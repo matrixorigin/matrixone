@@ -386,10 +386,10 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		motrace.EndStatement(ctx, nil)
+		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
 		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
-		motrace.EndStatement(ctx, err)
+		motrace.EndStatement(ctx, err, ses.sentRows.Load())
 		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
@@ -631,4 +631,23 @@ func isInvalidConfigInput(config string) bool {
 	// first verify if the input string can parse as a josn type data
 	_, err := types.ParseStringToByteJson(config)
 	return err != nil
+}
+
+func removePrefixComment(sql string) string {
+	if len(sql) >= 4 {
+		p1 := strings.Index(sql, "/*")
+		if p1 != 0 {
+			// no prefix comment in this sql
+			return sql
+		}
+
+		p2 := strings.Index(sql, "*/")
+		if p2 < 2 {
+			// no valid prefix comment in this sql
+			return sql
+		}
+
+		sql = sql[p2+2:]
+	}
+	return sql
 }

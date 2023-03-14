@@ -28,11 +28,11 @@ import (
 )
 
 type lockTableAllocator struct {
-	logger  *log.MOLogger
-	stoper  *stopper.Stopper
-	timeout time.Duration
-	address string
-	server  Server
+	logger          *log.MOLogger
+	stoper          *stopper.Stopper
+	keepBindTimeout time.Duration
+	address         string
+	server          Server
 
 	mu struct {
 		sync.RWMutex
@@ -44,9 +44,9 @@ type lockTableAllocator struct {
 // NewLockTableAllocator create a memory based lock table allocator.
 func NewLockTableAllocator(
 	address string,
-	timeout time.Duration,
+	keepBindTimeout time.Duration,
 	cfg morpc.Config) LockTableAllocator {
-	if timeout == 0 {
+	if keepBindTimeout == 0 {
 		panic("invalid lock table bind timeout")
 	}
 
@@ -57,7 +57,7 @@ func NewLockTableAllocator(
 		logger:  logger.Named(tag),
 		stoper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
-		timeout: timeout,
+		keepBindTimeout: keepBindTimeout,
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
@@ -147,7 +147,7 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 
 	var values []*serviceBinds
 	for _, b := range l.mu.services {
-		if b.timeout(now, l.timeout) {
+		if b.timeout(now, l.keepBindTimeout) {
 			values = append(values, b)
 		}
 	}
@@ -230,7 +230,7 @@ func (l *lockTableAllocator) createBindLocked(
 }
 
 func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
-	timer := time.NewTimer(l.timeout)
+	timer := time.NewTimer(l.keepBindTimeout)
 	defer timer.Stop()
 	for {
 		select {
@@ -245,7 +245,7 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 				b.disable()
 				l.disableTableBinds(b)
 			}
-			timer.Reset(l.timeout)
+			timer.Reset(l.keepBindTimeout)
 		}
 	}
 }

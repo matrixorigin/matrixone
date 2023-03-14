@@ -161,7 +161,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 	if err != nil {
 		return nil, err
 	}
-	if r.meta.End() == 0 {
+	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
 	return blocks, nil
