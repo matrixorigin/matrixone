@@ -612,6 +612,21 @@ func (m *MockEngine) EXPECT() *MockEngineMockRecorder {
 	return m.recorder
 }
 
+// AllocateID mocks base method.
+func (m *MockEngine) AllocateID(ctx context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllocateID", ctx)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AllocateID indicates an expected call of AllocateID.
+func (mr *MockEngineMockRecorder) AllocateID(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateID", reflect.TypeOf((*MockEngine)(nil).AllocateID), ctx)
+}
+
 // Commit mocks base method.
 func (m *MockEngine) Commit(ctx context.Context, op client.TxnOperator) error {
 	m.ctrl.T.Helper()
@@ -787,18 +802,4 @@ func (m *MockEngine) Rollback(ctx context.Context, op client.TxnOperator) error 
 func (mr *MockEngineMockRecorder) Rollback(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockEngine)(nil).Rollback), ctx, op)
-}
-
-
-func (m *MockEngine) AllocateID(ctx context.Context) (uint64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AllocateID", ctx)
-	ret0, _ := ret[0].(uint64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-func (mr *MockEngineMockRecorder) AllocateID(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateID", reflect.TypeOf((*MockEngine)(nil).AllocateID), ctx)
 }
