@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,7 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
-		ap.Container = colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
+		ap.s3Writer = colexec.NewS3Writer(ap.InsertCtx.TableDef)
 	}
 	return nil
 }
@@ -39,13 +41,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	defer analyze(proc, idx)()
 
 	insertArg := arg.(*Argument)
-	container := insertArg.Container
-	bat := proc.Reg.InputBatch
+	s3Writer := insertArg.s3Writer
+	bat := proc.InputBatch()
 	if bat == nil {
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			if err := container.WriteS3CacheBatch(proc); err != nil {
+			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
 				return false, err
 			}
 		}
@@ -60,13 +62,31 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}()
 
 	insertCtx := insertArg.InsertCtx
-	affectedRows, err := colexec.InsertBatch(container, proc, bat, insertCtx.Source,
-		insertCtx.TableDef, insertCtx.UniqueSource)
+
+	if insertArg.IsRemote {
+		// write to s3
+		err := s3Writer.WriteS3Batch(bat, proc, 0)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		// write origin table
+		err := insertCtx.Source.Write(proc.Ctx, bat)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	// write unique key table
+	nameToPos, pkPos := getUniqueKeyInfo(insertCtx.TableDef)
+	err := colexec.WriteUniqueTable(s3Writer, proc, bat, insertCtx.TableDef, nameToPos, pkPos, insertCtx.UniqueSource)
 	if err != nil {
 		return false, err
 	}
+
+	affectedRows := uint64(bat.Vecs[0].Length())
 	if insertArg.IsRemote {
-		container.WriteEnd(proc)
+		s3Writer.WriteEnd(proc)
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
@@ -80,4 +100,23 @@ func analyze(proc *process.Process, idx int) func() {
 		anal.Stop()
 		anal.AddInsertTime(t)
 	}
+}
+
+func getUniqueKeyInfo(tableDef *pb.TableDef) (map[string]int, int) {
+	nameToPos := make(map[string]int)
+	pkPos := -1
+	pos := 0
+	for j, col := range tableDef.Cols {
+		if tableDef.CompositePkey == nil && col.Name != catalog.Row_ID && col.Primary {
+			pkPos = j
+		}
+		if col.Name != catalog.Row_ID {
+			nameToPos[col.Name] = pos
+			pos++
+		}
+	}
+	if tableDef.CompositePkey != nil {
+		pkPos = pos
+	}
+	return nameToPos, pkPos
 }
