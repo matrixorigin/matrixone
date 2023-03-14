@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -123,10 +124,15 @@ func (r *runtime) GetGlobalVariables(name string) (any, bool) {
 
 // DefaultRuntime used to test
 func DefaultRuntime() Runtime {
+	return DefaultRuntimeWithLevel(zap.DebugLevel)
+}
+
+// DefaultRuntime used to test
+func DefaultRuntimeWithLevel(level zapcore.Level) Runtime {
 	return NewRuntime(
 		metadata.ServiceType_CN,
 		"",
-		logutil.GetPanicLoggerWithLevel(zap.DebugLevel),
+		logutil.GetPanicLoggerWithLevel(level),
 		WithClock(clock.NewHLCClock(func() int64 {
 			return time.Now().UTC().UnixNano()
 		}, 0)))

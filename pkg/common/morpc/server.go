@@ -261,8 +261,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					case <-cs.ctx.Done():
 						responses = nil
 						return
-					case resp := <-cs.c:
-						responses = append(responses, resp)
+					case resp, ok := <-cs.c:
+						if ok {
+							responses = append(responses, resp)
+						}
 					}
 				} else {
 					select {

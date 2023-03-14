@@ -108,7 +108,9 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	s.exported = true
 	row.Reset()
 	row.SetColumnVal(stmtIDCol, uuid.UUID(s.StatementID).String())
-	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
+	if !s.IsZeroTxnID() {
+		row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
+	}
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
 	row.SetColumnVal(roleIdCol, int64(s.RoleId))

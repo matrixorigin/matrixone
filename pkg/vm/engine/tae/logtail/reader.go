@@ -19,11 +19,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+// Reader is a snapshot of all txn prepared between from and to.
+// Dirty tables/segments/blocks can be queried based on those txn
 type Reader struct {
 	from, to types.TS
 	table    *TxnTable
 }
 
+// Merge all dirty table/segment/block into one dirty tree
 func (r *Reader) GetDirty() (tree *common.Tree, count int) {
 	tree = common.NewTree()
 	op := func(row RowT) (moveOn bool) {
@@ -37,6 +40,7 @@ func (r *Reader) GetDirty() (tree *common.Tree, count int) {
 	return
 }
 
+// HasCatalogChanges returns true if any txn in the reader modified the Catalog
 func (r *Reader) HasCatalogChanges() bool {
 	changed := false
 	op := func(row RowT) (moveOn bool) {
@@ -54,6 +58,7 @@ func (r *Reader) HasCatalogChanges() bool {
 	return changed
 }
 
+// Merge all dirty table/segment/block of **a table** into one tree
 func (r *Reader) GetDirtyByTable(
 	dbID, id uint64,
 ) (tree *common.TableTree) {
