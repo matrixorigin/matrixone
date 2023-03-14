@@ -143,7 +143,7 @@ func FilterAndUpdateByRowId(
 			}
 
 			// write unique key table
-			writeUniqueTable(nil, proc, updateBatch, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
+			WriteUniqueTable(nil, proc, updateBatch, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -155,10 +155,13 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func writeUniqueTable(s3Container *WriteS3Container, proc *process.Process, updateBatch *batch.Batch,
+func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *batch.Batch,
 	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
-	var ukBatch *batch.Batch
+	if tableDef.Indexes == nil {
+		return nil
+	}
 
+	var ukBatch *batch.Batch
 	defer func() {
 		if ukBatch != nil {
 			ukBatch.Clean(proc.Mp())
@@ -166,69 +169,62 @@ func writeUniqueTable(s3Container *WriteS3Container, proc *process.Process, upda
 	}()
 
 	uIdx := 0
-	if tableDef.Indexes != nil {
-		for _, indexdef := range tableDef.Indexes {
-			if indexdef.Unique {
-				partsLength := len(indexdef.Parts)
-				uniqueColumnPos := make([]int, partsLength)
-				for p, column := range indexdef.Parts {
-					uniqueColumnPos[p] = updateNameToPos[column]
-				}
+	for _, indexDef := range tableDef.Indexes {
+		if !indexDef.Unique {
+			continue
+		}
 
-				colCount := len(uniqueColumnPos)
-				if pkPos == -1 {
-					//have no pk
-					ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
-				} else {
-					ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
-				}
+		partsLength := len(indexDef.Parts)
+		uniqueColumnPos := make([]int, partsLength)
+		for p, column := range indexDef.Parts {
+			uniqueColumnPos[p] = updateNameToPos[column]
+		}
 
-				var vec *vector.Vector
-				var bitMap *nulls.Nulls
-				if colCount == 1 {
-					idx := uniqueColumnPos[0]
-					vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[idx], proc)
-				} else {
-					vs := make([]*vector.Vector, colCount)
-					for vIdx, pIdx := range uniqueColumnPos {
-						vs[vIdx] = updateBatch.Vecs[pIdx]
-					}
-					vec, bitMap = util.SerialWithCompacted(vs, proc)
-				}
-				ukBatch.SetVector(0, vec)
-				ukBatch.SetZs(vec.Length(), proc.Mp())
+		colCount := len(uniqueColumnPos)
+		if pkPos == -1 {
+			//have no pk
+			ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
+		} else {
+			ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
+		}
 
-				if pkPos != -1 {
-					// have pk, append pk vector
-					vec = util.CompactPrimaryCol(updateBatch.Vecs[pkPos], bitMap, proc)
-					ukBatch.SetVector(1, vec)
-				}
+		var vec *vector.Vector
+		var bitMap *nulls.Nulls
+		if colCount == 1 {
+			idx := uniqueColumnPos[0]
+			vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[idx], proc)
+		} else {
+			vs := make([]*vector.Vector, colCount)
+			for vIdx, pIdx := range uniqueColumnPos {
+				vs[vIdx] = updateBatch.Vecs[pIdx]
+			}
+			vec, bitMap = util.SerialWithCompacted(vs, proc)
+		}
+		ukBatch.SetVector(0, vec)
+		ukBatch.SetZs(vec.Length(), proc.Mp())
 
-				// db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
-				// if err != nil {
-				// 	return err
-				// }
-				// rel, err := db.Relation(proc.Ctx, tblName)
-				// if err != nil {
-				// 	return err
-				// }
+		if pkPos != -1 {
+			// have pk, append pk vector
+			vec = util.CompactPrimaryCol(updateBatch.Vecs[pkPos], bitMap, proc)
+			ukBatch.SetVector(1, vec)
+		}
 
-				if s3Container == nil {
-					rel := rels[uIdx]
-					err := rel.Write(proc.Ctx, ukBatch)
-					if err != nil {
-						return err
-					}
-					uIdx++
-				} else {
-					uIdx++
-					s3Container.WriteS3Batch(ukBatch, proc, uIdx)
-				}
-			} else {
-				continue
+		if s3Writer == nil {
+			rel := rels[uIdx]
+			err := rel.Write(proc.Ctx, ukBatch)
+			if err != nil {
+				return err
+			}
+			uIdx++
+		} else {
+			uIdx++
+			err := s3Writer.WriteS3Batch(ukBatch, proc, uIdx)
+			if err != nil {
+				return err
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -434,43 +430,6 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 	}
 
 	return info
-}
-
-func InsertBatch(
-	container *WriteS3Container,
-	proc *process.Process,
-	bat *batch.Batch,
-	rel engine.Relation,
-	tableDef *plan.TableDef,
-	uniqueRel []engine.Relation) (uint64, error) {
-	affectedRows := bat.Vecs[0].Length()
-	defer func() {
-		bat.Clean(proc.Mp())
-	}()
-
-	info := GetInfoForInsertAndUpdate(tableDef, nil)
-
-	if container != nil {
-		// write to s3
-		err := container.WriteS3Batch(bat, proc, 0)
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		// write origin table
-		err := rel.Write(proc.Ctx, bat)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	// write unique key table
-	err := writeUniqueTable(container, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
-	if err != nil {
-		return 0, err
-	}
-
-	return uint64(affectedRows), nil
 }
 
 func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
