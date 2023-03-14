@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -85,6 +86,7 @@ type store struct {
 	hakeeperClient      logservice.DNHAKeeperClient
 	fileService         fileservice.FileService
 	metadataFileService fileservice.ReplaceableFileService
+	lockTableAllocator  lockservice.LockTableAllocator
 	moCluster           clusterservice.MOCluster
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
@@ -110,7 +112,8 @@ type store struct {
 }
 
 // NewService create DN Service
-func NewService(cfg *Config,
+func NewService(
+	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
@@ -144,6 +147,9 @@ func NewService(cfg *Config,
 		s.options.adjustConfigFunc(s.cfg)
 	}
 
+	if err := s.initLockTableAllocator(); err != nil {
+		return nil, err
+	}
 	if err := s.initClocker(); err != nil {
 		return nil, err
 	}
@@ -185,6 +191,9 @@ func (s *store) Close() error {
 		err = multierr.Append(e, err)
 	}
 	if e := s.server.Close(); e != nil {
+		err = multierr.Append(e, err)
+	}
+	if e := s.lockTableAllocator.Close(); e != nil {
 		err = multierr.Append(e, err)
 	}
 	s.replicas.Range(func(_, value any) bool {
@@ -265,7 +274,8 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					shard,
 					storage,
 					s.sender,
-					s.cfg.Txn.ZombieTimeout.Duration))
+					s.cfg.Txn.ZombieTimeout.Duration,
+					s.lockTableAllocator))
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
@@ -334,6 +344,14 @@ func (s *store) initClocker() error {
 	if s.rt.Clock() == nil {
 		return moerr.NewBadConfigNoCtx("missing txn clock")
 	}
+	return nil
+}
+
+func (s *store) initLockTableAllocator() error {
+	s.lockTableAllocator = lockservice.NewLockTableAllocator(
+		s.cfg.LockService.LockListenAddress,
+		s.cfg.LockService.KeepBindTimeout.Duration,
+		s.cfg.RPC)
 	return nil
 }
 

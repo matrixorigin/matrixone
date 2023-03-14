@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -348,15 +347,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
 
-		var err error
-		var onDuplicateKeyArg *onduplicatekey.Argument
-		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -371,6 +361,13 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
+			for _, scope := range ss {
+				scope.Instructions = append(scope.Instructions, vm.Instruction{
+					Op:  vm.PreInsert,
+					Arg: preArg,
+				})
+			}
+
 			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -385,6 +382,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op:  vm.OnDuplicateKey,
 					Arg: onDuplicateKeyArg,
@@ -1303,16 +1304,11 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Ar
 		}
 		ss2 = append(ss2, s)
 	}
-	preInsertInstr := &vm.Instruction{
-		Op:  vm.PreInsert,
-		Arg: preArg,
-	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,
 		Arg: arg,
 	}
 	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(preInsertInstr, nil))
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
 	}
 	return c.newMergeScope(ss2)
