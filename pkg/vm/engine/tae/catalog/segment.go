@@ -16,9 +16,7 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -372,37 +370,6 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	return
-}
-
-func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
-	sn := int64(0)
-	if sn, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
-		return
-	}
-	n = sn + 1
-	if err = binary.Write(w, binary.BigEndian, entry.sorted); err != nil {
-		return
-	}
-	n = sn + 1
-	return
-}
-
-func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &entry.state); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Read(r, binary.BigEndian, &entry.sorted); err != nil {
-		return
-	}
-	n += 1
 	return
 }
 

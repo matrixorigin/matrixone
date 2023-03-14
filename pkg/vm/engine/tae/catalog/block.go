@@ -15,9 +15,7 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -199,26 +197,6 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	return
-}
-
-func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
-		return
-	}
-	n += 1
-	return
-}
-
-func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	err = binary.Read(r, binary.BigEndian, &entry.state)
-	n += 1
 	return
 }
 

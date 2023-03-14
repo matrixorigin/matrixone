@@ -17,7 +17,6 @@ package catalog
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -374,33 +373,6 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	return
-}
-
-func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.TableBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	buf, err := entry.schema.Marshal()
-	if err != nil {
-		return
-	}
-	sn := int(0)
-	sn, err = w.Write(buf)
-	n += int64(sn)
-	return
-}
-
-func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.TableBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	if entry.schema == nil {
-		entry.schema = NewEmptySchema("")
-	}
-	sn := int64(0)
-	sn, err = entry.schema.ReadFrom(r)
-	n += sn
 	return
 }
 
