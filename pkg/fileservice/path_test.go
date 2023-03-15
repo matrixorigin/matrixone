@@ -21,22 +21,29 @@ import (
 )
 
 func TestParsePath(t *testing.T) {
-	path, err := ParsePath("foo")
+	p := "foo"
+	path, err := ParsePath(p)
 	assert.Nil(t, err)
 	assert.Equal(t, "foo", path.File)
+	assert.Equal(t, p, path.String())
 
-	path, err = ParsePath(JoinPath("foo", "bar"))
+	p = JoinPath("foo", "bar")
+	path, err = ParsePath(p)
 	assert.Nil(t, err)
 	assert.Equal(t, "bar", path.File)
 	assert.Equal(t, "foo", path.Service)
+	assert.Equal(t, p, path.String())
 
-	path, err = ParsePath(JoinPath("foo,baz,quux", "bar"))
+	p = JoinPath("foo,baz,quux", "bar")
+	path, err = ParsePath(p)
 	assert.Nil(t, err)
 	assert.Equal(t, "bar", path.File)
 	assert.Equal(t, "foo", path.Service)
 	assert.Equal(t, []string{"baz", "quux"}, path.ServiceArguments)
+	assert.Equal(t, p, path.String())
 
 	path, err = ParsePath("矩阵")
 	assert.Nil(t, err)
 	assert.Equal(t, "矩阵", path.File)
+	assert.Equal(t, "矩阵", path.String())
 }

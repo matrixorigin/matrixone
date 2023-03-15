@@ -25,8 +25,9 @@ import (
 // TODO: add decimal128 distinct test
 func TestVariance(t *testing.T) {
 	int8Typ := types.New(types.T_int8, 0, 0)
-	decimal64Typ := types.New(types.T_decimal64, 0, 0)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 18, 0)
+	decimal128Typ := types.New(types.T_decimal128, 38, 0)
+	decimal128Typ_3 := types.New(types.T_decimal128, 38, 3)
 
 	testCases := []testCase{
 		// int8 variance test
@@ -120,6 +121,17 @@ func TestVariance(t *testing.T) {
 			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
 			mergeNsp:    nil,
 			mergeExpect: []float64{8.25},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateVariance,
+			isDistinct: true,
+			inputTyp:   decimal128Typ_3,
+
+			input:    []int64{14314, 15314, 14394, 124314},
+			inputNsp: nil,
+			expected: []float64{2254.078700000000},
 
 			testMarshal: false,
 		},

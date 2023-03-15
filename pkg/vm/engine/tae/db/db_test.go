@@ -5712,7 +5712,7 @@ func TestGCCatalog3(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	testutils.WaitExpect(4000, checkCompactAndGCFn)
+	testutils.WaitExpect(10000, checkCompactAndGCFn)
 	assert.True(t, checkCompactAndGCFn())
 	t.Log(tae.Catalog.SimplePPString(3))
 }

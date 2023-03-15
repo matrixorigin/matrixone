@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package perfcounter
+package fileservice
 
 import (
-	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func BenchmarkUpdate(b *testing.B) {
-	counter := new(CounterSet)
-	ctx := WithCounterSet(context.Background(), counter)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		Update(ctx, func(c *CounterSet) {
+func TestSubPathFS(t *testing.T) {
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func(name string) FileService {
+			upstream, err := NewMemoryFS(name)
+			assert.Nil(t, err)
+			return SubPath(upstream, "foo")
 		})
-	}
+	})
 }

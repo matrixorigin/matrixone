@@ -49,7 +49,7 @@ func testFileService(
 		ctx := context.Background()
 		fs := newFS(fsName)
 
-		assert.Equal(t, fsName, fs.Name())
+		assert.True(t, strings.Contains(fs.Name(), fsName))
 
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
@@ -490,7 +490,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name
-		entries, err = fs.List(ctx, JoinPath(fsName, "qux/quux/"))
+		entries, err = fs.List(ctx, JoinPath(fs.Name(), "qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -499,7 +499,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name and / prefix and suffix
-		entries, err = fs.List(ctx, JoinPath(fsName, "/qux/quux/"))
+		entries, err = fs.List(ctx, JoinPath(fs.Name(), "/qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -779,7 +779,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
-		entries, err := fs.List(ctx, JoinPath(fsName, "/path"))
+		entries, err := fs.List(ctx, JoinPath(fs.Name(), "/path"))
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, "to", entries[0].Name)

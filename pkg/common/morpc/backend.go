@@ -536,7 +536,14 @@ func (rb *remoteBackend) fetch(
 	case <-rb.resetConnC:
 		rb.handleResetConn()
 	case <-rb.stopWriteC:
-		return messages, true
+		for {
+			select {
+			case f := <-rb.writeC:
+				messages = append(messages, f)
+			default:
+				return messages, true
+			}
+		}
 	}
 	return messages, false
 }

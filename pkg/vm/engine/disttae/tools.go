@@ -1302,7 +1302,7 @@ func transferTimestampval(v int64, oid types.T) (bool, any) {
 func transferDecimal64val(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal64:
-		return true, types.Decimal64FromInt64Raw(v)
+		return true, types.Decimal64(v)
 	default:
 		return false, nil
 	}
@@ -1311,7 +1311,7 @@ func transferDecimal64val(v int64, oid types.T) (bool, any) {
 func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal128:
-		return true, types.Decimal128FromInt64Raw(a, b)
+		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
 		return false, nil
 	}

@@ -19,10 +19,10 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -129,7 +129,8 @@ func receiveBatch(proc *process.Process, ctr *container) (*batch.Batch, bool, er
 	}
 	chosen, value, ok := reflect.Select(ctr.receiverListener)
 	if !ok {
-		return nil, false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+		logutil.Errorf("pipeline closed unexpectedly")
+		return nil, true, nil
 	}
 	pointer := value.UnsafePointer()
 	bat := (*batch.Batch)(pointer)

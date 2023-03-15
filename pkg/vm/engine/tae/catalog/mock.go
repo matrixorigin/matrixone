@@ -198,6 +198,10 @@ func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
 	return new(mockSegIt)
 }
 
+func (h *mockTableHandle) MakeSegmentItOnSnap() (it handle.SegmentIt) {
+	return new(mockSegIt)
+}
+
 func (h *mockTableHandle) String() string {
 	return h.entry.String()
 }

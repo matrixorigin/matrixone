@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -276,7 +275,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
-	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, sqlType, true)
+	for _, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -643,10 +644,10 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).ToStringWithScale(scale)
+		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).ToStringWithScale(scale)
+		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).Format(scale)
 	case types.T_uuid:
 		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 	case types.T_Rowid:
@@ -684,211 +685,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 }
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
-	var err error
-	if !dump.DumpDatabase {
-		return doDumpQueryResult(requestCtx, mce.GetSession(), dump.ExportParams)
-	}
-	dump.OutFile = maybeAppendExtension(dump.OutFile)
-	exists, err := fileExists(dump.OutFile)
-	if exists {
-		return moerr.NewFileAlreadyExists(requestCtx, dump.OutFile)
-	}
-	if err != nil {
-		return err
-	}
-	if dump.MaxFileSize != 0 && dump.MaxFileSize < mpool.MB {
-		return moerr.NewInvalidInput(requestCtx, "max file size must be larger than 1MB")
-	}
-	if len(dump.Database) == 0 {
-		return moerr.NewInvalidInput(requestCtx, "No database selected")
-	}
-	return mce.dumpData(requestCtx, dump)
-}
-
-func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.MoDump) error {
-	ses := mce.GetSession()
-	txnHandler := ses.GetTxnHandler()
-	bh := ses.GetBackgroundExec(requestCtx)
-	defer bh.Close()
-	dbName := string(dump.Database)
-	var (
-		db        engine.Database
-		err       error
-		showDbDDL = false
-		dbDDL     string
-		tables    []string
-	)
-	var txn TxnOperator
-	txn, err = txnHandler.GetTxn()
-	if err != nil {
-		return err
-	}
-	if db, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, dbName, txn); err != nil {
-		return moerr.NewBadDB(requestCtx, dbName)
-	}
-	err = bh.Exec(requestCtx, fmt.Sprintf("use `%s`", dbName))
-	if err != nil {
-		return err
-	}
-	if len(dump.Tables) == 0 {
-		dbDDL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\n", dbName)
-		createSql, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE DATABASE `%s`;", dbName))
-		if err != nil {
-			return err
-		}
-		dbDDL += createSql + "\n\nUSE `" + dbName + "`;\n\n"
-		showDbDDL = true
-		tables, err = db.Relations(requestCtx)
-		if err != nil {
-			return err
-		}
-	} else {
-		tables = make([]string, len(dump.Tables))
-		for i, t := range dump.Tables {
-			tables[i] = string(t.ObjectName)
-		}
-	}
-
-	params := make([]*dumpTable, 0, len(tables))
-	for _, tblName := range tables {
-		if strings.HasPrefix(tblName, "%!%") { //skip hidden table
-			continue
-		}
-		table, err := db.Relation(requestCtx, tblName)
-		if err != nil {
-			return err
-		}
-		tblDDL, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE TABLE `%s`;", tblName))
-		if err != nil {
-			return err
-		}
-		tableDefs, err := table.TableDefs(requestCtx)
-		if err != nil {
-			return err
-		}
-		attrs, isView, err := getAttrFromTableDef(tableDefs)
-		if err != nil {
-			return err
-		}
-		if isView {
-			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
-		} else {
-			tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
-		}
-		params = append(params, &dumpTable{tblName, tblDDL, table, attrs, isView})
-	}
-	return mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
-}
-
-func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tree.MoDump, dbDDL string, params []*dumpTable, showDbDDL bool) error {
-	ses := mce.GetSession()
-	var (
-		err         error
-		f           *os.File
-		curFileSize int64 = 0
-		curFileIdx  int64 = 1
-		buf         *bytes.Buffer
-		rbat        *batch.Batch
-	)
-	f, err = createDumpFile(requestCtx, dump.OutFile)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			if f != nil {
-				f.Close()
-			}
-			if buf != nil {
-				buf.Reset()
-			}
-			if rbat != nil {
-				rbat.Clean(ses.mp)
-			}
-			removeFile(dump.OutFile, curFileIdx)
-		}
-	}()
-	buf = new(bytes.Buffer)
-	if showDbDDL {
-		_, err = buf.WriteString(dbDDL)
-		if err != nil {
-			return err
-		}
-	}
-	f, curFileIdx, curFileSize, err = writeDump2File(requestCtx, buf, dump, f, curFileIdx, curFileSize)
-	if err != nil {
-		return err
-	}
-	for _, param := range params {
-		if param.isView {
-			continue
-		}
-		_, err = buf.WriteString(param.ddl)
-		if err != nil {
-			return err
-		}
-		f, curFileIdx, curFileSize, err = writeDump2File(requestCtx, buf, dump, f, curFileIdx, curFileSize)
-		if err != nil {
-			return err
-		}
-		rds, err := param.rel.NewReader(requestCtx, 1, nil, nil)
-		if err != nil {
-			return err
-		}
-		for {
-			bat, err := rds[0].Read(requestCtx, param.attrs, nil, ses.mp)
-			if err != nil {
-				return err
-			}
-			if bat == nil {
-				break
-			}
-
-			buf.WriteString("INSERT INTO ")
-			buf.WriteString(param.name)
-			buf.WriteString(" VALUES ")
-			rbat, err = convertValueBat2Str(requestCtx, bat, ses.mp, ses.GetTimeZone())
-			if err != nil {
-				return err
-			}
-			for i := 0; i < rbat.Length(); i++ {
-				if i != 0 {
-					buf.WriteString(", ")
-				}
-				buf.WriteString("(")
-				for j := 0; j < rbat.VectorCount(); j++ {
-					if j != 0 {
-						buf.WriteString(", ")
-					}
-					buf.WriteString(rbat.GetVector(int32(j)).GetStringAt(i))
-				}
-				buf.WriteString(")")
-			}
-			buf.WriteString(";\n")
-			f, curFileIdx, curFileSize, err = writeDump2File(requestCtx, buf, dump, f, curFileIdx, curFileSize)
-			if err != nil {
-				return err
-			}
-		}
-		buf.WriteString("\n\n\n")
-	}
-	if !showDbDDL {
-		return nil
-	}
-	for _, param := range params {
-		if !param.isView {
-			continue
-		}
-		_, err = buf.WriteString(param.ddl)
-		if err != nil {
-			return err
-		}
-		f, curFileIdx, curFileSize, err = writeDump2File(requestCtx, buf, dump, f, curFileIdx, curFileSize)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return doDumpQueryResult(requestCtx, mce.GetSession(), dump.ExportParams)
 }
 
 /*
@@ -2563,6 +2360,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			av: st,
 		})
+	case *tree.AlterTable:
+		ret = (&AlterTableExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			at: st,
+		})
 	case *tree.DropView:
 		ret = (&DropViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2978,6 +2782,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc, ses)
 	if err != nil {
 		sql = removePrefixComment(sql)
+		sql = hideAccessKey(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3254,6 +3059,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.AlterView:
 			ses.InvalidatePrivilegeCache()
+		case *tree.AlterTable:
+			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -3468,7 +3275,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
 			*tree.CreateView, *tree.DropView,
-			*tree.AlterView,
+			*tree.AlterView, *tree.AlterTable,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -3628,7 +3435,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
+			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -4033,7 +3840,7 @@ StatementCanBeExecutedInUncommittedTransaction checks the statement can be execu
 func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView:
+	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		return true, nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
@@ -4109,7 +3916,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView, *tree.AlterView,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
 		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
