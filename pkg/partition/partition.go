@@ -26,16 +26,16 @@ import (
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
 		var n bool
 		var v int8
 
-		vs := vec.Col.([]int8)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[int8](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -55,11 +55,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int16
 
-		vs := vec.Col.([]int16)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[int16](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -79,11 +79,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int32
 
-		vs := vec.Col.([]int32)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[int32](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -103,11 +103,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Date
 
-		vs := vec.Col.([]types.Date)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[types.Date](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -127,11 +127,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int64
 
-		vs := vec.Col.([]int64)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[int64](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -151,11 +151,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Datetime
 
-		vs := vec.Col.([]types.Datetime)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[types.Datetime](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -175,11 +175,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Time
 
-		vs := vec.Col.([]types.Time)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[types.Time](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -200,11 +200,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint8
 
-		vs := vec.Col.([]uint8)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[uint8](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -224,11 +224,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint16
 
-		vs := vec.Col.([]uint16)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[uint16](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -248,11 +248,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint32
 
-		vs := vec.Col.([]uint32)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[uint32](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -272,11 +272,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint64
 
-		vs := vec.Col.([]uint64)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[uint64](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -296,11 +296,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v float32
 
-		vs := vec.Col.([]float32)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[float32](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -320,11 +320,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v float64
 
-		vs := vec.Col.([]float64)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustFixedCol[float64](vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -343,11 +343,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
 		var v string
-		vs := vector.GetStrVectorValues(vec)
-		if nulls.Any(vec.Nsp) {
+		vs := vector.MustStrCol(vec)
+		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {

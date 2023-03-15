@@ -45,8 +45,8 @@ func TestService(t *testing.T) {
 	require.NoError(t, err)
 
 	address := addrs[0]
-	logtailer := mockLocktailer(tableA, tableB, tableC)
 	rt := mockRuntime()
+	logtailer := mockLocktailer(rt.Clock().Now, tableA, tableB, tableC)
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
@@ -158,12 +158,18 @@ func TestService(t *testing.T) {
 
 type logtailer struct {
 	tables []api.TableID
+	now    func() (timestamp.Timestamp, timestamp.Timestamp)
 }
 
-func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
+func mockLocktailer(now func() (timestamp.Timestamp, timestamp.Timestamp), tables ...api.TableID) taelogtail.Logtailer {
 	return &logtailer{
 		tables: tables,
+		now:    now,
 	}
+}
+
+func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	return m.now()
 }
 
 func (m *logtailer) RangeLogtail(

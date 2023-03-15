@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/pierrec/lz4"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -72,7 +74,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	block := NewBlock(uint16(len(batch.Vecs)), w.object, w.name)
 	w.AddBlock(block.(*Block))
 	for i, vec := range batch.Vecs {
-		buf, err := vec.Show()
+		buf, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +96,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			originSize: uint32(originSize),
 		}
 		block.(*Block).columns[i].(*ColumnBlock).meta.alg = compress.Lz4
-		block.(*Block).columns[i].(*ColumnBlock).meta.typ = uint8(vec.Typ.Oid)
+		block.(*Block).columns[i].(*ColumnBlock).meta.typ = uint8(vec.GetType().Oid)
 	}
 	return block, nil
 }
@@ -114,6 +116,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	var err error
 	w.RLock()
 	defer w.RUnlock()
+	if len(w.blocks) == 0 {
+		logutil.Warn("object io: no block needs to be written")
+	}
 	var buf bytes.Buffer
 	metaLen := 0
 	start := 0

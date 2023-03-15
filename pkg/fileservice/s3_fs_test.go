@@ -28,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -101,6 +102,7 @@ func TestS3FS(t *testing.T) {
 				-1,
 				-1,
 				cacheDir,
+				nil,
 			)
 			assert.Nil(t, err)
 
@@ -119,12 +121,18 @@ func TestS3FS(t *testing.T) {
 			-1,
 			-1,
 			cacheDir,
+			nil,
 		)
 		assert.Nil(t, err)
 		ctx := context.Background()
+		var counterSet, counterSet2 perfcounter.CounterSet
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet2)
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
+		assert.Equal(t, int64(1), counterSet.S3.List.Load())
+		assert.Equal(t, int64(1), counterSet2.S3.List.Load())
 	})
 
 	t.Run("mem caching file service", func(t *testing.T) {
@@ -139,6 +147,7 @@ func TestS3FS(t *testing.T) {
 				128*1024,
 				-1,
 				cacheDir,
+				nil,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -157,6 +166,7 @@ func TestS3FS(t *testing.T) {
 				-1,
 				128*1024,
 				cacheDir,
+				nil,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -410,6 +420,7 @@ func TestS3FSMinioServer(t *testing.T) {
 				-1,
 				-1,
 				cacheDir,
+				nil,
 			)
 			assert.Nil(t, err)
 
@@ -445,6 +456,7 @@ func BenchmarkS3FS(b *testing.B) {
 			-1,
 			-1,
 			cacheDir,
+			nil,
 		)
 		assert.Nil(b, err)
 		return fs

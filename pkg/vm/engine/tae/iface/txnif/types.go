@@ -18,6 +18,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
@@ -47,13 +49,16 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
+	GetPKDedupSkip() PKDedupSkipScope
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
+
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
-	GetInfo() []byte
+	GetSnapshotTS() types.TS
+	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
 	GetError() error
@@ -99,6 +104,7 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
+	SetPKDedupSkip(skip PKDedupSkipScope)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
@@ -118,6 +124,7 @@ type TxnAsyncer interface {
 
 type TxnTest interface {
 	MockIncWriteCnt() int
+	MockStartTS(types.TS)
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
 	SetApplyCommitFn(func(AsyncTxn) error)
@@ -222,8 +229,7 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
-		pkVecs []containers.Vector,
-		file string, metaLocs []string, flag int32) error
+		zm []dataio.Index, metaLocs []string) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)

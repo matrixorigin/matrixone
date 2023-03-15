@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// shuffle the ctr.bat
 	if ctr.bat != nil {
 		for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-			vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+			ctr.bat.Vecs[i].Free(proc.Mp())
 		}
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 		ctr.bat.ExpandNulls()
@@ -180,7 +180,7 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 			} else {
 				nullsLast = desc
 			}
-			ctr.cmps[i] = compare.New(bat2.Vecs[ctr.poses[i]].Typ, desc, nullsLast)
+			ctr.cmps[i] = compare.New(*bat2.Vecs[ctr.poses[i]].GetType(), desc, nullsLast)
 		}
 	}
 

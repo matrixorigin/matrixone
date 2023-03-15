@@ -108,6 +108,9 @@
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126 
 
+# pkg/perfcounter
+/pkg/perfcounter @reusee
+
 # pkg/sort 
 /pkg/sort @nnsgmsone
 

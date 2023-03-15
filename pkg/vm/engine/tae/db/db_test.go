@@ -665,21 +665,16 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	{
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
-		var pks []containers.Vector
-		var metaLocs []string
-		pks = append(pks, bats[0].Vecs[2])
-		pks = append(pks, bats[1].Vecs[2])
-		metaLocs = append(metaLocs, metaLoc1)
-		metaLocs = append(metaLocs, metaLoc2)
-		err := rel.AddBlksWithMetaLoc(pks, "", metaLocs, 0)
-		assert.Nil(t, err)
-		//local deduplication check
-		err = rel.Append(bats[2])
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+		err := rel.AddBlksWithMetaLoc(nil, []string{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.Nil(t, err)
+
+		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc2})
+		assert.Nil(t, err)
 		err = rel.Append(bats[1])
-		assert.NotNil(t, err)
+		assert.Nil(t, err)
 		//err = rel.RangeDeleteLocal(start, end)
 		//assert.Nil(t, err)
 		//assert.True(t, rel.IsLocalDeleted(start, end))
@@ -687,16 +682,20 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.Nil(t, err)
 
 		//"tb-1" table now has one committed non-appendable segment which contains
-		//two non-appendable block, and one committed appendable segment which contains one appendable block.
+		//two non-appendable block, and one committed appendable segment which contains two appendable block.
 
-		//do deduplication check
+		//do deduplication check against sanpshot data.
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 		err = rel.Append(bats[0])
 		assert.NotNil(t, err)
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
-		err = rel.Append(bats[3])
-		assert.Nil(t, err)
+
+		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc1, metaLoc2})
+		assert.NotNil(t, err)
+
+		//check blk count.
 		cntOfAblk := 0
 		cntOfblk := 0
 		forEachBlock(rel, func(blk handle.Block) (err error) {
@@ -727,6 +726,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.True(t, cntOfblk == 2)
 		assert.True(t, cntOfAblk == 2)
 		assert.Nil(t, txn.Commit())
+
 		//check count of committed segments.
 		cntOfAseg := 0
 		cntOfseg := 0
@@ -3533,8 +3533,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	assert.NoError(t, err)
-	assert.Equal(t, "todrop", datname.GetString(0))
-	assert.Equal(t, "db", datname.GetString(1))
+	assert.Equal(t, "todrop", datname.GetStringAt(0))
+	assert.Equal(t, "db", datname.GetStringAt(1))
 
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	assert.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
@@ -3553,8 +3553,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	assert.NoError(t, err)
-	assert.Equal(t, schema.Name, relname.GetString(0))
-	assert.Equal(t, schema.Name, relname.GetString(1))
+	assert.Equal(t, schema.Name, relname.GetStringAt(0))
+	assert.Equal(t, schema.Name, relname.GetStringAt(1))
 
 	// get columns catalog change
 	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -3609,7 +3609,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.GetValueAt[types.Rowid](rowids, i)
+		id := vector.MustFixedCol[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	assert.Equal(t, 10, len(rowidMap))
@@ -5742,4 +5742,38 @@ func TestForceCheckpoint(t *testing.T) {
 	assert.Error(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
+}
+
+func TestSnapshotLag1(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 20)
+	defer data.Close()
+
+	bats := data.Split(4)
+	tae.createRelAndAppend(bats[0], true)
+
+	txn1, rel1 := tae.getRelation()
+	assert.NoError(t, rel1.Append(bats[1]))
+	txn2, rel2 := tae.getRelation()
+	assert.NoError(t, rel2.Append(bats[1]))
+
+	{
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.Append(bats[1]))
+		assert.NoError(t, txn.Commit())
+	}
+
+	txn1.MockStartTS(tae.TxnMgr.Now())
+	err := txn1.Commit()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	err = txn2.Commit()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }

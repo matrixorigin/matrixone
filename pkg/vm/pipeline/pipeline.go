@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,6 +47,13 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err error) {
+	// performance counter
+	perfCounterSet := new(perfcounter.CounterSet)
+	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
+	defer func() {
+		_ = perfCounterSet //TODO
+	}()
+
 	var bat *batch.Batch
 	// used to handle some push-down request
 	if p.reg != nil {

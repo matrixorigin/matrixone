@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -501,7 +500,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
-	n := vector.Length(bat.Vecs[0])
+	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -515,7 +514,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(ses, bat, int64(j), oq)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq)
 		if err != nil {
 			return err
 		}
@@ -533,6 +532,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
+	ses.sentRows.Add(int64(n))
 	logInfof(ses.GetConciseProfile(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
@@ -550,19 +550,19 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
+func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
 	}
-	var rowIndex = int64(j)
+	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
-		if vec.IsScalarNull() {
+		if vec.IsConstNull() {
 			row[i] = nil
 			continue
 		}
-		if vec.IsScalar() {
+		if vec.IsConst() {
 			rowIndex = 0
 		}
 
@@ -586,281 +586,74 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
-	timeZone := ses.GetTimeZone()
-	switch vec.Typ.Oid { //get col
+func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
+	if vec.GetNulls().Contains(uint64(rowIndex)) {
+		row[i] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		if !nulls.Any(vec.Nsp) {
-			row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
-			}
-		}
+		row[i] = types.DecodeJson(vec.GetBytesAt(rowIndex))
 	case types.T_bool:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]bool)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]bool)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
 	case types.T_int8:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]int8)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]int8)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[int8](vec, rowIndex)
 	case types.T_uint8:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]uint8)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]uint8)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[uint8](vec, rowIndex)
 	case types.T_int16:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]int16)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]int16)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[int16](vec, rowIndex)
 	case types.T_uint16:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]uint16)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]uint16)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[uint16](vec, rowIndex)
 	case types.T_int32:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]int32)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]int32)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[int32](vec, rowIndex)
 	case types.T_uint32:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]uint32)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]uint32)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[uint32](vec, rowIndex)
 	case types.T_int64:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]int64)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]int64)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[int64](vec, rowIndex)
 	case types.T_uint64:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]uint64)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]uint64)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
 	case types.T_float32:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]float32)
-			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
-				row[i] = vs[rowIndex]
-			} else {
-				row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
-			}
+		val := vector.GetFixedAt[float32](vec, rowIndex)
+		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+			row[i] = val
 		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]float32)
-				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
-					row[i] = vs[rowIndex]
-				} else {
-					row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
-				}
-			}
+			row[i] = strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)
 		}
 	case types.T_float64:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]float64)
-			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
-				row[i] = vs[rowIndex]
-			} else {
-				row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
-			}
+		val := vector.GetFixedAt[float64](vec, rowIndex)
+		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+			row[i] = val
 		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]float64)
-				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
-					row[i] = vs[rowIndex]
-				} else {
-					row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
-				}
-			}
+			row[i] = strconv.FormatFloat(val, 'f', int(vec.GetType().Scale), 64)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			row[i] = vec.GetBytes(rowIndex)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				row[i] = vec.GetBytes(rowIndex)
-			}
-		}
+		row[i] = vec.GetBytesAt(rowIndex)
 	case types.T_date:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Date)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Date)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 	case types.T_datetime:
-		scale := vec.Typ.Scale
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Datetime)
-			row[i] = vs[rowIndex].String2(scale)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Datetime)
-				row[i] = vs[rowIndex].String2(scale)
-			}
-		}
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAt[types.Datetime](vec, rowIndex).String2(scale)
 	case types.T_time:
-		scale := vec.Typ.Scale
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Time)
-			row[i] = vs[rowIndex].String2(scale)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Time)
-				row[i] = vs[rowIndex].String2(scale)
-			}
-		}
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAt[types.Time](vec, rowIndex).String2(scale)
 	case types.T_timestamp:
-		scale := vec.Typ.Scale
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Timestamp)
-			row[i] = vs[rowIndex].String2(timeZone, scale)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Timestamp)
-				row[i] = vs[rowIndex].String2(timeZone, scale)
-			}
-		}
+		scale := vec.GetType().Scale
+		timeZone := ses.GetTimeZone()
+		row[i] = vector.GetFixedAt[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
 	case types.T_decimal64:
-		scale := vec.Typ.Scale
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Decimal64)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Decimal64)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
-			}
-		}
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).ToStringWithScale(scale)
 	case types.T_decimal128:
-		scale := vec.Typ.Scale
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.([]types.Decimal128)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Decimal128)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
-			}
-		}
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).ToStringWithScale(scale)
 	case types.T_uuid:
-		if !nulls.Any(vec.Nsp) {
-			vs := vec.Col.([]types.Uuid)
-			row[i] = vs[rowIndex].ToString()
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Uuid)
-				row[i] = vs[rowIndex].ToString()
-			}
-		}
+		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 	case types.T_Rowid:
-		if !nulls.Any(vec.Nsp) {
-			vs := vec.Col.([]types.Rowid)
-			row[i] = vs[rowIndex]
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.([]types.Rowid)
-				row[i] = vs[rowIndex]
-			}
-		}
+		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
 	default:
-		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.Typ.Oid)
-		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.Typ.Oid)
+		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }
@@ -1067,7 +860,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 					if j != 0 {
 						buf.WriteString(", ")
 					}
-					buf.WriteString(rbat.GetVector(int32(j)).GetString(int64(i)))
+					buf.WriteString(rbat.GetVector(int32(j)).GetStringAt(i))
 				}
 				buf.WriteString(")")
 			}
@@ -1101,7 +894,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 /*
 handle "SELECT @@xxx.yyyy"
 */
-func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
+func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cwsLen int) error {
 	var err error = nil
 	ses := mce.GetSession()
 	mrs := ses.GetMysqlResultSet()
@@ -1139,7 +932,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	mrs.AddRow(row)
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
 		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
@@ -1370,7 +1163,7 @@ func doShowErrors(ses *Session) error {
 	return err
 }
 
-func (mce *MysqlCmdExecutor) handleShowErrors() error {
+func (mce *MysqlCmdExecutor) handleShowErrors(cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1380,7 +1173,7 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -1474,7 +1267,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		bs := vector.GetColumn[bool](vec)
+		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1483,8 +1276,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCols(bat.Vecs[0])
-		v1 := vector.MustStrCols(bat.Vecs[1])
+		v0 := vector.MustStrCol(bat.Vecs[0])
+		v1 := vector.MustStrCol(bat.Vecs[1])
 		rows = rows[:len(v0)]
 		for i := range v0 {
 			rows[i][0] = v0[i]
@@ -1508,7 +1301,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process, cwIndex, cwsLen int) error {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err := doShowVariables(ses, proc, sv)
@@ -1516,7 +1309,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -1538,8 +1331,10 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 		v0[i] = row[0].(string)
 		v1[i] = fmt.Sprintf("%v", row[1])
 	}
-	bat.Vecs[0] = vector.NewWithStrings(typ, v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewWithStrings(typ, v1, nil, ses.GetMemPool())
+	bat.Vecs[0] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
+	bat.Vecs[1] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
 	return bat, nil
 }
 
@@ -1855,7 +1650,7 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 }
 
 // handleShowAccounts lists the info of accounts
-func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts) error {
+func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1864,7 +1659,7 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
@@ -1942,7 +1737,8 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.NewWithBytes(types.T_varchar.ToType(), vs, nil, session.GetMemPool())
+	vec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
@@ -2037,7 +1833,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 			c.SetCharset(0x3f)
 		}
 
-		c.SetDecimal(uint8(col.Typ.Scale))
+		c.SetDecimal(col.Typ.Scale)
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
@@ -3181,6 +2977,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		sql = removePrefixComment(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3198,7 +2995,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var ret interface{}
 	var runner ComputationRunner
 	var selfHandle bool
-	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
@@ -3223,6 +3019,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
+		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
 		sqlType := ses.sqlSourceType[0]
 		if i < len(ses.sqlSourceType) {
@@ -3371,13 +3168,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st, proc)
+			err = mce.handleShowVariables(st, proc, i, len(cws))
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.ShowErrors, *tree.ShowWarnings:
 			selfHandle = true
-			err = mce.handleShowErrors()
+			err = mce.handleShowErrors(i, len(cws))
 			if err != nil {
 				goto handleFailed
 			}
@@ -3515,7 +3312,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowAccounts:
 			selfHandle = true
-			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
+			if err = mce.handleShowAccounts(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.Load:
@@ -3547,14 +3344,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleSucceeded
 			}
 		case *tree.ShowVariables:
-			err = mce.handleShowVariables(st, proc)
+			err = mce.handleShowVariables(st, proc, i, len(cws))
 			if err != nil {
 				goto handleFailed
 			} else {
 				goto handleSucceeded
 			}
 		case *tree.ShowErrors, *tree.ShowWarnings:
-			err = mce.handleShowErrors()
+			err = mce.handleShowErrors(i, len(cws))
 			if err != nil {
 				goto handleFailed
 			} else {
@@ -3823,12 +3620,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleSucceeded:
 		//load data handle txn failure internally
 		incStatementCounter(tenant, stmt)
-		if !fromLoadData {
-			txnErr = ses.TxnCommitSingleStatement(stmt)
-			if txnErr != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-				return txnErr
-			}
+		txnErr = ses.TxnCommitSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
 		}
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable,
@@ -3932,12 +3727,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetConciseProfile(), err.Error())
-		if !fromLoadData {
-			txnErr = ses.TxnRollbackSingleStatement(stmt)
-			if txnErr != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-				return txnErr
-			}
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
 		}
 		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
@@ -4051,6 +3844,18 @@ func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Re
 		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 	}
 
+}
+
+func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex, cwsLen int) *Response {
+
+	//if the stmt has next stmt, should set the server status equals to 10
+	var resp *Response
+	if cwIndex < cwsLen-1 {
+		resp = NewResponse(category, SERVER_MORE_RESULTS_EXISTS, cmd, d)
+	} else {
+		resp = NewResponse(category, 0, cmd, d)
+	}
+	return resp
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
@@ -4519,6 +4324,10 @@ var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]b
 
 func init() {
 	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func GetStatementIdStr(ses *Session) string {
+	return trace.SpanFromContext(ses.GetRequestContext()).SpanContext().TraceID.String()
 }
 
 func getAccountId(ctx context.Context) uint32 {

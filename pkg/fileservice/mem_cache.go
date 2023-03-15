@@ -16,29 +16,66 @@ package fileservice
 
 import (
 	"context"
-	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
-	lru   *LRU
-	stats *CacheStats
-	ch    chan func()
+	policy      memcachepolicy.Policy
+	ch          chan func()
+	counterSets []*perfcounter.CounterSet
 }
 
-func NewMemCache(capacity int64) *MemCache {
+func NewMemCache(opts ...Options) *MemCache {
 	ch := make(chan func(), 65536)
 	go func() {
 		for fn := range ch {
 			fn()
 		}
 	}()
-	return &MemCache{
-		lru:   NewLRU(capacity),
-		stats: new(CacheStats),
-		ch:    ch,
+
+	initOpts := defaultOptions()
+	for _, optFunc := range opts {
+		optFunc(&initOpts)
 	}
+
+	return &MemCache{
+		policy:      initOpts.policy,
+		ch:          ch,
+		counterSets: initOpts.counterSets,
+	}
+}
+
+func WithLRU(capacity int64) Options {
+	return func(o *options) {
+		o.policy = lrupolicy.New(capacity)
+	}
+}
+
+func WithClock(capacity int64) Options {
+	return func(o *options) {
+		o.policy = clockpolicy.New(capacity)
+	}
+}
+
+func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) Options {
+	return func(o *options) {
+		o.counterSets = append(o.counterSets, counterSets...)
+	}
+}
+
+type Options func(*options)
+
+type options struct {
+	policy      memcachepolicy.Policy
+	counterSets []*perfcounter.CounterSet
+}
+
+func defaultOptions() options {
+	return options{}
 }
 
 var _ Cache = new(MemCache)
@@ -49,15 +86,15 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "MemCache.Read")
-	defer span.End()
 
-	numHit := 0
+	var numHit, numRead int64
 	defer func() {
-		if m.stats != nil {
-			atomic.AddInt64(&m.stats.NumRead, int64(len(vector.Entries)))
-			atomic.AddInt64(&m.stats.NumHit, int64(numHit))
-		}
+		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.MemRead.Add(numRead)
+			c.Cache.MemHit.Add(numHit)
+		}, m.counterSets...)
 	}()
 
 	for i, entry := range vector.Entries {
@@ -72,7 +109,8 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.lru.Get(key)
+		obj, size, ok := m.policy.Get(key)
+		numRead++
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
@@ -107,19 +145,15 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.lru.Set(key, obj, objSize)
+				m.policy.Set(key, obj, objSize)
 			}
 		} else {
-			m.lru.Set(key, entry.Object, entry.ObjectSize)
+			m.policy.Set(key, entry.Object, entry.ObjectSize)
 		}
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.lru.Flush()
-}
-
-func (m *MemCache) CacheStats() *CacheStats {
-	return m.stats
+	m.policy.Flush()
 }

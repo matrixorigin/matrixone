@@ -34,41 +34,40 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		fBacth  func([][]byte, []string, *nulls.Nulls) ([]string, error)
 	)
 	switch {
-	case types.IsString(vec.Typ.Oid):
+	case types.IsString(vec.GetType().Oid):
 		fSingle = json_unquote.StringSingle
 		fBacth = json_unquote.StringBatch
 	default:
 		fSingle = json_unquote.JsonSingle
 		fBacth = json_unquote.JsonBatch
 	}
-	resultType := types.T_varchar.ToType()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+	rtyp := types.T_varchar.ToType()
+	if vec.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	if vec.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
-		v := vector.MustBytesCols(vec)[0]
+	if vec.IsConst() {
+		v := vector.MustBytesCol(vec)[0]
 		var r string
 		r, err = fSingle(v)
 		if err != nil {
 			return nil, err
 		}
-		err = vector.SetStringAt(ret, 0, r, proc.Mp())
+		ret = vector.NewConstBytes(rtyp, []byte(r), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustStrCols(vec)
-	xs := vector.MustBytesCols(vec)
-	rs, err = fBacth(xs, rs, ret.Nsp)
+	rs := vector.MustStrCol(vec)
+	xs := vector.MustBytesCol(vec)
+	rs, err = fBacth(xs, rs, ret.GetNulls())
 	if err != nil {
 		return nil, err
 	}
 	for i, r := range rs {
-		if ret.Nsp.Contains(uint64(i)) {
+		if ret.GetNulls().Contains(uint64(i)) {
 			continue
 		}
 		err = vector.SetStringAt(ret, i, r, proc.Mp())

@@ -58,6 +58,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithExportInterval(SV.TraceExportInterval),
 		WithLongQueryTime(SV.LongQueryTime),
 		DebugMode(SV.EnableTraceDebug),
+		WithBufferSizeThreshold(SV.BufferSize),
 	)
 	return Init(ctx, opts...)
 }
@@ -111,7 +112,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 		}
 	}
 	defaultReminder := batchpipe.NewConstantClock(config.exportInterval)
-	defaultOptions := []BufferOption{BufferWithReminder(defaultReminder)}
+	defaultOptions := []BufferOption{BufferWithReminder(defaultReminder), BufferWithSizeThreshold(config.bufferSizeThreshold)}
 	var p = config.batchProcessor
 	// init BatchProcess for trace/log/error
 	switch {

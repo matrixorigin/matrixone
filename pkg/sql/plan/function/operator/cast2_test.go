@@ -16,11 +16,12 @@ package operator
 
 import (
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 type tcTemp struct {
