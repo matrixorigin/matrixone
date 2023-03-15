@@ -726,6 +726,7 @@ var (
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
 		catalog.AutoIncrTableName:    0,
+		"mo_pubs":                    0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	//the sqls creating many tables for the tenant.

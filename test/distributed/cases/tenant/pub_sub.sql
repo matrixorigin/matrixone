@@ -34,4 +34,7 @@ drop publication pub2;
 drop publication pub3;
 drop publication pub4;
 drop publication pub5;
+drop account acc0;
+drop account acc1;
+drop account acc2;
 drop database t;
