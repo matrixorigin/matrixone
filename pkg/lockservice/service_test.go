@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -74,6 +75,31 @@ func TestRowLock(t *testing.T) {
 	)
 }
 
+func TestRowLockWithMany(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}, {2}, {3}, {4}, {5}, {6}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+			lt, _ := l.getLockTable(0)
+			assert.Equal(t, 6, lt.(*localLockTable).mu.store.Len())
+		},
+	)
+}
+
 func TestMultipleRowLocks(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -93,7 +119,7 @@ func TestMultipleRowLocks(t *testing.T) {
 			for i := 0; i < sum; i++ {
 				wg.Add(1)
 				go func(i int) {
-					_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
+					_, err := l.Lock(ctx, 0, [][]byte{{1}, {2}, {3}, {4}, {5}, {6}}, []byte(strconv.Itoa(i)), option)
 					assert.NoError(t, err)
 					iter++
 					err = l.Unlock(ctx, []byte(strconv.Itoa(i)))
@@ -225,6 +251,34 @@ func TestDeadLockWithRange(t *testing.T) {
 	)
 }
 
+func TestRowLockWithSameTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			for i := 0; i < 10; i++ {
+				_, err := l.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn1"),
+					option)
+				assert.NoError(t, err)
+				lt, _ := l.getLockTable(0)
+				assert.Equal(t, 1, lt.(*localLockTable).mu.store.Len())
+			}
+		},
+	)
+}
+
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
 	l *service,
@@ -278,7 +332,7 @@ func TestRangeLock(t *testing.T) {
 	)
 }
 
-func TestMultipleRangeLocks(t *testing.T) {
+func TestRangeLockWithMany(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -286,7 +340,34 @@ func TestMultipleRangeLocks(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}, {2}, {3}, {4}, {5}, {6}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+			lt, _ := l.getLockTable(0)
+			assert.Equal(t, 6, lt.(*localLockTable).mu.store.Len())
+
+		},
+	)
+}
+
+func TestMultipleRangeLocks(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			option := LockOptions{
+				Granularity: pb.Granularity_Range,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
 			}
@@ -304,9 +385,9 @@ func TestMultipleRangeLocks(t *testing.T) {
 					}
 					end := (i + 1) % 10
 					_, err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
-					assert.NoError(t, err)
+					require.NoError(t, err, hex.EncodeToString([]byte(strconv.Itoa(i))))
 					err = l.Unlock(ctx, []byte(strconv.Itoa(i)))
-					assert.NoError(t, err)
+					require.NoError(t, err)
 				}(i)
 			}
 			wg.Wait()
@@ -316,7 +397,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
-	// runBenchmark(b, "unlimited-table", 32)
+	runBenchmark(b, "unlimited-table", 32)
 }
 
 var tableID atomic.Uint64
