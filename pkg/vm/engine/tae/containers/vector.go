@@ -24,10 +24,11 @@ import (
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
+	"unsafe"
 )
 
 // DN vector is different from CN vector by
-// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable.
+// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable. (Will be removed in future PR)
 // 2. Window - DN uses sharedmemory Window
 // 3. Mpool  - DN stores mpool reference within the vector
 // 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
@@ -48,13 +49,8 @@ type vector[T any] struct {
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
 	vec := &vector[T]{
-		downstreamVector: cnVector.New(typ),
+		downstreamVector: cnVector.NewVec(typ),
 		isNullable:       nullable,
-	}
-
-	// nullable
-	if nullable {
-		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
 	}
 
 	// setting mpool variables
@@ -89,10 +85,7 @@ func (vec *vector[T]) Get(i int) any {
 }
 
 func (vec *vector[T]) ShallowGet(i int) any {
-	if vec.IsNull(i) {
-		return types.Null{}
-	}
-	return GetNonNullValue(vec.downstreamVector, uint32(i))
+	return GetValue(vec.downstreamVector, uint32(i))
 }
 
 func (vec *vector[T]) Length() int {
@@ -104,9 +97,9 @@ func (vec *vector[T]) Append(v any) {
 
 	_, isNull := v.(types.Null)
 	if isNull {
-		_ = vec.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
+		_ = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
 	} else {
-		_ = vec.downstreamVector.Append(v, false, vec.mpool)
+		_ = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
 	}
 }
 
@@ -127,7 +120,7 @@ func (vec *vector[T]) NullMask() *cnNulls.Nulls {
 }
 
 func (vec *vector[T]) GetType() types.Type {
-	return vec.downstreamVector.GetType()
+	return *vec.downstreamVector.GetType()
 }
 
 func (vec *vector[T]) Extend(src Vector) {
@@ -141,9 +134,7 @@ func (vec *vector[T]) Update(i int, v any) {
 }
 
 func (vec *vector[T]) Slice() any {
-	//TODO: expensive
-	// MustFixedCol[T]
-	return vec.downstreamVector.Col
+	return cnVector.MustFixedCol[T](vec.downstreamVector)
 }
 
 func (vec *vector[T]) Bytes() *Bytes {
@@ -247,17 +238,20 @@ func (vec *vector[T]) Allocated() int {
 func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 
 	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
-	newDownstream.Nsp = nulls
+	if nulls != nil {
+		cnNulls.Add(newDownstream.GetNulls(), nulls.ToArray()...)
+	}
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
 }
 
 func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
+	mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, bs.Storage)
 	if typ.IsVarlen() {
-		mov = cnVector.NewWithDataAndArea(typ, bs.HeaderBuf(), bs.StorageBuf())
+		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage)
 	} else {
-		mov = cnVector.NewWithData(typ, bs.StorageBuf())
+		mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, bs.Storage)
 	}
 	return mov
 }
@@ -270,7 +264,7 @@ func (vec *vector[T]) tryPromoting() {
 
 		// deep copy
 		newDownstream, _ := newDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
-		newDownstream.Nsp = vec.downstreamVector.Nsp.Clone()
+		cnNulls.Add(newDownstream.GetNulls(), vec.downstreamVector.GetNulls().ToArray()...)
 
 		vec.downstreamVector = newDownstream
 		vec.isOwner = true
@@ -281,32 +275,42 @@ func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*c
 
 	var mov *cnVector.Vector
 	if typ.IsVarlen() {
-		dataByteArr := bs.HeaderBuf()
 
-		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		// 1. Mpool Allocate Header
+		var header []types.Varlena
+		headerByteArr := bs.HeaderBuf()
+
+		if len(headerByteArr) > 0 {
+			headerAllocated, err := pool.Alloc(len(headerByteArr))
+			if err != nil {
+				return nil, err
+			}
+			copy(headerAllocated, headerByteArr)
+
+			sz := typ.TypeSize()
+			header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&headerAllocated[0])), len(headerAllocated)/sz)
+		}
+
+		// 2. Mpool Allocate Storage
+		storageByteArr := bs.StorageBuf()
+		storageAllocated, err := pool.Alloc(len(storageByteArr))
 		if err != nil {
 			return nil, err
 		}
-		copy(dataAllocated, dataByteArr)
+		copy(storageAllocated, storageByteArr)
 
-		areaByteArr := bs.StorageBuf()
-		areaAllocated, err := pool.Alloc(len(areaByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(areaAllocated, areaByteArr)
-
-		mov = cnVector.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
+		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated)
 	} else {
 
-		dataByteArr := bs.StorageBuf()
-		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		// 1. Mpool Allocate Storage
+		storageByteArr := bs.StorageBuf()
+		storageAllocated, err := pool.Alloc(len(storageByteArr))
 		if err != nil {
 			return nil, err
 		}
-		copy(dataAllocated, dataByteArr)
+		copy(storageAllocated, storageByteArr)
 
-		mov = cnVector.NewWithData(typ, dataAllocated)
+		mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, storageAllocated)
 	}
 	return mov, nil
 }
@@ -436,7 +440,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 // TODO: --- Need advise on the below functions
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: Not doing tryPromoting()
+	// TODO: Not doing tryPromoting(). Is it ok XuPeng?
 	var sels []int64
 	vecLen := uint32(vec.Length())
 	for i := uint32(0); i < vecLen; i++ {
@@ -444,7 +448,7 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 			sels = append(sels, int64(i))
 		}
 	}
-	cnVector.Shrink(vec.downstreamVector, sels)
+	vec.downstreamVector.Shrink(sels)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
