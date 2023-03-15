@@ -178,6 +178,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		}
 	case AlterView:
 		return c.scope.AlterView(c)
+	case AlterTable:
+		return c.scope.AlterTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
 	case CreateIndex:
@@ -238,6 +240,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 		case plan.DataDefinition_ALTER_VIEW:
 			return &Scope{
 				Magic: AlterView,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_ALTER_TABLE:
+			return &Scope{
+				Magic: AlterTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:

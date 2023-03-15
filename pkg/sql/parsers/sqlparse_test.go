@@ -16,6 +16,7 @@ package parsers
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -63,4 +64,30 @@ func TestPostgresql(t *testing.T) {
 	if debugSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", debugSQL.output, out)
 	}
+}
+
+func TestSplitSqlBySemicolon(t *testing.T) {
+	ret1 := SplitSqlBySemicolon("select 1;select 2;select 3;")
+	require.Equal(t, 3, len(ret1))
+	require.Equal(t, "select 1", ret1[0])
+	require.Equal(t, "select 2", ret1[1])
+	require.Equal(t, "select 3", ret1[2])
+
+	ret2 := SplitSqlBySemicolon("select 1;select 2/*;;;*/;select 3;")
+	require.Equal(t, 3, len(ret2))
+	require.Equal(t, "select 1", ret2[0])
+	require.Equal(t, "select 2/*;;;*/", ret2[1])
+	require.Equal(t, "select 3", ret2[2])
+
+	ret3 := SplitSqlBySemicolon("select 1;select \"2;;\";select 3;")
+	require.Equal(t, 3, len(ret3))
+	require.Equal(t, "select 1", ret3[0])
+	require.Equal(t, "select \"2;;\"", ret3[1])
+	require.Equal(t, "select 3", ret3[2])
+
+	ret4 := SplitSqlBySemicolon("select 1;select '2;;';select 3;")
+	require.Equal(t, 3, len(ret4))
+	require.Equal(t, "select 1", ret4[0])
+	require.Equal(t, "select '2;;'", ret4[1])
+	require.Equal(t, "select 3", ret4[2])
 }

@@ -226,11 +226,20 @@ func NewSession(
 
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
-					return ss.stream.write(ctx, msg.response)
+
+					err := ss.stream.write(ctx, msg.response)
+					if err != nil {
+						ss.logger.Error("fail to send logtail response",
+							zap.Error(err),
+							zap.String("timeout", msg.timeout.String()),
+							zap.String("response", msg.response.String()),
+						)
+						return err
+					}
+					return nil
 				}
 
 				if err := sendFunc(); err != nil {
-					ss.logger.Error("fail to send logtail response", zap.Error(err))
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
@@ -247,6 +256,11 @@ func NewSession(
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
 	ss.logger.Info("clean session for morpc stream")
+
+	// close morpc stream, maybe verbose
+	if err := ss.stream.Close(); err != nil {
+		ss.logger.Error("fail to close morpc client session", zap.Error(err))
+	}
 
 	ss.cancelFunc()
 	ss.wg.Wait()
