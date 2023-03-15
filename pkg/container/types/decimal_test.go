@@ -32,6 +32,29 @@ func TestParse128(t *testing.T) {
 		panic("Decimal128Parse wrong")
 	}
 }
+func TestCompare64(t *testing.T) {
+	x := Decimal64(0)
+	y := ^x
+	if CompareDecimal64(x, y) != 1 {
+		panic("CompareDecimal64 wrong")
+	}
+}
+
+func TestCompare128(t *testing.T) {
+	x := Decimal128{0, 0}
+	y := Decimal128{^x.B0_63, ^x.B64_127}
+	if CompareDecimal128(x, y) != 1 {
+		panic("CompareDecimal128 wrong")
+	}
+}
+
+func TestCompare256(t *testing.T) {
+	x := Decimal256{0, 0, 0, 0}
+	y := Decimal256{^x.B0_63, ^x.B64_127, ^x.B128_191, ^x.B192_255}
+	if CompareDecimal256(x, y) != 1 {
+		panic("CompareDecimal256 wrong")
+	}
+}
 
 func TestDecimal64Float(t *testing.T) {
 	x := Decimal64(rand.Int())
@@ -66,16 +89,30 @@ func TestDecimal64AddSub(t *testing.T) {
 	}
 }
 func TestDecimal128AddSub(t *testing.T) {
-	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
 	z := x
 	err := error(nil)
-	y := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
 	x, _, err = x.Add(y, 0, 0)
 	if err == nil {
 		x, _, err = x.Sub(y, 0, 0)
 	}
 	if err != nil || x != z {
 		panic("Decimal128AddSub wrong")
+	}
+}
+
+func TestDecimal256AddSub(t *testing.T) {
+	x := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	z := x
+	err := error(nil)
+	y := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal256AddSub wrong")
 	}
 }
 
@@ -103,6 +140,21 @@ func TestDecimal128MulDiv(t *testing.T) {
 	}
 	if err != nil || x != z {
 		panic("Decimal128MulDiv wrong")
+	}
+}
+
+func TestDecimal256MulDiv(t *testing.T) {
+	x := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), 0}
+	z := x
+	err := error(nil)
+	y := Decimal256{uint64(rand.Int()), 0, 0, 0}
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		fmt.Println(err)
+		panic("Decimal256MulDiv wrong")
 	}
 }
 func TestParseFormat(t *testing.T) {
