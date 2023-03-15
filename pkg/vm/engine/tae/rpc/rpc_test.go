@@ -128,7 +128,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		userId:    0,
 		roleId:    0,
 	}
-	var entries []*api.Entry
+	//var entries []*api.Entry
+	entries := make([]*api.Entry, 0)
 	txn := mock1PCTxn(txnEngine)
 	dbTestID := IDAlloc.NextDB()
 	createDbEntries, err := makeCreateDatabaseEntries(
