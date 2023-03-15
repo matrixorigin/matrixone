@@ -151,7 +151,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, nodeUUID string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
@@ -177,7 +177,11 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 		if err != nil {
 			return nil, err
 		}
-		perfCounterSet.FileServices[nodeUUID+":"+service.Name()] = counterSet
+		perfCounterSet.FileServices[strings.Join([]string{
+			serviceType.String(),
+			nodeUUID,
+			service.Name(),
+		}, " ")] = counterSet
 		services = append(services, service)
 
 	}
