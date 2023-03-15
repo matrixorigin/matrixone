@@ -3079,8 +3079,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.AlterTable:
-			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -3939,7 +3937,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
 		*tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
