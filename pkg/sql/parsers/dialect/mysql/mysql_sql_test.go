@@ -2064,6 +2064,14 @@ var (
 		{
 			input: "show subscriptions",
 		},
+		{
+			input:  "show table_size from test",
+			output: "show table size from test",
+		},
+		{
+			input:  "show table_size from mo_role from mo_catalog",
+			output: "show table size from mo_role from mo_catalog",
+		},
 	}
 )
 
