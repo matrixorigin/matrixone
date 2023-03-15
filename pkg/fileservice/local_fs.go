@@ -44,7 +44,7 @@ type LocalFS struct {
 	memCache    *MemCache
 	asyncUpdate bool
 
-	perfCounters []*perfcounter.Counter
+	perfCounterSets []*perfcounter.CounterSet
 }
 
 var _ FileService = new(LocalFS)
@@ -57,7 +57,7 @@ func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
-	perfCounters []*perfcounter.Counter,
+	perfCounterSets []*perfcounter.CounterSet,
 ) (*LocalFS, error) {
 
 	// ensure dir
@@ -105,16 +105,16 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
-		name:         name,
-		rootPath:     rootPath,
-		dirFiles:     make(map[string]*os.File),
-		asyncUpdate:  true,
-		perfCounters: perfCounters,
+		name:            name,
+		rootPath:        rootPath,
+		dirFiles:        make(map[string]*os.File),
+		asyncUpdate:     true,
+		perfCounterSets: perfCounterSets,
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(
 			WithLRU(memCacheCapacity),
-			WithPerfCounters(perfCounters),
+			WithPerfCounterSets(perfCounterSets),
 		)
 		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
