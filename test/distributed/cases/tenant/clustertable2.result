@@ -125,5 +125,5 @@ network_policy    TEXT(0)    YES        null
 created_by    TEXT(0)    YES        null        
 created_at    DATETIME(0)    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
-drop account if exists acc_idx;
 drop table mo_instance;
+drop account if exists acc_idx;

@@ -97,5 +97,5 @@ create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 -- @session:id=3&user=acc_idx:root&password=123456
 desc mo_catalog.mo_instance;
 -- @session
-drop account if exists acc_idx;
 drop table mo_instance;
+drop account if exists acc_idx;
