@@ -290,6 +290,7 @@ func (w *S3Writer) mergeBlock(idx int, length int, proc *process.Process) error 
 			if err := w.writeBlock(w.buffers[idx]); err != nil {
 				return err
 			}
+			container.buffers[idx].CleanOnlyData()
 		}
 		if err := w.writeEndBlocks(proc, idx); err != nil {
 			return err
