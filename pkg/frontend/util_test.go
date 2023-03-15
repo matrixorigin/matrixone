@@ -15,11 +15,9 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"testing"
 	"time"
@@ -33,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -502,189 +499,6 @@ func TestGetSimpleExprValue(t *testing.T) {
 		}
 
 	})
-}
-
-func TestFileExists(t *testing.T) {
-	cvey.Convey("test file exists", t, func() {
-		exist, err := fileExists("test.txt")
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(exist, cvey.ShouldBeFalse)
-	})
-}
-
-func TestGetAttrFromTableDef(t *testing.T) {
-	cvey.Convey("test get attr from table def", t, func() {
-		want := []string{"id", "a", "b"}
-		defs := []engine.TableDef{
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
-					Name: "id",
-				},
-			},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
-					Name: "a",
-				},
-			},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
-					Name: "b",
-				},
-			},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
-					Name:    "c",
-					IsRowId: true,
-				},
-			},
-			&engine.AttributeDef{
-				Attr: engine.Attribute{
-					Name:     "d",
-					IsHidden: true,
-				},
-			},
-		}
-		act, isView, err := getAttrFromTableDef(defs)
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(isView, cvey.ShouldBeFalse)
-		cvey.So(act, cvey.ShouldResemble, want)
-	})
-}
-
-func TestGetDDL(t *testing.T) {
-	ctx := context.TODO()
-
-	cvey.Convey("test get ddl", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		want0 := []byte("create database test;")
-		want1 := []byte("create table test.t1 (id int);")
-		rs0 := []interface{}{&MysqlResultSet{Data: [][]interface{}{{want0, want0}}}}
-		rs1 := []interface{}{&MysqlResultSet{Data: [][]interface{}{{want0, want1}}}}
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		bh.EXPECT().Close().Return().AnyTimes()
-		cnt := -1
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() ([]interface{}, error) {
-			cnt++
-			if cnt == 0 {
-				return rs0, nil
-			}
-			return rs1, nil
-		}).AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ret, err := getDDL(bh, ctx, "")
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(ret, cvey.ShouldResemble, string(want0))
-		ret, err = getDDL(bh, ctx, "")
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(ret, cvey.ShouldResemble, string(want1))
-	})
-}
-
-func TestConvertValueBat2Str(t *testing.T) {
-	var (
-		typs = []types.Type{
-			types.T_bool.ToType(),
-			types.T_int8.ToType(),
-			types.T_int16.ToType(),
-			types.T_int32.ToType(),
-			types.T_int64.ToType(),
-			types.T_uint8.ToType(),
-			types.T_uint16.ToType(),
-			types.T_uint32.ToType(),
-			types.T_uint64.ToType(),
-			types.T_float32.ToType(),
-			types.T_float64.ToType(),
-			types.T_decimal64.ToType(),
-			types.T_decimal128.ToType(),
-			types.T_date.ToType(),
-			types.T_datetime.ToType(),
-			types.T_timestamp.ToType(),
-			types.T_varchar.ToType(),
-			types.T_char.ToType(),
-			types.T_json.ToType(),
-		}
-	)
-	before := testutil.TestUtilMp.CurrNB()
-	bat := testutil.NewBatch(typs, true, 5, testutil.TestUtilMp)
-	rbat, err := convertValueBat2Str(context.TODO(), bat, testutil.TestUtilMp, time.Local)
-	require.Nil(t, err)
-	require.NotNil(t, rbat)
-	bat.Clean(testutil.TestUtilMp)
-	rbat.Clean(testutil.TestUtilMp)
-	after := testutil.TestUtilMp.CurrNB()
-	require.Equal(t, before, after)
-}
-
-func TestGenDumpFileName(t *testing.T) {
-	base := "test.sql"
-	want := "test_1.sql"
-	got := genDumpFileName(base, 1)
-	require.Equal(t, want, got)
-}
-
-func TestCreateDumpFile(t *testing.T) {
-	base := "test_dump_" + time.Now().Format("20060102150405") + ".sql"
-	var f *os.File
-	defer func() {
-		if f != nil {
-			f.Close()
-		}
-		os.RemoveAll(base)
-	}()
-	f, err := createDumpFile(context.TODO(), base)
-	require.Nil(t, err)
-	require.NotNil(t, f)
-}
-
-func TestWriteDump2File(t *testing.T) {
-	ctx := context.TODO()
-	base := "test_dump_" + time.Now().Format("20060102150405") + ".sql"
-	var f *os.File
-	defer func() {
-		if f != nil {
-			f.Close()
-		}
-		removeFile(base, 1)
-		removeFile(base, 2)
-	}()
-	f, err := createDumpFile(ctx, base)
-	require.Nil(t, err)
-	require.NotNil(t, f)
-	dump := &tree.MoDump{
-		OutFile:     base,
-		MaxFileSize: 1,
-	}
-	buf := bytes.NewBufferString("test")
-	curFileSize, curFileIdx := int64(0), int64(1)
-	_, _, _, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
-	require.NotNil(t, err)
-	dump.MaxFileSize = 1024
-	bufSize := buf.Len()
-	f, curFileIdx, curFileSize, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
-	require.Nil(t, err)
-	require.NotNil(t, f)
-	require.Equal(t, int64(1), curFileIdx)
-	require.Equal(t, int64(bufSize), curFileSize)
-	dump.MaxFileSize = 9
-	buf.WriteString("123456")
-	bufSize = buf.Len()
-	f, curFileIdx, curFileSize, err = writeDump2File(ctx, buf, dump, f, curFileIdx, curFileSize)
-	require.Nil(t, err)
-	require.NotNil(t, f)
-	require.Equal(t, int64(2), curFileIdx)
-	require.Equal(t, int64(bufSize), curFileSize)
-}
-
-func TestMaybeAppendExtension(t *testing.T) {
-	base := "test"
-	want := "test.sql"
-	got := maybeAppendExtension(base)
-	require.Equal(t, want, got)
-	got = maybeAppendExtension(want)
-	require.Equal(t, want, got)
 }
 
 func TestRemovePrefixComment(t *testing.T) {
