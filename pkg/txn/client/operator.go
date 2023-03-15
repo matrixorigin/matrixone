@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -123,6 +124,7 @@ type txnOperator struct {
 		closed       bool
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
+		lockTables   []lock.LockTable
 	}
 }
 
@@ -154,6 +156,7 @@ func newTxnOperatorWithSnapshot(
 	tc := &txnOperator{rt: rt, sender: sender}
 	tc.mu.txn = v.Txn
 	tc.txnID = v.Txn.ID
+	tc.mu.lockTables = v.LockTables
 	tc.option.disable1PCOpt = v.Disable1PCOpt
 	tc.option.enableCacheWrite = v.EnableCacheWrite
 	tc.option.readyOnly = v.ReadyOnly
@@ -195,6 +198,7 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 		ReadyOnly:        tc.option.readyOnly,
 		EnableCacheWrite: tc.option.enableCacheWrite,
 		Disable1PCOpt:    tc.option.disable1PCOpt,
+		LockTables:       tc.mu.lockTables,
 	}
 	return snapshot.Marshal()
 }
@@ -218,6 +222,13 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 
 	if !bytes.Equal(snapshot.Txn.ID, tc.mu.txn.ID) {
 		tc.rt.Logger().Fatal("apply snapshot with invalid txn id")
+	}
+
+	// apply locked tables in other cn
+	for _, v := range snapshot.LockTables {
+		if err := tc.doAddLockTableLocked(v); err != nil {
+			return err
+		}
 	}
 
 	for _, dn := range snapshot.Txn.DNShards {
@@ -308,6 +319,30 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+
+	return tc.doAddLockTableLocked(value)
+}
+
+func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
+	for _, l := range tc.mu.lockTables {
+		if l.Table == value.Table {
+			if l.Changed(value) {
+				return moerr.NewDeadLockDetectedNoCtx()
+			}
+			return nil
+		}
+	}
+	tc.mu.lockTables = append(tc.mu.lockTables, value)
+	return nil
+}
+
 func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_DEBUG
@@ -336,6 +371,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			tc.mu.closed = true
 			tc.mu.Unlock()
 		}()
+		tc.mu.txn.LockTables = tc.mu.lockTables
 	}
 
 	if err := tc.validate(ctx, commit); err != nil {

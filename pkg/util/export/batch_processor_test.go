@@ -18,18 +18,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
+	"github.com/lni/goutils/leaktest"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 )
@@ -113,6 +118,9 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	}
 	return should
 }
+
+var waitGetBatchFinish = func() {}
+
 func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -132,6 +140,11 @@ func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 		buf.WriteString("),")
 	}
 	logutil.Infof("GetBatch: %s", buf.String())
+	if waitGetBatchFinish != nil {
+		logutil.Infof("wait BatchFinish")
+		waitGetBatchFinish()
+		logutil.Infof("wait BatchFinish, Done")
+	}
 	return string(buf.Next(buf.Len() - 1))
 }
 
@@ -155,6 +168,8 @@ var MOCollectorMux sync.Mutex
 func TestNewMOCollector(t *testing.T) {
 	MOCollectorMux.Lock()
 	defer MOCollectorMux.Unlock()
+	defer leaktest.AfterTest(t)()
+	defer agent.Close()
 	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
@@ -162,7 +177,8 @@ func TestNewMOCollector(t *testing.T) {
 	})
 	var signalC = make(chan struct{}, 16)
 	var acceptSignal = func() { <-signalC }
-	signalFunc = func() { signalC <- struct{}{} }
+	stub1 := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
+	defer stub1.Reset()
 
 	collector := NewMOCollector(ctx)
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
@@ -174,18 +190,146 @@ func TestNewMOCollector(t *testing.T) {
 	acceptSignal()
 	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
-	got := <-ch
-	require.Equal(t, `(1),(2),(3)`, got)
+	got123 := <-ch
 	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
 	collector.Collect(ctx, newDummy(5))
 	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
-	got = <-ch
-	require.Equal(t, `(4),(5)`, got)
+	got45 := <-ch
 	for i := len(ch); i > 0; i-- {
-		got = <-ch
+		got := <-ch
 		t.Logf("left ch: %s", got)
+	}
+	require.Equal(t, `(1),(2),(3)`, got123)
+	require.Equal(t, `(4),(5)`, got45)
+}
+
+func TestNewMOCollector_BufferCnt(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	ctx := context.Background()
+	ch := make(chan string, 3)
+	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
+		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
+	})
+	var signalC = make(chan struct{}, 16)
+	var acceptSignal = func() { <-signalC }
+	stub1 := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
+	defer stub1.Reset()
+
+	var batchFlowC = make(chan struct{})
+	var signalBatchFinishC = make(chan struct{})
+	var signalBatchFinish = func() {
+		signalBatchFinishC <- struct{}{}
+	}
+	bhStub := gostub.Stub(&waitGetBatchFinish, func() {
+		batchFlowC <- struct{}{}
+		<-signalBatchFinishC
+	})
+	defer bhStub.Reset()
+
+	cfg := &config.OBCollectorConfig{}
+	cfg.SetDefaultValues()
+	cfg.ShowStatsInterval.Duration = 5 * time.Second
+	cfg.BufferCnt = 2
+	collector := NewMOCollector(ctx, WithOBCollectorConfig(cfg))
+	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
+	collector.Start()
+
+	collector.Collect(ctx, newDummy(1))
+	acceptSignal()
+	collector.Collect(ctx, newDummy(2))
+	acceptSignal()
+	collector.Collect(ctx, newDummy(3))
+	acceptSignal()
+	// make 1/2 buffer hang.
+	<-batchFlowC
+	collector.Collect(ctx, newDummy(4))
+	acceptSignal()
+	collector.Collect(ctx, newDummy(5))
+	acceptSignal()
+	collector.Collect(ctx, newDummy(6))
+	acceptSignal()
+
+	// make 2/2 buffer hang.
+	<-batchFlowC
+	// send 7th elem, it will hang, wait for buffer slot
+	go collector.Collect(ctx, newDummy(7))
+	// reset
+	bhStub.Reset()
+
+	select {
+	case <-signalC:
+		t.Errorf("failed wait buffer released.")
+		return
+	case <-time.After(5 * time.Second):
+		t.Logf("success: hang by buffer alloc: no slot.")
+		// reset be normal flow
+		signalBatchFinish()
+		signalBatchFinish()
+		acceptSignal()
+		t.Logf("reset normally")
+	}
+	got123 := <-ch
+	got456 := <-ch
+	collector.Stop(true)
+	got7 := <-ch
+	got := []string{got123, got456, got7}
+	sort.Strings(got)
+	logutil.GetGlobalLogger().Sync()
+	for i := len(ch); i > 0; i-- {
+		got := <-ch
+		t.Logf("left ch: %s", got)
+	}
+	require.Equal(t, []string{`(1),(2),(3)`, `(4),(5),(6)`, `(7)`}, got)
+}
+
+func Test_newBufferHolder_AddAfterStop(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	type args struct {
+		ctx    context.Context
+		name   batchpipe.HasName
+		impl   motrace.PipeImpl
+		signal bufferSignalFunc
+		c      *MOCollector
+	}
+
+	ch := make(chan string)
+	triggerSignalFunc := func(holder *bufferHolder) {}
+
+	cfg := &config.OBCollectorConfig{}
+	cfg.SetDefaultValues()
+	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
+
+	tests := []struct {
+		name string
+		args args
+		want *bufferHolder
+	}{
+		{
+			name: "callAddAfterStop",
+			args: args{
+				ctx:    context.TODO(),
+				name:   newDummy(0),
+				impl:   &dummyPipeImpl{ch: ch, duration: time.Hour},
+				signal: triggerSignalFunc,
+				c:      collector,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := newBufferHolder(tt.args.ctx, tt.args.name, tt.args.impl, tt.args.signal, tt.args.c)
+			buf.Start()
+			buf.Add(newDummy(1))
+			buf.Stop()
+			buf.Add(newDummy(2))
+			buf.Add(newDummy(3))
+			b, _ := buf.buffer.(*dummyBuffer)
+			require.Equal(t, []batchpipe.HasName{newDummy(1)}, b.arr)
+		})
 	}
 }

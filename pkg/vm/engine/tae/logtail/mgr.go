@@ -25,11 +25,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// Logtail manager holds sorted txn handles. Its main jobs:
+//
+// - Insert new txn handle
+// - Efficiently iterate over arbitrary range of txn handles on a snapshot
+// - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
-	now       func() types.TS
+	now       func() types.TS // now is from TxnManager
 }
 
 func NewManager(blockSize int, now func() types.TS) *Manager {
@@ -42,10 +47,13 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 	}
 }
 
+// OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
+// add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	mgr.table.AddTxn(txn)
 }
 
+// GetReader get a snapshot of all txn prepared between from and to.
 func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	return &Reader{
 		from:  from,

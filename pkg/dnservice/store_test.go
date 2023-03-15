@@ -237,8 +237,9 @@ func newTestStore(
 	options ...Option) *store {
 	assert.NoError(t, os.RemoveAll(testDNStoreAddr[7:]))
 	c := &Config{
-		UUID:          uuid,
-		ListenAddress: testDNStoreAddr,
+		UUID:           uuid,
+		ListenAddress:  testDNStoreAddr,
+		ServiceAddress: testDNStoreAddr,
 	}
 	c.LogtailServer.ListenAddress = testDNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)

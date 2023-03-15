@@ -16,13 +16,14 @@ package disttae
 
 import (
 	"context"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 type statsInfoMap struct {
@@ -239,9 +240,9 @@ func calcNdvUsingMinMax(minVal, maxVal any, t types.Type) float64 {
 	case types.T_uint64:
 		return float64(maxVal.(uint64)-minVal.(uint64)) + 1
 	case types.T_decimal64:
-		return maxVal.(types.Decimal64).Sub(minVal.(types.Decimal64)).ToFloat64() + 1
+		return types.Decimal64ToFloat64(maxVal.(types.Decimal64), t.Scale) - types.Decimal64ToFloat64(minVal.(types.Decimal64), t.Scale) + 1
 	case types.T_decimal128:
-		return maxVal.(types.Decimal128).Sub(minVal.(types.Decimal128)).ToFloat64() + 1
+		return types.Decimal128ToFloat64(maxVal.(types.Decimal128), t.Scale) - types.Decimal128ToFloat64(minVal.(types.Decimal128), t.Scale) + 1
 	case types.T_float32:
 		return float64(maxVal.(float32)-minVal.(float32)) + 1
 	case types.T_float64:

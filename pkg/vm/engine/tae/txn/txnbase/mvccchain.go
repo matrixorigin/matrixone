@@ -404,6 +404,8 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 	return
 }
 
+// ClonePreparedInRange will collect all txn node prepared in the time window.
+// Wait txn to complete committing if it didn't.
 func (be *MVCCChain) ClonePreparedInRange(start, end types.TS) (ret []txnif.MVCCNode) {
 	needWait, txn := be.NeedWaitCommitting(end.Next())
 	if needWait {

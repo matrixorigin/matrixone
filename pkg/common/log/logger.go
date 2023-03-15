@@ -47,6 +47,11 @@ func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
 	return newMOLogger(l.logger.With(fields...), l.ctx)
 }
 
+// WithOptions creates a child logger with zap options.
+func (l *MOLogger) WithOptions(opts ...zap.Option) *MOLogger {
+	return newMOLogger(l.logger.WithOptions(opts...), l.ctx)
+}
+
 // Named adds a new path segment to the logger's name. Segments are joined by
 // periods. By default, Loggers are unnamed.
 func (l *MOLogger) Named(name string) *MOLogger {
@@ -108,7 +113,7 @@ func (l *MOLogger) Debug(msg string, fields ...zap.Field) bool {
 }
 
 // InfoDebugAction shortcuts to print debug action log
-func (l *MOLogger) InfoDebugAction(msg string, fields ...zap.Field) func() {
+func (l *MOLogger) DebugAction(msg string, fields ...zap.Field) func() {
 	return l.LogAction(msg, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
@@ -179,10 +184,10 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 // This method should often be used to log the elapsed time of a function and, as the
 // logs appear in pairs, can also be used to check whether a function has been executed.
 func (l *MOLogger) LogAction(action string, opts LogOptions, fields ...zap.Field) func() {
-	startAt := time.Now()
 	if !l.Log(action, opts.AddCallerSkip(1), fields...) {
 		return nothing
 	}
+	startAt := time.Now()
 	return func() {
 		fields = append(fields, zap.Duration(FieldNameCost, time.Since(startAt)))
 		l.Log(action, opts, fields...)

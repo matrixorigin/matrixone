@@ -66,7 +66,7 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 }
 
 type TxnStoreFactory = func() txnif.TxnStore
-type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, []byte) txnif.AsyncTxn
+type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
 type TxnManager struct {
 	sync.RWMutex
@@ -101,6 +101,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	return mgr
 }
 
+// Now gets a timestamp under the protect from a inner lock. The lock makes
+// all timestamps allocated before have been assigned to txn, which means those
+// txn are visible for the returned timestamp.
 func (mgr *TxnManager) Now() types.TS {
 	mgr.Lock()
 	defer mgr.Unlock()
@@ -142,7 +145,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	startTs := mgr.TsAlloc.Alloc()
 
 	store := mgr.TxnStoreFactory()
-	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
 	mgr.IDMap[string(txnId)] = txn
 	return
@@ -163,7 +166,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	txn, ok := mgr.IDMap[string(id)]
 	if !ok {
 		store := mgr.TxnStoreFactory()
-		txn = mgr.TxnFactory(mgr, store, id, ts, info)
+		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
 		mgr.IDMap[string(id)] = txn
 	}

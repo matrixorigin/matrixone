@@ -17,25 +17,26 @@ package lockservice
 import (
 	"testing"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewRowLock(t *testing.T) {
 	txnID := []byte("1")
-	l := newRowLock(txnID, Exclusive)
+	l := newRowLock(txnID, pb.LockMode_Exclusive)
 	assert.True(t, l.isLockRow())
-	assert.Equal(t, Exclusive, l.getLockMode())
+	assert.Equal(t, pb.LockMode_Exclusive, l.getLockMode())
 }
 
 func TestNewRangeLock(t *testing.T) {
 	txnID := []byte("1")
-	sl, el := newRangeLock(txnID, Shared)
+	sl, el := newRangeLock(txnID, pb.LockMode_Shared)
 
 	assert.True(t, sl.isLockRange())
 	assert.True(t, sl.isLockRangeStart())
-	assert.Equal(t, Shared, sl.getLockMode())
+	assert.Equal(t, pb.LockMode_Shared, sl.getLockMode())
 
 	assert.True(t, el.isLockRange())
 	assert.True(t, el.isLockRangeEnd())
-	assert.Equal(t, Shared, el.getLockMode())
+	assert.Equal(t, pb.LockMode_Shared, el.getLockMode())
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rpc
+package morpc
 
 import (
 	"testing"
@@ -23,7 +23,7 @@ import (
 
 func TestAdjustConfig(t *testing.T) {
 	c := Config{}
-	c.adjust()
+	c.Adjust()
 	assert.Equal(t, defaultMaxConnections, c.MaxConnections)
 	assert.Equal(t, defaultSendQueueSize, c.SendQueueSize)
 	assert.Equal(t, defaultMaxIdleDuration, c.MaxIdleDuration.Duration)

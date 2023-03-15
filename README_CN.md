@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.7.0/MatrixOne/Release-Notes/v0.7.0/">
+  <a href="https://docs.matrixorigin.cn/0.7.0/MatrixOne/Release-Notes/v0.7.0/">
    <img src="https://img.shields.io/badge/Release-v0.7.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/cn/0.7.0/">
+  <a href="https://docs.matrixorigin.cn//0.7.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -139,13 +139,13 @@ MatrixOne 的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Overview/matrixone-architecture-design/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Overview/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装 MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
@@ -309,7 +309,7 @@ Enter password:
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 

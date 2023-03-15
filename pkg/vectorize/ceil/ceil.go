@@ -16,8 +16,6 @@ package ceil
 
 import (
 	"math"
-	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -40,7 +38,7 @@ var (
 	CeilInt64      func([]int64, []int64, int64) []int64
 	CeilFloat32    func([]float32, []float32, int64) []float32
 	CeilFloat64    func([]float64, []float64, int64) []float64
-	CeilDecimal128 func(int32, []types.Decimal128, []types.Decimal128, int64) []types.Decimal128
+	CeilDecimal128 func(int32, int32, []types.Decimal128, []types.Decimal128) []types.Decimal128
 )
 
 func init() {
@@ -296,20 +294,9 @@ func ceilFloat64(xs, rs []float64, digits int64) []float64 {
 	return rs
 }
 
-func ceilDecimal128(scale int32, xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
+func ceilDecimal128(scale1, scale2 int32, xs, rs []types.Decimal128) []types.Decimal128 {
 	for i := range xs {
-		strs := strings.Split(xs[i].ToStringWithScale(scale), ".")
-		x, _ := types.Decimal128_FromString(strs[0])
-		if strs[0][0] == '-' || len(strs) == 1 {
-			rs[i] = x
-			continue
-		}
-
-		v, _ := strconv.ParseFloat(strs[1], 64)
-		if v > float64(0) {
-			x = x.AddInt64(1)
-		}
-		rs[i] = x
+		rs[i] = xs[i].Ceil(scale1, scale2)
 	}
 	return rs
 }

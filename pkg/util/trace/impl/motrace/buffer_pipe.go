@@ -73,7 +73,7 @@ func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
-	return newItemBuffer(opts...)
+	return NewItemBuffer(opts...)
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
@@ -172,7 +172,7 @@ type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, table.
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
 var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, table.WriterFactory) any { return "" })
 
-func newItemBuffer(opts ...BufferOption) *itemBuffer {
+func NewItemBuffer(opts ...BufferOption) *itemBuffer {
 	b := &itemBuffer{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
@@ -183,9 +183,9 @@ func newItemBuffer(opts ...BufferOption) *itemBuffer {
 	for _, opt := range opts {
 		opt.apply(b)
 	}
-	logutil.Debugf("newItemBuffer, Reminder next: %v", b.Reminder.RemindNextAfter())
+	logutil.Debugf("NewItemBuffer, Reminder next: %v", b.Reminder.RemindNextAfter())
 	if b.genBatchFunc == nil || b.filterItemFunc == nil || b.Reminder == nil {
-		logutil.Debug("newItemBuffer meet nil elem")
+		logutil.Debug("NewItemBuffer meet nil elem")
 		return nil
 	}
 	return b

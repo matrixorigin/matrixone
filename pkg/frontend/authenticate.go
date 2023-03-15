@@ -476,7 +476,6 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
-	PrivilegeTypeDump
 )
 
 type PrivilegeScope uint8
@@ -610,8 +609,6 @@ func (pt PrivilegeType) String() string {
 		return "execute"
 	case PrivilegeTypeValues:
 		return "values"
-	case PrivilegeTypeDump:
-		return "dump"
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -688,8 +685,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeValues:
 		return PrivilegeScopeTable
-	case PrivilegeTypeDump:
-		return PrivilegeScopeDatabase
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -4375,13 +4370,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			dbName = string(st.Name.SchemaName)
 		}
 	case *tree.MoDump:
-		if st.Tables != nil {
-			objType = objectTypeTable
-			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		} else {
-			objType = objectTypeDatabase
-			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		}
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Kill:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -5948,11 +5938,9 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
-	var newUserId int64
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
-	pu := config.GetParameterUnit(ctx)
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
@@ -6006,7 +5994,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 	} else {
-		newTenant, newTenantCtx, newUserId, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6025,17 +6013,17 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 
-		err = createTablesInMoCatalogOfGeneralTenant2(tenant, bh, ca, newTenantCtx, int64(newTenant.TenantID), newUserId)
+		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
 
-		err = createTablesInSystemOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
+		err = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6056,7 +6044,7 @@ handleFailed:
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, context.Context, int64, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *tree.CreateAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -6129,24 +6117,25 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	// 	goto handleFailed
 	// }
 
+	newUserId = dumpID + 1
+
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
 		User:          ca.AuthOption.AdminName,
-		DefaultRole:   publicRoleName,
+		DefaultRole:   accountAdminRoleName,
 		TenantID:      uint32(newTenantID),
 		UserID:        uint32(newUserId),
-		DefaultRoleID: publicRoleID,
+		DefaultRoleID: accountAdminRoleID,
 	}
 	//with new tenant
 	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
-	newUserId = dumpID + 1
 	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
-	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
+	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
 handleFailed:
-	return newTenant, newTenantCtx, newUserId, err
+	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenantID, newUserId int64) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
@@ -6168,8 +6157,8 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 		initDataSqls = append(initDataSqls, sql)
 	}
 	//step 2:add new role entries to the mo_role
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
@@ -6192,9 +6181,9 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
-		tenant.GetUserID(), tenant.GetDefaultRoleID(), accountAdminRoleID)
+		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
 	//step4: add new entries to the mo_role_privs
@@ -6205,7 +6194,7 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 			accountAdminRoleID, accountAdminRoleName,
 			entry.objType, entry.objId,
 			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
 			entry.withGrantOption)
 		addSqlIntoSet(initMoRolePriv)
 	}
@@ -6217,15 +6206,15 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 			publicRoleID, publicRoleName,
 			entry.objType, entry.objId,
 			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
 			entry.withGrantOption)
 		addSqlIntoSet(initMoRolePriv)
 	}
 
 	//step5: add new entries to the mo_user_grant
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant1)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
 	//step6: add new entries to the mo_mysql_compatbility_mode
@@ -6245,7 +6234,7 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
-func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -6275,7 +6264,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
