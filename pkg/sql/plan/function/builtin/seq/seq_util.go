@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -94,51 +93,6 @@ func makeDeleteAndUpdateBatch(proc *process.Process, bat *batch.Batch) (*batch.B
 	bat.Vecs = bat.Vecs[:7]
 
 	return delBatch, bat, nil
-}
-
-func getrds(rel engine.Relation, e engine.Engine, proc *process.Process, txn client.TxnOperator, tblname string) ([]engine.Reader, error) {
-	var rds []engine.Reader
-	// Check is sequence table.
-	td, err := rel.TableDefs(proc.Ctx)
-	if err != nil {
-		return nil, err
-	}
-	if td[len(td)-1].(*engine.PropertiesDef).Properties[0].Value != catalog.SystemSequenceRel {
-		return nil, moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
-	}
-
-	// Read blocks of the sequence table.
-	expr := &plan.Expr{}
-	ret, err := rel.Ranges(proc.Ctx, expr)
-	if err != nil {
-		return nil, err
-	}
-	switch {
-	case len(ret) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return nil, err
-		}
-	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return nil, err
-		}
-	case len(ret[0]) == 0:
-		rds0, err := rel.NewReader(proc.Ctx, 1, expr, nil)
-		if err != nil {
-			return nil, err
-		}
-		rds1, err := rel.NewReader(proc.Ctx, 1, expr, ret[1:])
-		if err != nil {
-			return nil, err
-		}
-		rds = append(rds, rds0...)
-		rds = append(rds, rds1...)
-		return rds, nil
-	default:
-		rds, _ = rel.NewReader(proc.Ctx, 1, expr, ret)
-		return rds, nil
-	}
-	return nil, moerr.NewInternalError(proc.Ctx, "Can't get the sequence reader.")
 }
 
 func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
