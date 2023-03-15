@@ -2618,20 +2618,17 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			allAccount = true
 			accountList = ""
 		case len(ap.AccountsSet.SetAccounts) > 0:
-			accountListSep, err = getAllAccountName(ctx, ses, bh)
-			if err != nil {
-				goto handleFailed
-			}
+			/* do not check accountName if exists here */
+			//accountListSep, err = getAllAccountName(ctx, ses, bh)
+			//if err != nil {
+			//	goto handleFailed
+			//}
+
 			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
 			for _, acct := range ap.AccountsSet.SetAccounts {
 				s := string(acct)
 				if accountNameIsInvalid(s) {
 					err = moerr.NewInternalError(ctx, "invalid account name '%s'", s)
-					goto handleFailed
-				}
-				idx := sort.SearchStrings(accountListSep, s)
-				if idx >= len(accountListSep) || accountListSep[idx] != s {
-					err = moerr.NewInternalError(ctx, "account '%s' does not exist", s)
 					goto handleFailed
 				}
 				accts = append(accts, s)
@@ -2641,13 +2638,10 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			allAccount = false
 		case len(ap.AccountsSet.DropAccounts) > 0:
 			if allAccount {
-				accountListSep, err = getAllAccountName(ctx, ses, bh)
-				if err != nil {
-					goto handleFailed
-				}
-			} else {
-				accountListSep = strings.Split(accountList, ",")
+				err = moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
+				goto handleFailed
 			}
+			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.DropAccounts {
 				if accountNameIsInvalid(string(acct)) {
 					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
@@ -2662,10 +2656,10 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			allAccount = false
 		case len(ap.AccountsSet.AddAccounts) > 0:
 			if allAccount {
-				err = moerr.NewInternalError(ctx, "cannot add accounts to a publication with ALL")
+				err = moerr.NewInternalError(ctx, "cannot add account from all account option")
 				goto handleFailed
 			}
-			accountListSep := strings.Split(accountList, ",")
+			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.AddAccounts {
 				if accountNameIsInvalid(string(acct)) {
 					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
