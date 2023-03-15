@@ -1536,6 +1536,10 @@ func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tre
 	return doAlterPublication(ctx, mce.GetSession(), ap)
 }
 
+func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree.DropPublication) error {
+	return doDropPublication(ctx, mce.GetSession(), dp)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
@@ -2459,6 +2463,14 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			ap: st,
 		})
+	case *tree.DropPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dp: st,
+		})
 	case *tree.CreateAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 		ret = (&CreateAccountExecutor{
@@ -3241,6 +3253,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleAlterPublication(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropPublication:
+			selfHandle = true
+			if err = mce.handleDropPublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateAccount:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3660,7 +3677,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -4164,7 +4181,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
-		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreatePublication, *tree.AlterPublication:
+		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication:
 		return true
 	case *tree.Use:
 		return st.IsUseRole()

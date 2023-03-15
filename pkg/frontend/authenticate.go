@@ -1193,6 +1193,7 @@ const (
 	getPubInfoFormat       = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAllAccountSql       = `select account_name from mo_catalog.mo_account order by account_name;`
 	updatePubInfoFormat    = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
+	dropPubFormat          = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 )
 
 var (
@@ -1494,34 +1495,52 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, dbName)
+		if err != nil {
+			return "", err
+		}
 	}
 	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
 }
 
-func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, pubName, databaseName)
-	if err != nil {
-		return "", err
+func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName, databaseName)
+		if err != nil {
+			return "", err
+		}
 	}
 	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, allAccount, tableList, accountList, owner, creator, comment), nil
 }
-func getSqlForGetPubInfo(ctx context.Context, pubName string) (string, error) {
-	err := inputNameIsInvalid(ctx, pubName)
-	if err != nil {
-		return "", err
+func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
 	}
 	return fmt.Sprintf(getPubInfoFormat, pubName), nil
 }
-func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountAll bool, accountList string, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, pubName)
-	if err != nil {
-		return "", err
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountAll bool, accountList string, comment string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
 	}
 	return fmt.Sprintf(updatePubInfoFormat, accountAll, accountList, comment, pubName), nil
+}
+
+func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(dropPubFormat, pubName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -2511,7 +2530,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database))
+	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database), true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -2541,7 +2560,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	bh.ClearExecResultSet()
 	tenantInfo = ses.GetTenantInfo()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -2581,7 +2600,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
-	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name))
+	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name), true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -2677,7 +2696,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.Comment != "" {
 		comment = ap.Comment
 	}
-	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), allAccount, accountList, comment)
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), allAccount, accountList, comment, false)
 	if err != nil {
 		goto handleFailed
 	}
@@ -2692,6 +2711,59 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	}
 	return err
 
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	bh.ClearExecResultSet()
+	var (
+		err     error
+		sql     string
+		erArray []ExecResult
+	)
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	sql, err = getSqlForGetPubInfo(ctx, string(dp.Name), true)
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		goto handleFailed
+	}
+
+	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
