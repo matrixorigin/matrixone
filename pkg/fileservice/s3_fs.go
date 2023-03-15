@@ -55,7 +55,7 @@ type S3FS struct {
 	diskCache   *DiskCache
 	asyncUpdate bool
 
-	perfCounters []*perfcounter.Counter
+	perfCounterSets []*perfcounter.CounterSet
 }
 
 // key mapping scheme:
@@ -72,7 +72,7 @@ func NewS3FS(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
-	perfCounters []*perfcounter.Counter,
+	perfCounterSets []*perfcounter.CounterSet,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -86,7 +86,7 @@ func NewS3FS(
 		return nil, err
 	}
 
-	fs.perfCounters = perfCounters
+	fs.perfCounterSets = perfCounterSets
 
 	if err := fs.initCaches(
 		memCacheCapacity,
@@ -110,7 +110,7 @@ func NewS3FSOnMinio(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
-	perfCounters []*perfcounter.Counter,
+	perfCounterSets []*perfcounter.CounterSet,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -125,7 +125,7 @@ func NewS3FSOnMinio(
 		return nil, err
 	}
 
-	fs.perfCounters = perfCounters
+	fs.perfCounterSets = perfCounterSets
 
 	if err := fs.initCaches(
 		memCacheCapacity,
@@ -151,7 +151,7 @@ func (s *S3FS) initCaches(
 	if memCacheCapacity > 0 {
 		s.memCache = NewMemCache(
 			WithLRU(memCacheCapacity),
-			WithPerfCounters(s.perfCounters),
+			WithPerfCounterSets(s.perfCounterSets),
 		)
 		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
 	}
@@ -165,7 +165,7 @@ func (s *S3FS) initCaches(
 		s.diskCache, err = NewDiskCache(
 			diskCachePath,
 			diskCacheCapacity,
-			s.perfCounters,
+			s.perfCounterSets,
 		)
 		if err != nil {
 			return err
@@ -983,48 +983,48 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.List.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.Head.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.Put.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.Get.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.DeleteMulti.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.Delete.Add(1)
-	}, s.perfCounters...)
+	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }
