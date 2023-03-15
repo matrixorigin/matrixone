@@ -297,3 +297,10 @@ func (n *Nulls) IsSame(m *Nulls) bool {
 		return false
 	}
 }
+
+func (nsp *Nulls) ToArray() []uint64 {
+	if nsp.Np == nil {
+		return []uint64{}
+	}
+	return nsp.Np.ToArray()
+}
