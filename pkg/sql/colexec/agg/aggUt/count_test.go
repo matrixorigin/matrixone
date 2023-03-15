@@ -26,7 +26,8 @@ func TestCount(t *testing.T) {
 	int8TestTyp := types.New(types.T_int8, 0, 0)
 	boolTestTyp := types.New(types.T_bool, 0, 0)
 	varcharTestTyp := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	decimalTestTyp := types.New(types.T_decimal128, 0, 0)
+	decimal64TestTyp := types.New(types.T_decimal64, 0, 0)
+	decimal128TestTyp := types.New(types.T_decimal128, 0, 0)
 	uuidTestTyp := types.New(types.T_uuid, 0, 0)
 
 	testCases := []testCase{
@@ -127,7 +128,7 @@ func TestCount(t *testing.T) {
 		{
 			op:         agg.AggregateCount,
 			isDistinct: false,
-			inputTyp:   decimalTestTyp,
+			inputTyp:   decimal64TestTyp,
 
 			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
 			inputNsp: nil,
@@ -142,7 +143,7 @@ func TestCount(t *testing.T) {
 		{
 			op:         agg.AggregateCount,
 			isDistinct: true,
-			inputTyp:   decimalTestTyp,
+			inputTyp:   decimal128TestTyp,
 
 			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
 			inputNsp: nil,

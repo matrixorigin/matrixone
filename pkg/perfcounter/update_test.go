@@ -20,11 +20,11 @@ import (
 )
 
 func BenchmarkUpdate(b *testing.B) {
-	counter := new(Counter)
-	ctx := WithCounter(context.Background(), counter)
+	counter := new(CounterSet)
+	ctx := WithCounterSet(context.Background(), counter)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Update(ctx, func(c *Counter) {
+		Update(ctx, func(c *CounterSet) {
 		})
 	}
 }

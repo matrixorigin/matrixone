@@ -77,25 +77,27 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 			// txn2 wait txn1 or txn3
 			go func() {
 				defer wg.Done()
-				require.Equal(t, ErrLockTableNotFound, l.Lock(
+				_, err := l.Lock(
 					ctx,
 					1,
 					[][]byte{{1}},
 					[]byte{2},
 					LockOptions{Granularity: lock.Granularity_Row},
-				))
+				)
+				require.Equal(t, ErrLockTableNotFound, err)
 			}()
 
 			// txn3 wait txn2 or txn1
 			go func() {
 				defer wg.Done()
-				require.Equal(t, ErrLockTableNotFound, l.Lock(
+				_, err := l.Lock(
 					ctx,
 					1,
 					[][]byte{{1}},
 					[]byte{3},
 					LockOptions{Granularity: lock.Granularity_Row},
-				))
+				)
+				require.Equal(t, ErrLockTableNotFound, err)
 			}()
 
 			v, err := l.getLockTable(1)

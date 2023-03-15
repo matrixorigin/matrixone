@@ -27,10 +27,10 @@ func TestOctUint8(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := make([]*vector.Vector, 1)
 	vecs[0] = testutil.MakeUint8Vector([]uint8{12, 99, 100, 255}, nil)
-	e1, _ := types.Decimal128_FromStringWithScale("14", 64, 0)
-	e2, _ := types.Decimal128_FromStringWithScale("143", 64, 0)
-	e3, _ := types.Decimal128_FromStringWithScale("144", 64, 0)
-	e4, _ := types.Decimal128_FromStringWithScale("377", 64, 0)
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
 	expected := []types.Decimal128{e1, e2, e3, e4}
 
 	t.Run("oct uin8 test", func(t *testing.T) {
@@ -47,13 +47,13 @@ func TestOctUint16(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := make([]*vector.Vector, 1)
 	vecs[0] = testutil.MakeUint16Vector([]uint16{12, 99, 100, 255, 1024, 10000, 65535}, nil)
-	e1, _ := types.Decimal128_FromStringWithScale("14", 64, 0)
-	e2, _ := types.Decimal128_FromStringWithScale("143", 64, 0)
-	e3, _ := types.Decimal128_FromStringWithScale("144", 64, 0)
-	e4, _ := types.Decimal128_FromStringWithScale("377", 64, 0)
-	e5, _ := types.Decimal128_FromStringWithScale("2000", 64, 0)
-	e6, _ := types.Decimal128_FromStringWithScale("23420", 64, 0)
-	e7, _ := types.Decimal128_FromStringWithScale("177777", 64, 0)
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
 	expected := []types.Decimal128{e1, e2, e3, e4, e5, e6, e7}
 
 	t.Run("oct uin16 test", func(t *testing.T) {
@@ -68,14 +68,14 @@ func TestOctUint16(t *testing.T) {
 func TestOctUint32(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeUint32Vector([]uint32{12, 99, 100, 255, 1024, 10000, 65535, 4294967295}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("14", 64, 0)
-	e2, _ := types.Decimal128_FromStringWithScale("143", 64, 0)
-	e3, _ := types.Decimal128_FromStringWithScale("144", 64, 0)
-	e4, _ := types.Decimal128_FromStringWithScale("377", 64, 0)
-	e5, _ := types.Decimal128_FromStringWithScale("2000", 64, 0)
-	e6, _ := types.Decimal128_FromStringWithScale("23420", 64, 0)
-	e7, _ := types.Decimal128_FromStringWithScale("177777", 64, 0)
-	e8, _ := types.Decimal128_FromStringWithScale("37777777777", 64, 0)
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
+	e8, _, _ := types.Parse128("37777777777")
 	expected := []types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8}
 
 	t.Run("oct uin32 test", func(t *testing.T) {
@@ -91,15 +91,15 @@ func TestOctUint32(t *testing.T) {
 func TestOctUint64(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeUint64Vector([]uint64{12, 99, 100, 255, 1024, 10000, 65535, 4294967295, 18446744073709551615}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("14", 64, 0)
-	e2, _ := types.Decimal128_FromStringWithScale("143", 64, 0)
-	e3, _ := types.Decimal128_FromStringWithScale("144", 64, 0)
-	e4, _ := types.Decimal128_FromStringWithScale("377", 64, 0)
-	e5, _ := types.Decimal128_FromStringWithScale("2000", 64, 0)
-	e6, _ := types.Decimal128_FromStringWithScale("23420", 64, 0)
-	e7, _ := types.Decimal128_FromStringWithScale("177777", 64, 0)
-	e8, _ := types.Decimal128_FromStringWithScale("37777777777", 64, 0)
-	e9, _ := types.Decimal128_FromStringWithScale("1777777777777777777777", 64, 0)
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
+	e8, _, _ := types.Parse128("37777777777")
+	e9, _, _ := types.Parse128("1777777777777777777777")
 	expected := []types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8, e9}
 
 	t.Run("oct uin64 test", func(t *testing.T) {
@@ -114,9 +114,9 @@ func TestOctUint64(t *testing.T) {
 func TestOctInt8(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt8Vector([]int8{-128, -1, 127}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("1777777777777777777600", 64, 0)
-	e2, _ := types.Decimal128_FromStringWithScale("1777777777777777777777", 64, 0)
-	e3, _ := types.Decimal128_FromStringWithScale("177", 64, 0)
+	e1, _, _ := types.Parse128("1777777777777777777600")
+	e2, _, _ := types.Parse128("1777777777777777777777")
+	e3, _, _ := types.Parse128("177")
 	expected := []types.Decimal128{e1, e2, e3}
 
 	t.Run("oct int8 test", func(t *testing.T) {
@@ -131,7 +131,7 @@ func TestOctInt8(t *testing.T) {
 func TestOctInt16(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt16Vector([]int16{-32768}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("1777777777777777700000", 64, 0)
+	e1, _, _ := types.Parse128("1777777777777777700000")
 	expected := []types.Decimal128{e1}
 
 	t.Run("oct int16 test", func(t *testing.T) {
@@ -146,7 +146,7 @@ func TestOctInt16(t *testing.T) {
 func TestOctInt32(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt32Vector([]int32{-2147483648}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("1777777777760000000000", 64, 0)
+	e1, _, _ := types.Parse128("1777777777760000000000")
 	expected := []types.Decimal128{e1}
 
 	t.Run("oct int32 test", func(t *testing.T) {
@@ -161,7 +161,7 @@ func TestOctInt32(t *testing.T) {
 func TestOctInt64(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt64Vector([]int64{-9223372036854775808}, nil)}
-	e1, _ := types.Decimal128_FromStringWithScale("1000000000000000000000", 64, 0)
+	e1, _, _ := types.Parse128("1000000000000000000000")
 	expected := []types.Decimal128{e1}
 
 	t.Run("oct int64 test", func(t *testing.T) {
@@ -178,7 +178,7 @@ func TestOctScalar(t *testing.T) {
 	vecs := []*vector.Vector{testutil.MakeInt64Vector([]int64{-9223372036854775808}, nil)}
 	vecs[0].SetClass(vector.CONSTANT)
 	vecs[0].SetLength(1)
-	e1, _ := types.Decimal128_FromStringWithScale("1000000000000000000000", 64, 0)
+	e1, _ := types.ParseDecimal128("1000000000000000000000", 64, 0)
 	expected := []types.Decimal128{e1}
 
 	t.Run("oct scalar test", func(t *testing.T) {
