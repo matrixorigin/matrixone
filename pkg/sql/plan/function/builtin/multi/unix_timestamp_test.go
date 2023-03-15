@@ -15,10 +15,11 @@
 package multi
 
 import (
-	"github.com/smartystreets/goconvey/convey"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -61,18 +62,20 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64, isN
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(c.wantBytes, plus.Col) {
-				t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, plus.Col)
+			if !c.wantNull {
+				if !reflect.DeepEqual(c.wantBytes, vector.MustFixedCol[int64](plus)) {
+					t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, vector.MustFixedCol[int64](plus))
+				}
 			}
-			require.Equal(t, c.wantNull, plus.ConstVectorIsNull())
-			require.Equal(t, c.wantScalar, plus.IsScalar())
+			require.Equal(t, c.wantNull, plus.IsConstNull())
+			require.Equal(t, c.wantScalar, plus.IsConst())
 		})
 	}
 }
 
 func makeVector2(src types.Timestamp, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
-	vectors[0] = vector.NewConstFixed(types.T_timestamp.ToType(), 1, src, testutil.TestUtilMp)
+	vectors[0] = vector.NewConstFixed(types.T_timestamp.ToType(), src, 1, testutil.TestUtilMp)
 	return vectors
 }
 
@@ -96,7 +99,7 @@ func TestUnixTimestampVarcharToFloat64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cols := vector.MustTCols[float64](resVec)
+			cols := vector.MustFixedCol[float64](resVec)
 			require.Equal(t, tt.expect, cols[0])
 		})
 	}

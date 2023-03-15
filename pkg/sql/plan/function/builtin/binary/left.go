@@ -25,33 +25,38 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	leftVec := vs[0]
 	rightVec := vs[1]
 
-	if leftVec.IsScalarNull() || rightVec.IsScalarNull() {
-		return proc.AllocScalarNullVector(leftVec.Typ), nil
+	if leftVec.IsConstNull() || rightVec.IsConstNull() {
+		return vector.NewConstNull(*leftVec.GetType(), leftVec.Length(), proc.Mp()), nil
 	}
-	strValues := vector.MustStrCols(leftVec)
-	lengthValues := vector.MustTCols[int64](rightVec)
+	strValues := vector.MustStrCol(leftVec)
+	lengthValues := vector.MustFixedCol[int64](rightVec)
 
-	if leftVec.IsScalar() && rightVec.IsScalar() {
-		resultValues := make([]string, 1)
-		left.LeftAllConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewConstString(leftVec.Typ, 1, resultValues[0], proc.Mp())
-		return resultVector, nil
-	} else if leftVec.IsScalar() && !rightVec.IsScalar() {
-		resultValues := make([]string, len(lengthValues))
-		left.LeftLeftConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, rightVec.Nsp, proc.Mp())
-		return resultVector, nil
-	} else if !leftVec.IsScalar() && rightVec.IsScalar() {
-		resultValues := make([]string, len(strValues))
-		left.LeftRightConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, leftVec.Nsp, proc.Mp())
-		return resultVector, nil
+	if leftVec.IsConst() && rightVec.IsConst() {
+		var rvals [1]string
+		left.LeftAllConst(strValues, lengthValues, rvals[:])
+		return vector.NewConstBytes(*leftVec.GetType(), []byte(rvals[0]), leftVec.Length(), proc.Mp()), nil
+	} else if leftVec.IsConst() && !rightVec.IsConst() {
+		rvals := make([]string, len(lengthValues))
+		left.LeftLeftConst(strValues, lengthValues, rvals)
+		rvec := vector.NewVec(*leftVec.GetType())
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Set(rvec.GetNulls(), rightVec.GetNulls())
+		return rvec, nil
+	} else if !leftVec.IsConst() && rightVec.IsConst() {
+		rvals := make([]string, len(strValues))
+		left.LeftRightConst(strValues, lengthValues, rvals)
+		rvec := vector.NewVec(*leftVec.GetType())
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Set(rvec.GetNulls(), leftVec.GetNulls())
+		return rvec, nil
 	} else {
-		resultValues := make([]string, len(strValues))
-		left.Left(strValues, lengthValues, resultValues)
+		rvals := make([]string, len(strValues))
+		left.Left(strValues, lengthValues, rvals)
 		resultNsp := nulls.NewWithSize(len(strValues))
-		nulls.Or(leftVec.Nsp, rightVec.Nsp, resultNsp)
-		resultVector := vector.NewWithStrings(leftVec.Typ, resultValues, resultNsp, proc.Mp())
-		return resultVector, nil
+		nulls.Or(leftVec.GetNulls(), rightVec.GetNulls(), resultNsp)
+		rvec := vector.NewVec(*leftVec.GetType())
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		rvec.SetNulls(resultNsp)
+		return rvec, nil
 	}
 }

@@ -48,13 +48,13 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	uuid := vector.MustTCols[types.Uuid](v)[0]
+	uuid := vector.MustFixedCol[types.Uuid](v)[0]
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return false, moerr.NewQueryIdNotFound(proc.Ctx, uuid.ToString())
+			return false, moerr.NewResultFileNotFound(proc.Ctx, path)
 		}
 		return false, err
 	}

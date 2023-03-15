@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -38,17 +39,40 @@ import (
 )
 
 // NewTestTxnService create a test TxnService for test
-func NewTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clock clock.Clock) TxnService {
+func NewTestTxnService(
+	t *testing.T,
+	shard uint64,
+	sender rpc.TxnSender,
+	clock clock.Clock) TxnService {
 	return NewTestTxnServiceWithLog(t, shard, sender, clock, nil)
 }
 
+// NewTestTxnServiceWithAllocator create a test TxnService for test
+func NewTestTxnServiceWithAllocator(
+	t *testing.T,
+	shard uint64,
+	sender rpc.TxnSender,
+	clock clock.Clock,
+	allocator lockservice.LockTableAllocator) TxnService {
+	return NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+		t,
+		shard,
+		sender,
+		clock,
+		nil,
+		time.Minute,
+		allocator)
+}
+
 // NewTestTxnServiceWithLog is similar to NewTestTxnService, used to recovery tests
-func NewTestTxnServiceWithLog(t *testing.T,
+func NewTestTxnServiceWithLog(
+	t *testing.T,
 	shard uint64,
 	sender rpc.TxnSender,
 	clock clock.Clock,
 	log logservice.Client) TxnService {
-	return NewTestTxnServiceWithLogAndZombie(t,
+	return NewTestTxnServiceWithLogAndZombie(
+		t,
 		shard,
 		sender,
 		clock,
@@ -57,12 +81,33 @@ func NewTestTxnServiceWithLog(t *testing.T,
 }
 
 // NewTestTxnServiceWithLogAndZombie is similar to NewTestTxnService, but with more args
-func NewTestTxnServiceWithLogAndZombie(t *testing.T,
+func NewTestTxnServiceWithLogAndZombie(
+	t *testing.T,
 	shard uint64,
 	sender rpc.TxnSender,
 	clock clock.Clock,
 	log logservice.Client,
 	zombie time.Duration) TxnService {
+	return NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+		t,
+		shard,
+		sender,
+		clock,
+		log,
+		zombie,
+		nil,
+	)
+}
+
+// NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator is similar to NewTestTxnService, but with more args
+func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+	t *testing.T,
+	shard uint64,
+	sender rpc.TxnSender,
+	clock clock.Clock,
+	log logservice.Client,
+	zombie time.Duration,
+	allocator lockservice.LockTableAllocator) TxnService {
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_DN,
 		"dn-uuid",
@@ -72,7 +117,8 @@ func NewTestTxnServiceWithLogAndZombie(t *testing.T,
 		NewTestDNShard(shard),
 		NewTestTxnStorage(log, clock),
 		sender,
-		zombie).(*service)
+		zombie,
+		allocator).(*service)
 }
 
 // NewTestTxnStorage create a TxnStorage used to recovery tests

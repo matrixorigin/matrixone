@@ -72,6 +72,8 @@ type tracerProviderConfig struct {
 	// longQueryTime unit ns
 	longQueryTime int64 //  WithLongQueryTime
 
+	bufferSizeThreshold int64 // WithBufferSizeThreshold
+
 	mux sync.RWMutex
 }
 
@@ -151,6 +153,12 @@ func WithExportInterval(secs int) tracerProviderOption {
 func WithLongQueryTime(secs float64) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longQueryTime = int64(float64(time.Second) * secs)
+	})
+}
+
+func WithBufferSizeThreshold(size int64) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.bufferSizeThreshold = size
 	})
 }
 

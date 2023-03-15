@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +51,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -90,7 +90,7 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderEnableCompress(true))
+	sd, err := NewSender(Config{EnableCompress: true}, newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -131,7 +131,7 @@ func TestSendWithMultiDN(t *testing.T) {
 		})
 	}
 
-	sd, err := NewSender(newTestRuntime(newTestClock(), nil))
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -191,6 +191,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 	}
 
 	sd, err := NewSender(
+		Config{},
 		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			if d.Address != testDN1Addr {
@@ -256,6 +257,7 @@ func TestLocalStreamDestroy(t *testing.T) {
 
 func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(
+		Config{},
 		newTestRuntime(newTestClock(), nil),
 		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
@@ -291,23 +293,6 @@ func BenchmarkLocalSend(b *testing.B) {
 	}
 }
 
-func TestNewSenderWithOptions(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-
-	s, err := NewSender(
-		newTestRuntime(newTestClock(), nil),
-		WithSenderPayloadBufferSize(100),
-		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
-	assert.NoError(t, err)
-	defer func() {
-		require.NoError(t, s.Close())
-	}()
-
-	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
-	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 2)
-	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
-}
-
 func TestCanSendWithLargeRequest(t *testing.T) {
 	size := 1024 * 1024 * 20
 	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecMaxBodySize(size+1024))
@@ -325,7 +310,9 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(newTestRuntime(newTestClock(), nil), WithSenderMaxMessageSize(size+1024))
+	sd, err := NewSender(
+		Config{MaxMessageSize: toml.ByteSize(size + 1024)},
+		newTestRuntime(newTestClock(), nil))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())

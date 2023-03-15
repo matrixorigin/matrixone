@@ -18,17 +18,62 @@ package logtail
 
 an application on logtail mgr: build reponse to SyncLogTailRequest
 
+More docs:
+https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_impl.md
+
+
+Main workflow:
+
+          +------------------+
+          | CheckpointRunner |
+          +------------------+
+            ^         |
+            | range   | ckp & newRange
+            |         v
+          +------------------+  newRange  +----------------+  snapshot   +--------------+
+ user ->  | HandleGetLogTail | ---------> | LogtailManager | ----------> | LogtailTable |
+   ^      +------------------+            +----------------+             +--------------+
+   |                                                                        |
+   |           +------------------+                                         |
+   +---------- |   RespBuilder    |  ------------------>+-------------------+
+      return   +------------------+                     |
+      entries                                           |  visit
+                                                        |
+                                                        v
+                                  +-----------------------------------+
+                                  |     txnblock2                     |
+                     ...          +-----------------------------------+   ...
+                                  | bornTs  | ... txn100 | txn101 |.. |
+                                  +-----------------+---------+-------+
+                                                    |         |
+                                                    |         |
+                                                    |         |
+                                  +-----------------+    +----+-------+     dirty blocks
+                                  |                 |    |            |
+                                  v                 v    v            v
+                              +-------+           +-------+       +-------+
+                              | BLK-1 |           | BLK-2 |       | BLK-2 |
+                              +---+---+           +---+---+       +---+---+
+                                  |                   |               |
+                                  v                   v               v
+                            [V1@t25,disk]       [V1@t17,mem]     [V1@t17,disk]
+                                  |                   |               |
+                                  v                   v               v
+                            [V0@t12,mem]        [V0@t10,mem]     [V0@t10,disk]
+                                  |                                   |
+                                  v                                   v
+                            [V0@t7,mem]                           [V0@t7,mem]
+
+
 */
 
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -140,8 +185,8 @@ type RespBuilder interface {
 	Close()
 }
 
-// CatalogLogtailRespBuilder knows how to make api-entry from catalog entry
-// impl catalog.Processor interface, driven by LogtailCollector
+// CatalogLogtailRespBuilder knows how to make api-entry from db and table entry.
+// impl catalog.Processor interface, driven by BoundTableOperator
 type CatalogLogtailRespBuilder struct {
 	*catalog.LoopProcessor
 	scope      Scope
@@ -185,6 +230,7 @@ func (b *CatalogLogtailRespBuilder) Close() {
 	}
 }
 
+// VisitDB = catalog.Processor.OnDatabase
 func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	entry.RLock()
 	if shouldIgnoreDBInLogtail(entry.ID) {
@@ -208,6 +254,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	return nil
 }
 
+// VisitTbl = catalog.Processor.OnTable
 func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	entry.RLock()
 	if shouldIgnoreTblInLogtail(entry.ID) {
@@ -325,50 +372,8 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
 }
 
-func u64ToRowID(v uint64) types.Rowid {
-	var rowid types.Rowid
-	bs := types.EncodeUint64(&v)
-	copy(rowid[0:], bs)
-	return rowid
-}
-
-func bytesToRowID(bs []byte) types.Rowid {
-	var rowid types.Rowid
-	if size := len(bs); size <= types.RowidSize {
-		copy(rowid[:size], bs[:size])
-	} else {
-		hasher := fnv.New128()
-		hasher.Write(bs)
-		hasher.Sum(rowid[:0])
-	}
-	return rowid
-}
-
-// make batch, append necessary field like commit ts
-func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
-	bat := containers.NewBatch()
-
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
-	// Types() is not used, then empty schema can also be handled here
-	typs := schema.AllTypes()
-	attrs := schema.AllNames()
-	nullables := schema.AllNullables()
-	for i, attr := range attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
-	}
-	return bat
-}
-
-// consume containers.Batch to construct api batch
-func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.CopyToMoBatch(bat)
-	return batch.BatchToProtoBatch(mobat)
-}
-
+// CatalogLogtailRespBuilder knows how to make api-entry from block entry.
+// impl catalog.Processor interface, driven by BoundTableOperator
 type TableLogtailRespBuilder struct {
 	*catalog.LoopProcessor
 	start, end      types.TS
@@ -423,6 +428,8 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
+// visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
+// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-prefetch
 func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
 	newEnd := b.end
 	e.RLock()
@@ -460,10 +467,9 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	return false
 }
 
+// appendBlkMeta add block metadata into api entry according to logtail protocol
+// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
-	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
-		e.AsCommonID().String(), e.IsAppendable(),
-		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
@@ -479,6 +485,8 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
+	// if block is deleted, send both Insert and Delete api entry
+	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
 	if metaNode.HasDropCommitted() {
 		if metaNode.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
@@ -489,6 +497,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 	}
 }
 
+// visitBlkData collects logtail in memory
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
 	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
@@ -510,6 +519,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 	return nil
 }
 
+// VisitBlk = catalog.Processor.OnBlock
 func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
 	if b.visitBlkMeta(entry) {
 		// data has been flushed, no need to collect data
