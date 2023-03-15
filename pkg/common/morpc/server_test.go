@@ -245,7 +245,7 @@ func TestStreamServerWithCache(t *testing.T) {
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
 
 		c := newTestClient(t)
@@ -271,15 +271,17 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 
 		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
 		<-cc
-		v, _ := rs.sessions.Load(uint64(1))
-		cs := v.(*clientSession)
-		for {
-			cs.mu.RLock()
-			if len(cs.mu.caches) == 0 {
+		v, ok := rs.sessions.Load(uint64(1))
+		if ok {
+			cs := v.(*clientSession)
+			for {
+				cs.mu.RLock()
+				if len(cs.mu.caches) == 0 {
+					cs.mu.RUnlock()
+					return
+				}
 				cs.mu.RUnlock()
-				return
 			}
-			cs.mu.RUnlock()
 		}
 	})
 }

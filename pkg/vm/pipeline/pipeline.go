@@ -48,10 +48,10 @@ func (p *Pipeline) String() string {
 
 func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err error) {
 	// performance counter
-	perfCounter := new(perfcounter.Counter)
-	proc.Ctx = perfcounter.WithCounter(proc.Ctx, perfCounter)
+	perfCounterSet := new(perfcounter.CounterSet)
+	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
 	defer func() {
-		_ = perfCounter //TODO
+		_ = perfCounterSet //TODO
 	}()
 
 	var bat *batch.Batch

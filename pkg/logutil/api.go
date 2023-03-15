@@ -119,14 +119,18 @@ func Adjust(logger *zap.Logger, options ...zap.Option) *zap.Logger {
 }
 
 // GetLoggerWithOptions get default zap logger
-func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, syncer zapcore.WriteSyncer, options ...zap.Option) *zap.Logger {
+func GetLoggerWithOptions(
+	level zapcore.LevelEnabler,
+	encoder zapcore.Encoder,
+	syncer zapcore.WriteSyncer,
+	options ...zap.Option) *zap.Logger {
 	var cores []zapcore.Core
 	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
 	if syncer == nil {
 		syncer = getConsoleSyncer()
 	}
 	if encoder == nil {
-		encoder = getLoggerEncoder("")
+		encoder = getLoggerEncoder("console")
 	}
 	cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 

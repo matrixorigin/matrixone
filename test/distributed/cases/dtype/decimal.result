@@ -1,74 +1,60 @@
 select 0.00,1.11,1234567890.1234567890123456789;
-0.00	1.11	1234567890.1234567890123456789
-0.00	1.11	1234567890.1234567890123456789
+0.00    1.11    1234567890.1234567890123456789
+0.00    1.11    1234567890.1234567890123456789
 select 1123.2333+1233.3331;
-1123.2333+1233.3331
+1123.2333 + 1233.3331
 2356.5664
 select cast(9223372.036854775808 as decimal)+1;
-cast(9223372.036854775808 as decimal)+1
+cast(9223372.036854775808 as decimal(38)) + 1
 9223373
 select round(cast(2320310.66666612312 as decimal));
-round(cast(2320310.66666612312 as decimal))
-2320311
+round(cast(2320310.66666612312 as decimal(38)))
+2320311.0
 select floor(cast(2231231.501231 as decimal));
-floor(cast(2231231.501231 as decimal))
+floor(cast(2231231.501231 as decimal(38)))
 2231232
 drop table if exists t1;
 create table t1 (a decimal(29,0) not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFE), (18446744073709551613.0000000), (18446744073709551612.0000000001);
+[unknown result because it is related to issue#3364]
 select * from t1 order by 1 asc;
-a
-72057594037927934
-18446744073709551612
-18446744073709551613
-18446744073709551615
+[unknown result because it is related to issue#3364]
 select * from t1 where a=18446744073709551615 order by a desc;
-a
-18446744073709551615
+[unknown result because it is related to issue#3364]
 delete from t1 where a=18446744073709551615.000000000;
+[unknown result because it is related to issue#3364]
 select * from t1;
-a
-72057594037927934
-18446744073709551612
-18446744073709551613
+[unknown result because it is related to issue#3364]
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(29,11) );
 insert into t1 (big) values (-1),(12.34567891234567),(92.23372036854775807);
 select * from t1 order by a desc, big asc;
-a	big
-1	-1.00000000000
-1	12.34567891235
-1	92.23372036855
+a    big
+1    -1.00000000000
+1    12.34567891235
+1    92.23372036855
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
--1.00000000000	92.23372036855	91.23372036855
+min(big)    max(big)    max(big) - 1
+-1.00000000000    92.23372036855    91.23372036855
 select min(big),avg(big),max(big)-1 from t1 group by a order by 1+2;
-min(big)	avg(big)	max(big)-1
--1.00000000000	34.526466426966667	91.23372036855
+min(big)    avg(big)    max(big) - 1
+-1.00000000000    34.526466426967    91.23372036855
 drop table t1;
+[unknown result because it is related to issue#3364]
 create table t1 ( a int not null default 1, big decimal(20,4) primary key);
+[unknown result because it is related to issue#3364]
 insert into t1 (big) values (0),(18446744073), (0xFFFFFE), (184467.13), (184462);
+[unknown result because it is related to issue#3364]
 select * from t1 order by 1,2 desc;
-a	big
-1	18446744073.0000
-1	16777214.0000
-1	184467.1300
-1	184462.0000
-1	0.0000
+[unknown result because it is related to issue#3364]
 select * from t1 order by big limit 1,2;
-a	big
-1	184462.0000
-1	184467.1300
+[unknown result because it is related to issue#3364]
 select * from t1 order by big limit 2 offset 1;
-a	big
-1	184462.0000
-1	184467.1300
+[unknown result because it is related to issue#3364]
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
-0.0000	18446744073.0000	18446744072.0000
+[unknown result because it is related to issue#3364]
 select min(big),count(big),max(big)-1 from t1 group by a;
-min(big)	count(big)	max(big)-1
-0.0000	5	18446744072.0000
+[unknown result because it is related to issue#3364]
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -86,43 +72,41 @@ insert into t1 values(9.2234, 2);
 insert into t2 values(1.7156e-1, 3);
 insert into t2 values(9.2233720368547758070000000000, 4);
 select * from t1;
-decimald	value32
-0.17156	1
-9.22340	2
+decimald    value32
+0.17156    1
+9.22340    2
 select * from t2;
-decimald	value32
-0.1716	3
-9.2234	4
+decimald    value32
+0.1716    3
+9.2234    4
 select * from t1 join t2 on t1.decimald=t2.decimald order by 1 asc, 2 desc;
-decimald	value32	decimald	value32
-9.22340	2	9.2234	4
+decimald    value32    decimald    value32
+9.22340    2    9.2234    4
 select * from t1 join t2 on t1.decimald=t2.decimald where t1.decimald!=0;
-decimald	value32	decimald	value32
-9.22340	2	9.2234	4
+decimald    value32    decimald    value32
+9.22340    2    9.2234    4
 select * from t1 join t2 on t1.decimald=t2.decimald order by 1,2 desc;
-decimald	value32	decimald	value32
-9.22340	2	9.2234	4
+decimald    value32    decimald    value32
+9.22340    2    9.2234    4
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (decimal20 decimal(20,18) not null);
 insert into t1 values (1.4e-19),(1.4e-18);
 select * from t1;
 decimal20
-0.000000000000000000
-0.000000000000000001
+0E-18
+1E-18
 drop table t1;
 create table t1 (decimal_col decimal(29,0));
 insert into t1 values (-17666000000000000000);
 select * from t1 where decimal_col=-17666000000000000000 order by 1 asc;
-decimal_col
--17666000000000000000
+[unknown result because it is related to issue#3364]
 select * from t1 where decimal_col='-17666000000000000000' order by decimal_col desc;
 decimal_col
 -17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as decimal) mod 50 as result;
-result
-49
+[unknown result because it is related to issue#4241]
 select cast(cast(19999999999999999999 as decimal) as unsigned);
 Data truncation: data out of range: data type uint64, value '19999999999999999999'
 CREATE TABLE t1 (id INT PRIMARY KEY,
@@ -135,12 +119,9 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
-id	a	b
-3	2147483647	2147483647
-5	2147483647	2147483647
+[unknown result because it is related to issue#4383]
 select a,count(a) from t1 group by a having count(a)>=2;
-a	count(a)
-2147483647	2
+[unknown result because it is related to issue#4383]
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
@@ -150,29 +131,29 @@ id
 1.10000
 2.20000
 SELECT id, id >= 1.1 FROM t_decimal;
-id	id >= 1.1
-1.00000	false	
-2.00000	true	
-1.10000	true	
-2.20000	true	
+id    id >= 1.1
+1.00000    false
+2.00000    true
+1.10000    true
+2.20000    true
 SELECT id, 1.1 <= id FROM t_decimal;
-id	1.1 <= id
-1.00000	false	
-2.00000	true	
-1.10000	true	
-2.20000	true	
+id    1.1 <= id
+1.00000    false
+2.00000    true
+1.10000    true
+2.20000    true
 SELECT id, id = 1.1 FROM t_decimal;
-id	id = 1.1
-1.00000	false	
-2.00000	false	
-1.10000	true	
-2.20000	false	
+id    id = 1.1
+1.00000    false
+2.00000    false
+1.10000    true
+2.20000    false
 SELECT id, 1.1 = id FROM t_decimal;
-id	1.1 = id
-1.00000	false	
-2.00000	false	
-1.10000	true	
-2.20000	false	
+id    1.1 = id
+1.00000    false
+2.00000    false
+1.10000    true
+2.20000    false
 SELECT * from t_decimal WHERE id = 1.1;
 id
 1.10000
@@ -217,54 +198,46 @@ drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
-a
-0.9
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
-a
-0.9
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
-a
-0.9
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
-a
-0.9
-0.9
+[unknown result because it is related to issue#3280]
 SELECT * FROM t1 WHERE a=0.9;
-a
-0.9
-0.9
+[unknown result because it is related to issue#3280]
 SELECT * FROM t1 WHERE a IN (0.8,0.9);
-a
-0.9
-0.9
+[unknown result because it is related to issue#3280]
 drop table t1;
+[unknown result because it is related to issue#3280]
 create table t (id decimal(23,3) unsigned, b int);
+[unknown result because it is related to issue#3280]
 insert into t values(889475494977969.3574,1);
+[unknown result because it is related to issue#3280]
 insert into t values(889475494977969.3579,2);
+[unknown result because it is related to issue#3280]
 insert into t values(889475494977969.357,3);
+[unknown result because it is related to issue#3280]
 select count(*) from t
 where id>=88947549497796.3574 and id <=889475494977969.358;
-count(*)
-3
+[unknown result because it is related to issue#3280]
 select count(*) from t
 where id between 88947549497796.3574 and 889475494977969.358;
-count(*)
-3
+[unknown result because it is related to issue#3280]
 drop table t;
+[unknown result because it is related to issue#3280]
 SELECT CAST(1.00 AS decimal) BETWEEN 1 AND -1;
-CAST(1.00 AS decimal) BETWEEN 1 AND -1
+cast(1.00 as decimal(38)) between 1 and -1
 false
 SELECT CAST(1.00 AS decimal) NOT BETWEEN 1 AND -1;
-CAST(1.00 AS decimal) NOT BETWEEN 1 AND -1
+cast(1.00 as decimal(38)) not between 1 and -1
 true
 SELECT CAST(-0 AS decimal) BETWEEN 0 AND -1;
-CAST(-0 AS decimal) BETWEEN 0 AND -1
+cast(-0 as decimal(38)) between 0 and -1
 false
 SELECT CAST(0 AS decimal) NOT BETWEEN 0 AND -1;
-CAST(0 AS decimal) NOT BETWEEN 0 AND -1
+cast(0 as decimal(38)) not between 0 and -1
 true
 drop table if exists t1;
 drop table if exists t2;
@@ -274,17 +247,15 @@ drop table if exists t12;
 CREATE TABLE t1 (a decimal(3,2), b decimal(5,2) primary key);
 INSERT INTO t1 VALUES (1.00,1.0000),(1.00,2.0000);
 update t1 set a=2.00 where a=1 limit 1;
+[unknown result because it is related to issue#3280]
 select * from t1;
-a	b
-1.00	1.00
-1.00	2.00
+[unknown result because it is related to issue#3280]
 INSERT INTO t1 VALUES (1,3);
+[unknown result because it is related to issue#3280]
 update t1 set a=2 where a=1.00;
+[unknown result because it is related to issue#3280]
 select * from t1;
-a	b
-2.00	1.00
-2.00	2.00
-2.00	3.00
+[unknown result because it is related to issue#3280]
 drop table t1;
 create table t1 (
 a decimal(10,5) not null,
@@ -301,79 +272,79 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 update t1 set a=a+101;
 select a,b from t1 order by 1;
-a	b
-103.00000	12346
-105.00000	12346
-107.00000	12346
-109.00000	12346
-111.00000	12346
-113.00000	12346
-115.00000	12346
-117.00000	12346
-119.00000	12346
-121.00000	12346
-123.00000	12346
-124.00000	12346
-125.00000	12346
-127.00000	12346
+a    b
+103.00000    12346
+105.00000    12346
+107.00000    12346
+109.00000    12346
+111.00000    12346
+113.00000    12346
+115.00000    12346
+117.00000    12346
+119.00000    12346
+121.00000    12346
+123.00000    12346
+124.00000    12346
+125.00000    12346
+127.00000    12346
 update t1 set a=27 where a=125;
 select a,b from t1 order by 1;
-a	b
-27.00000	12346
-103.00000	12346
-105.00000	12346
-107.00000	12346
-109.00000	12346
-111.00000	12346
-113.00000	12346
-115.00000	12346
-117.00000	12346
-119.00000	12346
-121.00000	12346
-123.00000	12346
-124.00000	12346
-127.00000	12346
+a    b
+27.00000    12346
+103.00000    12346
+105.00000    12346
+107.00000    12346
+109.00000    12346
+111.00000    12346
+113.00000    12346
+115.00000    12346
+117.00000    12346
+119.00000    12346
+121.00000    12346
+123.00000    12346
+124.00000    12346
+127.00000    12346
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1 order by 1;
-a	b
-27.00000	12346
-103.00000	12346
-105.00000	12346
-107.00000	12346
-109.00000	12346
-111.00000	12346
-113.00000	12346
-115.00000	12346
-117.00000	12346
-119.00000	12346
-121.00000	12346
-123.00000	12346
-124.00000	12346
-127.00000	12346
+a    b
+27.00000    12346
+103.00000    12346
+105.00000    12346
+107.00000    12346
+109.00000    12346
+111.00000    12346
+113.00000    12346
+115.00000    12346
+117.00000    12346
+119.00000    12346
+121.00000    12346
+123.00000    12346
+124.00000    12346
+127.00000    12346
 update t1 set a=a-1 where 3 > 2;
 select a,b from t1 order by 1;
-a	b
-26.00000	12346
-102.00000	12346
-104.00000	12346
-106.00000	12346
-108.00000	12346
-110.00000	12346
-112.00000	12346
-114.00000	12346
-116.00000	12346
-118.00000	12346
-120.00000	12346
-122.00000	12346
-123.00000	12346
-126.00000	12346
+a    b
+26.00000    12346
+102.00000    12346
+104.00000    12346
+106.00000    12346
+108.00000    12346
+110.00000    12346
+112.00000    12346
+114.00000    12346
+116.00000    12346
+118.00000    12346
+120.00000    12346
+122.00000    12346
+123.00000    12346
+126.00000    12346
 drop table t1;
 create table t1 (a decimal(10,5) primary key, b char(32));
 insert into t1 values (1.000000,'apple'), (2.00,'apple');
 select * from t1;
-a	b
-1.00000	apple
-2.00000	apple
+a    b
+1.00000    apple
+2.00000    apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -383,12 +354,12 @@ CREATE TABLE t1 (a decimal(3,2), b decimal(5,4) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 delete from t1 where a=1 limit 1;
 select * from t1;
-a	b
-1.00	2.0000
+a    b
+1.00    2.0000
 INSERT INTO t1 VALUES (1,3);
 delete from t1 where a=1;
 select * from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (
 a decimal(10,5) not null,
@@ -404,34 +375,28 @@ j decimal(10,5) not null default 12345.67890,
 primary key (a));
 insert into t1 (a) values (2.1111),(4),(00006.12311),(8.41231),(24.0000);
 delete from t1 where a=2+2.0000;
+[unknown result because it is related to issue#3280]
 select a,b from t1 order by 1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
-24.00000	12346
+[unknown result because it is related to issue#3280]
 delete from t1 where  a=24.0000;
+[unknown result because it is related to issue#3280]
 select a,b from t1 order by 1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+[unknown result because it is related to issue#3280]
 delete from t1 where  3 < 2;
+[unknown result because it is related to issue#3280]
 select a,b from t1 order by 1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+[unknown result because it is related to issue#3280]
 delete from t1 where  1 < 2;
+[unknown result because it is related to issue#3280]
 select a,b from t1 order by 1;
-a	b
+[unknown result because it is related to issue#3280]
 drop table t1;
 create table t1 (a decimal(10,5) primary key, b char(32));
 insert into t1 values (1.000000,'apple'), (2.00,'apple');
 select * from t1;
-a	b
-1.00000	apple
-2.00000	apple
+a    b
+1.00000    apple
+2.00000    apple
 drop table t1;
 create table t1(a decimal(5,2));
 insert into t1 values(0), (2.1), (2.994), (2.995);
@@ -456,9 +421,9 @@ a
 999.99
 -999.99
 insert into t1 values(999.995);
-invalid argument DECIMAL64, bad value 999.995
+invalid input: Can't convert string To Decimal64: 999.995(5,2)
 insert into t1 values(-999.995);
-invalid argument DECIMAL64, bad value 999.995
+invalid input: Can't convert string To Decimal64: 999.995(5,2)
 drop table t1;
 create table t1(a decimal(17,2));
 insert into t1 values(0), (2.1), (2.994), (2.995);
@@ -483,9 +448,9 @@ a
 999999999999999.99
 -999999999999999.99
 insert into t1 values(999999999999999.995);
-invalid argument decimal128, bad value 999999999999999.995
+invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
 insert into t1 values(-999999999999999.995);
-invalid argument decimal128, bad value 999999999999999.995
+invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
 drop table t1;
 create table t1(a decimal(5,5));
 insert into t1 values(0), (0.9), (0.99), (0.999), (0.9999), (0.99999), (0.999994);
@@ -515,9 +480,9 @@ a
 -0.99999
 -0.99999
 insert into t1 values(0.999995);
-invalid argument DECIMAL64, bad value 0.999995
+invalid input: Can't convert string To Decimal64: 0.999995(5,5)
 insert into t1 values(-0.999995);
-invalid argument DECIMAL64, bad value 0.999995
+invalid input: Can't convert string To Decimal64: 0.999995(5,5)
 drop table t1;
 create table t1(a decimal(17,17));
 insert into t1 values(0), (0.99999999999999999), (0.999999999999999994), (-0.99999999999999999), (-0.999999999999999994);
@@ -529,9 +494,9 @@ a
 -0.99999999999999999
 -0.99999999999999999
 insert into t1 values(0.999999999999999995);
-invalid argument decimal128, bad value 0.999999999999999995
+invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
 insert into t1 values(-0.999999999999999995);
-invalid argument decimal128, bad value 0.999999999999999995
+invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
 drop table if exists t1;
 create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);
@@ -569,19 +534,19 @@ create table t1 (a decimal(12,2));
 insert into t1 values (301934.27);
 select a * 4589.6 from t1;
 a * 4589.6
-1385757525.592
+1385757525.5920
 select a * 4589.60 from t1;
 a * 4589.60
 1385757525.5920
 select a * 54545.5 from t1;
 a * 54545.5
-16469155724.285
+16469155724.2850
 select a * 54545.50 from t1;
 a * 54545.50
 16469155724.2850
 select a * 54545.8 from t1;
 a * 54545.8
-16469246304.566
+16469246304.5660
 select a * 54545.80 from t1;
 a * 54545.80
 16469246304.5660
@@ -591,14 +556,607 @@ create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);
 select a / 4589.6 from t1;
 a / 4589.6
-65.786620
+65.78661975
 select a / 4589.60 from t1;
 a / 4589.60
-65.786620
+65.78661975
 select 4589.6 / a from t1;
 4589.6 / a
-0.01520
+0.0152007
 select 4589.60 / a from t1;
 4589.60 / a
-0.015201
+0.01520066
 drop table t1;
+DROP TABLE IF EXISTS decimal01;
+CREATE TABLE decimal01(a decimal(10,6));
+INSERT INTO decimal01 VALUES(123.37284);
+INSERT INTO decimal01 VALUES(3782.3);
+INSERT INTO decimal01 VALUES(328.0);
+INSERT INTO decimal01 VALUES(-373.909890);
+INSERT INTO decimal01 VALUES(-1.1);
+INSERT INTO decimal01 VALUES(0);
+INSERT INTO decimal01 VALUES(3246.3674578902132322913);
+INSERT INTO decimal01 VALUES(0.37281738921302);
+INSERT INTO decimal01 VALUES(12.4738244432449324);
+INSERT INTO decimal01 VALUES(-3278.38928432434932);
+INSERT INTO decimal01 VALUES(-1.434324654846543221327891321);
+INSERT INTO decimal01 VALUES(372.37287392839232943043);
+SELECT * FROM decimal01;
+a
+123.372840
+3782.300000
+328.000000
+-373.909890
+-1.100000
+0.000000
+3246.367458
+0.372817
+12.473824
+-3278.389284
+-1.434325
+372.372874
+UPDATE decimal01 set a = 0.999999999999 WHERE a = 12.473824;
+UPDATE decimal01 set a = -0.00000000000 WHERE a = -1.1;
+DELETE FROM decimal01 WHERE a = -3278.389284;
+DELETE FROM decimal01 WHERE a = 0.372817;
+SELECT a + 7382121 FROM decimal01;
+a + 7382121
+7382244.372840
+7385903.300000
+7382449.000000
+7381747.090110
+7382121.000000
+7385367.367458
+7382119.565675
+7382493.372874
+7382122.000000
+7382121.000000
+SELECT a - 0.27832 FROM decimal01;
+a - 0.27832
+123.094520
+3782.021680
+327.721680
+-374.188210
+-0.278320
+3246.089138
+-1.712645
+372.094554
+0.721680
+-0.278320
+SELECT a * 0 FROM decimal01;
+a * 0
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+0E-12
+SELECT a / 6 FROM decimal01;
+a / 6
+20.562140000000
+630.383333333333
+54.666666666667
+-62.318315000000
+0E-12
+541.061243000000
+-0.239054166667
+62.062145666667
+0.166666666667
+0E-12
+SELECT a * a FROM decimal01;
+a * a
+15220.857649665600
+14305793.290000000000
+107584.000000000000
+139808.605839812100
+0E-12
+10538901.672361381764
+2.057288205625
+138661.557291019876
+1.000000000000
+0E-12
+INSERT INTO decimal01 VALUES(NULL);
+INSERT INTO decimal01 VALUES(3271838219.12);
+invalid input: Can't convert string To Decimal64: 3271838219.12(10,6)
+INSERT INTO decimal01 VALUEs(-278732.48392480932);
+invalid input: Can't convert string To Decimal64: 278732.48392480932(10,6)
+DROP TABLE decimal01;
+DROP TABLE IF EXISTS decimal02;
+CREATE TABLE decimal02(a DECIMAL(10,11));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 39 near "));";
+DROP TABLE decimal02;
+no such table decimal.decimal02
+DROP TABLE IF EXISTS decimal03;
+CREATE TABLE decimal03(a DECIMAL(1.1,11));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near "1.1,11));";
+DROP TABLE decimal03;
+no such table decimal.decimal03
+DROP TABLE IF EXISTS decimal04;
+CREATE TABLE decimal04(a DECIMAL(11,-1));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near "-1));";
+DROP TABLE decimal04;
+no such table decimal.decimal04
+DROP TABLE IF EXISTS decimal05;
+CREATE TABLE decimal05(a DECIMAL(20,-1));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near "-1));";
+CREATE TABLE decimal05(b DECIMAL(-2,23));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 34 near "-2,23));";
+DROP TABLE decimal05;
+no such table decimal.decimal05
+DROP TABLE IF EXISTS decimal06;
+CREATE TABLE decimal06(a DECIMAL(39,10));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
+CREATE TABLE decimal06(b DECIMAL(40,39));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
+DROP TABLE decimal06;
+no such table decimal.decimal06
+DROP TABLE IF EXISTS decimal07;
+CREATE TABLE decimal07(a int PRIMARY KEY, b DECIMAL(38));
+INSERT INTO decimal07 VALUES(1, 3728193.3902);
+INSERT INTO decimal07 VALUES(2, 0.327813092);
+INSERT INTO decimal07 VALUES(3, -3728.4324);
+INSERT INTO decimal07 VALUES(4, 12345678909876543212345678909876543243);
+SELECT * FROM decimal07;
+a    b
+1    3728193
+2    0
+3    -3728
+4    12345678909876543212345678909876543243
+SELECT a, a * b FROM decimal07;
+a    a * b
+1    3728193
+2    0
+3    -11184
+4    49382715639506172849382715639506172972
+SELECT a, a + b FROM decimal07;
+a    a + b
+1    3728194
+2    2
+3    -3725
+4    12345678909876543212345678909876543247
+SELECT a, a - b - b FROM decimal07;
+a    a - b - b
+1    -7456385
+2    2
+3    7459
+4    -24691357819753086424691357819753086482
+SELECT a, b / a FROM decimal07;
+invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243(Scale:0)/4(Scale:0)
+SELECT a, b DIV a FROM decimal07;
+invalid argument operator div, bad value [DECIMAL128 DECIMAL128]
+SELECT a, ABS(b) FROM decimal07;
+a    abs(b)
+1    3728193
+2    0
+3    3728
+4    12345678909876543212345678909876543243
+SELECT a, CEIL(b) FROM decimal07;
+a    ceil(b)
+1    3728193
+2    0
+3    -3728
+4    12345678909876543212345678909876543243
+SELECT a, POWER(b,2) FROM decimal07;
+a    power(b, 2)
+1    1.3899423045249E13
+2    0.0
+3    1.3897984E7
+4    1.5241578774577047E74
+SELECT b + pi() FROM decimal07;
+b + pi()
+3728196.1415926535
+3.141592653589793
+-3724.8584073464103
+1.2345678909876543E37
+SELECT LOG(10, b + 100000) FROM decimal07;
+log(10, b + 100000)
+6.582993824800232
+5.0
+4.9834999941475795
+37.0915149775167
+SELECT LN(b + 20000) FROM decimal07;
+ln(b + 20000)
+15.136784415144875
+9.903487552536127
+9.69720111828834
+85.40636946379534
+SELECT EXP(b) FROM decimal07;
+exp(b)
+Infinity
+1.0
+0.0
+Infinity
+DROP TABLE decimal07;
+DROP TABLE IF EXISTS decimal08;
+CREATE TABLE decimal08(a DECIMAL(38,0));
+INSERT INTO decimal08 VALUES(21737187383787273829839184932843922131);
+INSERT INTO decimal08 VALUES(99999999999999999999999999999999999999);
+INSERT INTO decimal08 VALUES(999999999999999.99999999999999999999999);
+INSERT INTO decimal08 VALUES(1367281378213923.7382197382717382999911);
+INSERT INTO decimal08 VALUES(-63723829382993920323820398294832849309);
+INSERT INTO decimal08 VALUES(0.2777389100215365283243325321437821372);
+INSERT INTO decimal08 VALUES(-99999999999999999999999999999999999999);
+SELECT * FROM decimal08;
+a
+21737187383787273829839184932843922131
+99999999999999999999999999999999999999
+1000000000000000
+1367281378213924
+-63723829382993920323820398294832849309
+0
+-99999999999999999999999999999999999999
+SELECT a + 1 FROM decimal08;
+a + 1
+21737187383787273829839184932843922132
+100000000000000000000000000000000000000
+1000000000000001
+1367281378213925
+-63723829382993920323820398294832849308
+1
+-99999999999999999999999999999999999998
+SELECT a * 2 FROM decimal08;
+invalid input: Decimal128 Mul overflow: 99999999999999999999999999999999999999(Scale:0)*2(Scale:0)
+SELECT a / 3 FROM decimal08;
+invalid input: Decimal128 Div overflow: 21737187383787273829839184932843922131(Scale:0)/3(Scale:0)
+DROP TABLE decimal08;
+DROP TABLE IF EXISTS decimal09;
+CREATE TABLE decimal09 (d decimal DEFAULT NULL);
+INSERT INTO decimal09 VALUES (NULL);
+INSERT INTO decimal09 VALUES(212839);
+INSERT INTO decimal09 VALUES(44455788525777778895412365489563123654);
+INSERT INTO decimal09 VALUES(0.1236547899874561233211236544569877898);
+SELECT * FROM decimal09;
+d
+null
+212839
+44455788525777778895412365489563123654
+0
+SELECT format(d, 2) FROM decimal09;
+format(d, 2)
+null
+212,839.00
+44,455,788,525,777,778,895,412,365,489,563,123,654.00
+0.00
+DROP TABLE decimal09;
+DROP TABLE IF EXISTS decimal10;
+CREATE TABLE decimal10(a DECIMAL(20,8) NOT NULL, b smallint, c float, d DOUBLE);
+INSERT INTO decimal10 VALUES(12323.3829, -32768, -483924.43, 32932.323232);
+INSERT INTO decimal10 VALUES(3829.23, -38, 32943243.1, -3829.32);
+INSERT INTO decimal10 VALUES(-3728832.3982, 0, 0.32893029, 329832013.32893);
+INSERT INTO decimal10 VALUES(0.217832913924324,NULL,3728.39,NULL);
+SELECT * FROM decimal10;
+a    b    c    d
+12323.38290000    -32768    -483924.44    32932.323232
+3829.23000000    -38    3.2943244E7    -3829.32
+-3728832.39820000    0    0.3289303    3.2983201332893E8
+0.21783291    null    3728.39    null
+INSERT INTO decimal10 VALUES(NULL, 21,32,32.0);
+constraint violation: Column 'a' cannot be null
+INSERT INTO decimal10 VALUES(21732843219738283.21,NULL,NULL,0);
+invalid input: Can't convert string To Decimal128: 21732843219738283.21(20,8)
+SELECT a + b + c - d FROM decimal10;
+a + b + c - d
+-537301.385732
+3.295086532E7
+-3.3356084557893E8
+null
+SELECT a * b + c * d FROM decimal10;
+a * b + c * d
+-1.6340568606480984E10
+-1.2615036862482E11
+1.0849173931838037E8
+null
+SELECT a + c + a * c FROM decimal10;
+a + c + a * c
+-5.9640576E9
+1.26180205E11
+-4955358.0
+4540.7734
+SELECT a / d FROM decimal10;
+a / d
+0.3742032656847451
+-0.9999764971326501
+-0.011305247057632835
+null
+SELECT ABS(a) * c FROM decimal10;
+abs(a) * c
+-5.963586E9
+1.2614726E11
+1226526.0
+812.166
+SELECT FLOOR(a) FROM decimal10;
+floor(a)
+12323
+3829
+-3728833
+0
+SELECT CEIL(a) * CEIL(c) FROM decimal10;
+ceil(a) * ceil(c)
+-5.963879376E9
+1.2617262452E11
+-3728832.0
+3729.0
+SELECT POWER(ABS(a), 10) FROM decimal10;
+power(abs(a), 10)
+8.077917745724969E40
+6.778202311305383E35
+5.196711812449448E65
+2.405663793917006E-7
+SELECT pi() * a FROM decimal10;
+pi() * a
+38715.04918601408
+12029.880836905644
+-1.171447246865273E7
+0.6843422697660866
+SELECT LOG(ABS(a)) FROM decimal10;
+log(abs(a))
+9.419253785434625
+8.250419017576137
+15.131605712642699
+-1.524026977969649
+SELECT LN(ABS(a)) FROM decimal10;
+ln(abs(a))
+9.419253785434625
+8.250419017576137
+15.131605712642699
+-1.524026977969649
+SELECT EXP(a div c) FROM decimal10;
+exp(a div c)
+1.0
+1.0
+0.0
+1.0
+SELECT SUM(a) FROM decimal10;
+sum(a)
+-3712679.56746709
+SELECT AVG(a + b) FROM decimal10;
+avg(a + b)
+-1248495.261766666667
+SELECT COUNT(a) FROM decimal10;
+count(a)
+4
+SELECT MAX(a) FROM decimal10;
+max(a)
+12323.38290000
+SELECT MIN(a) + MAX(b) FROM decimal10;
+min(a) + max(b)
+-3728832.39820000
+SELECT * FROM decimal10 ORDER BY a DESC;
+a    b    c    d
+12323.38290000    -32768    -483924.44    32932.323232
+3829.23000000    -38    3.2943244E7    -3829.32
+0.21783291    null    3728.39    null
+-3728832.39820000    0    0.3289303    3.2983201332893E8
+SELECT a * c AS SUM FROM decimal10 ORDER BY SUM ASC;
+SUM
+-5.963586E9
+-1226526.0
+812.166
+1.2614726E11
+DROP TABLE decimal10;
+SELECT CAST(a AS DOUBLE) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST(a AS FLOAT) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST(b AS DECIMAL(10,1)) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST(b AS decimal(20,10)) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST(c AS decimal) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST((a * c) AS DECIMAL) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST(POWER(c,2) AS DECIMAL(28,6)) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+SELECT CAST((d - c) * a AS DECIMAL(30, 4)) FROM decimal10;
+SQL parser error: table "decimal10" does not exist
+DROP TABLE IF EXISTS decimal11;
+CREATE TABLE decimal10 (a DECIMAL(10,9) PRIMARY KEY DEFAULT 0, b tinyint unsigned, c bigint,id int);
+INSERT INTO decimal10 VALUES(0, 155, -654346789,1);
+INSERT INTO decimal10 VALUES(0.389932,78,38238293232,2);
+INSERT INTO decimal10 VALUES(-2.22,0, 32783232,1);
+INSERT INTO decimal10 VALUES(9, 111, NULL, 2);
+SELECT * FROM decimal10;
+a    b    c    id
+0E-9    155    -654346789    1
+0.389932000    78    38238293232    2
+-2.220000000    0    32783232    1
+9.000000000    111    null    2
+INSERT INTO decimal10 VALUES(NULL,9,2819323242,2);
+constraint violation: Column 'a' cannot be null
+SELECT CAST(b AS DECIMAL(10,9)) FROM decimal10;
+cast(b as decimal(10, 9))
+155.000000000
+78.000000000
+0E-9
+111.000000000
+SELECT CAST(b AS DECIMAL(10)) FROM decimal10;
+cast(b as decimal(10))
+155
+78
+0
+111
+SELECT CAST(ABS(a) AS int unsigned) FROM decimal10;
+cast(abs(a) as int unsigned)
+0
+0
+2
+9
+SELECT CAST(a AS bigint) FROM decimal10;
+cast(a as bigint)
+0
+0
+-2
+9
+SELECT CAST((a + b) AS DECIMAL(20,3)) FROM decimal10;
+cast((a + b) as decimal(20, 3))
+155.000
+78.390
+-2.220
+120.000
+SELECT * FROM decimal10 WHERE a  = 0;
+a    b    c    id
+0E-9    155    -654346789    1
+SELECT a, b, c FROM decimal10 WHERE ABS(a) = 12323.38290000;
+a    b    c
+SELECT * FROM decimal10 WHERE a > 3829.23000000;
+a    b    c    id
+SELECT * FROM decimal10 WHERE CEIL(a) != 9;
+a    b    c    id
+0E-9    155    -654346789    1
+0.389932000    78    38238293232    2
+-2.220000000    0    32783232    1
+SELECT * FROM decimal10 WHERE CEIL(a) < 10000;
+a    b    c    id
+0E-9    155    -654346789    1
+0.389932000    78    38238293232    2
+-2.220000000    0    32783232    1
+9.000000000    111    null    2
+SELECT * FROM decimal10 WHERE ABS(a) <= 1;
+a    b    c    id
+0E-9    155    -654346789    1
+0.389932000    78    38238293232    2
+SELECT * FROM decimal10 WHERE a BETWEEN -1 AND 3;
+a    b    c    id
+0E-9    155    -654346789    1
+0.389932000    78    38238293232    2
+SELECT * FROM decimal10 WHERE a NOT BETWEEN -1 AND 3;
+a    b    c    id
+-2.220000000    0    32783232    1
+9.000000000    111    null    2
+SELECT * FROM decimal10 WHERE a IN(1.0,9.0);
+a    b    c    id
+9.000000000    111    null    2
+SELECT a,b,c FROM decimal10 WHERE a NOT IN(1.00000,9.00000);
+a    b    c
+0E-9    155    -654346789
+0.389932000    78    38238293232
+-2.220000000    0    32783232
+SELECT * FROM decimal10 WHERE a IN(1,9);
+[unknown result because it is related to issue#8277]
+SELECT * a,b,c FROM decimal10 WHERE a NOT IN(1,9);
+[unknown result because it is related to issue#8277]
+SELECT a * b FROM decimal10 WHERE a NOT BETWEEN 2 AND 9;
+a * b
+0E-12
+30.414696000000
+0E-12
+SELECT any_value(a) FROM decimal10 WHERE ABS(a) >= 0 GROUP BY id;
+any_value(a)
+0E-9
+0.389932000
+SELECT * FROM decimal10 WHERE a > (SELECT COUNT(a) FROM decimal10);
+a    b    c    id
+9.000000000    111    null    2
+DROP TABLE decimal10;
+DROP TABLE IF EXISTS decimal11;
+CREATE TABLE decimal11 (a DECIMAL(38,13), b DECIMAL(25,12));
+INSERT INTO decimal11 VALUES(1234567890981.111231146421, 1.232143214321);
+INSERT INTO decimal11 VALUES(32838293.3387298323, -37827.382983283022);
+SELECT * FROM decimal11;
+a    b
+1234567890981.1112311464210    1.232143214321
+32838293.3387298323000    -37827.382983283022
+SELECT CAST((a * b) AS DECIMAL(20,10)) FROM decimal11;
+invalid input: Can't convert string To Decimal128: 1521164449490.9642986411848(20,10)
+SELECT a * b FROM decimal11;
+a * b
+1521164449490.9642986411848
+-1242186698641.5250726367777
+DROP TABLE IF EXISTS decimal12;
+CREATE TABLE decimal12(a char, b VARCHAR(38));
+INSERT INTO decimal12 VALUES('a','3.14e+09');
+INSERT INTO decimal12 VALUES('b', '-3.14e+09');
+INSERT INTO decimal12 VALUES('c','545676678738');
+INSERT INTO decimal12 VALUES('d',NULL);
+INSERT INTO decimal12 VALUES('e','99999999009999999999999999999999999999');
+SELECT * FROM decimal12;
+a    b
+a    3.14e+09
+b    -3.14e+09
+c    545676678738
+d    null
+e    99999999009999999999999999999999999999
+SELECT CAST(b AS DECIMAL(38,0)) FROM decimal12;
+cast(b as decimal(38))
+3140000000
+-3140000000
+545676678738
+null
+99999999009999999999999999999999999999
+SELECT CAST(b AS DECIMAL) FROM decimal12 WHERE a = 'b';
+cast(b as decimal(38))
+-3140000000
+DROP TABLE IF EXISTS decimal13;
+DROP TABLE IF EXISTS decimal14;
+CREATE TABLE decimal13(a DECIMAL(10,2) NOT NULL,b FLOAT,c smallint unsigned);
+INSERT INTO decimal13 VALUES(1,12.9,61555);
+INSERT INTO decimal13 VALUES(-38299323.8880,33.3283,0);
+INSERT INTO decimal13 VALUES(0.894324,-327832.932,90);
+SELECT * FROM decimal13;
+a    b    c
+1.00    12.9    61555
+-38299323.89    33.3283    0
+0.89    -327832.94    90
+CREATE TABLE decimal14(a DECIMAL(11,9), b DOUBLE, c int unsigned);
+INSERT INTO decimal14 VALUES(1,728.392032,2147483647);
+INSERT INTO decimal14 VALUES(32.12,38293,23829321);
+INSERT INTO decimal14 VALUES(0.3289302,382943243.438,0);
+SELECT * FROM decimal14;
+a    b    c
+1.000000000    728.392032    2147483647
+32.120000000    38293.0    23829321
+0.328930200    3.82943243438E8    0
+SELECT decimal13.a,decimal14.a FROM decimal13,decimal14 WHERE decimal13.a = decimal14.a;
+a    a
+1.00    1.000000000
+SELECT decimal13.a,decimal14.a FROM decimal13 join decimal11 ON decimal13.a = decimal14.a;
+invalid input: missing FROM-clause entry for table 'decimal14'
+SELECT decimal13.a,decimal14.a FROM decimal13 left join decimal11 ON decimal13.a = decimal14.a;
+invalid input: missing FROM-clause entry for table 'decimal14'
+SELECT decimal13.a,decimal14.b,decimal13.c FROM decimal14 right join decimal13 ON decimal14.a < decimal11.a;
+invalid input: missing FROM-clause entry for table 'decimal11'
+DROP TABLE decimal13;
+DROP TABLE decimal14;
+DROP TABLE IF EXISTS decimal15;
+CREATE TABLE decimal15(a decimal(10,5),b FLOAT,c double);
+CREATE UNIQUE INDEX a_index on decimal15(a);
+INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
+INSERT INTO decimal15 VALUES(-28.3232,387213.0,32132313);
+INSERT INTO decimal15 VALUES(NULL,327.328932,-38922.2123);
+SELECT * FROM decimal15;
+a    b    c
+271.21212    387213.0    3289.0
+-28.32320    387213.0    3.2132313E7
+null    327.32892    -38922.2123
+INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
+Duplicate entry '271.21212' for key '__mo_index_idx_col'
+DROP TABLE decimal15;
+DROP TABLE IF EXISTS decimal16;
+CREATE TABLE decimal16(a decimal, b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));
+INSERT INTO decimal16 VALUES(1234789456456456456567898552556, 3728321323.4321214,'小明');
+SELECT * FROM decimal16;
+a    b    c
+1234789456456456456567898552556    3728321323.4321214000    小明
+INSERT INTO decimal16 VALUES(-64564567898552556, 3728321323.4321214,'小花');
+INSERT INTO decimal16 VALUES(-64564568552556, 8321323.4321214,'小强');
+DROP TABLE decimal16;
+DROP TABLE IF EXISTS decimal17;
+CREATE TABLE decimal17(a decimal,b decimal(38,0),c decimal(20,4),d decimal(10));
+INSERT INTO decimal17 VALUES(3231.44112,0,-38232432541431.7890,3728739824.0909898765);
+INSERT INTO decimal17 VALUES(-3892.020,NULL,3872932.3289323,3829);
+INSERT INTO decimal17 VALUES(123.456,NULL,7281392.902,328392323);
+DROP TABLE IF EXISTS decimal18;
+CREATE TABLE decimal18(a DECIMAL, b DECIMAL(38,0));
+INSERT INTO decimal18 (a,b) SELECT a,b FROM decimal17;
+INSERT INTO decimal18 (a,b) SELECT c,d FROM decimal17;
+SELECT * FROM decimal17;
+a    b    c    d
+3231    0    -38232432541431.7890    3728739824
+-3892    null    3872932.3289    3829
+123    null    7281392.9020    328392323
+DROP TABLE decimal17;

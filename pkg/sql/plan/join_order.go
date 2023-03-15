@@ -356,7 +356,15 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	nodeID, _ = builder.pushdownFilters(nodeID, conds)
+	nodeID, conds = builder.pushdownFilters(nodeID, conds, true)
+	if len(conds) > 0 {
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{nodeID},
+			FilterList: conds,
+		}, nil)
+	}
+
 	ReCalcNodeStats(nodeID, builder, true)
 
 	return nodeID

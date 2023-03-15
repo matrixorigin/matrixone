@@ -20,59 +20,82 @@ package add
 #cgo CFLAGS: -I../../../cgo
 #cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
-import "C"
 
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func Decimal64VecAdd(xs, ys, rs *vector.Vector) error {
+func Decimal64VecAdd(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal64](xs)
 	yt := vector.MustFixedCol[types.Decimal64](ys)
 	rt := vector.MustFixedCol[types.Decimal64](rs)
-	flag := 0
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
+	} else {
+		rs.GetType().Scale = ys.GetType().Scale
+	}
+	n := len(rt)
+	err = nil
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[0].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[i].Add(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
+	for i := 0; i < n; i++ {
+		rt[i], _, err = xt[i].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 
-	rc := C.Decimal64_VecAdd(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal add overflow")
 	}
-	return nil
+	return
 }
 
-func Decimal128VecAdd(xs, ys, rs *vector.Vector) error {
+func Decimal128VecAdd(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal128](xs)
 	yt := vector.MustFixedCol[types.Decimal128](ys)
 	rt := vector.MustFixedCol[types.Decimal128](rs)
-	flag := 0
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
+	} else {
+		rs.GetType().Scale = ys.GetType().Scale
+	}
+	n := len(rt)
+	err = nil
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[0].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[i].Add(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-	rc := C.Decimal128_VecAdd(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal add overflow")
+	for i := 0; i < n; i++ {
+		rt[i], _, err = xt[i].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
+		}
 	}
-	return nil
+	return
 }
