@@ -247,7 +247,6 @@ func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 }
 
 func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
-	mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, bs.Storage)
 	if typ.IsVarlen() {
 		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage)
 	} else {

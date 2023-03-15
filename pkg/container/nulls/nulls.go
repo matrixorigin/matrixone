@@ -285,14 +285,14 @@ func (nsp *Nulls) Or(m *Nulls) *Nulls {
 	}
 }
 
-func (n *Nulls) IsSame(m *Nulls) bool {
+func (nsp *Nulls) IsSame(m *Nulls) bool {
 	switch {
-	case n == nil && m == nil:
+	case nsp == nil && m == nil:
 		return true
-	case n.Np == nil && m.Np == nil:
+	case nsp.Np == nil && m.Np == nil:
 		return true
-	case n.Np != nil && m.Np != nil:
-		return n.Np.IsSame(m.Np)
+	case nsp.Np != nil && m.Np != nil:
+		return nsp.Np.IsSame(m.Np)
 	default:
 		return false
 	}
