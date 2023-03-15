@@ -8,8 +8,6 @@ import (
 
 const (
 	getPublicationsInfoFormat = "select pub_name as Name,database_name as `Database` from mo_catalog.mo_pubs;"
-	idxOfName                 = 0
-	idxOfDatabase             = 1
 )
 
 var (
