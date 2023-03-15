@@ -20,13 +20,29 @@ import (
 	"testing"
 )
 
-func TestParse128(t *testing.T) {
-	_, _, z := Parse128("99999999999999999999999999999999999999")
-	if z != nil {
-		panic("DecimalParse wrong")
+func TestParse64(t *testing.T) {
+	x, y := ParseDecimal64("99999.99999999999999999999999999999999", 12, 6)
+	if y != nil || x != 100000000000 {
+		panic("Decimal64Parse wrong")
 	}
 }
-func TestDecimalFloat(t *testing.T) {
+func TestParse128(t *testing.T) {
+	x, y := ParseDecimal128("99999.999999999999999999999999999999999", 12, 6)
+	if y != nil || x.B0_63 != 100000000000 {
+		panic("Decimal128Parse wrong")
+	}
+}
+
+func TestDecimal64Float(t *testing.T) {
+	x := Decimal64(rand.Int())
+	y := Decimal64ToFloat64(x, 15)
+	z, _ := Decimal64FromFloat64(y, 18, 5)
+	x, _ = x.Scale(-10)
+	if x != z {
+		panic("DecimalFloat wrong")
+	}
+}
+func TestDecimal128Float(t *testing.T) {
 	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
 	y := Decimal128ToFloat64(x, 30)
 	z, _ := Decimal128FromFloat64(y, 38, 7)
@@ -36,25 +52,57 @@ func TestDecimalFloat(t *testing.T) {
 	}
 }
 
-func TestDecimalAddSub(t *testing.T) {
+func TestDecimal64AddSub(t *testing.T) {
+	x := Decimal64(rand.Int() >> 1)
+	z := x
+	err := error(nil)
+	y := Decimal64(rand.Int() >> 1)
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal64AddSub wrong")
+	}
+}
+func TestDecimal128AddSub(t *testing.T) {
 	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
 	z := x
+	err := error(nil)
 	y := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
-	x, _, _ = x.Add(y, 0, 0)
-	x, _, _ = x.Sub(y, 0, 0)
-	if x != z {
-		panic("DecimalAddSub wrong")
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal128AddSub wrong")
 	}
 }
 
-func TestDecimalMulDiv(t *testing.T) {
+func TestDecimal64MulDiv(t *testing.T) {
+	x := Decimal64(rand.Int() >> 32)
+	z := x
+	err := error(nil)
+	y := Decimal64(rand.Int() >> 32)
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal64MulDiv wrong")
+	}
+}
+func TestDecimal128MulDiv(t *testing.T) {
 	x := Decimal128{uint64(rand.Int()) >> 8, 0}
 	z := x
+	err := error(nil)
 	y := Decimal128{uint64(rand.Int()), uint64(rand.Int() & 255)}
-	x, _, _ = x.Mul(y, 0, 0)
-	x, _, _ = x.Div(y, 12, 0)
-	if x != z {
-		panic("DecimalMulDiv wrong")
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal128MulDiv wrong")
 	}
 }
 func TestParseFormat(t *testing.T) {
