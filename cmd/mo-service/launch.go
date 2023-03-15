@@ -33,7 +33,7 @@ var (
 	cnProxy goetty.Proxy
 )
 
-func startCluster(stopper *stopper.Stopper, perfCounter *perfcounter.Counter) error {
+func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet *perfcounter.CounterSet) error {
 	if *launchFile == "" {
 		panic("launch file not set")
 	}
@@ -43,22 +43,23 @@ func startCluster(stopper *stopper.Stopper, perfCounter *perfcounter.Counter) er
 		return err
 	}
 
-	if err := startLogServiceCluster(cfg.LogServiceConfigFiles, stopper, perfCounter); err != nil {
+	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
-	if err := startDNServiceCluster(cfg.DNServiceConfigsFiles, stopper, perfCounter); err != nil {
+	if err := startDNServiceCluster(ctx, cfg.DNServiceConfigsFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
-	if err := startCNServiceCluster(cfg.CNServiceConfigsFiles, stopper, perfCounter); err != nil {
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
 	return nil
 }
 
 func startLogServiceCluster(
+	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "Log service config not set")
@@ -70,7 +71,7 @@ func startLogServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(cfg, stopper, perfCounter); err != nil {
+		if err := startService(ctx, cfg, stopper, perfCounterSet); err != nil {
 			return err
 		}
 	}
@@ -78,9 +79,10 @@ func startLogServiceCluster(
 }
 
 func startDNServiceCluster(
+	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "DN service config not set")
@@ -91,7 +93,7 @@ func startDNServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(cfg, stopper, perfCounter); err != nil {
+		if err := startService(ctx, cfg, stopper, perfCounterSet); err != nil {
 			return nil
 		}
 	}
@@ -99,9 +101,10 @@ func startDNServiceCluster(
 }
 
 func startCNServiceCluster(
+	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "CN service config not set")
@@ -116,7 +119,7 @@ func startCNServiceCluster(
 			return err
 		}
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
-		if err := startService(cfg, stopper, perfCounter); err != nil {
+		if err := startService(ctx, cfg, stopper, perfCounterSet); err != nil {
 			return err
 		}
 	}
