@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 	"time"
@@ -7234,4 +7235,58 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 		convey.So(has("system"), convey.ShouldBeTrue)
 		convey.So(has("mo_catalog"), convey.ShouldBeFalse)
 	})
+}
+
+func TestGetSqlForGetDbIdAndType(t *testing.T) {
+	ctx := context.TODO()
+	kases := []struct {
+		pubName string
+		want    string
+		err     bool
+	}{
+		{
+			pubName: "abc",
+			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc';",
+			err:     false,
+		},
+		{
+			pubName: "abc\t",
+			want:    "",
+			err:     true,
+		},
+	}
+	for _, k := range kases {
+		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true)
+		require.Equal(t, k.err, err != nil)
+		require.Equal(t, k.want, sql)
+	}
+}
+
+func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
+	ctx := context.TODO()
+	kases := []struct {
+		pubName      string
+		databaseName string
+		err          bool
+	}{
+		{
+			pubName:      "abc",
+			databaseName: "abc",
+			err:          false,
+		},
+		{
+			pubName:      "abc\t",
+			databaseName: "abc",
+			err:          true,
+		},
+		{
+			pubName:      "abc",
+			databaseName: "abc\t",
+			err:          true,
+		},
+	}
+	for _, k := range kases {
+		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, true, "", "", 1, 1, "", true)
+		require.Equal(t, k.err, err != nil)
+	}
 }
