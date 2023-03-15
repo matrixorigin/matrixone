@@ -710,7 +710,11 @@ func genCreateTableTuple(
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_TABLES_SEQTYPE_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) //seqtype
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
