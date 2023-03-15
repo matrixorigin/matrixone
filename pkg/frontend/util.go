@@ -667,7 +667,7 @@ func hideAccessKey(sql string) string {
 				end++
 			}
 
-			if end < sqlLen && start < end {
+			if end < sqlLen {
 				sql = sql[:start+1] + "******" + sql[end:]
 			}
 		}
@@ -684,7 +684,7 @@ func hideAccessKey(sql string) string {
 				end++
 			}
 
-			if end < sqlLen && start < end {
+			if end < sqlLen {
 				sql = sql[:start+1] + "******" + sql[end:]
 			}
 		}
