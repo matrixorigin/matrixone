@@ -1695,6 +1695,23 @@ func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tre
 	return err
 }
 
+func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, sp *tree.ShowCreatePublications, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowCreatePublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -3278,6 +3295,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowPublications:
 			selfHandle = true
 			if err = mce.handleShowPublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowCreatePublications:
+			selfHandle = true
+			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.CreateAccount:
