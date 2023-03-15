@@ -17566,7 +17566,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: 38, // this is the default precision for decimal
-				Scale:   0,
+				Scale:       0,
 			}
 		}
 		yyVAL.union = yyLOCAL

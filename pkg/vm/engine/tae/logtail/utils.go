@@ -549,7 +549,7 @@ func (data *CheckpointData) ReadFrom(
 			}
 			result := job.WaitDone()
 			defer job.Close()
-			if result != nil && result.Res != nil {
+			if result != nil && result.Res != nil && result.Res.(*containers.Batch) != nil {
 				result.Res.(*containers.Batch).Close()
 				result.Res = nil
 			}
