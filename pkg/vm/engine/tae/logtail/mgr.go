@@ -146,10 +146,10 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 	}
 }
 func (mgr *Manager) Stop() {
-	mgr.cancel()
-	mgr.wg.Wait()
 	mgr.collectLogtailQueue.Stop()
 	mgr.waitCommitQueue.Stop()
+	mgr.cancel()
+	mgr.wg.Wait()
 }
 func (mgr *Manager) Start() {
 	mgr.wg.Add(1)
