@@ -15,12 +15,13 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func SplitTableAndColumn(name string) (string, string) {
@@ -130,10 +131,38 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// att_relname in ('mo_database','mo_tables','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
 
+	//build subquery Plan
+	mo_tableExpr := tree.NewTableName(tree.Identifier(catalog.MO_CATALOG+"."+catalog.MO_TABLES), tree.ObjectNamePrefix{})
+	selectTable := &tree.JoinTableExpr{
+		JoinType: "CROSS",
+		Left: &tree.AliasedTableExpr{
+			Expr: mo_tableExpr,
+		},
+	}
+	relnameColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{catalog.SystemRelAttr_Name},
+	}
+
+	relkindEqualAst := makeStringEqualAst(catalog.SystemRelAttr_Kind, "cluster")
+	selectStmt := &tree.Select{
+		Select: &tree.SelectClause{
+			Exprs: []tree.SelectExpr{{Expr: relnameColName}},
+			From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
+			Where: tree.NewWhere(relkindEqualAst),
+		},
+	}
+	subquery := tree.NewSubquery(selectStmt, false)
+
+	inExpr2 := tree.NewComparisonExpr(tree.IN, att_relnameColName, subquery)
+
+	orExpr := tree.NewOrExpr(inExpr, inExpr2)
+	parentExpr := tree.NewParenExpr(orExpr)
+
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
 	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
-	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
+	andExpr := tree.NewAndExpr(accountIdEqulZero, parentExpr)
 
 	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
 	right := tree.NewParenExpr(andExpr)
