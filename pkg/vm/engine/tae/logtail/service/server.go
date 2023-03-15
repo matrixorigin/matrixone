@@ -354,6 +354,8 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.logger
 
+	activate := false
+
 	publishTicker := time.NewTicker(s.cfg.LogtailCollectInterval)
 	defer publishTicker.Stop()
 
@@ -414,12 +416,21 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// register subscribed table
 				s.subscribed.Register(sub.tableID, table)
+
+				if !activate {
+					activate = true
+				}
 			}
 
 			subscriptionFunc(sub)
 
 		case <-publishTicker.C:
 			publishmentFunc := func() {
+				// no subscription, no publishment
+				if !activate {
+					return
+				}
+
 				defer func() {
 					if risk >= s.cfg.MaxLogtailFetchFailure {
 						panic("fail to fetch incremental logtail many times")
