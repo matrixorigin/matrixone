@@ -87,10 +87,6 @@ func TestFileServiceFactory(t *testing.T) {
 		Name:    defines.SharedFileServiceName,
 		Backend: "MEM",
 	})
-	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK-ETL",
-	})
 
 	fs, err := c.createFileService("A", globalCounterSet, 0, "")
 	assert.NoError(t, err)

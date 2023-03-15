@@ -22,22 +22,23 @@ package main
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"go.uber.org/zap/zapcore"
 	"net/http"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"go.uber.org/zap/zapcore"
+
 	_ "net/http/pprof"
 	"runtime/pprof"
 
 	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -60,11 +61,7 @@ func main() {
 		DisableStore: true,
 	})
 
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, "mo-data/etl")
-	if err != nil {
-		logutil.Infof("failed open fileservice: %v", err)
-		return
-	}
+	fs := testutil.NewFS()
 	files, err := fs.List(ctx, "/")
 	if err != nil {
 		logutil.Infof("failed list /: %v", err)
@@ -117,7 +114,7 @@ func main() {
 	cancel()
 }
 
-func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {
+func mergeTable(ctx context.Context, fs fileservice.FileService, table *table.Table) {
 	var err error
 	ctx, span := trace.Start(ctx, "mergeTable")
 	defer span.End()

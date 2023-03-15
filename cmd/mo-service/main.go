@@ -123,7 +123,7 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	}
 }
 
-func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, globalCounterSet *perfcounter.CounterSet) error {
+func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, globalCounterSet *perfcounter.CounterSet) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
@@ -147,7 +147,12 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	if err = initTraceMetric(ctx, st, cfg, stopper, fs, uuid); err != nil {
+	sharedFS, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+	fsForMetrics := fileservice.SubPath(sharedFS, "etl")
+	if err = initTraceMetric(ctx, st, cfg, stopper, fsForMetrics, uuid); err != nil {
 		return err
 	}
 

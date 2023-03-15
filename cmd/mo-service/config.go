@@ -139,7 +139,7 @@ func (c *Config) validate() error {
 	}
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
-		case defines.LocalFileServiceName, defines.ETLFileServiceName:
+		case defines.LocalFileServiceName:
 			if c.FileServices[idx].DataDir == "" {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
@@ -211,14 +211,6 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 	_, err = fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
-	}
-
-	// ensure etl exists, for trace & metric
-	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
-		if err != nil {
-			return nil, moerr.ConvertPanicError(context.Background(), err)
-		}
 	}
 
 	return fs, nil
