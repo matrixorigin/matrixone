@@ -90,6 +90,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemClusterRel {
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
 	}
 	rowCount := 0
 	var pkDefs []string
