@@ -132,7 +132,7 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
 
 	//build subquery Plan
-	mo_tableExpr := tree.NewTableName(tree.Identifier(catalog.MO_CATALOG+"."+catalog.MO_TABLES), tree.ObjectNamePrefix{})
+	mo_tableExpr := tree.NewTableName(tree.Identifier(catalog.MO_TABLES), tree.ObjectNamePrefix{CatalogName: "", SchemaName: catalog.MO_CATALOG, ExplicitCatalog: false, ExplicitSchema: true})
 	selectTable := &tree.JoinTableExpr{
 		JoinType: "CROSS",
 		Left: &tree.AliasedTableExpr{
