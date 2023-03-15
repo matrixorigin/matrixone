@@ -532,6 +532,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
+	ses.sentRows.Add(int64(n))
 	logInfof(ses.GetConciseProfile(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
@@ -642,10 +643,10 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).ToStringWithScale(scale)
+		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).ToStringWithScale(scale)
+		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).Format(scale)
 	case types.T_uuid:
 		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 	case types.T_Rowid:
@@ -2976,6 +2977,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		sql = removePrefixComment(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3017,6 +3019,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
+		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
 		sqlType := ses.sqlSourceType[0]
 		if i < len(ses.sqlSourceType) {
@@ -4321,6 +4324,10 @@ var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]b
 
 func init() {
 	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func GetStatementIdStr(ses *Session) string {
+	return trace.SpanFromContext(ses.GetRequestContext()).SpanContext().TraceID.String()
 }
 
 func getAccountId(ctx context.Context) uint32 {

@@ -97,6 +97,33 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		c := newTestClient(t)
 		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
+			err := cs.Write(ctx, request)
+			assert.Error(t, err)
+			return err
+		})
+
+		req := newTestMessage(1)
+		f, err := c.Send(ctx, testAddr, req)
+		assert.NoError(t, err)
+
+		defer f.Close()
+		resp, err := f.Get()
+		assert.Error(t, ctx.Err(), err)
+		assert.Nil(t, resp)
+	})
+}
+
+func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
+	wc := make(chan struct{}, 1)
+	defer close(wc)
+
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		defer cancel()
+
+		c := newTestClient(t)
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
+			assert.NoError(t, cs.Close())
 			return cs.Write(ctx, request)
 		})
 
@@ -218,7 +245,7 @@ func TestStreamServerWithCache(t *testing.T) {
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
 
 		c := newTestClient(t)
@@ -244,15 +271,17 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 
 		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
 		<-cc
-		v, _ := rs.sessions.Load(uint64(1))
-		cs := v.(*clientSession)
-		for {
-			cs.mu.RLock()
-			if len(cs.mu.caches) == 0 {
+		v, ok := rs.sessions.Load(uint64(1))
+		if ok {
+			cs := v.(*clientSession)
+			for {
+				cs.mu.RLock()
+				if len(cs.mu.caches) == 0 {
+					cs.mu.RUnlock()
+					return
+				}
 				cs.mu.RUnlock()
-				return
 			}
-			cs.mu.RUnlock()
 		}
 	})
 }

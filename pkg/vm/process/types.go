@@ -41,7 +41,8 @@ type Analyze interface {
 	WaitStop(time.Time)
 	DiskIO(*batch.Batch)
 	S3IOByte(*batch.Batch)
-	S3IOCount(int)
+	S3IOInputCount(int)
+	S3IOOutputCount(int)
 	Network(*batch.Batch)
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
@@ -124,8 +125,10 @@ type AnalyzeInfo struct {
 	DiskIO int64
 	// S3IOByte, data size read from s3
 	S3IOByte int64
-	// S3IOCount, query count that read from s3
-	S3IOCount int64
+	// S3IOInputCount, count for PUT, COPY, POST and LIST
+	S3IOInputCount int64
+	// S3IOOutputCount, count for GET, SELECT and other
+	S3IOOutputCount int64
 	// NetworkIO, message size send between CN node
 	NetworkIO int64
 	// ScanTime, scan cost time in external scan

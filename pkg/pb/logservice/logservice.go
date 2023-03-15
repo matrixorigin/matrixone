@@ -76,6 +76,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.SQLAddress = hb.SQLAddress
+	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
@@ -99,6 +100,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo.Shards = hb.Shards
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.LogtailServerAddress = hb.LogtailServerAddress
+	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }

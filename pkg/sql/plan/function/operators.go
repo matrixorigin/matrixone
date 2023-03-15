@@ -2820,16 +2820,30 @@ var operators = map[int]Functions{
 				Fn:        operator.PlusFloat[float64],
 			},
 			{
-				Index:     10,
-				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
-				Fn:        operator.PlusDecimal64,
+				Index: 10,
+				Args:  []types.T{types.T_decimal64, types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 < scale2 {
+						scale1 = scale2
+					}
+					return types.New(types.T_decimal64, 18, scale1)
+				},
+				Fn: operator.PlusDecimal64,
 			},
 			{
-				Index:     11,
-				Args:      []types.T{types.T_decimal128, types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.PlusDecimal128,
+				Index: 11,
+				Args:  []types.T{types.T_decimal128, types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 < scale2 {
+						scale1 = scale2
+					}
+					return types.New(types.T_decimal128, 38, scale1)
+				},
+				Fn: operator.PlusDecimal128,
 			},
 			{
 				Index:     12,
@@ -2907,16 +2921,30 @@ var operators = map[int]Functions{
 				Fn:        operator.MinusFloat[float64],
 			},
 			{
-				Index:     10,
-				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
-				Fn:        operator.MinusDecimal64,
+				Index: 10,
+				Args:  []types.T{types.T_decimal64, types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 < scale2 {
+						scale1 = scale2
+					}
+					return types.New(types.T_decimal64, 18, scale1)
+				},
+				Fn: operator.MinusDecimal64,
 			},
 			{
-				Index:     11,
-				Args:      []types.T{types.T_decimal128, types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.MinusDecimal128,
+				Index: 11,
+				Args:  []types.T{types.T_decimal128, types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 < scale2 {
+						scale1 = scale2
+					}
+					return types.New(types.T_decimal128, 38, scale1)
+				},
+				Fn: operator.MinusDecimal128,
 			},
 			{
 				Index:     12,
@@ -3000,16 +3028,44 @@ var operators = map[int]Functions{
 				Fn:        operator.MultFloat[float64],
 			},
 			{
-				Index:     10,
-				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.MultDecimal64,
+				Index: 10,
+				Args:  []types.T{types.T_decimal64, types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := int32(12)
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 > scale {
+						scale = scale1
+					}
+					if scale2 > scale {
+						scale = scale2
+					}
+					if scale1+scale2 < scale {
+						scale = scale1 + scale2
+					}
+					return types.New(types.T_decimal128, 38, scale)
+				},
+				Fn: operator.MultDecimal64,
 			},
 			{
-				Index:     11,
-				Args:      []types.T{types.T_decimal128, types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.MultDecimal128,
+				Index: 11,
+				Args:  []types.T{types.T_decimal128, types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := int32(12)
+					scale1 := parameters[0].Scale
+					scale2 := parameters[1].Scale
+					if scale1 > scale {
+						scale = scale1
+					}
+					if scale2 > scale {
+						scale = scale2
+					}
+					if scale1+scale2 < scale {
+						scale = scale1 + scale2
+					}
+					return types.New(types.T_decimal128, 38, scale)
+				},
+				Fn: operator.MultDecimal128,
 			},
 		},
 	},
@@ -3033,16 +3089,36 @@ var operators = map[int]Functions{
 				Fn:        operator.DivFloat[float64],
 			},
 			{
-				Index:     2,
-				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.DivDecimal64,
+				Index: 2,
+				Args:  []types.T{types.T_decimal64, types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := int32(12)
+					scale1 := parameters[0].Scale
+					if scale1 > scale {
+						scale = scale1
+					}
+					if scale1+6 < scale {
+						scale = scale1 + 6
+					}
+					return types.New(types.T_decimal128, 38, scale)
+				},
+				Fn: operator.DivDecimal64,
 			},
 			{
-				Index:     3,
-				Args:      []types.T{types.T_decimal128, types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.DivDecimal128,
+				Index: 3,
+				Args:  []types.T{types.T_decimal128, types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := int32(12)
+					scale1 := parameters[0].Scale
+					if scale1 > scale {
+						scale = scale1
+					}
+					if scale1+6 < scale {
+						scale = scale1 + 6
+					}
+					return types.New(types.T_decimal128, 38, scale)
+				},
+				Fn: operator.DivDecimal128,
 			},
 		},
 	},
@@ -3223,17 +3299,21 @@ var operators = map[int]Functions{
 				},
 			},
 			{
-				Index:     10,
-				Args:      []types.T{types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
+				Index: 10,
+				Args:  []types.T{types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal64, 18, parameters[0].Scale)
+				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
-				Index:     11,
-				Args:      []types.T{types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
+				Index: 11,
+				Args:  []types.T{types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, parameters[0].Scale)
+				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					return vs[0].Dup(proc.Mp())
 				},
@@ -3283,16 +3363,20 @@ var operators = map[int]Functions{
 				Fn:        operator.UnaryMinus[float64],
 			},
 			{
-				Index:     6,
-				Args:      []types.T{types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
-				Fn:        operator.UnaryMinusDecimal64,
+				Index: 6,
+				Args:  []types.T{types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal64, 18, parameters[0].Scale)
+				},
+				Fn: operator.UnaryMinusDecimal64,
 			},
 			{
-				Index:     7,
-				Args:      []types.T{types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        operator.UnaryMinusDecimal128,
+				Index: 7,
+				Args:  []types.T{types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, parameters[0].Scale)
+				},
+				Fn: operator.UnaryMinusDecimal128,
 			},
 		},
 	},

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -37,12 +38,13 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	rt      runtime.Runtime
-	logger  *log.MOLogger
-	shard   metadata.DNShard
-	storage storage.TxnStorage
-	sender  rpc.TxnSender
-	stopper *stopper.Stopper
+	rt        runtime.Runtime
+	logger    *log.MOLogger
+	shard     metadata.DNShard
+	storage   storage.TxnStorage
+	sender    rpc.TxnSender
+	stopper   *stopper.Stopper
+	allocator lockservice.LockTableAllocator
 
 	// TxnService maintains a sync.Map in memory to record all running transactions. The metadata for each write
 	// transaction is initialized when the TxnService receives its first write operation and written to the map.
@@ -70,7 +72,8 @@ func NewTxnService(
 	shard metadata.DNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
-	zombieTimeout time.Duration) TxnService {
+	zombieTimeout time.Duration,
+	allocator lockservice.LockTableAllocator) TxnService {
 	logger := rt.Logger().With(util.TxnDNShardField(shard))
 	s := &service{
 		rt:      rt,
@@ -91,6 +94,7 @@ func NewTxnService(
 		zombieTimeout: zombieTimeout,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
+		allocator:     allocator,
 	}
 	if err := s.stopper.RunTask(s.gcZombieTxn); err != nil {
 		s.logger.Fatal("start gc zombie txn failed",

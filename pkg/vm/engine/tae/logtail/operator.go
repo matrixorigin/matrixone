@@ -19,75 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-// BoundTableOperator holds a read only reader, knows how to iter entry.
-// Drive a entry visitor, which acts as an api resp builder
-type BaseOperator struct {
+// BoundTableOperator holds a read only reader, knows how to iterate catalog entries.
+type BoundTableOperator struct {
 	catalog *catalog.Catalog
 	reader  *Reader
-}
-
-type BoundOperator struct {
-	*BaseOperator
 	visitor catalog.Processor
-}
-
-func NewBoundOperator(catalog *catalog.Catalog,
-	reader *Reader,
-	visitor catalog.Processor) *BoundOperator {
-	return &BoundOperator{
-		BaseOperator: &BaseOperator{
-			catalog: catalog,
-			reader:  reader,
-		},
-		visitor: visitor,
-	}
-}
-
-func (op *BoundOperator) Run() (err error) {
-	var (
-		db  *catalog.DBEntry
-		tbl *catalog.TableEntry
-		seg *catalog.SegmentEntry
-		blk *catalog.BlockEntry
-	)
-	dirty, _ := op.reader.GetDirty()
-	for _, tblDirty := range dirty.Tables {
-		if db, err = op.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
-			return
-		}
-		if tbl, err = db.GetTableEntryByID(tblDirty.ID); err != nil {
-			return
-		}
-		for _, dirtySeg := range tblDirty.Segs {
-			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					err = nil
-					continue
-				}
-				return
-			}
-			if err = op.visitor.OnSegment(seg); err != nil {
-				return err
-			}
-			for id := range dirtySeg.Blks {
-				if blk, err = seg.GetBlockEntryByID(id); err != nil {
-					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						err = nil
-						continue
-					}
-					return
-				}
-				if err = op.visitor.OnBlock(blk); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return
-}
-
-type BoundTableOperator struct {
-	*BoundOperator
 	dbID    uint64
 	tableID uint64
 	scope   Scope
@@ -99,13 +35,17 @@ func NewBoundTableOperator(catalog *catalog.Catalog,
 	dbID, tableID uint64,
 	visitor catalog.Processor) *BoundTableOperator {
 	return &BoundTableOperator{
-		BoundOperator: NewBoundOperator(catalog, reader, visitor),
-		tableID:       tableID,
-		dbID:          dbID,
-		scope:         scope,
+		catalog: catalog,
+		reader:  reader,
+		visitor: visitor,
+		tableID: tableID,
+		dbID:    dbID,
+		scope:   scope,
 	}
 }
 
+// Run takes a RespBuilder to visit every table/segment/block touched by all txn
+// in the Reader. During the visiting, RespBuiler will fetch information to return logtail entry
 func (c *BoundTableOperator) Run() error {
 	switch c.scope {
 	case ScopeDatabases:
@@ -119,6 +59,7 @@ func (c *BoundTableOperator) Run() error {
 	}
 }
 
+// For normal user table, pick out all dirty blocks and call OnBlock
 func (c *BoundTableOperator) processTableData() (err error) {
 	var (
 		db  *catalog.DBEntry
@@ -160,6 +101,9 @@ func (c *BoundTableOperator) processTableData() (err error) {
 	return nil
 }
 
+// For mo_database, iterate over all database and call OnBlock.
+// TODO: avoid iterating all. For now it is acceptable because all catalog is in
+// memory and ddl is much smaller than dml
 func (c *BoundTableOperator) processDatabases() error {
 	if !c.reader.HasCatalogChanges() {
 		return nil
@@ -174,6 +118,9 @@ func (c *BoundTableOperator) processDatabases() error {
 	return nil
 }
 
+// For mo_table and mo_columns, iterate over all tables and call OnTable
+// TODO: avoid iterating all. For now it is acceptable because all catalog is in
+// memory and ddl is much smaller than dml
 func (c *BoundTableOperator) processTables() error {
 	if !c.reader.HasCatalogChanges() {
 		return nil
