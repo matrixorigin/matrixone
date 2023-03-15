@@ -1754,30 +1754,6 @@ var (
 			output: `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
 		},
 		{
-			input:  `modump database t into 'a.sql'`,
-			output: `modump database t into a.sql`,
-		},
-		{
-			input:  `modump database t into 'a.sql' max_file_size 1`,
-			output: `modump database t into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql'`,
-			output: `modump database t tables t1 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1 into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql'`,
-			output: `modump database t tables t1, t2 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
-		},
-		{
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
