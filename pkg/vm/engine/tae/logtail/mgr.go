@@ -37,7 +37,7 @@ const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
 )
 
-func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error{
+func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error {
 	if len(tails) == 0 {
 		return nil
 	}
@@ -203,6 +203,9 @@ func (mgr *Manager) getSaveTS() types.TS {
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
 // add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
+	if txn.GetStore().IsHeartbeat() {
+		return
+	}
 	mgr.table.AddTxn(txn)
 }
 func (mgr *Manager) OnEndPreApplyCommit(txn txnif.AsyncTxn) {

@@ -24,6 +24,10 @@ func (store *heartbeatStore) IsReadonly() bool {
 	return false
 }
 
+func (store *heartbeatStore) IsHeartbeat() bool {
+	return true
+}
+
 // type heartbeatTxn struct{
 // 	*Txn
 // }

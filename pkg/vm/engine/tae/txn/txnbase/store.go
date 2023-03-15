@@ -155,3 +155,7 @@ func (store *NoopTxnStore) GetLogtails(
 	onAppend func(bat any),
 	onDelete func(deletes []uint32, prefix []byte)) {
 }
+
+func (store *NoopTxnStore) IsHeartbeat() bool {
+	return false
+}

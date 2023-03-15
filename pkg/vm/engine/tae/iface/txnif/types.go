@@ -278,6 +278,7 @@ type TxnStore interface {
 		onMetadata func(block any),
 		onAppend func(bat any),
 		onDelete func(deletes []uint32, prefix []byte))
+	IsHeartbeat() bool
 }
 
 type TxnEntryType int16
