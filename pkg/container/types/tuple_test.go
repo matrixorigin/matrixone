@@ -32,8 +32,8 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 			args: Tuple{true, int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), float32(1),
 				float64(1),
 				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
-				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64_FromInt32(123),
-				Decimal128_FromInt32(123), []byte{1, 2, 3}},
+				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64(123),
+				Decimal128{123, 0}, []byte{1, 2, 3}},
 		},
 	}
 	for _, test := range tests {
@@ -385,12 +385,12 @@ func randTimestamp() Timestamp {
 }
 
 func randDecimal64() Decimal64 {
-	decimal, _ := Decimal64FromFloat64(rand.Float64(), 20, 10)
+	decimal := Decimal64(rand.Int() % 10000000000)
 	return decimal
 }
 
 func randDecimal128() Decimal128 {
-	decimal, _ := Decimal128FromFloat64(rand.Float64(), 20, 10)
+	decimal := Decimal128{uint64(rand.Int() % 10000000000), 0}
 	return decimal
 }
 
