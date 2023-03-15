@@ -26,16 +26,23 @@ type Stddevpop[T1 types.Floats | types.Ints | types.UInts] struct {
 
 type StdD64 struct {
 	Variance *VD64
+	Typ      types.Type
 }
 
 type StdD128 struct {
 	Variance *VD128
+	Typ      types.Type
 }
 
 func StdDevPopReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64, types.T_decimal128:
-		return types.New(types.T_decimal128, 0, typs[0].Scale)
+		if typs[0].Scale > 12 {
+			return types.New(types.T_decimal128, 38, typs[0].Scale)
+		} else {
+			return types.New(types.T_decimal128, 38, 12)
+		}
+
 	default:
 		return types.New(types.T_float64, 0, 0)
 	}
@@ -79,8 +86,8 @@ func (sdp *Stddevpop[T1]) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func NewStdD64() *StdD64 {
-	return &StdD64{Variance: NewVD64()}
+func NewStdD64(typ types.Type) *StdD64 {
+	return &StdD64{Variance: NewVD64(typ), Typ: typ}
 }
 
 func (s *StdD64) Grows(size int) {
@@ -90,8 +97,8 @@ func (s *StdD64) Grows(size int) {
 func (s *StdD64) Eval(vs []types.Decimal128) []types.Decimal128 {
 	s.Variance.Eval(vs)
 	for i, v := range vs {
-		tmp := math.Sqrt(v.ToFloat64())
-		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
+		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
+		d, _ := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
 		vs[i] = d
 	}
 	return vs
@@ -118,8 +125,8 @@ func (s *StdD64) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func NewStdD128() *StdD128 {
-	return &StdD128{Variance: NewVD128()}
+func NewStdD128(typ types.Type) *StdD128 {
+	return &StdD128{Variance: NewVD128(typ), Typ: typ}
 }
 
 func (s *StdD128) Grows(size int) {
@@ -129,8 +136,8 @@ func (s *StdD128) Grows(size int) {
 func (s *StdD128) Eval(vs []types.Decimal128) []types.Decimal128 {
 	s.Variance.Eval(vs)
 	for i, v := range vs {
-		tmp := math.Sqrt(v.ToFloat64())
-		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
+		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
+		d, _ := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
 		vs[i] = d
 	}
 	return vs

@@ -309,15 +309,15 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		return checkNumberIntersect[types.Timestamp](v, vec)
 	case types.T_decimal64:
 		return checkGeneralIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
-			return t1.Ge(t2)
+			return (t1.Compare(t2) >= 0)
 		}, func(t1, t2 types.Decimal64) bool {
-			return t1.Le(t2)
+			return (t1.Compare(t2) <= 0)
 		})
 	case types.T_decimal128:
 		return checkGeneralIntersect(v, vec, func(t1, t2 types.Decimal128) bool {
-			return t1.Ge(t2)
+			return (t1.Compare(t2) >= 0)
 		}, func(t1, t2 types.Decimal128) bool {
-			return t1.Le(t2)
+			return (t1.Compare(t2) <= 0)
 		})
 	case types.T_uuid:
 		return checkGeneralIntersect(v, vec, func(t1, t2 types.Uuid) bool {
@@ -434,38 +434,38 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 		switch funName {
 		case ">":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
-				return t1.Gt(t2)
+				return t1.Compare(t2) > 0
 			}), nil
 		case "<":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
-				return t1.Lt(t2)
+				return t1.Compare(t2) < 0
 			}), nil
 		case ">=":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
-				return t1.Ge(t2)
+				return t1.Compare(t2) >= 0
 			}), nil
 		case "<=":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
-				return t1.Le(t2)
+				return t1.Compare(t2) <= 0
 			}), nil
 		}
 	case types.T_decimal128:
 		switch funName {
 		case ">":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
-				return t1.Gt(t2)
+				return t1.Compare(t2) > 0
 			}), nil
 		case "<":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
-				return t1.Lt(t2)
+				return t1.Compare(t2) < 0
 			}), nil
 		case ">=":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
-				return t1.Ge(t2)
+				return t1.Compare(t2) >= 0
 			}), nil
 		case "<=":
 			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
-				return t1.Le(t2)
+				return t1.Compare(t2) <= 0
 			}), nil
 		}
 	case types.T_uuid:

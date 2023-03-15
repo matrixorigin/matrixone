@@ -31,7 +31,7 @@ type mathMultiT interface {
 type mathMultiFun[T mathMultiT] func([]T, []T, int64) []T
 
 func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
-	rtyp := ivecs[0].GetType()
+	rtyp := types.New(ivecs[0].GetType().Oid, 0, 0)
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		// if vecs[1].IsConstNull() {
@@ -45,14 +45,14 @@ func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc
 	vs := vector.MustFixedCol[T](ivecs[0])
 	if ivecs[0].IsConst() {
 		if ivecs[0].IsConstNull() {
-			return vector.NewConstNull(*rtyp, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 
 		var rs [1]T
 		ret_rs := cb(vs, rs[:], digits)
-		return vector.NewConstFixed(*rtyp, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rvec, err := proc.AllocVectorOfRows(*rtyp, len(vs), ivecs[0].GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(vs), ivecs[0].GetNulls())
 		if err != nil {
 			return nil, err
 		}

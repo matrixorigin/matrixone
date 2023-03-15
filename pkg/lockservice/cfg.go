@@ -23,13 +23,13 @@ import (
 
 // Config lock service config
 type Config struct {
-	ServiceID                 string
-	ServiceAddress            string
-	MaxFixedSliceSize         toml.ByteSize
-	KeepLockTableBindDuration toml.Duration
-	KeepRemoteLockDuration    toml.Duration
-	RemoteLockTimeout         toml.Duration
-	RPC                       morpc.Config
+	ServiceID              string
+	ServiceAddress         string
+	MaxFixedSliceSize      toml.ByteSize
+	KeepBindDuration       toml.Duration
+	KeepRemoteLockDuration toml.Duration
+	RemoteLockTimeout      toml.Duration
+	RPC                    morpc.Config
 }
 
 func (c *Config) adjust() {
@@ -42,8 +42,8 @@ func (c *Config) adjust() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(1024 * 1024)
 	}
-	if c.KeepLockTableBindDuration.Duration == 0 {
-		c.KeepLockTableBindDuration.Duration = time.Second
+	if c.KeepBindDuration.Duration == 0 {
+		c.KeepBindDuration.Duration = time.Second
 	}
 	if c.KeepRemoteLockDuration.Duration == 0 {
 		c.KeepRemoteLockDuration.Duration = time.Second

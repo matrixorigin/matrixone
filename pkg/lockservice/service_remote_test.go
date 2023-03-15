@@ -568,7 +568,7 @@ func runBindChangedTests(
 			fn(ctx, alloc, l1, l2, table1)
 		},
 		func(c *Config) {
-			c.KeepLockTableBindDuration.Duration = time.Millisecond * 50
+			c.KeepBindDuration.Duration = time.Millisecond * 50
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
 
 			c.RPC.BackendOptions = append(c.RPC.BackendOptions,

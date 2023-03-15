@@ -277,7 +277,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		anal: &anaylze{},
 		addr: colexec.CnAddr,
 	}
-	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.ctx = c.proc.Ctx
 
 	c.fill = func(_ any, b *batch.Batch) error {
