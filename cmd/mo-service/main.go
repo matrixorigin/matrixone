@@ -91,7 +91,7 @@ func main() {
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
-		if err := startCluster(ctx, stopper, globalCounter); err != nil {
+		if err := startCluster(ctx, stopper, globalCounterSet); err != nil {
 			panic(err)
 		}
 	} else if *configFile != "" {
@@ -99,7 +99,7 @@ func main() {
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
-		if err := startService(ctx, cfg, stopper, globalCounter); err != nil {
+		if err := startService(ctx, cfg, stopper, globalCounterSet); err != nil {
 			panic(err)
 		}
 	} else {
@@ -123,7 +123,7 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	}
 }
 
-func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, globalCounter *perfcounter.Counter) error {
+func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, globalCounterSet *perfcounter.CounterSet) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
@@ -142,7 +142,7 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	fs, err := cfg.createFileService(defines.LocalFileServiceName, globalCounter, uuid)
+	fs, err := cfg.createFileService(defines.LocalFileServiceName, globalCounterSet, uuid)
 	if err != nil {
 		return err
 	}
@@ -153,11 +153,11 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 
 	switch st {
 	case metadata.ServiceType_CN:
-		return startCNService(cfg, stopper, fs, globalCounter)
+		return startCNService(cfg, stopper, fs, globalCounterSet)
 	case metadata.ServiceType_DN:
-		return startDNService(cfg, stopper, fs, globalCounter)
+		return startDNService(cfg, stopper, fs, globalCounterSet)
 	case metadata.ServiceType_LOG:
-		return startLogService(cfg, stopper, fs, globalCounter)
+		return startLogService(cfg, stopper, fs, globalCounterSet)
 	default:
 		panic("unknown service type")
 	}
@@ -167,13 +167,13 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
-		ctx = perfcounter.WithCounter(ctx, perfCounter)
+		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
@@ -208,7 +208,7 @@ func startDNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
@@ -218,7 +218,7 @@ func startDNService(
 		return err
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
-		ctx = perfcounter.WithCounter(ctx, perfCounter)
+		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
@@ -242,7 +242,7 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounter *perfcounter.Counter,
+	perfCounterSet *perfcounter.CounterSet,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
 	s, err := logservice.NewService(lscfg, fileService,
@@ -254,7 +254,7 @@ func startLogService(
 		panic(err)
 	}
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
-		ctx = perfcounter.WithCounter(ctx, perfCounter)
+		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
 			logutil.Infof("bootstrapping hakeeper...")
 			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {

@@ -151,12 +151,12 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.Counter, nodeUUID string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
-	if perfCounter.FileServices == nil {
-		perfCounter.FileServices = make(map[string]*perfcounter.Counter)
+	if perfCounterSet.FileServices == nil {
+		perfCounterSet.FileServices = make(map[string]*perfcounter.CounterSet)
 	}
 
 	for _, config := range c.FileServices {
@@ -166,18 +166,18 @@ func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.
 			config.Name = defines.SharedFileServiceName
 		}
 
-		counter := new(perfcounter.Counter)
+		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			config,
-			[]*perfcounter.Counter{
-				counter,
-				perfCounter,
+			[]*perfcounter.CounterSet{
+				counterSet,
+				perfCounterSet,
 			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		perfCounter.FileServices[nodeUUID+":"+service.Name()] = counter
+		perfCounterSet.FileServices[nodeUUID+":"+service.Name()] = counterSet
 		services = append(services, service)
 
 	}

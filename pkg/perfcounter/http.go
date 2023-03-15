@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 )
 
-func (c *Counter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (c *CounterSet) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, `
   <style>
   table, th, td {
