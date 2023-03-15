@@ -3887,7 +3887,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
