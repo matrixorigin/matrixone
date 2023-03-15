@@ -205,11 +205,14 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, err
 				}
 			} else {
-				appendFuncs[i](
+				err := appendFuncs[i](
 					b.Vecs[i],
 					entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
 					entry.Offset,
 				)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
