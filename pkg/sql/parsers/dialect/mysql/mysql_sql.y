@@ -2209,7 +2209,7 @@ alter_table_stmt:
     ALTER TABLE table_name alter_options
     {
         $$ = &tree.AlterTable{
-            Table: *$3,
+            Table: $3,
             Options: $4,
         }
     }
