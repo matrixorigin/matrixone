@@ -16,14 +16,12 @@ package cnservice
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
@@ -51,19 +49,6 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	go func() {
-		for range time.NewTicker(time.Second * 30).C {
-			perfcounter.Update(ctx, func(c *perfcounter.Counter) {
-				stats := mp.Stats()
-				c.DistTAE.MPool.NumAlloc.Store(stats.NumAlloc.Load())
-				c.DistTAE.MPool.NumFree.Store(stats.NumFree.Load())
-				c.DistTAE.MPool.NumAllocBytes.Store(stats.NumAllocBytes.Load())
-				c.DistTAE.MPool.NumFreeBytes.Store(stats.NumFreeBytes.Load())
-				c.DistTAE.MPool.NumCurrBytes.Store(stats.NumCurrBytes.Load())
-				c.DistTAE.MPool.HighWaterMark.Store(stats.HighWaterMark.Load())
-			})
-		}
-	}()
 
 	// use s3 as main fs
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)

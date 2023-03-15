@@ -22,59 +22,96 @@ package mult
 */
 import "C"
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func Decimal64VecMult(xs, ys, rs *vector.Vector) error {
+func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal64](xs)
 	yt := vector.MustFixedCol[types.Decimal64](ys)
 	rt := vector.MustFixedCol[types.Decimal128](rs)
-	flag := 0
+	n := len(rt)
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		x := types.Decimal128{B0_63: uint64(xt[0]), B64_127: 0}
+		if xt[0]>>63 != 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		for i := 0; i < n; i++ {
+			y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
+			if yt[i]>>63 != 0 {
+				y.B64_127 = ^y.B64_127
+			}
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		y := types.Decimal128{B0_63: uint64(yt[0]), B64_127: 0}
+		if yt[0]>>63 != 0 {
+			y.B64_127 = ^y.B64_127
+		}
+		for i := 0; i < n; i++ {
+			x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
+			if xt[i]>>63 != 0 {
+				x.B64_127 = ^x.B64_127
+			}
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-
-	rc := C.Decimal64_VecMul(dec128PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal MUL")
+	for i := 0; i < n; i++ {
+		for i := 0; i < n; i++ {
+			x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
+			if xt[i]>>63 != 0 {
+				x.B64_127 = ^x.B64_127
+			}
+			y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
+			if yt[i]>>63 != 0 {
+				y.B64_127 = ^y.B64_127
+			}
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
 	}
 	return nil
 }
 
-func Decimal128VecMult(xs, ys, rs *vector.Vector) error {
+func Decimal128VecMult(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal128](xs)
 	yt := vector.MustFixedCol[types.Decimal128](ys)
 	rt := vector.MustFixedCol[types.Decimal128](rs)
-	flag := 0
+	n := len(rt)
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], rs.GetType().Scale, err = xt[0].Mul(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], rs.GetType().Scale, err = xt[i].Mul(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-
-	//int32_t Decimal128_VecMul(int64_t *r, int64_t *a, int64_t *b, uint64_t n, uint64_t *nulls, int32_t flag);
-	rc := C.Decimal128_VecMul(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal MUL")
+	for i := 0; i < n; i++ {
+		rt[i], rs.GetType().Scale, err = xt[i].Mul(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
+		}
 	}
-	return nil
+	return
 }

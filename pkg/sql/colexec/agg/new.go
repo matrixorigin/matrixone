@@ -222,13 +222,13 @@ func newAvg(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericAvg[float64](typ, dist)
 	case types.T_decimal64:
-		aggPriv := NewD64Avg()
+		aggPriv := NewD64Avg(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	case types.T_decimal128:
-		aggPriv := NewD128Avg()
+		aggPriv := NewD128Avg(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
@@ -637,13 +637,13 @@ func newVariance(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericVariance[float64](typ, dist)
 	case types.T_decimal64:
-		aggPriv := NewVD64()
+		aggPriv := NewVD64(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
-		aggPriv := NewVD128()
+		aggPriv := NewVD128(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
@@ -676,13 +676,13 @@ func newStdDevPop(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericStdDevPop[float64](typ, dist)
 	case types.T_decimal64:
-		aggPriv := NewStdD64()
+		aggPriv := NewStdD64(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
-		aggPriv := NewStdD128()
+		aggPriv := NewStdD128(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}

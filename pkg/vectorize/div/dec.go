@@ -20,12 +20,7 @@ package div
 #cgo CFLAGS: -I../../../cgo
 #cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
-import "C"
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -35,62 +30,90 @@ const (
 	RC_OUT_OF_RANGE     = 20201
 )
 
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func Decimal64VecDiv(xs, ys, rs *vector.Vector) error {
+func Decimal64VecDiv(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal64](xs)
 	yt := vector.MustFixedCol[types.Decimal64](ys)
 	rt := vector.MustFixedCol[types.Decimal128](rs)
-	flag := 0
+	n := len(rt)
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		x := types.Decimal128{B0_63: uint64(xt[0]), B64_127: 0}
+		if xt[0]>>63 != 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		for i := 0; i < n; i++ {
+			y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
+			if yt[i]>>63 != 0 {
+				y.B64_127 = ^y.B64_127
+			}
+			rt[i], rs.GetType().Scale, err = x.Div(y, xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		y := types.Decimal128{B0_63: uint64(yt[0]), B64_127: 0}
+		if yt[0]>>63 != 0 {
+			y.B64_127 = ^y.B64_127
+		}
+		for i := 0; i < n; i++ {
+			x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
+			if xt[i]>>63 != 0 {
+				x.B64_127 = ^x.B64_127
+			}
+			rt[i], rs.GetType().Scale, err = x.Div(y, xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-
-	rc := C.Decimal64_VecDiv(dec128PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		if rc == RC_DIVISION_BY_ZERO {
-			return moerr.NewDivByZeroNoCtx()
-		} else if rc == RC_OUT_OF_RANGE {
-			return moerr.NewOutOfRangeNoCtx("decimal64", "decimal div")
-		} else {
-			return moerr.NewInternalErrorNoCtx("decimal64 div internal error")
+	for i := 0; i < n; i++ {
+		x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
+		if xt[i]>>63 != 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
+		if yt[i]>>63 != 0 {
+			y.B64_127 = ^y.B64_127
+		}
+		rt[i], rs.GetType().Scale, err = x.Div(y, xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
 		}
 	}
-	return nil
+	return
 }
 
-func Decimal128VecDiv(xs, ys, rs *vector.Vector) error {
+func Decimal128VecDiv(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustFixedCol[types.Decimal128](xs)
 	yt := vector.MustFixedCol[types.Decimal128](ys)
 	rt := vector.MustFixedCol[types.Decimal128](rs)
-	flag := 0
+	n := len(rt)
 	if xs.IsConst() {
-		flag |= LEFT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], rs.GetType().Scale, err = xt[0].Div(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
 	if ys.IsConst() {
-		flag |= RIGHT_IS_SCALAR
+		for i := 0; i < n; i++ {
+			rt[i], rs.GetType().Scale, err = xt[i].Div(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-
-	rc := C.Decimal128_VecDiv(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
-	if rc != 0 {
-		if rc == RC_DIVISION_BY_ZERO {
-			return moerr.NewDivByZeroNoCtx()
-		} else if rc == RC_OUT_OF_RANGE {
-			return moerr.NewOutOfRangeNoCtx("decimal128", "decimal div")
-		} else {
-			return moerr.NewInternalErrorNoCtx("decimal128 div internal error")
+	for i := 0; i < n; i++ {
+		rt[i], rs.GetType().Scale, err = xt[i].Div(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
 		}
 	}
-	return nil
+	return
 }

@@ -15,11 +15,12 @@
 package perfcounter
 
 import (
+	"sync/atomic"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
-type Counter struct {
+type CounterSet struct {
 	S3 struct {
 		List        stats.Counter
 		Head        stats.Counter
@@ -38,9 +39,9 @@ type Counter struct {
 		DiskHit  stats.Counter
 	}
 
-	DistTAE struct {
-		MPool mpool.MPoolStats
+	FileServices map[string]*CounterSet
 
+	DistTAE struct {
 		Logtail struct {
 			Entries               stats.Counter
 			InsertEntries         stats.Counter
