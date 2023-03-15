@@ -364,14 +364,14 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	case types.T_decimal64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal64(int64(i+offset), 64, 0)
+			d := types.Decimal64(int64(i + offset))
 			data = append(data, d)
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)
 	case types.T_decimal128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal128(int64(i+offset), 64, 0)
+			d := types.Decimal128{B0_63: uint64(i + offset), B64_127: 0}
 			data = append(data, d)
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)

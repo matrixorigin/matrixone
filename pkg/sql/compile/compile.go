@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -103,11 +104,13 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.u = u
+	c.ctx = c.proc.Ctx
 	c.fill = fill
 	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
-	s, err := c.compileScope(ctx, pn)
+	s, err := c.compileScope(c.proc.Ctx, pn)
 	if err != nil {
 		return err
 	}
@@ -129,10 +132,11 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
-	defer func() { c.scope = nil }() // free pipeline
+	defer func() {
+		// free pipeline
+		c.scope = nil
+	}()
 
-	// XXX PrintScope has a none-trivial amount of logging
-	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1584,9 +1588,17 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		analInfos: anals,
 		curr:      int(qry.Steps[0]),
 	}
+	c.proc.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {
+	// record the number of s3 requests
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -1600,7 +1612,8 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount = atomic.LoadInt64(&anal.S3IOInputCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount = atomic.LoadInt64(&anal.S3IOOutputCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
 		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)

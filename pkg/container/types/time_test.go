@@ -402,22 +402,22 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			// decimal128 to Time
-			dcm, err := Decimal128_FromString(c.dcmStr)
-			println("the decimal is ", dcm.String())
+			dcm, scale, err := Parse128(c.dcmStr)
+			println("the decimal is ", dcm.Format(scale))
 			require.NoError(t, err)
 			if !c.isErr {
-				parsed, err := ParseDecimal128lToTime(dcm, c.scale)
+				parsed, err := ParseDecimal128ToTime(dcm, scale, c.scale)
 				require.NoError(t, err)
 				require.Equal(t, parsed, c.expected)
 
 				// Time to Decimal
-				toDcm, err := c.expected.ToDecimal128(context.TODO(), 34, c.scale)
-				println("the toDecimal is ", toDcm.String())
+				toDcm, err := c.expected.ToDecimal128(context.TODO(), 38, c.scale)
+				println("the toDecimal is ", toDcm.Format(c.scale))
 				require.NoError(t, err)
 				if c.isCarry {
 					// if the scale cause carry
 					// must compare it with decimal from c.expected2
-					newdcm, err := Decimal128_FromString(c.expected2)
+					newdcm, _, err := Parse128(c.expected2)
 					require.NoError(t, err)
 					require.Equal(t, toDcm, newdcm)
 				} else {

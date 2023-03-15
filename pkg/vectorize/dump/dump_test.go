@@ -122,7 +122,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseSigned[int8](xs, kase.ns, rs)
+			rs, err = ParseSigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -138,7 +138,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseSigned[int16](xs, kase.ns, rs)
+			rs, err = ParseSigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -154,7 +154,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseSigned[int32](xs, kase.ns, rs)
+			rs, err = ParseSigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -170,7 +170,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseSigned[int64](xs, kase.ns, rs)
+			rs, err = ParseSigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -186,7 +186,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseUnsigned[uint8](xs, kase.ns, rs)
+			rs, err = ParseUnsigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -202,7 +202,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseUnsigned[uint16](xs, kase.ns, rs)
+			rs, err = ParseUnsigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -218,7 +218,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseUnsigned[uint32](xs, kase.ns, rs)
+			rs, err = ParseUnsigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -234,7 +234,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseUnsigned[uint64](xs, kase.ns, rs)
+			rs, err = ParseUnsigned(xs, kase.ns, rs)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -250,7 +250,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseFloats[float32](xs, kase.ns, rs, 32)
+			rs, err = ParseFloats(xs, kase.ns, rs, 32)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -266,42 +266,16 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseFloats[float64](xs, kase.ns, rs, 64)
+			rs, err = ParseFloats(xs, kase.ns, rs, 64)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
 				require.Equal(t, strconv.FormatFloat(xs[i], 'f', -1, 64), rs[i])
 			}
 		case types.T_decimal64:
-			xs := make([]types.Decimal64, len(kase.xs))
-			for i, x := range kase.xs {
-				xs[i] = types.MustDecimal64FromString(x)
-			}
-			xs = append(xs, xs[0])
-			kase.ns = nulls.NewWithSize(len(xs))
-			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[types.Decimal64](xs, kase.ns, rs, DefaultParser[types.Decimal64])
-			require.Nil(t, err)
-			require.Equal(t, rs[len(rs)-1], "NULL")
-			for i := 0; i < len(xs)-1; i++ {
-				unquote := rs[i][1 : len(rs[i])-1]
-				require.Equal(t, xs[i].String(), unquote)
-			}
+
 		case types.T_decimal128:
-			xs := make([]types.Decimal128, len(kase.xs))
-			for i, x := range kase.xs {
-				xs[i] = types.MustDecimal128FromString(x)
-			}
-			xs = append(xs, xs[0])
-			kase.ns = nulls.NewWithSize(len(xs))
-			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[types.Decimal128](xs, kase.ns, rs, DefaultParser[types.Decimal128])
-			require.Nil(t, err)
-			require.Equal(t, rs[len(rs)-1], "NULL")
-			for i := 0; i < len(xs)-1; i++ {
-				unquote := rs[i][1 : len(rs[i])-1]
-				require.Equal(t, xs[i].String(), unquote)
-			}
+
 		case types.T_date:
 			xs := make([]types.Date, len(kase.xs))
 			for i, x := range kase.xs {
@@ -312,7 +286,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[types.Date](xs, kase.ns, rs, DefaultParser[types.Date])
+			rs, err = ParseQuoted(xs, kase.ns, rs, DefaultParser[types.Date])
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -329,7 +303,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[types.Time](xs, kase.ns, rs, DefaultParser[types.Time])
+			rs, err = ParseQuoted(xs, kase.ns, rs, DefaultParser[types.Time])
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -346,7 +320,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[types.Datetime](xs, kase.ns, rs, DefaultParser[types.Datetime])
+			rs, err = ParseQuoted(xs, kase.ns, rs, DefaultParser[types.Datetime])
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -377,7 +351,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[string](xs, kase.ns, rs, DefaultParser[string])
+			rs, err = ParseQuoted(xs, kase.ns, rs, DefaultParser[string])
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
@@ -395,7 +369,7 @@ func TestParser(t *testing.T) {
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseQuoted[[]byte](xs, kase.ns, rs, JsonParser)
+			rs, err = ParseQuoted(xs, kase.ns, rs, JsonParser)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {

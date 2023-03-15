@@ -11,8 +11,8 @@ role_id    role_name    owner
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select role_id,role_name,owner from mo_catalog.mo_role;
 role_id    role_name    owner
-2    accountadmin    0
-1    public    0
+2    accountadmin    2
+1    public    2
 show databases;
 Database
 system
