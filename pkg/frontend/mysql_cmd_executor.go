@@ -275,7 +275,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
-	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, sqlType, true)
+	for _, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -2795,6 +2797,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc, ses)
 	if err != nil {
 		sql = removePrefixComment(sql)
+		sql = hideAccessKey(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
