@@ -31,7 +31,7 @@ func init() {
 	gob.Register(Int(0))
 	gob.Register(Uint(0))
 	gob.Register(Float(0))
-	gob.Register(Bytes{})
+	gob.Register(Decimal{})
 }
 
 // ID represents a unique id
@@ -85,6 +85,14 @@ func (b Bytes) Less(than Bytes) bool {
 	return bytes.Compare(b, than) < 0
 }
 
+// Decimal represents a Decimal128 value
+type Decimal types.Decimal128
+
+// Less compares two Decimals
+func (b Decimal) Less(than Decimal) bool {
+	return types.Decimal128(b).Compare(types.Decimal128(than)) < 0
+}
+
 // ToOrdered convert v to Ordered value
 func ToOrdered(v any) any {
 	if v == nil {
@@ -126,9 +134,12 @@ func ToOrdered(v any) any {
 	case types.Timestamp:
 		return Int(v)
 	case types.Decimal64:
-		return Bytes(v[:])
+		if v>>63 == 0 {
+			return Decimal{uint64(v), 0}
+		}
+		return Decimal{uint64(v), ^uint64(0)}
 	case types.Decimal128:
-		return Bytes(v[:])
+		return Decimal(v)
 	case types.TS:
 		return Bytes(v[:])
 	case types.Rowid:
