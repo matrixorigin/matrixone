@@ -14,24 +14,16 @@
 
 package perfcounter
 
-import "sync/atomic"
+import (
+	"bytes"
+	"reflect"
+	"testing"
+)
 
-type Counter struct {
-	S3 struct {
-		List        atomic.Int64
-		Head        atomic.Int64
-		Put         atomic.Int64
-		Get         atomic.Int64
-		Delete      atomic.Int64
-		DeleteMulti atomic.Int64
+func TestFormat(t *testing.T) {
+	c := &CounterSet{
+		FileServices: make(map[string]*CounterSet),
 	}
-
-	Cache struct {
-		Read     atomic.Int64
-		Hit      atomic.Int64
-		MemRead  atomic.Int64
-		MemHit   atomic.Int64
-		DiskRead atomic.Int64
-		DiskHit  atomic.Int64
-	}
+	buf := new(bytes.Buffer)
+	format(buf, reflect.ValueOf(c), reflect.TypeOf(c))
 }

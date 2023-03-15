@@ -500,3 +500,12 @@ func TestGetSimpleExprValue(t *testing.T) {
 
 	})
 }
+
+func TestRemovePrefixComment(t *testing.T) {
+	require.Equal(t, "abcd", removePrefixComment("abcd"))
+	require.Equal(t, "abcd", removePrefixComment("/*11111*/abcd"))
+	require.Equal(t, "abcd", removePrefixComment("/**/abcd"))
+	require.Equal(t, "/*/abcd", removePrefixComment("/*/abcd"))
+	require.Equal(t, "/*abcd", removePrefixComment("/*abcd"))
+	require.Equal(t, "*/abcd", removePrefixComment("*/abcd"))
+}

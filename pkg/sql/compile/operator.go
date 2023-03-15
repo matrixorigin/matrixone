@@ -372,25 +372,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			Ts: t.Ts,
-			// TargetTable:          t.TargetTable,
-			// TargetColDefs:        t.TargetColDefs,
-			Affected: t.Affected,
-			Engine:   t.Engine,
-			// DB:                   t.DB,
-			// TableID:              t.TableID,
-			// CPkeyColDef:          t.CPkeyColDef,
-			// DBName:               t.DBName,
-			// TableName:            t.TableName,
-			// UniqueIndexTables:    t.UniqueIndexTables,
-			// UniqueIndexDef:       t.UniqueIndexDef,
-			// SecondaryIndexTables: t.SecondaryIndexTables,
-			// SecondaryIndexDef:    t.SecondaryIndexDef,
-			// ClusterTable:         t.ClusterTable,
-			// ClusterByDef:         t.ClusterByDef,
+			Affected:  t.Affected,
+			Engine:    t.Engine,
 			IsRemote:  t.IsRemote,
 			InsertCtx: t.InsertCtx,
-			// HasAutoCol:           t.HasAutoCol,
 		}
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
