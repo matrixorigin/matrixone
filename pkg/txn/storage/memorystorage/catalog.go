@@ -112,7 +112,7 @@ type RelationRow struct {
 	PartitionDef []byte
 	ViewDef      []byte
 	Constraint   []byte
-	seqtype      []byte
+	// SeqType not included.
 }
 
 func (r *RelationRow) Key() ID {

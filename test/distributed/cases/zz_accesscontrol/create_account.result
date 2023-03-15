@@ -186,6 +186,7 @@ accountadmin    database    show tables    *
 accountadmin    database    create table    *
 accountadmin    database    drop table    *
 accountadmin    database    alter table    *
+accountadmin    database    show sequences    *
 accountadmin    database    create sequence    *
 accountadmin    database    drop sequence    *
 accountadmin    database    alter sequence    *

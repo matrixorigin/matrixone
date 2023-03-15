@@ -397,8 +397,7 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
 
-	var sql string
-	sql = fmt.Sprintf("SELECT relname as `Sequences_in_%s`, seqtype as 'Data Type' FROM %s.mo_tables WHERE relkind = '%s' and reldatabase = '%s'",
+	sql := fmt.Sprintf("SELECT relname as `Sequences_in_%s`, seqtype as 'Data Type' FROM %s.mo_tables WHERE relkind = '%s' and reldatabase = '%s'",
 		dbName, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, dbName)
 
 	if stmt.Where != nil {
