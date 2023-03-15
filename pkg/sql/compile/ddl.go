@@ -1085,7 +1085,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 /*
 Sequence table got 1 row and 7 columns(besides row_id).
 -----------------------------------------------------------------------------------
-next_seq_num| min_value| max_value| start_value| increment_value| cycle| is_called |
+last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_called |
 -----------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------------

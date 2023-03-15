@@ -1402,14 +1402,6 @@ priv_type:
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE
     }
-|   CREATE SEQUENCE
-    {
-        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE
-    }
-|   DROP SEQUENCE
-    {
-        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_SEQUENCE
-    }
 |    TRIGGER
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_TRIGGER
@@ -1473,10 +1465,6 @@ priv_type:
 |    SHOW TABLES
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES
-    }
-|    SHOW SEQUENCES
-    {
-        $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_SEQUENCES
     }
 |    CREATE TABLE
     {

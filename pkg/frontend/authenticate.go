@@ -452,19 +452,15 @@ const (
 	PrivilegeTypeUserOwnership
 	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
-	PrivilegeTypeShowSequences
 	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
 	PrivilegeTypeCreateTable
-	PrivilegeTypeCreateSequence
 	PrivilegeTypeCreateView
 	PrivilegeTypeDropObject
 	PrivilegeTypeDropTable
 	PrivilegeTypeDropView
-	PrivilegeTypeDropSequence
 	PrivilegeTypeAlterObject
 	PrivilegeTypeAlterTable
 	PrivilegeTypeAlterView
-	PrivilegeTypeAlterSequence
 	PrivilegeTypeDatabaseAll
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
@@ -569,14 +565,10 @@ func (pt PrivilegeType) String() string {
 		return "role ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
-	case PrivilegeTypeShowSequences:
-		return "show sequences"
 	case PrivilegeTypeCreateObject:
 		return "create object"
 	case PrivilegeTypeCreateTable:
 		return "create table"
-	case PrivilegeTypeCreateSequence:
-		return "create sequence"
 	case PrivilegeTypeCreateView:
 		return "create view"
 	case PrivilegeTypeDropObject:
@@ -585,16 +577,12 @@ func (pt PrivilegeType) String() string {
 		return "drop table"
 	case PrivilegeTypeDropView:
 		return "drop view"
-	case PrivilegeTypeDropSequence:
-		return "drop sequence"
 	case PrivilegeTypeAlterObject:
 		return "alter object"
 	case PrivilegeTypeAlterTable:
 		return "alter table"
 	case PrivilegeTypeAlterView:
 		return "alter view"
-	case PrivilegeTypeAlterSequence:
-		return "alter sequence"
 	case PrivilegeTypeDatabaseAll:
 		return "database all"
 	case PrivilegeTypeDatabaseOwnership:
@@ -667,13 +655,11 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeShowSequences:
+	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence:
+	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView, PrivilegeTypeDropSequence:
-		return PrivilegeScopeDatabase
-	case PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView, PrivilegeTypeAlterSequence:
+	case PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeDatabaseAll:
 		return PrivilegeScopeDatabase
@@ -1678,19 +1664,15 @@ var (
 		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeShowSequences:     {PrivilegeTypeShowSequences, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateTable:       {PrivilegeTypeCreateTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeCreateSequence:    {PrivilegeTypeCreateSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateView:        {PrivilegeTypeCreateView, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropTable:         {PrivilegeTypeDropTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropView:          {PrivilegeTypeDropView, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeDropSequence:      {PrivilegeTypeDropSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterTable:        {PrivilegeTypeAlterTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterView:         {PrivilegeTypeAlterView, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeAlterSequence:     {PrivilegeTypeAlterSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1726,10 +1708,6 @@ var (
 		PrivilegeTypeCreateTable,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
-		PrivilegeTypeShowSequences,
-		PrivilegeTypeCreateSequence,
-		PrivilegeTypeDropSequence,
-		PrivilegeTypeAlterSequence,
 		PrivilegeTypeCreateView,
 		PrivilegeTypeDropView,
 		PrivilegeTypeAlterView,
@@ -1764,10 +1742,6 @@ var (
 		PrivilegeTypeCreateTable,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
-		PrivilegeTypeShowSequences,
-		PrivilegeTypeCreateSequence,
-		PrivilegeTypeDropSequence,
-		PrivilegeTypeAlterSequence,
 		PrivilegeTypeCreateView,
 		PrivilegeTypeDropView,
 		PrivilegeTypeAlterView,
@@ -3889,7 +3863,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowSequences:
-		typs = append(typs, PrivilegeTypeShowSequences, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
+		typs = append(typs, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
@@ -3948,7 +3922,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		}
 	case *tree.DropSequence:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeDropSequence, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
@@ -5227,14 +5201,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
 		privType = PrivilegeTypeShowTables
-	case tree.PRIVILEGE_TYPE_STATIC_SHOW_SEQUENCES:
-		privType = PrivilegeTypeShowSequences
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
 		privType = PrivilegeTypeCreateTable
-	case tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE:
-		privType = PrivilegeTypeCreateSequence
-	case tree.PRIVILEGE_TYPE_STATIC_DROP_SEQUENCE:
-		privType = PrivilegeTypeDropSequence
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
 		privType = PrivilegeTypeDropTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:
