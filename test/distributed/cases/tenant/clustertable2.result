@@ -96,61 +96,36 @@ desc mo_catalog.mo_instance;
 Field    Type    Null    Key    Default    Extra    Comment
 1436
 id    VARCHAR(128)    NO    PRI    null        
-1437
 name    VARCHAR(255)    NO        null        
-1438
 account_name    VARCHAR(128)    NO        null        
-1439
 provider    TEXT(0)    NO        null        
-1440
 provider_id    TEXT(0)    YES        null        
-1441
 region    TEXT(0)    NO        null        
-1442
 plan_type    TEXT(0)    NO        null        
-1443
 version    TEXT(0)    YES        null        
-1444
 status    TEXT(0)    YES        null        
-1445
 quota    TEXT(0)    YES        null        
-1446
 network_policy    TEXT(0)    YES        null        
-1447
 created_by    TEXT(0)    YES        null        
-1448
 created_at    DATETIME(0)    YES        null        
-1449
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 desc mo_catalog.mo_instance;
 Field    Type    Null    Key    Default    Extra    Comment
 1457
 id    VARCHAR(128)    NO    PRI    null        
-1458
 name    VARCHAR(255)    NO        null        
-1459
 account_name    VARCHAR(128)    NO        null        
-1460
 provider    TEXT(0)    NO        null        
-1461
 provider_id    TEXT(0)    YES        null        
-1462
 region    TEXT(0)    NO        null        
-1463
 plan_type    TEXT(0)    NO        null        
-1464
 version    TEXT(0)    YES        null        
-1465
 status    TEXT(0)    YES        null        
-1466
 quota    TEXT(0)    YES        null        
-1467
 network_policy    TEXT(0)    YES        null        
-1468
 created_by    TEXT(0)    YES        null        
-1469
 created_at    DATETIME(0)    YES        null        
-1470
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 drop account if exists acc_idx;
+drop table mo_instance;
