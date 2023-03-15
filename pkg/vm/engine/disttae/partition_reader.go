@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -33,6 +35,10 @@ import (
 )
 
 type PartitionReader struct {
+	// debug for cms
+	txnTime    timestamp.Timestamp
+	tblCmsWant bool
+
 	typsMap              map[string]types.Type
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
@@ -179,46 +185,105 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		}
 	}
 
-	for p.iter.Next() {
-		entry := p.iter.Entry()
+	if p.tblCmsWant {
+		tsGet := make([]timestamp.Timestamp, 0, 4)
+		occurs := make(map[types.TS]bool)
 
-		if _, ok := p.deletes[entry.RowID]; ok {
-			continue
-		}
+		for p.iter.Next() {
+			entry := p.iter.Entry()
 
-		if p.skipBlocks != nil {
-			if _, ok := p.skipBlocks[entry.BlockID]; ok {
+			if _, ok := p.deletes[entry.RowID]; ok {
 				continue
 			}
-		}
 
-		if p.sourceBatchNameIndex == nil {
-			p.sourceBatchNameIndex = make(map[string]int)
-			for i, name := range entry.Batch.Attrs {
-				p.sourceBatchNameIndex[name] = i
-			}
-		}
-
-		for i, name := range b.Attrs {
-			if name == catalog.Row_ID {
-				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
-					return nil, err
-				}
-			} else {
-				err := appendFuncs[i](
-					b.Vecs[i],
-					entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
-					entry.Offset,
-				)
-				if err != nil {
-					return nil, err
+			if p.skipBlocks != nil {
+				if _, ok := p.skipBlocks[entry.BlockID]; ok {
+					continue
 				}
 			}
-		}
 
-		rows++
-		if rows == maxRows {
-			break
+			if p.sourceBatchNameIndex == nil {
+				p.sourceBatchNameIndex = make(map[string]int)
+				for i, name := range entry.Batch.Attrs {
+					p.sourceBatchNameIndex[name] = i
+				}
+			}
+
+			for i, name := range b.Attrs {
+				if name == catalog.Row_ID {
+					if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
+						return nil, err
+					}
+				} else {
+					err := appendFuncs[i](
+						b.Vecs[i],
+						entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
+						entry.Offset,
+					)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			if _, ok := occurs[entry.Time]; !ok {
+				occurs[entry.Time] = true
+				tsGet = append(tsGet, entry.Time.ToTimestamp())
+			}
+
+			rows++
+			if rows == maxRows {
+				break
+			}
+		}
+		tsGetStr := ""
+		for _, t := range tsGet {
+			tsGetStr += t.String()
+			tsGetStr += ", "
+		}
+		logutil.Infof("partition read : snapshot is %s\n, read ts is [%s]\n", p.txnTime.String(), tsGetStr)
+	} else {
+		for p.iter.Next() {
+			entry := p.iter.Entry()
+
+			if _, ok := p.deletes[entry.RowID]; ok {
+				continue
+			}
+
+			if p.skipBlocks != nil {
+				if _, ok := p.skipBlocks[entry.BlockID]; ok {
+					continue
+				}
+			}
+
+			if p.sourceBatchNameIndex == nil {
+				p.sourceBatchNameIndex = make(map[string]int)
+				for i, name := range entry.Batch.Attrs {
+					p.sourceBatchNameIndex[name] = i
+				}
+			}
+
+			for i, name := range b.Attrs {
+				if name == catalog.Row_ID {
+					if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
+						return nil, err
+					}
+				} else {
+					err := appendFuncs[i](
+						b.Vecs[i],
+						entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
+						entry.Offset,
+					)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			rows++
+			if rows == maxRows {
+				break
+			}
 		}
 	}
 

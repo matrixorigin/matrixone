@@ -523,15 +523,15 @@ func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	if len(ranges) == 0 {
-		return tbl.newMergeReader(ctx, num, expr)
+		return tbl.newMemoryTableReader(ctx, num, expr)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		return tbl.newMergeReader(ctx, num, expr)
+		return tbl.newMemoryTableReader(ctx, num, expr)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
 		mrds := make([]mergeReader, num)
-		rds0, err := tbl.newMergeReader(ctx, num, expr)
+		rds0, err := tbl.newMemoryTableReader(ctx, num, expr)
 		if err != nil {
 			return nil, err
 		}
@@ -553,7 +553,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	return tbl.newBlockReader(ctx, num, expr, ranges)
 }
 
-func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
+func (tbl *txnTable) newMemoryTableReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
 	var index memorytable.Tuple
@@ -733,6 +733,8 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
+		tblCmsWant:      tbl.tableName == "cms1",
+		txnTime:         txn.meta.SnapshotTS,
 		typsMap:         mp,
 		inserts:         inserts,
 		deletes:         deletes,
