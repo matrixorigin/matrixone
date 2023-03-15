@@ -9329,7 +9329,7 @@ yydefault:
 //line mysql_sql.y:2223
 		{
 			yyLOCAL = &tree.AlterTable{
-				Table:   *yyDollar[3].tableNameUnion(),
+				Table:   yyDollar[3].tableNameUnion(),
 				Options: yyDollar[4].alterTableOptionsUnion(),
 			}
 		}
