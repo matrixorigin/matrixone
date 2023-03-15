@@ -832,6 +832,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		`drop table if exists mo_catalog.mo_pubs;`,
 		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
 
@@ -2868,6 +2869,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		//step 7 : drop table mo_user_defined_function
 		//step 8 : drop table mo_mysql_compatbility_mode
 		//step 9 : drop table %!%mo_increment_columns
+		//step 10 : drop table mo_pubs
 		for _, sql = range getSqlForDropAccount() {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
