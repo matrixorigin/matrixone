@@ -260,7 +260,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
 	store := &heartbeatStore{}
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
+	// mgr.IDMap[string(txnId)] = txn
 	return &OpTxn{
 		Txn: txn,
 		Op:  OpCommit,
