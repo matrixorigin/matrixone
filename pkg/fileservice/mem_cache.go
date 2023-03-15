@@ -24,9 +24,9 @@ import (
 )
 
 type MemCache struct {
-	policy   memcachepolicy.Policy
-	ch       chan func()
-	counters []*perfcounter.Counter
+	policy      memcachepolicy.Policy
+	ch          chan func()
+	counterSets []*perfcounter.CounterSet
 }
 
 func NewMemCache(opts ...Options) *MemCache {
@@ -43,9 +43,9 @@ func NewMemCache(opts ...Options) *MemCache {
 	}
 
 	return &MemCache{
-		policy:   initOpts.policy,
-		ch:       ch,
-		counters: initOpts.counters,
+		policy:      initOpts.policy,
+		ch:          ch,
+		counterSets: initOpts.counterSets,
 	}
 }
 
@@ -61,17 +61,17 @@ func WithClock(capacity int64) Options {
 	}
 }
 
-func WithPerfCounters(counters []*perfcounter.Counter) Options {
+func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) Options {
 	return func(o *options) {
-		o.counters = append(o.counters, counters...)
+		o.counterSets = append(o.counterSets, counterSets...)
 	}
 }
 
 type Options func(*options)
 
 type options struct {
-	policy   memcachepolicy.Policy
-	counters []*perfcounter.Counter
+	policy      memcachepolicy.Policy
+	counterSets []*perfcounter.CounterSet
 }
 
 func defaultOptions() options {
@@ -89,12 +89,12 @@ func (m *MemCache) Read(
 
 	var numHit, numRead int64
 	defer func() {
-		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.Cache.Read.Add(numRead)
 			c.Cache.Hit.Add(numHit)
 			c.Cache.MemRead.Add(numRead)
 			c.Cache.MemHit.Add(numHit)
-		}, m.counters...)
+		}, m.counterSets...)
 	}()
 
 	for i, entry := range vector.Entries {
