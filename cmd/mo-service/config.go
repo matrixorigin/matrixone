@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
-	"go.uber.org/zap"
 )
 
 var (
@@ -152,15 +151,13 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.Counter) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
-	type perServiceCounter struct {
-		fsName      string
-		perfCounter perfcounter.Counter
+	if perfCounterSet.FileServices == nil {
+		perfCounterSet.FileServices = make(map[string]*perfcounter.CounterSet)
 	}
-	perfCounterInfos := make([]*perServiceCounter, 0, len(c.FileServices))
 
 	for _, config := range c.FileServices {
 
@@ -169,53 +166,25 @@ func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.
 			config.Name = defines.SharedFileServiceName
 		}
 
-		counter := new(perServiceCounter)
+		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			config,
-			[]*perfcounter.Counter{
-				&counter.perfCounter,
-				perfCounter,
+			[]*perfcounter.CounterSet{
+				counterSet,
+				perfCounterSet,
 			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		counter.fsName = service.Name()
+		perfCounterSet.FileServices[strings.Join([]string{
+			serviceType.String(),
+			nodeUUID,
+			service.Name(),
+		}, " ")] = counterSet
 		services = append(services, service)
-		perfCounterInfos = append(perfCounterInfos, counter)
 
 	}
-
-	// cache stats
-	//TODO add metrics exporter
-	go func() {
-
-		printCounter := func(name string, counter *perfcounter.Counter) {
-			reads := counter.Cache.Read.Load()
-			hits := counter.Cache.Hit.Load()
-			memReads := counter.Cache.MemRead.Load()
-			memHits := counter.Cache.MemHit.Load()
-			diskReads := counter.Cache.DiskRead.Load()
-			diskHits := counter.Cache.DiskHit.Load()
-			logutil.Info("cache stats of "+name,
-				zap.Any("reads", reads),
-				zap.Any("hits", hits),
-				zap.Any("hit rate", float64(hits)/float64(reads)),
-				zap.Any("mem reads", memReads),
-				zap.Any("mem hits", memHits),
-				zap.Any("mem hit rate", float64(memHits)/float64(memReads)),
-				zap.Any("disk reads", diskReads),
-				zap.Any("disk hits", diskHits),
-				zap.Any("disk hit rate", float64(diskHits)/float64(diskReads)),
-			)
-		}
-
-		for range time.NewTicker(time.Second * 10).C {
-			for _, counter := range perfCounterInfos {
-				printCounter(counter.fsName, &counter.perfCounter)
-			}
-		}
-	}()
 
 	// create FileServices
 	fs, err := fileservice.NewFileServices(

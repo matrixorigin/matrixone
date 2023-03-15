@@ -104,7 +104,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
-	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.u = u
 	c.ctx = c.proc.Ctx
 	c.fill = fill
@@ -1586,12 +1586,12 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3Counter.S3.Put.Load()
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3Counter.S3.List.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Head.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Get.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Delete.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.DeleteMulti.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)

@@ -39,7 +39,7 @@ var (
 	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
 	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
 
-	globalCounter = new(perfcounter.Counter)
+	globalCounterSet = new(perfcounter.CounterSet)
 )
 
 func startCPUProfile() func() {
@@ -266,7 +266,7 @@ func init() {
 	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
 
 	// global performance counter
-	http.Handle("/debug/perfcounter", globalCounter)
+	http.Handle("/debug/perfcounter", globalCounterSet)
 
 }
 

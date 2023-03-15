@@ -92,7 +92,7 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "DISK-ETL",
 	})
 
-	fs, err := c.createFileService("A", nil)
+	fs, err := c.createFileService("A", globalCounterSet, 0, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
 }
