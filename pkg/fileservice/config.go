@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
@@ -107,6 +108,7 @@ func newMinioFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (Fi
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
 		perfCounters,
+		cfg.Name == defines.ETLFileServiceName,
 	)
 	if err != nil {
 		return nil, err
@@ -125,6 +127,7 @@ func newS3FileService(cfg Config, perfCounters []*perfcounter.CounterSet) (FileS
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
 		perfCounters,
+		cfg.Name == defines.ETLFileServiceName,
 	)
 	if err != nil {
 		return nil, err

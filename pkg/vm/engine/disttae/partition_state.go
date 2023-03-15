@@ -386,6 +386,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 
 		})
+
+		//TODO preload
 	}
 
 	partitionStateProfileHandler.AddSample()
