@@ -194,6 +194,10 @@ func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {
 	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)
 }
 
+func (h *txnRelation) MakeSegmentItOnSnap() handle.SegmentIt {
+	return newSegmentItOnSnap(h.table)
+}
+
 func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
 	return newSegmentIt(h.table)
 }
