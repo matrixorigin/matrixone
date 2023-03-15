@@ -5743,3 +5743,37 @@ func TestForceCheckpoint(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 }
+
+func TestSnapshotLag1(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 20)
+	defer data.Close()
+
+	bats := data.Split(4)
+	tae.createRelAndAppend(bats[0], true)
+
+	txn1, rel1 := tae.getRelation()
+	assert.NoError(t, rel1.Append(bats[1]))
+	txn2, rel2 := tae.getRelation()
+	assert.NoError(t, rel2.Append(bats[1]))
+
+	{
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.Append(bats[1]))
+		assert.NoError(t, txn.Commit())
+	}
+
+	txn1.MockStartTS(tae.TxnMgr.Now())
+	err := txn1.Commit()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	err = txn2.Commit()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+}

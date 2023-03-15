@@ -16,6 +16,8 @@ package blockio
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +31,7 @@ type BlockWriter struct {
 	writer  objectio.Writer
 	isSetPK bool
 	pk      uint16
+	name    string
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -39,6 +42,7 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	return &BlockWriter{
 		writer:  writer,
 		isSetPK: false,
+		name:    name,
 	}, nil
 }
 
@@ -109,7 +113,23 @@ func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.Block
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
+		logutil.Info("[WriteEnd]", common.OperationField(w.name),
+			common.OperandField("[Size=0]"))
 		return blocks, objectio.Extent{}, err
 	}
+	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
 	return blocks, blocks[0].GetExtent(), err
+}
+
+func (w *BlockWriter) String(
+	blocks []objectio.BlockObject) string {
+	size, err := GetObjectSizeWithBlocks(blocks)
+	if err != nil {
+		return fmt.Sprintf("name: %s, err: %s", w.name, err.Error())
+	}
+	return fmt.Sprintf("name: %s, block count: %d, size: %d",
+		w.name,
+		len(blocks),
+		size,
+	)
 }

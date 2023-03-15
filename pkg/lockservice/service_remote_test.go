@@ -51,22 +51,26 @@ func TestLockAndUnlockOnRemote(t *testing.T) {
 			table2 := uint64(2)
 
 			// make table1 on l1, table2 on l2
-			require.NoError(t, l1.Lock(ctx, table1, [][]byte{{1}}, txn1, option))
+			_, err := l1.Lock(ctx, table1, [][]byte{{1}}, txn1, option)
+			require.NoError(t, err)
 			checkTxn(t, l1, txn1, "")
 			checkTxnLocks(t, l1, txn1, table1, []byte{1})
 
-			require.NoError(t, l2.Lock(ctx, table2, [][]byte{{2}}, txn2, option))
+			_, err = l2.Lock(ctx, table2, [][]byte{{2}}, txn2, option)
+			require.NoError(t, err)
 			checkTxn(t, l2, txn2, "")
 			checkTxnLocks(t, l2, txn2, table2, []byte{2})
 
 			// lock remote
-			require.NoError(t, l1.Lock(ctx, table2, [][]byte{{3}}, txn1, option))
+			_, err = l1.Lock(ctx, table2, [][]byte{{3}}, txn1, option)
+			require.NoError(t, err)
 			checkTxn(t, l1, txn1, "")
 			checkTxn(t, l2, txn1, "s1")
 			checkTxnLocks(t, l1, txn1, table1, []byte{1})
 			checkTxnLocks(t, l1, txn1, table2, []byte{3})
 
-			require.NoError(t, l2.Lock(ctx, table1, [][]byte{{4}}, txn2, option))
+			_, err = l2.Lock(ctx, table1, [][]byte{{4}}, txn2, option)
+			require.NoError(t, err)
 			checkTxn(t, l2, txn2, "")
 			checkTxn(t, l1, txn2, "s2")
 			checkTxnLocks(t, l2, txn2, table2, []byte{2})
@@ -291,7 +295,7 @@ func TestLockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -367,7 +371,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			// l2 hold the old bind, and can not connect to s1, and wait bind changed
 			for {
-				err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 					Granularity: pb.Granularity_Row,
 					Mode:        pb.LockMode_Exclusive,
 					Policy:      pb.WaitPolicy_Wait,
@@ -452,7 +456,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
