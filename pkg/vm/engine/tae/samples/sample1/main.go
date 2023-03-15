@@ -103,7 +103,6 @@ func main() {
 	waitTime := time.Millisecond * time.Duration(batchCnt/200+1) * 300
 	for i := 0; i < 5; i++ {
 		time.Sleep(waitTime)
-		tae.PrintStats()
 	}
 	logutil.Info(tae.TxnBufMgr.String())
 	logutil.Info(tae.MTBufMgr.String())

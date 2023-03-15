@@ -64,7 +64,7 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) error {
+	options LockOptions) (pb.LockTable, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
@@ -72,13 +72,13 @@ func (s *service) Lock(
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
 	if err != nil {
-		return err
+		return pb.LockTable{}, err
 	}
 
 	if err := l.lock(ctx, txn, rows, options); err != nil {
-		return err
+		return pb.LockTable{}, err
 	}
-	return nil
+	return l.getBind(), nil
 }
 
 func (s *service) Unlock(ctx context.Context, txnID []byte) error {
