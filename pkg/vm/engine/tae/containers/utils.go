@@ -67,9 +67,8 @@ func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
 
 	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage)
-	if vec.HasNull() {
-		cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-	}
+	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
+
 	//mov.SetOriginal(true)
 
 	return mov
