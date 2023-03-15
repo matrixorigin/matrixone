@@ -17,7 +17,6 @@ package logtail
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,16 +66,10 @@ type Manager struct {
 	truncated types.TS
 	now       func() types.TS // now is from TxnManager
 
-	committingTS        atomic.Value
 	previousSaveTS      types.TS
-	committedTS         atomic.Value
 	logtailCallback     atomic.Value
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
-	committedTxn        chan *txnWithLogtails
-	wg                  sync.WaitGroup
-	ctx                 context.Context
-	cancel              context.CancelFunc
 }
 
 func NewManager(blockSize int, now func() types.TS) *Manager {
@@ -85,32 +78,13 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 			blockSize,
 			now,
 		),
-		wg:  sync.WaitGroup{},
 		now: now,
 	}
 	mgr.previousSaveTS = now()
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
-	mgr.committedTxn = make(chan *txnWithLogtails)
-	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 
 	return mgr
-}
-func (mgr *Manager) OnAllocPrepareTS(ts types.TS) {
-	mgr.committingTS.Store(ts)
-}
-
-func (mgr *Manager) OnCommittedTS(ts types.TS) {
-	mgr.committedTS.Store(ts)
-}
-func (mgr *Manager) generateHeartbeat() {
-	icallback := mgr.logtailCallback.Load()
-	if icallback != nil {
-		callback := icallback.(func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
-		from := mgr.previousSaveTS
-		to := mgr.getSaveTS()
-		callback(from.ToTimestamp(), to.ToTimestamp())
-	}
 }
 
 type txnWithLogtails struct {
@@ -141,36 +115,18 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 			}
 			continue
 		}
-		mgr.committedTxn <- txn
-		mgr.OnCommittedTS(txn.txn.GetPrepareTS())
+		mgr.generateLogtailWithTxn(txn)
 	}
 }
 func (mgr *Manager) Stop() {
 	mgr.collectLogtailQueue.Stop()
 	mgr.waitCommitQueue.Stop()
-	mgr.cancel()
-	mgr.wg.Wait()
 }
 func (mgr *Manager) Start() {
-	mgr.wg.Add(1)
 	mgr.collectLogtailQueue.Start()
 	mgr.waitCommitQueue.Start()
-	go mgr.generateLogtails()
 }
-func (mgr *Manager) generateLogtails() {
-	defer mgr.wg.Done()
-	// ticker := time.NewTicker(LogtailHeartbeatDuration)
-	for {
-		select {
-		case <-mgr.ctx.Done():
-			return
-		case txn := <-mgr.committedTxn:
-			mgr.generateLogtailWithTxn(txn)
-			// case <-ticker.C:
-			// 	mgr.generateHeartbeat()
-		}
-	}
-}
+
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
@@ -180,24 +136,6 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		mgr.previousSaveTS = to
 		callback(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
 	}
-}
-func (mgr *Manager) getSaveTS() types.TS {
-	now := mgr.now()
-	icommittingTS := mgr.committingTS.Load()
-	if icommittingTS == nil {
-		mgr.previousSaveTS = now
-		return now
-	}
-	icommittedTS := mgr.committedTS.Load()
-	if icommittedTS == nil {
-		return mgr.previousSaveTS
-	}
-	committedTS := icommittedTS.(types.TS)
-	if committedTS.Equal(icommittingTS.(types.TS)) {
-		mgr.previousSaveTS = now
-		return now
-	}
-	return mgr.previousSaveTS
 }
 
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
