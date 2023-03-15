@@ -32,6 +32,7 @@ type Relation interface {
 	Schema() any
 	UpdateConstraint([]byte) error
 	MakeSegmentIt() SegmentIt
+	MakeSegmentItOnSnap() SegmentIt
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
