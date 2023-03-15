@@ -327,7 +327,7 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		require.Equal(t, expected.([]types.Timestamp), vector.MustFixedCol[types.Timestamp](vec))
 	case types.T_decimal64:
 		if hasDecimalResult {
-			result := testutil.MakeDecimal64ArrByFloat64Arr(expected.([]float64))
+			result := testutil.MakeDecimal64ArrByFloat64Arr(expected.([]float64), typ.Scale)
 			require.Equal(t, result, vector.MustFixedCol[types.Decimal64](vec))
 		} else {
 			result := testutil.MakeDecimal64ArrByInt64Arr(expected.([]int64))
@@ -335,7 +335,7 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		}
 	case types.T_decimal128:
 		if hasDecimalResult {
-			result := testutil.MakeDecimal128ArrByFloat64Arr(expected.([]float64))
+			result := testutil.MakeDecimal128ArrByFloat64Arr(expected.([]float64), typ.Scale)
 			require.Equal(t, result, vector.MustFixedCol[types.Decimal128](vec))
 		} else {
 			result := testutil.MakeDecimal128ArrByInt64Arr(expected.([]int64))

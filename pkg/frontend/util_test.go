@@ -459,26 +459,26 @@ func TestGetSimpleExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1 := types.MustDecimal64FromString("1.0")
-		dec2 := types.MustDecimal64FromString("-1.0")
-		dec3 := types.MustDecimal64FromString("-1.2345670")
+		dec1, _, _ := types.Parse64("1.0")
+		dec2, _, _ := types.Parse64("-1.0")
+		dec3, _, _ := types.Parse64("-1.2345670")
 
 		kases := []args{
 			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
 				Id:          int32(types.T_decimal64),
-				Width:       16,
+				Width:       18,
 				Scale:       1,
 				NotNullable: true,
 			})},
 			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
 				Id:          int32(types.T_decimal64),
-				Width:       16,
+				Width:       18,
 				Scale:       1,
 				NotNullable: true,
 			})},
 			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
 				Id:          int32(types.T_decimal64),
-				Width:       16,
+				Width:       18,
 				Scale:       7,
 				NotNullable: true,
 			})},

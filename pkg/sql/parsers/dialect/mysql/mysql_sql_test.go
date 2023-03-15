@@ -562,7 +562,7 @@ var (
 		input: "create table deci_table (a decimal(20, 5))",
 	}, {
 		input:  "create table deci_table (a decimal)",
-		output: "create table deci_table (a decimal(34))",
+		output: "create table deci_table (a decimal(38))",
 	}, {
 		input: "create table deci_table (a decimal(20))",
 	}, {

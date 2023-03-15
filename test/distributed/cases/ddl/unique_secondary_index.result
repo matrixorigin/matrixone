@@ -453,7 +453,7 @@ null    3    0.01    null
 create table create_index_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
 create unique index decimal_index on create_index_09(col2);
 insert into create_index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23000000' for key '__mo_index_idx_col'
 insert into create_index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from create_index_09;
 col1    col2    col3
