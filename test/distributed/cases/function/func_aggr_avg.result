@@ -266,6 +266,7 @@ a	SUM( b)
 SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
 a	AVG( b)
 1	32768.5000
+select sleep(1);
 sleep(1)
 0
 SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
