@@ -241,7 +241,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			tsGetStr += t.String()
 			tsGetStr += ", "
 		}
-		logutil.Infof("partition read : snapshot is %s\n, read ts is [%s]\n", p.txnTime.String(), tsGetStr)
+		logutil.Infof("partition read rows[%d]: snapshot is %s\n, rows ts is [%s]\n", rows, p.txnTime.String(), tsGetStr)
 	} else {
 		for p.iter.Next() {
 			entry := p.iter.Entry()
