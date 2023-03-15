@@ -68,8 +68,8 @@ var DefaultTxnFactory = func(
 	store txnif.TxnStore,
 	id []byte,
 	startTS types.TS,
-	info []byte) txnif.AsyncTxn {
-	return NewTxn(mgr, store, id, startTS, info)
+	snapshotTS types.TS) txnif.AsyncTxn {
+	return NewTxn(mgr, store, id, startTS, snapshotTS)
 }
 
 type Txn struct {
@@ -88,12 +88,12 @@ type Txn struct {
 	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
-func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS, info []byte) *Txn {
+func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start, snapshot types.TS) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
 	}
-	txn.TxnCtx = NewTxnCtx(txnId, start, info)
+	txn.TxnCtx = NewTxnCtx(txnId, start, snapshot)
 	return txn
 }
 

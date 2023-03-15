@@ -261,8 +261,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					case <-cs.ctx.Done():
 						responses = nil
 						return
-					case resp := <-cs.c:
-						responses = append(responses, resp)
+					case resp, ok := <-cs.c:
+						if ok {
+							responses = append(responses, resp)
+						}
 					}
 				} else {
 					select {
@@ -342,7 +344,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 								fields = append(fields, zap.Error(err))
 							}
 							for _, f := range responses {
-								if !s.options.filter(f.send.Message) {
+								if s.options.filter(f.send.Message) {
 									id := f.getSendMessageID()
 									s.logger.Error("write response failed",
 										zap.Uint64("request-id", id),

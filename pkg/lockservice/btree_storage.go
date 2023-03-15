@@ -77,3 +77,13 @@ func (k *btreeBasedStorage) Seek(key []byte) ([]byte, Lock, bool) {
 	})
 	return result.key, result.value, !result.isEmpty()
 }
+
+func (k *btreeBasedStorage) Iter(fn func([]byte, Lock) bool) {
+	k.tree.Ascend(func(item treeItem) bool {
+		return fn(item.key, item.value)
+	})
+}
+
+func (k *btreeBasedStorage) Clear() {
+	k.tree.Clear(false)
+}

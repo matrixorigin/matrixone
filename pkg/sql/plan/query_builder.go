@@ -708,7 +708,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
-		rootId, _ = builder.pushdownFilters(rootId, nil)
+		rootId, _ = builder.pushdownFilters(rootId, nil, false)
 		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
 		SortFilterListByStats(builder.GetContext(), rootId, builder)
@@ -2165,7 +2165,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr) (int32, []*plan.Expr) {
+func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
 
 	var canPushdown, cantPushdown []*plan.Expr
@@ -2183,7 +2183,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			}
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
@@ -2201,7 +2201,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
 		var extraFilters []*plan.Expr
 		for _, filter := range cantPushdownChild {
@@ -2218,7 +2218,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 		}
-		builder.pushdownFilters(node.Children[0], extraFilters)
+		builder.pushdownFilters(node.Children[0], extraFilters, separateNonEquiConds)
 
 		if len(cantPushdownChild) > 0 {
 			node.Children[0] = childID
@@ -2348,15 +2348,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 			case JoinSideBoth:
 				if node.JoinType == plan.Node_INNER {
-					if f, ok := filter.Expr.(*plan.Expr_F); ok {
-						if f.F.Func.ObjName == "=" {
-							if getJoinSide(f.F.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
-								if getJoinSide(f.F.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
-									node.OnList = append(node.OnList, filter)
-									break
+					if separateNonEquiConds {
+						if f, ok := filter.Expr.(*plan.Expr_F); ok {
+							if f.F.Func.ObjName == "=" {
+								if getJoinSide(f.F.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
+									if getJoinSide(f.F.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
+										node.OnList = append(node.OnList, filter)
+										break
+									}
 								}
 							}
 						}
+					} else {
+						node.OnList = append(node.OnList, filter)
+						break
 					}
 				}
 
@@ -2391,11 +2396,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		if node.JoinType == plan.Node_INNER {
 			//only inner join can deduce new predicate
-			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList))
-			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList))
+			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown, separateNonEquiConds)
 
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
@@ -2407,7 +2412,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[0] = childID
 
-		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], rightPushdown)
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], rightPushdown, separateNonEquiConds)
 
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
@@ -2429,7 +2434,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
@@ -2439,7 +2444,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		}
 		node.Children[0] = childID
 
-		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight)
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight, separateNonEquiConds)
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
@@ -2462,7 +2467,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			canPushdown = append(canPushdown, replaceColRefs(filter, projectTag, node.ProjectList))
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
 		if len(cantPushdownChild) > 0 {
 			childID = builder.appendNode(&plan.Node{
@@ -2479,7 +2484,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	case plan.Node_FUNCTION_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]
-		childId, err := builder.pushdownFilters(childId, nil)
+		childId, err := builder.pushdownFilters(childId, nil, separateNonEquiConds)
 		if err != nil {
 			return 0, err
 		}
@@ -2487,7 +2492,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	default:
 		if len(node.Children) > 0 {
-			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters)
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
 
 			if len(cantPushdownChild) > 0 {
 				childID = builder.appendNode(&plan.Node{

@@ -21,19 +21,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	thirdValues := vector.MustStrCols(thirdVector)
-	resultType := types.T_varchar.ToType()
+func RegularReplace(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	thirdVector := ivecs[2]
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
+	thirdValues := vector.MustStrCol(thirdVector)
+	rtyp := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
-	for i := range vectors {
-		val := vector.Length(vectors[i])
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -45,33 +45,33 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	var match_type []string
 
 	//different parameter length conditions
-	switch len(vectors) {
+	switch len(ivecs) {
 	case 3:
 		pos = []int64{1}
 		occ = []int64{0}
 		match_type = []string{"c"}
 
 	case 4:
-		pos = vector.MustTCols[int64](vectors[3])
+		pos = vector.MustFixedCol[int64](ivecs[3])
 		occ = []int64{0}
 		match_type = []string{"c"}
 	case 5:
-		pos = vector.MustTCols[int64](vectors[3])
-		occ = vector.MustTCols[int64](vectors[4])
+		pos = vector.MustFixedCol[int64](ivecs[3])
+		occ = vector.MustFixedCol[int64](ivecs[4])
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() || thirdVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, 0, nil)
 	if err != nil {
 		return nil, err
 	}
-	err = regular.RegularReplaceWithArrays(firstValues, secondValues, thirdValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector, proc, maxLen)
+	err = regular.RegularReplaceWithArrays(firstValues, secondValues, thirdValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), rvec, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

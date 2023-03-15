@@ -15,10 +15,11 @@
 package binary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestInstr(t *testing.T) {
@@ -53,17 +54,19 @@ func TestInstr(t *testing.T) {
 		inVec := testutil.MakeVarcharVector(k.strs, nil)
 		subVec := testutil.MakeVarcharVector(k.substrs, nil)
 		if len(k.strs) == 1 {
-			inVec.MakeScalar(1)
+			inVec.SetClass(vector.CONSTANT)
+			inVec.SetLength(1)
 		}
 		if len(k.substrs) == 1 {
-			subVec.MakeScalar(1)
+			subVec.SetClass(vector.CONSTANT)
+			subVec.SetLength(1)
 		}
 		v, err := Instr([]*vector.Vector{inVec, subVec}, proc)
 		require.NoError(t, err)
-		vSlice := vector.MustTCols[int64](v)
+		vSlice := vector.MustFixedCol[int64](v)
 		require.Equal(t, k.wants, vSlice)
-		if inVec.IsScalar() {
-			inVec.Nsp.Set(0)
+		if inVec.IsConst() {
+			inVec.GetNulls().Set(0)
 			_, err = Instr([]*vector.Vector{inVec, subVec}, proc)
 			require.NoError(t, err)
 		}

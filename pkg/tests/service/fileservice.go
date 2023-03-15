@@ -51,7 +51,7 @@ func (c *testCluster) buildFileServices() *fileServices {
 	}
 	if c.opt.keepData {
 		factory = func(dir string, name string) fileservice.FileService {
-			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0)
+			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0, nil)
 			require.NoError(c.t, err)
 			return fs
 		}

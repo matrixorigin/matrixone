@@ -114,7 +114,7 @@ func TestFieldNumber(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustFixedCol[uint64](tc.expect), vector.MustFixedCol[uint64](gotV))
 		})
 	}
 }
@@ -202,7 +202,7 @@ func TestFieldString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustFixedCol[uint64](tc.expect), vector.MustFixedCol[uint64](gotV))
 		})
 	}
 }

@@ -15,7 +15,7 @@
 package multi
 
 import (
-	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,144 +23,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	MaxSpacePerRowOfLpad  = int64(16 * 1024 * 1024)
-	ParameterSourceString = int(0)
-	ParameterLengths      = int(1)
-	ParameterPadString    = int(2)
-)
+func Lpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVec, tgtLenVec, padVec := ivecs[0], ivecs[1], ivecs[2]
 
-/*
-First Parameter: source string
-Second Parameter: length
-Third Parameter: pad string
-*/
-func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	rtyp := types.T_varchar.ToType()
+	if srcVec.IsConstNull() || tgtLenVec.IsConstNull() || padVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, srcVec.Length(), proc.Mp()), nil
 	}
-	resultType := types.T_varchar.ToType()
-	for _, v := range vecs {
-		if v.GetType().Oid == types.T_blob {
-			resultType = types.T_blob.ToType()
+
+	srcVals := vector.MustStrCol(srcVec)
+	tgtLenVals := vector.MustFixedCol[int64](tgtLenVec)
+	padVals := vector.MustStrCol(padVec)
+	if srcVec.IsConst() && tgtLenVec.IsConst() && padVec.IsConst() {
+		rval, isNull := doLpad(srcVals[0], tgtLenVals[0], padVals[0])
+		if isNull {
+			return vector.NewConstNull(rtyp, srcVec.Length(), proc.Mp()), nil
 		}
+		return vector.NewConstBytes(rtyp, []byte(rval), srcVec.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, srcVec.Length(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Set(rvec.GetNulls(), srcVec.GetNulls())
+		nulls.Set(rvec.GetNulls(), tgtLenVec.GetNulls())
+		nulls.Set(rvec.GetNulls(), padVec.GetNulls())
+
+		srcIdx, tgtLenIdx, padIdx := 0, 0, 0
+		srcInc, tgtLenInc, padInc := 1, 1, 1
+		if srcVec.IsConst() {
+			srcInc = 0
+		}
+		if tgtLenVec.IsConst() {
+			tgtLenInc = 0
+		}
+		if padVec.IsConst() {
+			padInc = 0
+		}
+
+		for i := 0; i < srcVec.Length(); i++ {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rval, isNull := doLpad(srcVals[srcIdx], tgtLenVals[tgtLenIdx], padVals[padIdx])
+				if isNull {
+					rvec.GetNulls().Set(uint64(i))
+				} else {
+					vector.SetBytesAt(rvec, i, []byte(rval), proc.Mp())
+				}
+			}
+			srcIdx += srcInc
+			tgtLenIdx += tgtLenInc
+			padIdx += padInc
+		}
+		return rvec, nil
 	}
-	sourceStr := vector.MustStrCols(vecs[ParameterSourceString]) //Get the first arg
-
-	//characters length not bytes length
-	lengthsOfChars := getLensForLpad(vecs[ParameterLengths].Col)
-
-	//pad string
-	padStr := vector.MustStrCols(vecs[ParameterPadString])
-
-	constVectors := []bool{vecs[ParameterSourceString].IsScalar(), vecs[ParameterLengths].IsScalar(), vecs[ParameterPadString].IsScalar()}
-	inputNulls := []*nulls.Nulls{vecs[ParameterSourceString].Nsp, vecs[ParameterLengths].Nsp, vecs[ParameterPadString].Nsp}
-	//evaluate bytes space for every row
-	rowCount := vector.Length(vecs[ParameterSourceString])
-
-	var resultVec *vector.Vector = nil
-	resultValues := make([]string, rowCount)
-	resultNUll := nulls.NewWithSize(rowCount)
-
-	fillLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, resultValues, resultNUll, inputNulls)
-
-	resultVec = vector.NewWithStrings(resultType, resultValues, resultNUll, proc.Mp())
-	return resultVec, nil
 }
 
-func getLensForLpad(col interface{}) []int64 {
-	switch vs := col.(type) {
-	case []int64:
-		return vs
-	case []float64:
-		res := make([]int64, 0, len(vs))
-		for _, v := range vs {
-			if v > float64(math.MaxInt64) {
-				res = append(res, math.MaxInt64)
-			} else if v < float64(math.MinInt64) {
-				res = append(res, math.MinInt64)
-			} else {
-				res = append(res, int64(v))
-			}
-		}
-		return res
-	case []uint64:
-		res := make([]int64, 0, len(vs))
-		for _, v := range vs {
-			if v > uint64(math.MaxInt64) {
-				res = append(res, math.MaxInt64)
-			} else {
-				res = append(res, int64(v))
-			}
-		}
-		return res
-	}
-	panic("unexpected parameter types were received")
-}
+func doLpad(src string, tgtLen int64, pad string) (string, bool) {
+	const MaxTgtLen = int64(16 * 1024 * 1024)
 
-func fillLpad(sourceStr []string, lengths []int64, padStr []string, rowCount int, constVectors []bool, results []string, resultNUll *nulls.Nulls, inputNulls []*nulls.Nulls) {
-	for i := 0; i < rowCount; i++ {
-		if ui := uint64(i); nulls.Contains(inputNulls[ParameterSourceString], ui) ||
-			nulls.Contains(inputNulls[ParameterLengths], ui) ||
-			nulls.Contains(inputNulls[ParameterPadString], ui) {
-			//null
-			nulls.Add(resultNUll, ui)
-			continue
-		}
-		//1.count characters in source and pad
-		var source string
-		if constVectors[ParameterSourceString] {
-			source = sourceStr[0]
-		} else {
-			source = sourceStr[i]
-		}
-		sourceRune := []rune(string(source))
-		sourceCharCnt := int64(len(sourceRune))
-		var pad string
-		if constVectors[ParameterPadString] {
-			pad = padStr[0]
-		} else {
-			pad = padStr[i]
-		}
-		padLen := len(pad)
-		if padLen == 0 {
-			//empty string
-			continue
-		}
-		padRune := []rune(string(pad))
-		padCharCnt := int64(len(padRune))
-		var targetLength int64
-		if constVectors[ParameterLengths] {
-			targetLength = lengths[0]
-		} else {
-			targetLength = lengths[i]
-		}
+	srcRune, padRune := []rune(string(src)), []rune(string(pad))
+	srcLen, padLen := len(srcRune), len(padRune)
 
-		if targetLength < 0 || targetLength > MaxSpacePerRowOfLpad {
-			//NULL
-			nulls.Add(resultNUll, uint64(i))
-		} else if targetLength == 0 {
-			//empty string
-		} else if targetLength < sourceCharCnt {
-			//shorten source string
-			sourcePart := sourceRune[:targetLength]
-			sourcePartSlice := string(sourcePart)
-			results[i] = sourcePartSlice
-		} else if targetLength >= sourceCharCnt {
-			//calculate the space count
-			r := targetLength - sourceCharCnt
-			//complete pad count
-			p := r / padCharCnt
-			//partial pad count
-			m := r % padCharCnt
-			padPartSlice := string(padRune[:m])
-			for j := int64(0); j < p; j++ {
-				results[i] += pad
-			}
-			if m != 0 {
-				results[i] += padPartSlice
-			}
-			results[i] += source
-		}
+	if tgtLen < 0 || tgtLen > MaxTgtLen {
+		return "", true
+	} else if int(tgtLen) < srcLen {
+		return string(srcRune[:tgtLen]), false
+	} else if int(tgtLen) == srcLen {
+		return src, false
+	} else if padLen == 0 {
+		return "", false
+	} else {
+		r := int(tgtLen) - srcLen
+		p, m := r/padLen, r%padLen
+		return strings.Repeat(pad, p) + string(padRune[:m]) + src, false
 	}
 }
