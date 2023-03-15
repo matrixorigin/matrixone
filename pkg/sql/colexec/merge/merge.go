@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -58,6 +59,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			logutil.Errorf("pipeline closed unexpectedly")
 			return true, nil
 		}
 		anal.WaitStop(start)

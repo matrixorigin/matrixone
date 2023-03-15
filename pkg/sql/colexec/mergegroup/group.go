@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -105,6 +106,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			logutil.Errorf("pipeline closed unexpectedly")
 			return true, nil
 		}
 		anal.WaitStop(start)
