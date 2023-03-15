@@ -124,11 +124,10 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	return
 }
 
-func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *Vector, err error) {
+func FromDNVector(typ types.Type, header []types.Varlena, storage []byte, cantFree bool) (vec *Vector, err error) {
 	vec = NewVec(typ)
-	//TODO: Check with Aunjgr if this is OK?
-	//vec.cantFreeData = true
-	//vec.cantFreeArea = true
+	vec.cantFreeData = cantFree
+	vec.cantFreeArea = cantFree
 	if typ.IsString() {
 		if len(header) > 0 {
 			vec.col = header

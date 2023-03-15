@@ -248,9 +248,9 @@ func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 
 func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
 	if typ.IsVarlen() {
-		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage)
+		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage, true)
 	} else {
-		mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, bs.Storage)
+		mov, _ = cnVector.FromDNVector(typ, nil, bs.Storage, true)
 	}
 	return mov
 }
@@ -298,7 +298,7 @@ func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*c
 		}
 		copy(storageAllocated, storageByteArr)
 
-		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated)
+		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated, false)
 	} else {
 
 		// 1. Mpool Allocate Storage
@@ -309,7 +309,7 @@ func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*c
 		}
 		copy(storageAllocated, storageByteArr)
 
-		mov, _ = cnVector.FromDNVector(typ, []types.Varlena{}, storageAllocated)
+		mov, _ = cnVector.FromDNVector(typ, nil, storageAllocated, false)
 	}
 	return mov, nil
 }

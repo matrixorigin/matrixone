@@ -66,7 +66,7 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
 
-	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage)
+	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
 	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
 
 	//mov.SetOriginal(true)
@@ -116,7 +116,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(storage) > 0 {
 			copy(storage, bs.Storage)
 		}
-		mov, _ = movec.FromDNVector(typ, header, storage)
+		mov, _ = movec.FromDNVector(typ, header, storage, true)
 		//} else if vec.GetType().IsTuple() {
 		//	mov = movec.NewVector(vec.GetType())
 		//	cnt := types.DecodeInt32(bs.Storage)
@@ -130,7 +130,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(data) > 0 {
 			copy(data, bs.Storage)
 		}
-		mov, _ = movec.FromDNVector(typ, nil, data)
+		mov, _ = movec.FromDNVector(typ, nil, data, true)
 	}
 
 	if vec.HasNull() {
