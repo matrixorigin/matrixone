@@ -977,10 +977,12 @@ var builtins = map[int]Functions{
 				Fn:        multi.FloorFloat64,
 			},
 			{
-				Index:     6,
-				Args:      []types.T{types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        multi.FloorDecimal128,
+				Index: 6,
+				Args:  []types.T{types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, parameters[0].Width, 0)
+				},
+				Fn: multi.FloorDecimal128,
 			},
 			{
 				Index:     7,

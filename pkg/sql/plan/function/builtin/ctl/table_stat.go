@@ -309,9 +309,9 @@ func getValueInStr(value any) string {
 	case types.Uuid:
 		return v.ToString()
 	case types.Decimal64:
-		return v.String()
+		return v.Format(0)
 	case types.Decimal128:
-		return v.String()
+		return v.Format(0)
 	default:
 		return ""
 	}

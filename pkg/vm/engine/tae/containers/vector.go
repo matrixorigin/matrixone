@@ -94,13 +94,13 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		} else if _, ok := any(v).(types.Decimal64); ok {
 			d := vec.Get(i).(types.Decimal64)
 			od := vec.Get(i).(types.Decimal64)
-			if d.Ne(od) {
+			if d != od {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal128); ok {
 			d := vec.Get(i).(types.Decimal128)
 			od := vec.Get(i).(types.Decimal128)
-			if d.Ne(od) {
+			if d != od {
 				return false
 			}
 		} else if _, ok := any(v).(types.TS); ok {
