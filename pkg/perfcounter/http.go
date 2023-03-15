@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"sort"
 	"sync/atomic"
 )
 
@@ -28,6 +29,7 @@ func (c *CounterSet) ServeHTTP(w http.ResponseWriter, req *http.Request) {
   table, th, td {
     border: 1px solid;
     border-collapse: collapse;
+    font-family: monospace, monospace;
   }
   </style>
   `)
@@ -77,23 +79,45 @@ func formatStruct(w io.Writer, v reflect.Value, t reflect.Type) {
 	}
 }
 
-func formatMap(w io.Writer, v reflect.Value, _ reflect.Type) {
+func formatMap(w io.Writer, v reflect.Value, t reflect.Type) {
 	fmt.Fprintf(w, "<table>")
 	defer fmt.Fprintf(w, "</table>")
-	iter := v.MapRange()
-	for iter.Next() {
-		value := iter.Value()
-		if value.IsZero() {
-			continue
+
+	if t.Key().Kind() == reflect.String {
+		keyValues := v.MapKeys()
+		keys := make([]string, 0, v.Len())
+		for _, keyValue := range keyValues {
+			keys = append(keys, keyValue.String())
 		}
-		key := iter.Key()
-		fmt.Fprintf(w, "<tr>")
-		fmt.Fprintf(w, "<td>")
-		format(w, key, key.Type())
-		fmt.Fprintf(w, "</td>")
-		fmt.Fprintf(w, "<td>")
-		format(w, value, value.Type())
-		fmt.Fprintf(w, "</td>")
-		fmt.Fprintf(w, "</tr>")
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(w, "<tr>")
+			fmt.Fprint(w, "<td>")
+			fmt.Fprint(w, key)
+			fmt.Fprint(w, "</td>")
+			value := v.MapIndex(reflect.ValueOf(key))
+			fmt.Fprint(w, "<td>")
+			format(w, value, value.Type())
+			fmt.Fprint(w, "</td>")
+			fmt.Fprint(w, "</tr>")
+		}
+
+	} else {
+		iter := v.MapRange()
+		for iter.Next() {
+			value := iter.Value()
+			if value.IsZero() {
+				continue
+			}
+			key := iter.Key()
+			fmt.Fprintf(w, "<tr>")
+			fmt.Fprintf(w, "<td>")
+			format(w, key, key.Type())
+			fmt.Fprintf(w, "</td>")
+			fmt.Fprintf(w, "<td>")
+			format(w, value, value.Type())
+			fmt.Fprintf(w, "</td>")
+			fmt.Fprintf(w, "</tr>")
+		}
 	}
 }
