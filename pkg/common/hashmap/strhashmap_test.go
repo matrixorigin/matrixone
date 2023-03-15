@@ -96,7 +96,7 @@ func TestInsertValue(t *testing.T) {
 	ok, err = mp.InsertValue(types.Timestamp(0))
 	require.NoError(t, err)
 	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Decimal64{})
+	ok, err = mp.InsertValue(types.Decimal64(0))
 	require.NoError(t, err)
 	require.Equal(t, false, ok)
 	ok, err = mp.InsertValue(types.Decimal128{})
@@ -391,7 +391,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs [
 		if random {
 			v = rand.Int()
 		}
-		d, _ := types.InitDecimal64(int64(v), 64, 0)
+		d := types.Decimal64(v)
 		if err := vector.AppendFixed(vec, d, false, m); err != nil {
 
 			vec.Free(m)
@@ -417,7 +417,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 		if random {
 			v = rand.Int()
 		}
-		d, _ := types.InitDecimal128(int64(v), 64, 0)
+		d := types.Decimal128{B0_63: uint64(v), B64_127: 0}
 		if err := vector.AppendFixed(vec, d, false, m); err != nil {
 			vec.Free(m)
 			return nil

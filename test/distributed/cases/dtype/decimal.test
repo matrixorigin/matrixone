@@ -1,4 +1,4 @@
--- @suite                                                                                                                                                                                
+-- @suite
 -- @case
 -- @desc:test for decimal datatype
 -- @label:bvt
@@ -303,3 +303,313 @@ select a / 4589.60 from t1;
 select 4589.6 / a from t1;
 select 4589.60 / a from t1;
 drop table t1;
+
+-- decimal(M,D),Both M and D exist and M>=D
+DROP TABLE IF EXISTS decimal01;
+CREATE TABLE decimal01(a decimal(10,6));
+INSERT INTO decimal01 VALUES(123.37284);
+INSERT INTO decimal01 VALUES(3782.3);
+INSERT INTO decimal01 VALUES(328.0);
+INSERT INTO decimal01 VALUES(-373.909890);
+INSERT INTO decimal01 VALUES(-1.1);
+INSERT INTO decimal01 VALUES(0);
+INSERT INTO decimal01 VALUES(3246.3674578902132322913);
+
+-- The total number of inserted digits is greater than 10,
+-- and the integer part is less than or equal to 4 digits, keep 6 decimal places
+INSERT INTO decimal01 VALUES(0.37281738921302);
+INSERT INTO decimal01 VALUES(12.4738244432449324);
+INSERT INTO decimal01 VALUES(-3278.38928432434932);
+
+-- Truncated when inserted
+INSERT INTO decimal01 VALUES(-1.434324654846543221327891321);
+INSERT INTO decimal01 VALUES(372.37287392839232943043);
+
+-- Verify data correctness
+SELECT * FROM decimal01;
+
+-- update
+UPDATE decimal01 set a = 0.999999999999 WHERE a = 12.473824;
+UPDATE decimal01 set a = -0.00000000000 WHERE a = -1.1;
+
+-- delete
+DELETE FROM decimal01 WHERE a = -3278.389284;
+DELETE FROM decimal01 WHERE a = 0.372817;
+
+-- Mathematical operation(+ - * /)
+SELECT a + 7382121 FROM decimal01;
+SELECT a - 0.27832 FROM decimal01;
+SELECT a * 0 FROM decimal01;
+SELECT a / 6 FROM decimal01;
+SELECT a * a FROM decimal01;
+
+-- insert null
+INSERT INTO decimal01 VALUES(NULL);
+
+-- Abnormal insertion: the total number of digits exceeds the limit
+INSERT INTO decimal01 VALUES(3271838219.12);
+INSERT INTO decimal01 VALUEs(-278732.48392480932);
+DROP TABLE decimal01;
+
+-- Abnormal:Exception creation table:M < D
+DROP TABLE IF EXISTS decimal02;
+CREATE TABLE decimal02(a DECIMAL(10,11));
+DROP TABLE decimal02;
+
+-- Abnormal:Decimals appear when creating tables
+DROP TABLE IF EXISTS decimal03;
+CREATE TABLE decimal03(a DECIMAL(1.1,11));
+DROP TABLE decimal03;
+
+-- Abnormal:A negative number appears when creating a table
+DROP TABLE IF EXISTS decimal04;
+CREATE TABLE decimal04(a DECIMAL(11,-1));
+DROP TABLE decimal04;
+
+-- Abnormal:Exception creation table:D < 0 or M < 0
+DROP TABLE IF EXISTS decimal05;
+CREATE TABLE decimal05(a DECIMAL(20,-1));
+CREATE TABLE decimal05(b DECIMAL(-2,23));
+DROP TABLE decimal05;
+
+-- Abnormal:Exception creation table:D or M is out of valid range
+DROP TABLE IF EXISTS decimal06;
+CREATE TABLE decimal06(a DECIMAL(39,10));
+CREATE TABLE decimal06(b DECIMAL(40,39));
+DROP TABLE decimal06;
+
+-- D is not specified:Default D is 0
+DROP TABLE IF EXISTS decimal07;
+CREATE TABLE decimal07(a int PRIMARY KEY, b DECIMAL(38));
+INSERT INTO decimal07 VALUES(1, 3728193.3902);
+INSERT INTO decimal07 VALUES(2, 0.327813092);
+INSERT INTO decimal07 VALUES(3, -3728.4324);
+INSERT INTO decimal07 VALUES(4, 12345678909876543212345678909876543243);
+
+-- D is not specified. The default value is 0
+SELECT * FROM decimal07;
+
+-- Mathematical operation:*，+，-，/，DIV
+SELECT a, a * b FROM decimal07;
+SELECT a, a + b FROM decimal07;
+SELECT a, a - b - b FROM decimal07;
+SELECT a, b / a FROM decimal07;
+SELECT a, b DIV a FROM decimal07;
+
+-- Nesting with mathematical functions
+SELECT a, ABS(b) FROM decimal07;
+SELECT a, CEIL(b) FROM decimal07;
+SELECT a, POWER(b,2) FROM decimal07;
+SELECT b + pi() FROM decimal07;
+SELECT LOG(10, b + 100000) FROM decimal07;
+SELECT LN(b + 20000) FROM decimal07;
+SELECT EXP(b) FROM decimal07;
+DROP TABLE decimal07;
+
+-- Critical value test
+DROP TABLE IF EXISTS decimal08;
+CREATE TABLE decimal08(a DECIMAL(38,0));
+INSERT INTO decimal08 VALUES(21737187383787273829839184932843922131);
+INSERT INTO decimal08 VALUES(99999999999999999999999999999999999999);
+INSERT INTO decimal08 VALUES(999999999999999.99999999999999999999999);
+INSERT INTO decimal08 VALUES(1367281378213923.7382197382717382999911);
+INSERT INTO decimal08 VALUES(-63723829382993920323820398294832849309);
+INSERT INTO decimal08 VALUES(0.2777389100215365283243325321437821372);
+INSERT INTO decimal08 VALUES(-99999999999999999999999999999999999999);
+SELECT * FROM decimal08;
+
+SELECT a + 1 FROM decimal08;
+
+-- Abnormal:value overflow
+SELECT a * 2 FROM decimal08;
+SELECT a / 3 FROM decimal08;
+DROP TABLE decimal08;
+
+-- default decimal,D and M is not specified, default M is 38, default D is 0
+DROP TABLE IF EXISTS decimal09;
+CREATE TABLE decimal09 (d decimal DEFAULT NULL);
+INSERT INTO decimal09 VALUES (NULL);
+INSERT INTO decimal09 VALUES(212839);
+INSERT INTO decimal09 VALUES(44455788525777778895412365489563123654);
+INSERT INTO decimal09 VALUES(0.1236547899874561233211236544569877898);
+SELECT * FROM decimal09;
+SELECT format(d, 2) FROM decimal09;
+DROP TABLE decimal09;
+
+-- Decimal and int, int unsigned and other types of operations
+-- The column constraint of decimal is null
+DROP TABLE IF EXISTS decimal10;
+CREATE TABLE decimal10(a DECIMAL(20,8) NOT NULL, b smallint, c float, d DOUBLE);
+INSERT INTO decimal10 VALUES(12323.3829, -32768, -483924.43, 32932.323232);
+INSERT INTO decimal10 VALUES(3829.23, -38, 32943243.1, -3829.32);
+INSERT INTO decimal10 VALUES(-3728832.3982, 0, 0.32893029, 329832013.32893);
+INSERT INTO decimal10 VALUES(0.217832913924324,NULL,3728.39,NULL);
+
+SELECT * FROM decimal10;
+
+-- Abnormal insert
+INSERT INTO decimal10 VALUES(NULL, 21,32,32.0);
+INSERT INTO decimal10 VALUES(21732843219738283.21,NULL,NULL,0);
+
+-- Mathematical operations and nesting with mathematical functions
+SELECT a + b + c - d FROM decimal10;
+SELECT a * b + c * d FROM decimal10;
+SELECT a + c + a * c FROM decimal10;
+SELECT a / d FROM decimal10;
+
+SELECT ABS(a) * c FROM decimal10;
+SELECT FLOOR(a) FROM decimal10;
+SELECT CEIL(a) * CEIL(c) FROM decimal10;
+SELECT POWER(ABS(a), 10) FROM decimal10;
+SELECT pi() * a FROM decimal10;
+SELECT LOG(ABS(a)) FROM decimal10;
+SELECT LN(ABS(a)) FROM decimal10;
+SELECT EXP(a div c) FROM decimal10;
+
+-- Aggregate function test
+SELECT SUM(a) FROM decimal10;
+SELECT AVG(a + b) FROM decimal10;
+SELECT COUNT(a) FROM decimal10;
+SELECT MAX(a) FROM decimal10;
+SELECT MIN(a) + MAX(b) FROM decimal10;
+
+-- sort
+SELECT * FROM decimal10 ORDER BY a DESC;
+SELECT a * c AS SUM FROM decimal10 ORDER BY SUM ASC;
+DROP TABLE decimal10;
+
+-- CAST
+SELECT CAST(a AS DOUBLE) FROM decimal10;
+SELECT CAST(a AS FLOAT) FROM decimal10;
+SELECT CAST(b AS DECIMAL(10,1)) FROM decimal10;
+SELECT CAST(b AS decimal(20,10)) FROM decimal10;
+SELECT CAST(c AS decimal) FROM decimal10;
+SELECT CAST((a * c) AS DECIMAL) FROM decimal10;
+SELECT CAST(POWER(c,2) AS DECIMAL(28,6)) FROM decimal10;
+SELECT CAST((d - c) * a AS DECIMAL(30, 4)) FROM decimal10;
+
+-- The column constraint of decimal is the primary key and default value is 0
+DROP TABLE IF EXISTS decimal11;
+CREATE TABLE decimal10 (a DECIMAL(10,9) PRIMARY KEY DEFAULT 0, b tinyint unsigned, c bigint,id int);
+INSERT INTO decimal10 VALUES(0, 155, -654346789,1);
+INSERT INTO decimal10 VALUES(0.389932,78,38238293232,2);
+INSERT INTO decimal10 VALUES(-2.22,0, 32783232,1);
+INSERT INTO decimal10 VALUES(9, 111, NULL, 2);
+
+SELECT * FROM decimal10;
+
+-- Abnormal insert
+INSERT INTO decimal10 VALUES(NULL,9,2819323242,2);
+
+-- CAST
+SELECT CAST(b AS DECIMAL(10,9)) FROM decimal10;
+SELECT CAST(b AS DECIMAL(10)) FROM decimal10;
+SELECT CAST(ABS(a) AS int unsigned) FROM decimal10;
+SELECT CAST(a AS bigint) FROM decimal10;
+SELECT CAST((a + b) AS DECIMAL(20,3)) FROM decimal10;
+
+-- Conditional query and subquery
+SELECT * FROM decimal10 WHERE a  = 0;
+SELECT a, b, c FROM decimal10 WHERE ABS(a) = 12323.38290000;
+SELECT * FROM decimal10 WHERE a > 3829.23000000;
+SELECT * FROM decimal10 WHERE CEIL(a) != 9;
+SELECT * FROM decimal10 WHERE CEIL(a) < 10000;
+SELECT * FROM decimal10 WHERE ABS(a) <= 1;
+SELECT * FROM decimal10 WHERE a BETWEEN -1 AND 3;
+SELECT * FROM decimal10 WHERE a NOT BETWEEN -1 AND 3;
+SELECT * FROM decimal10 WHERE a IN(1.0,9.0);
+SELECT a,b,c FROM decimal10 WHERE a NOT IN(1.00000,9.00000);
+
+-- @bvt:issue#8277
+SELECT * FROM decimal10 WHERE a IN(1,9);
+SELECT * a,b,c FROM decimal10 WHERE a NOT IN(1,9);
+-- @bvt:issue
+
+SELECT a * b FROM decimal10 WHERE a NOT BETWEEN 2 AND 9;
+SELECT any_value(a) FROM decimal10 WHERE ABS(a) >= 0 GROUP BY id;
+SELECT * FROM decimal10 WHERE a > (SELECT COUNT(a) FROM decimal10);
+DROP TABLE decimal10;
+
+-- truncate result
+DROP TABLE IF EXISTS decimal11;
+CREATE TABLE decimal11 (a DECIMAL(38,13), b DECIMAL(25,12));
+INSERT INTO decimal11 VALUES(1234567890981.111231146421, 1.232143214321);
+INSERT INTO decimal11 VALUES(32838293.3387298323, -37827.382983283022);
+SELECT * FROM decimal11;
+SELECT CAST((a * b) AS DECIMAL(20,10)) FROM decimal11;
+SELECT a * b FROM decimal11;
+
+-- char and varchar to decimal
+DROP TABLE IF EXISTS decimal12;
+CREATE TABLE decimal12(a char, b VARCHAR(38));
+INSERT INTO decimal12 VALUES('a','3.14e+09');
+INSERT INTO decimal12 VALUES('b', '-3.14e+09');
+INSERT INTO decimal12 VALUES('c','545676678738');
+INSERT INTO decimal12 VALUES('d',NULL);
+INSERT INTO decimal12 VALUES('e','99999999009999999999999999999999999999');
+
+SELECT * FROM decimal12;
+
+-- cast
+SELECT CAST(b AS DECIMAL(38,0)) FROM decimal12;
+SELECT CAST(b AS DECIMAL) FROM decimal12 WHERE a = 'b';
+
+-- join
+DROP TABLE IF EXISTS decimal13;
+DROP TABLE IF EXISTS decimal14;
+CREATE TABLE decimal13(a DECIMAL(10,2) NOT NULL,b FLOAT,c smallint unsigned);
+INSERT INTO decimal13 VALUES(1,12.9,61555);
+INSERT INTO decimal13 VALUES(-38299323.8880,33.3283,0);
+INSERT INTO decimal13 VALUES(0.894324,-327832.932,90);
+SELECT * FROM decimal13;
+
+CREATE TABLE decimal14(a DECIMAL(11,9), b DOUBLE, c int unsigned);
+INSERT INTO decimal14 VALUES(1,728.392032,2147483647);
+INSERT INTO decimal14 VALUES(32.12,38293,23829321);
+INSERT INTO decimal14 VALUES(0.3289302,382943243.438,0);
+SELECT * FROM decimal14;
+
+SELECT decimal13.a,decimal14.a FROM decimal13,decimal14 WHERE decimal13.a = decimal14.a;
+SELECT decimal13.a,decimal14.a FROM decimal13 join decimal11 ON decimal13.a = decimal14.a;
+SELECT decimal13.a,decimal14.a FROM decimal13 left join decimal11 ON decimal13.a = decimal14.a;
+SELECT decimal13.a,decimal14.b,decimal13.c FROM decimal14 right join decimal13 ON decimal14.a < decimal11.a;
+DROP TABLE decimal13;
+DROP TABLE decimal14;
+
+-- unique index
+DROP TABLE IF EXISTS decimal15;
+CREATE TABLE decimal15(a decimal(10,5),b FLOAT,c double);
+CREATE UNIQUE INDEX a_index on decimal15(a);
+INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
+INSERT INTO decimal15 VALUES(-28.3232,387213.0,32132313);
+INSERT INTO decimal15 VALUES(NULL,327.328932,-38922.2123);
+SELECT * FROM decimal15;
+
+-- unique index cannot have duplicate value insertion
+INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
+DROP TABLE decimal15;
+
+-- secondary index
+DROP TABLE IF EXISTS decimal16;
+CREATE TABLE decimal16(a decimal, b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));
+INSERT INTO decimal16 VALUES(1234789456456456456567898552556, 3728321323.4321214,'小明');
+SELECT * FROM decimal16;
+
+INSERT INTO decimal16 VALUES(-64564567898552556, 3728321323.4321214,'小花');
+INSERT INTO decimal16 VALUES(-64564568552556, 8321323.4321214,'小强');
+DROP TABLE decimal16;
+
+-- load data CSV
+DROP TABLE IF EXISTS decimal17;
+CREATE TABLE decimal17(a decimal,b decimal(38,0),c decimal(20,4),d decimal(10));
+INSERT INTO decimal17 VALUES(3231.44112,0,-38232432541431.7890,3728739824.0909898765);
+INSERT INTO decimal17 VALUES(-3892.020,NULL,3872932.3289323,3829);
+INSERT INTO decimal17 VALUES(123.456,NULL,7281392.902,328392323);
+
+DROP TABLE IF EXISTS decimal18;
+CREATE TABLE decimal18(a DECIMAL, b DECIMAL(38,0));
+
+INSERT INTO decimal18 (a,b) SELECT a,b FROM decimal17;
+INSERT INTO decimal18 (a,b) SELECT c,d FROM decimal17;
+SELECT * FROM decimal17;
+DROP TABLE decimal17;

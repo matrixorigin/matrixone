@@ -84,5 +84,5 @@ func OctFloat[T constraints.Float](xs []T, rs []types.Decimal128) ([]types.Decim
 }
 
 func oct(val uint64) (types.Decimal128, error) {
-	return types.Decimal128_FromStringWithScale(fmt.Sprintf("%o", val), 33, 0)
+	return types.ParseDecimal128(fmt.Sprintf("%o", val), 38, 0)
 }

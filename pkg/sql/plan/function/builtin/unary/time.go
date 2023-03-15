@@ -126,7 +126,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 		var rvals [1]types.Time
-		_, err := time.Decimal128ToTime(ivals, rvals[:])
+		_, err := time.Decimal128ToTime(ivals, rvals[:], rtyp.Scale)
 		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
@@ -134,7 +134,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[types.Time](rvec)
-		_, err = time.Decimal128ToTime(ivals, rvals)
+		_, err = time.Decimal128ToTime(ivals, rvals, rtyp.Scale)
 		return rvec, err
 	}
 }

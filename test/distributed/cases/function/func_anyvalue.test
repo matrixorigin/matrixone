@@ -1,3 +1,4 @@
+
 #ORDER BY, WHERE
 create table t1(a int, b int, c int);
 insert into t1 values(200,1,1),(100,1,2),(400,2,2),(300,2,1);
@@ -31,7 +32,6 @@ select a,any_value(b),sum(c) from t1 group by a;
 select a,any_value(b),sum(c) from (select * from t1 order by a desc, b desc) as d group by a;
 drop table t1;
 drop table t2;
-
 
 #NULL
 select any_value(null);

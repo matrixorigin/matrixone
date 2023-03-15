@@ -17565,8 +17565,8 @@ yydefault:
 //line mysql_sql.y:8218
 		{
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: 34, // this is the default scale for decimal
-				Scale:       0,
+				DisplayWith: 38, // this is the default precision for decimal
+				Scale:   0,
 			}
 		}
 		yyVAL.union = yyLOCAL
