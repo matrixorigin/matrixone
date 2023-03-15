@@ -24,6 +24,8 @@ import (
 const (
 	// ClusterService cluster service
 	ClusterService = "cluster-service"
+	// ClusterService cluster service
+	LockService = "lock-service"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
 )

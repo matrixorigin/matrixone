@@ -115,6 +115,14 @@ func (t Tuple) Less(than Tuple) bool {
 				return false
 			}
 
+		case Decimal:
+			b := b.(Decimal)
+			if a.Less(b) {
+				return true
+			} else if b.Less(a) {
+				return false
+			}
+
 		default:
 			panic(fmt.Sprintf("unknown item type: %T %#v", a, a))
 		}

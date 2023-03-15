@@ -121,7 +121,7 @@ func Test_GetInt64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64FromInt32(15)
+		mrs.Data[15][0] = types.Decimal64(15)
 		ret, err = mrs.GetInt64(context.TODO(), 15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -227,7 +227,7 @@ func Test_GetUint64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64FromInt32(15)
+		mrs.Data[15][0] = types.Decimal64(15)
 		ret, err = mrs.GetUint64(context.TODO(), 15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -333,7 +333,7 @@ func Test_GetFloat64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64FromInt32(15)
+		mrs.Data[15][0] = types.Decimal64(15)
 		ret, err = mrs.GetFloat64(context.TODO(), 15, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -444,7 +444,7 @@ func Test_GetString(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, "0001-01-01 00:00:00")
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[16][0] = types.Decimal64FromInt32(15)
+		mrs.Data[16][0] = types.Decimal64(15)
 		ret, err = mrs.GetString(context.TODO(), 16, 0)
 		convey.So(ret, convey.ShouldEqual, "")
 		convey.So(err, convey.ShouldNotBeNil)

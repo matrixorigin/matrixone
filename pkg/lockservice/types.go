@@ -80,7 +80,7 @@ type LockService interface {
 	//
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
-	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) error
+	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.LockTable, error)
 	// Unlock release all locks associated with the transaction.
 	Unlock(ctx context.Context, txnID []byte) error
 	// Close close the lock service.

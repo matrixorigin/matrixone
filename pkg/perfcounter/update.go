@@ -16,24 +16,24 @@ package perfcounter
 
 import "context"
 
-func Update(ctx context.Context, fn func(*Counter), extraCounters ...*Counter) {
+func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*CounterSet) {
 	v := ctx.Value(CtxKeyCounters)
-	var counters Counters
+	var counterSets CounterSets
 	if v != nil {
-		counters = v.(Counters)
-		for counter := range counters {
-			fn(counter)
+		counterSets = v.(CounterSets)
+		for set := range counterSets {
+			fn(set)
 		}
 	}
-	for _, counter := range extraCounters {
-		if counter == nil {
+	for _, set := range extraCounterSets {
+		if set == nil {
 			continue
 		}
-		if counters != nil {
-			if _, ok := counters[counter]; ok {
+		if counterSets != nil {
+			if _, ok := counterSets[set]; ok {
 				continue
 			}
 		}
-		fn(counter)
+		fn(set)
 	}
 }
