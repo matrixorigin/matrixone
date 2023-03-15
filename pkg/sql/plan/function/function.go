@@ -370,6 +370,19 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 		for i := range sources {
 			if targets[i].Oid == types.T_decimal64 || targets[i].Oid == types.T_decimal128 {
 				if sources[i].Scale < maxScale {
+					if targets[i].Oid == types.T_decimal64 {
+						if sources[i].Width+maxScale-sources[i].Scale > 18 {
+							sources[i].Width = 18
+						} else {
+							sources[i].Width += maxScale - sources[i].Scale
+						}
+					} else {
+						if sources[i].Width+maxScale-sources[i].Scale > 38 {
+							sources[i].Width = 38
+						} else {
+							sources[i].Width += maxScale - sources[i].Scale
+						}
+					}
 					sources[i].Scale = maxScale
 				}
 			}

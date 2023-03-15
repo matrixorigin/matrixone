@@ -8237,7 +8237,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 34,           // this is the default scale for decimal
+            DisplayWith: 38,           // this is the default precision for decimal
             Scale: 0,
         }
     }

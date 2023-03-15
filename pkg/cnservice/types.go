@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -78,12 +79,6 @@ type Config struct {
 	ServiceAddress string `toml:"service-address"`
 	// SQLAddress service address for receiving external sql client
 	SQLAddress string `toml:"sql-address"`
-
-	// LockListenAddress lock service listen address for receiving lock requests
-	LockListenAddress string `toml:"lock-listen-address"`
-	// LockServiceAddress service address for communication, if this address is not set, use
-	// ListenAddress as the communication address.
-	LockServiceAddress string `toml:"lock-service-address"`
 
 	// FileService file service configuration
 
@@ -152,6 +147,26 @@ type Config struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
+
+	LockService struct {
+		// ListenAddress lock service listen address for receiving lock requests
+		ListenAddress string `toml:"listen-address"`
+		// ServiceAddress service address for communication, if this address is not set, use
+		// ListenAddress as the communication address.
+		ServiceAddress string `toml:"service-address"`
+		// MaxFixedSliceSize lockservice uses fixedSlice to store all lock information, a pool
+		// of fixedSlice will be built internally, there are various specifications of fixexSlice,
+		// this value sets how big the maximum specification of FixedSlice is.
+		MaxFixedSliceSize toml.ByteSize `toml:"max-fixed-slice-size"`
+		// KeepBindDuration Maintain the period of the locktable bound to the current service
+		KeepBindDuration toml.Duration `toml:"keep-bind-duration"`
+		// KeepRemoteLockDuration how often to send a heartbeat to maintain a lock on a remote
+		// locktable.
+		KeepRemoteLockDuration toml.Duration `toml:"keep-remote-lock-duration"`
+		// RemoteLockTimeout how long does it take to receive a heartbeat that maintains the
+		// remote lock before releasing the lock
+		RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
+	} `toml:"lockservice"`
 }
 
 func (c *Config) Validate() error {
@@ -209,13 +224,25 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
-	if c.LockListenAddress == "" {
-		c.LockListenAddress = defaultLockListenAddress
+	if c.LockService.ListenAddress == "" {
+		c.LockService.ListenAddress = defaultLockListenAddress
 	}
-	if c.LockServiceAddress == "" {
-		c.LockServiceAddress = c.LockListenAddress
+	if c.LockService.ServiceAddress == "" {
+		c.LockService.ServiceAddress = c.LockService.ListenAddress
 	}
 	return nil
+}
+
+func (c *Config) getLockServiceConfig() lockservice.Config {
+	return lockservice.Config{
+		ServiceID:              c.UUID,
+		ServiceAddress:         c.LockService.ListenAddress,
+		MaxFixedSliceSize:      c.LockService.MaxFixedSliceSize,
+		KeepBindDuration:       c.LockService.KeepBindDuration,
+		KeepRemoteLockDuration: c.LockService.KeepRemoteLockDuration,
+		RemoteLockTimeout:      c.LockService.RemoteLockTimeout,
+		RPC:                    c.RPC,
+	}
 }
 
 type service struct {
@@ -244,6 +271,7 @@ type service struct {
 	fileService            fileservice.FileService
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
+	lockService            lockservice.LockService
 
 	stopper *stopper.Stopper
 

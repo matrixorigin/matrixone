@@ -264,7 +264,7 @@ func (p *PartitionState) HandleRowsInsert(
 	}
 
 	partitionStateProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.InsertEntries.Add(1)
 		c.DistTAE.Logtail.InsertRows.Add(numInserted)
@@ -307,7 +307,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	}
 
 	partitionStateProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.DeleteEntries.Add(1)
 	})
@@ -389,7 +389,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	}
 
 	partitionStateProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataInsertEntries.Add(1)
 		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
@@ -425,7 +425,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	}
 
 	partitionStateProfileHandler.AddSample()
-	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
 	})
