@@ -32,6 +32,11 @@ func ColumnCntLargerErrorInfo() string {
 	return "the table column is larger than input data column"
 }
 
+type LoadItem struct {
+	Param *ExternalParam
+	Plh *ParseLineHandler
+}
+
 // Use for External table scan param
 type ExternalParam struct {
 	// Externally passed parameters that will not change

@@ -527,6 +527,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for k := 0; k < n; k++ {
 		bat.Zs[k] = 1
 	}
+	bat.Cnt = 1
 	return bat, nil
 }
 
@@ -605,11 +606,23 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	plh.batchSize = cnt
-	bat, err = GetBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
+	if proc.ParallelLoad {
+		bat = &batch.Batch{
+			Ht: &LoadItem{
+				Param: param,
+				Plh: &ParseLineHandler{
+					batchSize: plh.batchSize,
+					moCsvLineArray: plh.moCsvLineArray,
+				},
+			},
+		}
+		bat.Zs = make([]int64, 1)
+	} else {
+		bat, err = GetBatchData(param, plh, proc)
+		if err != nil {
+			return nil, err
+		}
 	}
-	bat.Cnt = 1
 	return bat, nil
 }
 

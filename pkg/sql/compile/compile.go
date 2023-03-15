@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -638,9 +639,24 @@ func (c *Compile) ConstructScope() *Scope {
 	return ds
 }
 
+func (c *Compile) ConstructMergeScope() *Scope {
+	ds := &Scope{Magic: Merge}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+	ds.Proc.LoadTag = true
+	ds.Proc.ParallelLoad = true
+	ds.appendInstruction(vm.Instruction{
+		Op:      vm.Merge,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     &merge.Argument{},
+	})
+	return ds
+}
+
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+	return c.compileExternScanParallel(ctx, n)
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
@@ -740,6 +756,57 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
 		}
 	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	ctx, span := trace.Start(ctx, "compileExternScanParallel")
+	defer span.End()
+	mcpu := c.cnList[0].Mcpu
+	param := &tree.ExternParam{}
+	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	if err != nil {
+		return nil, err
+	}
+	if err := plan2.InitInfileParam(param); err != nil {
+		return nil, err
+	}
+	if n.ObjRef != nil {
+		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
+	}
+	param.FileService = c.proc.FileService
+	param.Ctx = c.ctx
+	var fileList []string
+	var fileSize []int64
+	fileList, fileSize, err = plan2.ReadDir(param)
+	if err != nil {
+		return nil, err
+	}
+	fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.ConstructMergeScope()
+	}
+	offset := make([][2]int, 0)
+	tmp := c.ConstructScope()
+	tmp.Proc.ParallelLoad = true
+	tmp.appendInstruction(vm.Instruction{
+		Op:      vm.External,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     constructExternal(n, param, c.ctx, fileList, fileSize, offset),
+	})
+	arg := constructBroadcastJoinDispatch(0, ss, c.addr, ss[0].Proc)
+	arg.FuncId = dispatch.SendToAnyLocalFunc
+	tmp.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	ss[0].PreScopes = append(ss[0].PreScopes, tmp)
 	c.anal.isFirst = false
 	return ss, nil
 }

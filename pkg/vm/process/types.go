@@ -172,6 +172,8 @@ type Process struct {
 	LoadLocalReader *io.PipeReader
 
 	DispatchNotifyCh chan WrapCs
+
+	ParallelLoad bool
 }
 
 type WrapCs struct {

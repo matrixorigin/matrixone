@@ -43,6 +43,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 
+	if proc.ParallelLoad {
+		return false, nil
+	}
 	bat := proc.InputBatch()
 	if bat == nil {
 		proc.SetInputBatch(nil)
@@ -54,6 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
+
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil {
