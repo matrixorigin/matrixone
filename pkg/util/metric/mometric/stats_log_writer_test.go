@@ -113,13 +113,13 @@ func TestStatsLogWriter(t *testing.T) {
 	//6. Validate the log printed.
 	assert.Equal(t, 3, len(writtenLogs))
 	for _, log := range writtenLogs {
-		assert.Contains(t, log.Message, "window values")
+		assert.Contains(t, log.Message, "stats ")
 	}
 
-	// 7. (Optional) Read from the console and validate the log.
-	// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
-	// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
-	// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
+	// 7. (Optional) Read from the console and validate the log. Example log:
+	// 2023/03/15 02:37:31.767463 -0500 INFO cn-service mometric/stats_log_writer.go:86 MockServiceStats stats  {"uuid": "test", "reads": 2, "hits": 1}
+	// 2023/03/15 02:37:33.767659 -0500 INFO cn-service mometric/stats_log_writer.go:86 MockServiceStats stats  {"uuid": "test", "reads": 0, "hits": 0}
+	// 2023/03/15 02:37:35.767608 -0500 INFO cn-service mometric/stats_log_writer.go:86 MockServiceStats stats  {"uuid": "test", "reads": 0, "hits": 0}
 	// StatsLogWriter has stopped gracefully.
 
 }

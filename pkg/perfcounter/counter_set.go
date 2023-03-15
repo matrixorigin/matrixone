@@ -15,8 +15,6 @@
 package perfcounter
 
 import (
-	"sync/atomic"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 

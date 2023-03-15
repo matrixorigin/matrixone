@@ -20,10 +20,10 @@ import (
 )
 
 type CounterLogExporter struct {
-	counter *Counter
+	counter *CounterSet
 }
 
-func NewCounterLogExporter(counter *Counter) stats.LogExporter {
+func NewCounterLogExporter(counter *CounterSet) stats.LogExporter {
 	return &CounterLogExporter{
 		counter: counter,
 	}
