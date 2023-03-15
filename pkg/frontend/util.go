@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -28,7 +27,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,7 +38,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -422,209 +419,6 @@ func logDebugf(info string, msg string, fields ...interface{}) {
 func logErrorf(info string, msg string, fields ...interface{}) {
 	fields = append(fields, info)
 	logutil.Errorf(msg+" %s", fields...)
-}
-
-func fileExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
-func getAttrFromTableDef(defs []engine.TableDef) ([]string, bool, error) {
-	attrs := make([]string, 0, len(defs))
-	isView := false
-	for _, tblDef := range defs {
-		switch def := tblDef.(type) {
-		case *engine.AttributeDef:
-			if def.Attr.IsHidden || def.Attr.IsRowId {
-				continue
-			}
-			attrs = append(attrs, def.Attr.Name)
-		case *engine.ViewDef:
-			isView = true
-		}
-	}
-	return attrs, isView, nil
-}
-
-func getDDL(bh BackgroundExec, ctx context.Context, sql string) (string, error) {
-	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, sql)
-	if err != nil {
-		return "", err
-	}
-	ret := string(bh.GetExecResultSet()[0].(*MysqlResultSet).Data[0][1].([]byte))
-	if !strings.HasSuffix(ret, ";") {
-		ret += ";"
-	}
-	return ret, nil
-}
-
-func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
-	var err error
-	rbat := batch.NewWithSize(bat.VectorCount())
-	rbat.InitZsOne(bat.Length())
-	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.NewVec(types.T_varchar.ToType()) //TODO: check size
-		rs := make([]string, bat.Length())
-		switch bat.Vecs[i].GetType().Oid {
-		case types.T_bool:
-			xs := vector.MustFixedCol[bool](bat.Vecs[i])
-			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_int8:
-			xs := vector.MustFixedCol[int8](bat.Vecs[i])
-			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_int16:
-			xs := vector.MustFixedCol[int16](bat.Vecs[i])
-			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_int32:
-			xs := vector.MustFixedCol[int32](bat.Vecs[i])
-			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_int64:
-			xs := vector.MustFixedCol[int64](bat.Vecs[i])
-			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-
-		case types.T_uint8:
-			xs := vector.MustFixedCol[uint8](bat.Vecs[i])
-			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_uint16:
-			xs := vector.MustFixedCol[uint16](bat.Vecs[i])
-			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_uint32:
-			xs := vector.MustFixedCol[uint32](bat.Vecs[i])
-			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-
-		case types.T_uint64:
-			xs := vector.MustFixedCol[uint64](bat.Vecs[i])
-			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		case types.T_float32:
-			xs := vector.MustFixedCol[float32](bat.Vecs[i])
-			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 32)
-		case types.T_float64:
-			xs := vector.MustFixedCol[float64](bat.Vecs[i])
-			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 64)
-		case types.T_decimal64:
-			xs := vector.MustFixedCol[types.Decimal64](bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal64])
-		case types.T_decimal128:
-			xs := vector.MustFixedCol[types.Decimal128](bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			xs := vector.MustStrCol(bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
-		case types.T_json:
-			xs := vector.MustBytesCol(bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
-		case types.T_timestamp:
-			xs := vector.MustFixedCol[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Scale)
-		case types.T_datetime:
-			xs := vector.MustFixedCol[types.Datetime](bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
-		case types.T_date:
-			xs := vector.MustFixedCol[types.Date](bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Date])
-		case types.T_uuid:
-			xs := vector.MustFixedCol[types.Uuid](bat.Vecs[i])
-			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
-		default:
-			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].GetType().String())
-		}
-		if err != nil {
-			return nil, err
-		}
-		for j := 0; j < len(rs); j++ {
-			err = vector.AppendBytes(rbat.Vecs[i], []byte(rs[j]), false, mp)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	rbat.InitZsOne(bat.Length())
-	return rbat, nil
-}
-
-func genDumpFileName(outfile string, idx int64) string {
-	path := filepath.Dir(outfile)
-	filename := strings.Split(filepath.Base(outfile), ".")
-	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
-	return filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, idx, extend))
-}
-
-func createDumpFile(ctx context.Context, filename string) (*os.File, error) {
-	exists, err := fileExists(filename)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, moerr.NewFileAlreadyExists(ctx, filename)
-	}
-
-	ret, err := os.Create(filename)
-	if err != nil {
-		return nil, err
-	}
-	return ret, nil
-}
-
-func writeDump2File(ctx context.Context, buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
-	if dump.MaxFileSize > 0 && int64(buf.Len()) > dump.MaxFileSize {
-		err = moerr.NewInternalError(ctx, "dump: data in db is too large,please set a larger max_file_size")
-		return
-	}
-	if dump.MaxFileSize > 0 && curFileSize+int64(buf.Len()) > dump.MaxFileSize {
-		f.Close()
-		if curFileIdx == 1 {
-			os.Rename(dump.OutFile, genDumpFileName(dump.OutFile, curFileIdx))
-		}
-		newFileIdx = curFileIdx + 1
-		newFileSize = int64(buf.Len())
-		ret, err = createDumpFile(ctx, genDumpFileName(dump.OutFile, newFileIdx))
-		if err != nil {
-			return
-		}
-		_, err = buf.WriteTo(ret)
-		if err != nil {
-			return
-		}
-		buf.Reset()
-		return
-	}
-	newFileSize = curFileSize + int64(buf.Len())
-	_, err = buf.WriteTo(f)
-	if err != nil {
-		return
-	}
-	buf.Reset()
-	return f, curFileIdx, newFileSize, nil
-}
-
-func maybeAppendExtension(s string) string {
-	path := filepath.Dir(s)
-	filename := strings.Split(filepath.Base(s), ".")
-	if len(filename) == 1 {
-		filename = append(filename, "sql")
-	}
-	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
-	return filepath.Join(path, base+"."+extend)
-}
-
-func removeFile(s string, idx int64) {
-	if idx == 1 {
-		os.RemoveAll(s)
-		return
-	}
-	path := filepath.Dir(s)
-	filename := strings.Split(filepath.Base(s), ".")
-	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
-	for i := int64(1); i <= idx; i++ {
-		os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
-	}
 }
 
 func isInvalidConfigInput(config string) bool {

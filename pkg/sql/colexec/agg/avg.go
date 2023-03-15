@@ -30,18 +30,34 @@ type Avg[T Numeric] struct {
 
 type Decimal64Avg struct {
 	Cnts []int64
+	Typ  types.Type
 }
 
 type Decimal128Avg struct {
 	Cnts []int64
+	Typ  types.Type
 }
 
 func AvgReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64:
-		return types.New(types.T_decimal128, 0, typs[0].Scale)
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
 	case types.T_decimal128:
-		return types.New(types.T_decimal128, 0, typs[0].Scale)
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
 	case types.T_float32, types.T_float64:
 		return types.New(types.T_float64, 0, 0)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -106,8 +122,8 @@ func (a *Avg[T]) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func NewD64Avg() *Decimal64Avg {
-	return &Decimal64Avg{}
+func NewD64Avg(typ types.Type) *Decimal64Avg {
+	return &Decimal64Avg{Typ: typ}
 }
 
 func (a *Decimal64Avg) Grows(cnt int) {
@@ -121,7 +137,7 @@ func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 		if a.Cnts[i] == 0 {
 			continue
 		}
-		vs[i] = vs[i].DivInt64(a.Cnts[i])
+		vs[i], _, _ = vs[i].Div(types.Decimal128{B0_63: uint64(a.Cnts[i]), B64_127: 0}, a.Typ.Scale, 0)
 	}
 	return vs
 }
@@ -129,8 +145,17 @@ func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
 		a.Cnts[i] += z
-		tmp64 := value.MulInt64(z)
-		return ov.Add(types.Decimal128_FromDecimal64(tmp64)), false
+		x := types.Decimal128{B0_63: uint64(z), B64_127: 0}
+		if z < 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		y := types.Decimal128{B0_63: uint64(value), B64_127: 0}
+		if value>>63 != 0 {
+			y.B64_127 = ^y.B64_127
+		}
+		tmp, _, _ := y.Mul(x, a.Typ.Scale, 0)
+		ov, _ = ov.Add128(tmp)
+		return ov, false
 	}
 	return ov, isEmpty
 }
@@ -140,7 +165,8 @@ func (a *Decimal64Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y t
 		ya := yAvg.(*Decimal64Avg)
 		a.Cnts[xIndex] += ya.Cnts[yIndex]
 		if !xEmpty {
-			return x.Add(y), false
+			x, _ = x.Add128(y)
+			return x, false
 		}
 		return y, false
 	}
@@ -177,8 +203,8 @@ func (a *Decimal64Avg) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func NewD128Avg() *Decimal128Avg {
-	return &Decimal128Avg{}
+func NewD128Avg(typ types.Type) *Decimal128Avg {
+	return &Decimal128Avg{Typ: typ}
 }
 
 func (a *Decimal128Avg) Grows(cnt int) {
@@ -192,7 +218,7 @@ func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 		if a.Cnts[i] == 0 {
 			continue
 		}
-		vs[i] = vs[i].DivInt64(a.Cnts[i])
+		vs[i], _, _ = vs[i].Div(types.Decimal128{B0_63: uint64(a.Cnts[i]), B64_127: 0}, a.Typ.Scale, 0)
 	}
 	return vs
 }
@@ -200,7 +226,13 @@ func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 func (a *Decimal128Avg) Fill(i int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
 		a.Cnts[i] += z
-		return ov.Add(value.MulInt64(z)), false
+		x := types.Decimal128{B0_63: uint64(z), B64_127: 0}
+		if z < 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		value, _, _ = value.Mul(x, a.Typ.Scale, 0)
+		ov, _ = ov.Add128(value)
+		return ov, false
 	}
 	return ov, isEmpty
 }
@@ -210,7 +242,8 @@ func (a *Decimal128Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y 
 		ya := yAvg.(*Decimal128Avg)
 		a.Cnts[xIndex] += ya.Cnts[yIndex]
 		if !xEmpty {
-			return x.Add(y), false
+			x, _ = x.Add128(y)
+			return x, false
 		}
 		return y, false
 	}

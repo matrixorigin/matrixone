@@ -38,7 +38,7 @@ func (s *service) initRemote() {
 	s.remote.keeper = NewLockTableKeeper(
 		s.cfg.ServiceID,
 		rpcClient,
-		s.cfg.KeepLockTableBindDuration.Duration,
+		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
 		&s.tables)
 	s.initRemoteHandler()
