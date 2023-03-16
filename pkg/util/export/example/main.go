@@ -92,7 +92,7 @@ func main() {
 	SV.MergeCycle.Duration = 5 * time.Minute
 	SV.MergeMaxFileSize = 128
 	SV.MergedExtension = "tae"
-	if err := export.InitMerge(ctx, SV, nil); err != nil {
+	if err := export.InitMerge(ctx, SV); err != nil {
 		panic(err)
 	}
 	dr := morun.NewRuntime(

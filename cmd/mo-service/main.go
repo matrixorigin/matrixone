@@ -339,7 +339,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			mometric.StopMetricSync()
 		})
 	}
-	if err = export.InitMerge(ctx, &SV, fs); err != nil {
+	if err = export.InitMerge(ctx, &SV); err != nil {
 		return err
 	}
 	return nil
