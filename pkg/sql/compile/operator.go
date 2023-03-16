@@ -954,9 +954,9 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 	return arg
 }
 
-// ShuffleJoinDispatch is a cross-cn dispath
-// and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+// This function do not setting funcId.
+// PLEASE SETTING FuncId AFTER YOU CALL IT.
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
 
 	scopeLen := len(ss)
@@ -992,7 +992,13 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 			})
 		}
 	}
+	return hasRemote, arg
+}
 
+// ShuffleJoinDispatch is a cross-cn dispath
+// and it will send same batch to all register
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, proc)
 	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {

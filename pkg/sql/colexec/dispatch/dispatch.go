@@ -37,7 +37,26 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 		ap.prepared = false
 		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
-		ap.ctr.sendFunc = sendToAllFunc
+		if len(ap.LocalRegs) == 0 {
+			ap.ctr.sendFunc = sendToAllRemoteFunc
+		} else {
+			ap.ctr.sendFunc = sendToAllFunc
+		}
+		for _, rr := range ap.RemoteRegs {
+			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+		}
+
+	case SendToAnyFunc:
+		if len(ap.RemoteRegs) == 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAnyFunc should include RemoteRegs")
+		}
+		ap.prepared = false
+		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
+		if len(ap.LocalRegs) == 0 {
+			ap.ctr.sendFunc = sendToAnyRemoteFunc
+		} else {
+			ap.ctr.sendFunc = sendToAnyFunc
+		}
 		for _, rr := range ap.RemoteRegs {
 			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
 		}
@@ -49,6 +68,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAllLocalFunc
+
 	case SendToAnyLocalFunc:
 		if len(ap.RemoteRegs) != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
@@ -56,6 +76,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
+
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}
