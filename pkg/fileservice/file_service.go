@@ -69,6 +69,8 @@ type IOVector struct {
 	// implementations may or may not delete the file after this time
 	// zero value means no expire
 	ExpireAt time.Time
+	// Preload indicates whether the I/O is for preloading
+	Preload bool
 }
 
 type IOEntry struct {
