@@ -36,6 +36,7 @@ const (
 	SendToAllFunc = iota
 	SendToAllLocalFunc
 	SendToAnyLocalFunc
+	DeleteSendFunc
 )
 
 // common sender: send to any LocalReceiver
@@ -114,6 +115,24 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 		}
 	}
 
+	return nil
+}
+
+func deleteSendFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	if !ap.prepared {
+		ap.waitRemoteRegsReady(proc)
+	}
+	// send to remote regs
+	encodeData, errEncode := types.Encode(bat)
+	if errEncode != nil {
+		return errEncode
+	}
+	for _, r := range ap.ctr.remoteReceivers {
+		if err := sendBatchToClientSession(encodeData, r); err != nil {
+			return err
+		}
+	}
+	proc.SetInputBatch(bat)
 	return nil
 }
 

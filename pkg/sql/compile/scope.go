@@ -626,6 +626,11 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 	for _, rr := range s.RemoteReceivRegInfos {
+		var reg *process.WaitRegister
+		if rr.Idx != -1 {
+			// For BroadCastJoin
+			reg = s.Proc.Reg.MergeReceivers[rr.Idx]
+		}
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
@@ -659,21 +664,24 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errReceive
 				return
 			}
-
-			if err := receiveMsgAndForward(c, messagesReceive, reg.Ch, mp); err != nil {
+			var ch chan *batch.Batch
+			if reg != nil {
+				ch = reg.Ch
+			}
+			if err := receiveMsgAndForward(c, messagesReceive, ch, mp, s.Proc); err != nil {
 				reg.Ch <- nil
 				errChan <- err
 				return
 			}
 			reg.Ch <- nil
 			errChan <- nil
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
+		}(rr, reg, s.Proc.GetMPool())
 	}
 
 	return nil
 }
 
-func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {
+func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool, proc *process.Process) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
@@ -716,7 +724,13 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			if err != nil {
 				return err
 			}
-			forwardCh <- bat
+			if forwardCh == nil {
+				// used for delete
+				proc.SetInputBatch(bat)
+			} else {
+				// used for BroadCastJoin
+				forwardCh <- bat
+			}
 			dataBuffer = nil
 		}
 	}
