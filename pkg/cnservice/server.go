@@ -56,6 +56,11 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
+	// get etl fs
+	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 
 	srv := &service{
 		metadata: metadata.CNStore{
@@ -64,6 +69,7 @@ func NewService(
 		},
 		cfg:         cfg,
 		metadataFS:  fs,
+		etlFS:       etlFS,
 		fileService: fileService,
 	}
 	for _, opt := range options {
