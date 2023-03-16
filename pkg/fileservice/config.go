@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,6 +49,9 @@ type NewFileServicesFunc = func(defaultName string) (*FileServices, error)
 
 // NewFileService create file service from config
 func NewFileService(cfg Config, perfCounterSets []*perfcounter.CounterSet) (FileService, error) {
+	if cfg.Name == "" {
+		panic("empty name")
+	}
 	switch strings.ToUpper(cfg.Backend) {
 	case memFileServiceBackend:
 		return newMemFileService(cfg, perfCounterSets)
@@ -73,6 +77,9 @@ func newMemFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, er
 }
 
 func newDiskFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (FileService, error) {
+	if cfg.DataDir == "" {
+		panic(fmt.Sprintf("empty data dir: %+v", cfg))
+	}
 	fs, err := NewLocalFS(
 		cfg.Name,
 		cfg.DataDir,
@@ -107,6 +114,7 @@ func newMinioFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (Fi
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
 		perfCounters,
+		false,
 	)
 	if err != nil {
 		return nil, err
@@ -125,6 +133,7 @@ func newS3FileService(cfg Config, perfCounters []*perfcounter.CounterSet) (FileS
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
 		perfCounters,
+		false,
 	)
 	if err != nil {
 		return nil, err
