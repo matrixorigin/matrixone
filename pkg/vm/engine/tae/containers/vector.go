@@ -461,7 +461,7 @@ func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
 	vec.downstreamVector = dsVec
 }
 
-// TODO - Below functions are not used in critical path. Used mainly for testing
+//Below functions are not used in critical path. Used mainly for testing
 
 func (vec *vector[T]) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
