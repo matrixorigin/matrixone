@@ -222,9 +222,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 			case "region":
 				ctx.WriteString("'region'='" + node.Param.Option[i+1] + "'")
 			case "access_key_id":
-				ctx.WriteString("'access_key_id'='" + node.Param.Option[i+1] + "'")
+				ctx.WriteString("'access_key_id'='******'")
 			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='" + node.Param.Option[i+1] + "'")
+				ctx.WriteString("'secret_access_key'='******'")
 			case "bucket":
 				ctx.WriteString("'bucket'='" + node.Param.Option[i+1] + "'")
 			case "filepath":

@@ -55,16 +55,45 @@ func logLocalLock(
 	txn *activeTxn,
 	tableID uint64,
 	rows [][]byte,
-	opts LockOptions,
-	w *waiter) {
+	opts LockOptions) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("try to lock on local",
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
-			zap.String("opts", opts.DebugString()),
-			zap.Stringer("waiter", w))
+			zap.String("opts", opts.DebugString()))
+	}
+}
+
+func logLocalLockRow(
+	txn *activeTxn,
+	tableID uint64,
+	row []byte,
+	mode pb.LockMode) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("try to lock row on local",
+			txnField(txn),
+			zap.Uint64("table", tableID),
+			bytesField("row", row),
+			zap.String("mode", mode.String()))
+	}
+}
+
+func logLocalLockRange(
+	txn *activeTxn,
+	tableID uint64,
+	start, end []byte,
+	mode pb.LockMode) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("try to lock range on local",
+			txnField(txn),
+			zap.Uint64("table", tableID),
+			bytesField("start", start),
+			bytesField("end", end),
+			zap.String("mode", mode.String()))
 	}
 }
 
@@ -104,21 +133,30 @@ func logLocalLockWaitOn(
 	txn *activeTxn,
 	tableID uint64,
 	waiter *waiter,
+	key []byte,
 	waitOn Lock) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
+		var waits [][]byte
+		waitOn.waiter.waiters.iter(func(b []byte) bool {
+			waits = append(waits, b)
+			return true
+		})
+
 		logger.Debug("lock wait on local",
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			zap.Stringer("waiter", waiter),
-			zap.Stringer("wait-on", waitOn))
+			bytesField("wait-on-key", key),
+			zap.Stringer("wait-on", waitOn),
+			bytesArrayField("wait-txn-list", waits))
 	}
 }
 
 func logLocalLockWaitOnResult(
 	txn *activeTxn,
 	tableID uint64,
-	rows [][]byte,
+	key []byte,
 	opts LockOptions,
 	waiter *waiter,
 	err error) {
@@ -133,7 +171,7 @@ func logLocalLockWaitOnResult(
 		fn("lock wait on local result",
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			bytesArrayField("rows", rows),
+			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
 			zap.Any("result", err))
@@ -336,6 +374,23 @@ func logUnlockTableOnLocal(
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn unlock table on local",
 			txnField(txn),
+			zap.String("bind", bind.DebugString()))
+	}
+}
+
+func logUnlockTableKeyOnLocal(
+	txn *activeTxn,
+	bind pb.LockTable,
+	key []byte,
+	lock Lock,
+	next *waiter) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("txn unlock table key on local",
+			txnField(txn),
+			bytesField("key", key),
+			zap.Stringer("next", next),
+			zap.Stringer("lock", lock),
 			zap.String("bind", bind.DebugString()))
 	}
 }

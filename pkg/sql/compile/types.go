@@ -59,6 +59,7 @@ const (
 	InsertValues
 	TruncateTable
 	AlterView
+	AlterTable
 	MergeInsert
 )
 
@@ -170,7 +171,7 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	s3Counter perfcounter.Counter
+	s3CounterSet perfcounter.CounterSet
 
 	// when we construct the scope, compileTableScan will new a scope, the magic is
 	// remote, but now the tempEngine is just standlone. So for now use this to read

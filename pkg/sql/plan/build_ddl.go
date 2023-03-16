@@ -1226,25 +1226,35 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
+			name := string(opt.Name)
+			name_not_found := true
 			typ := plan.AlterTableDrop_COLUMN
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
 				typ = plan.AlterTableDrop_COLUMN
+				for _, col := range tableDef.Cols {
+					if col.Name == name {
+						name_not_found = false
+						break
+					}
+				}
 			case tree.AlterTableDropIndex:
 				typ = plan.AlterTableDrop_INDEX
 			case tree.AlterTableDropKey:
 				typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				typ = plan.AlterTableDrop_PRIMARY_KEY
+				if tableDef.Pkey == nil {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
+				}
+				name_not_found = false
 			case tree.AlterTableDropForeignKey:
 				typ = plan.AlterTableDrop_FOREIGN_KEY
-			}
-			name := string(opt.Name)
-			name_not_found := true
-			for _, fk := range tableDef.Fkeys {
-				if fk.Name == name {
-					name_not_found = false
-					break
+				for _, fk := range tableDef.Fkeys {
+					if fk.Name == name {
+						name_not_found = false
+						break
+					}
 				}
 			}
 			if name_not_found {
@@ -1404,8 +1414,7 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		colName := keyPart.ColName.Parts[0]
 		for _, col := range tableDef.Cols {
 			if col.Name == colName {
-				// need to reset to ColId after created.
-				fkData.Def.Cols[i] = 0
+				fkData.Def.Cols[i] = col.ColId
 				fkCols.Cols[i] = colName
 				fkColTyp[i] = col.Typ
 				fkColName[i] = colName

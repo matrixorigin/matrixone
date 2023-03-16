@@ -32,6 +32,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
@@ -98,9 +99,9 @@ func printTuple(tuple Tuple) string {
 		case Timestamp:
 			res += fmt.Sprintf("(timestamp: %v)", t.String())
 		case Decimal64:
-			res += fmt.Sprintf("(decimal64: %v)", t.String())
+			res += fmt.Sprintf("(decimal64: %v)", t.Format(0))
 		case Decimal128:
-			res += fmt.Sprintf("(decimal128: %v)", t.String())
+			res += fmt.Sprintf("(decimal128: %v)", t.Format(0))
 		case []byte:
 			res += fmt.Sprintf("([]byte: %v)", t)
 		case float32:
@@ -401,13 +402,13 @@ func (p *Packer) EncodeTimestamp(e Timestamp) {
 
 func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
-	b := [8]byte(e)
+	b := *(*[8]byte)(unsafe.Pointer(&e))
 	p.encodeBytes(bytesCode, b[:])
 }
 
 func (p *Packer) EncodeDecimal128(e Decimal128) {
 	p.putByte(decimal128Code)
-	b := [16]byte(e)
+	b := *(*[16]byte)(unsafe.Pointer(&e))
 	p.encodeBytes(bytesCode, b[:])
 }
 
@@ -630,13 +631,13 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 			dEl, off = decodeBytes(b[i+1:])
 			var bb [8]byte
 			copy(bb[:], dEl[:8])
-			el = Decimal64(bb)
+			el = *(*Decimal64)(unsafe.Pointer(&bb))
 			off += 1
 		case b[i] == decimal128Code:
 			dEl, off = decodeBytes(b[i+1:])
 			var bb [16]byte
 			copy(bb[:], dEl[:16])
-			el = Decimal128(bb)
+			el = *(*Decimal128)(unsafe.Pointer(&bb))
 			off += 1
 		case b[i] == stringTypeCode:
 			el, off = decodeBytes(b[i+1:])

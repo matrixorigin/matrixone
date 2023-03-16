@@ -16,25 +16,25 @@ package perfcounter
 
 import "context"
 
-type Counters = map[*Counter]struct{}
+type CounterSets = map[*CounterSet]struct{}
 
 type ctxKeyCounters struct{}
 
 var CtxKeyCounters = ctxKeyCounters{}
 
-func WithCounter(ctx context.Context, counter *Counter) context.Context {
+func WithCounterSet(ctx context.Context, set *CounterSet) context.Context {
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
 	if v == nil {
-		return context.WithValue(ctx, CtxKeyCounters, Counters{
-			counter: struct{}{},
+		return context.WithValue(ctx, CtxKeyCounters, CounterSets{
+			set: struct{}{},
 		})
 	}
-	counters := v.(Counters)
-	newCounters := make(Counters, len(counters)+1)
+	counters := v.(CounterSets)
+	newCounters := make(CounterSets, len(counters)+1)
 	for counter := range counters {
 		newCounters[counter] = struct{}{}
 	}
-	newCounters[counter] = struct{}{}
+	newCounters[set] = struct{}{}
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)
 }

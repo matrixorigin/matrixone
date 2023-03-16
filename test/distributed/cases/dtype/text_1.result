@@ -320,11 +320,11 @@ delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
 select cast(col13 as decimal(5,3)) from t8;
-invalid argument DECIMAL64, bad value 12345.123456789
+invalid input: Can't convert string To Decimal64: 12345.123456789(5,3)
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
 select cast(col13 as decimal(5,3)) from t8;
-invalid argument DECIMAL64, bad value 12345.123456789
+invalid input: Can't convert string To Decimal64: 12345.123456789(5,3)
 select cast(col13 as decimal(20,15)) from t8;
 cast(col13 as decimal(20, 15))
 12345.123456789000000
