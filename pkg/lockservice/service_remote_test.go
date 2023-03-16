@@ -152,7 +152,7 @@ func TestLockBlockedOnRemote(t *testing.T) {
 				close(c)
 			}()
 			select {
-			case <-time.After(time.Second):
+			case <-time.After(time.Second * 10):
 				break
 			case <-c:
 				assert.Fail(t, "can not get remote lock")
