@@ -441,6 +441,10 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if bat == nil {
 		return nil
 	}
+	if tbl.tableName == "cms1" {
+		logutil.Infof("disttae write, [id: %d], batch length is %d, addr: %p",
+			tbl.tableId, bat.Length(), bat)
+	}
 
 	// Write S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {

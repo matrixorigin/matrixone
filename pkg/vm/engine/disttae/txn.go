@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"time"
@@ -110,6 +111,11 @@ func (txn *Transaction) WriteBatch(
 	dnStore DNStore,
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 ) error {
+	if tableName == "cms1" {
+		logutil.Infof("disttae write batch, [id: %d], bat len is %d, addr is %p",
+			tableId, bat.Length(), bat)
+	}
+
 	txn.readOnly = false
 	bat.Cnt = 1
 	if typ == INSERT {
