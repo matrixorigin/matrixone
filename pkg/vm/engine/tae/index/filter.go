@@ -45,6 +45,12 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.GetType()}
 	hashes := make([]uint64, 0)
 	op := func(v any, _ int) error {
+		//TODO: Adhoc fix for testing.
+		// Error in BVT: panic: interface conversion: interface {} is types.Null, not int32
+		if _, ok := v.(types.Null); ok {
+			return nil
+		}
+
 		hash, err := types.Hash(v, sf.typ)
 		if err != nil {
 			return err
