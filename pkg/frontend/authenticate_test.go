@@ -7315,6 +7315,7 @@ func TestDoCreatePublication(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, false, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
+	require.NoError(t, err)
 	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 	defer bhStub.Reset()
 
