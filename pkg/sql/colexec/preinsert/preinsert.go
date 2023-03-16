@@ -16,7 +16,7 @@ package preinsert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -78,21 +78,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
-	newBatch := batch.NewWithSize(insertBatch.VectorCount())
-	for i := 0; i < insertBatch.VectorCount(); i++ {
-		vec := insertBatch.GetVector(int32(i))
-		uf := vector.GetUnionOneFunction(*vec.GetType(), proc.GetMPool())
-		newBatch.SetVector(int32(i), vector.NewVec(*vec.GetType()))
-		for j := 0; j < insertBatch.Length(); j++ {
-			err := uf(newBatch.GetVector(int32(i)), vec, int64(j))
-			if err != nil {
-				return false, err
-			}
-		}
-	}
-	newBatch.Attrs = append(newBatch.Attrs, insertBatch.Attrs...)
-	newBatch.Zs = append(newBatch.Zs, insertBatch.Zs...)
-	proc.SetInputBatch(newBatch)
+	fmt.Println("XXXXXX preinsert output batch", insertBatch)
+	proc.SetInputBatch(insertBatch)
 	return false, nil
 }
 

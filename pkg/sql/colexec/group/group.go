@@ -77,6 +77,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 
+	fmt.Println("XXXXXX group:", ap.Exprs)
+	fmt.Println("XXXXXX group input batch:", proc.InputBatch())
+
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -169,7 +172,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	if err := ctr.processH0(bat, ap, proc); err != nil {
+	if err := ctr.processH0(bat); err != nil {
 		return false, err
 	}
 	return false, nil
@@ -316,7 +319,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	return false, err
 }
 
-func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *container) processH0(bat *batch.Batch) error {
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}

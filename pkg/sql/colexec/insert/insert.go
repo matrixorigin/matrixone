@@ -63,7 +63,9 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 
 	defer func() {
-		bat.Clean(proc.Mp())
+		if !insertArg.IsRemote {
+			bat.Clean(proc.Mp())
+		}
 	}()
 
 	insertCtx := insertArg.InsertCtx

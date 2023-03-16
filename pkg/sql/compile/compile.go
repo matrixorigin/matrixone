@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -211,7 +213,9 @@ func (c *Compile) Run(_ uint64) (err error) {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		return c.compileQuery(ctx, qry.Query)
+		rs, err := c.compileQuery(ctx, qry.Query)
+		fmt.Println("XXXXXXXX", DebugShowScopes([]*Scope{rs}))
+		return rs, err
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
@@ -364,29 +368,83 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Op:  vm.PreInsert,
 			Arg: preArg,
 		})
+		var pkIdx int32
+		if insertNode.InsertCtx.TableDef.CompositePkey != nil {
+			pkIdx = int32(insertNode.InsertCtx.TableDef.CompositePkey.ColId)
+		} else {
+			for i := range insertNode.InsertCtx.TableDef.Cols {
+				if insertNode.InsertCtx.TableDef.Cols[i].Primary {
+					pkIdx = int32(i)
+					break
+				}
+			}
+		}
+		//pkIdx := insertNode.InsertCtx.TableDef.CompositePkey
+		//pkIdx := insertNode.InsertCtx.TableDef.Name2ColIndex[insertNode.InsertCtx.TableDef.Pkey.PkeyColName]
+		// select count(pk), * from table group by table.pk;
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Group,
+			Idx: c.anal.curr,
+			Arg: groupArgument(insertNode, pkIdx),
+		})
+		// select *, assert(count(pk) = 1) from table;
+		/*		rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.Restrict,
+					Idx: c.anal.curr,
+					Arg: &restrict.Argument{
+						E: &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: false,
+								AutoIncr:    false,
+								Width:       10,
+								Size:        10,
+								Scale:       0,
+								Table:       "",
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: nil,
+									Args: nil,
+								},
+							},
+						},
+					},
+				})
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.Projection,
+					Idx: c.anal.curr,
+					Arg: &projection.Argument{
+						Es: []*plan.Expr{{
+							Typ:  nil,
+							Expr: nil,
+						}},
+					},
+				})*/
 		ss = []*Scope{rs}
 
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		/*
+			nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
-			// use distributed-insert
-			arg.IsRemote = true
-			rs = c.newInsertMergeScope(arg, ss)
-			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeBlock,
-				Arg: &mergeblock.Argument{
-					Tbl:         arg.InsertCtx.Source,
-					Unique_tbls: arg.InsertCtx.UniqueSource,
-				},
-			})
-			return rs, nil
-		}
-
+			if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
+				// use distributed-insert
+				arg.IsRemote = true
+				rs = c.newInsertMergeScope(arg, ss)
+				rs.Magic = MergeInsert
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op: vm.MergeBlock,
+					Arg: &mergeblock.Argument{
+						Tbl:         arg.InsertCtx.Source,
+						Unique_tbls: arg.InsertCtx.UniqueSource,
+					},
+				})
+				return rs, nil
+			}
+		*/
 		rs = c.newMergeScope(ss)
 		rs.Magic = Insert
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
@@ -423,6 +481,52 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		})
 		return rs, nil
 	}
+}
+
+func groupArgument(insertNode *plan.Node, pkIdx int32) *group.Argument {
+	arg := &group.Argument{
+		NeedEval: true,
+		Exprs: []*plan.Expr{{
+			Typ: insertNode.InsertCtx.TableDef.Cols[pkIdx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: pkIdx,
+					Name:   insertNode.InsertCtx.TableDef.Cols[pkIdx].Name,
+				},
+			},
+		}},
+		Types: []types.Type{vector.ProtoTypeToType(insertNode.InsertCtx.TableDef.Cols[pkIdx].Typ)},
+		Aggs: []agg.Aggregate{{
+			Op:   agg.AggregateCount,
+			Dist: false,
+			E: &plan.Expr{
+				Typ: insertNode.InsertCtx.TableDef.Cols[pkIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: pkIdx,
+						Name:   insertNode.InsertCtx.TableDef.Cols[pkIdx].Name,
+					},
+				},
+			},
+		},
+		},
+	}
+	for i, def := range insertNode.InsertCtx.TableDef.Cols {
+		arg.Aggs = append(arg.Aggs, agg.Aggregate{
+			Op:   agg.AggregateMax,
+			Dist: false,
+			E: &plan.Expr{
+				Typ: insertNode.InsertCtx.TableDef.Cols[pkIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+						Name:   def.Name,
+					},
+				},
+			},
+		})
+	}
+	return arg
 }
 
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
