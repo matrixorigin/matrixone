@@ -245,6 +245,33 @@ func (blk *txnBlock) GetByFilter(filter *handle.Filter) (offset uint32, err erro
 	return blk.entry.GetBlockData().GetByFilter(blk.table.store.txn, filter)
 }
 
+// newRelationBlockItOnSnap make a iterator on txn 's segments of snapshot, exclude segment of workspace
+// TODO: segmentit or tableit
+func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
+	it := new(relBlockIt)
+	segmentIt := rel.MakeSegmentItOnSnap()
+	if !segmentIt.Valid() {
+		it.err = segmentIt.GetError()
+		return it
+	}
+	seg := segmentIt.GetSegment()
+	blockIt := seg.MakeBlockIt()
+	for !blockIt.Valid() {
+		segmentIt.Next()
+		if !segmentIt.Valid() {
+			it.err = segmentIt.GetError()
+			return it
+		}
+		seg = segmentIt.GetSegment()
+		blockIt = seg.MakeBlockIt()
+	}
+	it.blockIt = blockIt
+	it.segmentIt = segmentIt
+	it.rel = rel
+	it.err = blockIt.GetError()
+	return it
+}
+
 // TODO: segmentit or tableit
 func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 	it := new(relBlockIt)
