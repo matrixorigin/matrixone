@@ -276,7 +276,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 	} else if cwft.plan.GetQuery().GetLoadTag() {
-		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
+		cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
 	} else if cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
@@ -331,7 +331,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		txnHandler.SetTempEngine(tempEngine)
 
 		// 3. init temp-db to store temporary relations
-		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txn)
+		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txnOperator)
 		if err != nil {
 			return nil, err
 		}

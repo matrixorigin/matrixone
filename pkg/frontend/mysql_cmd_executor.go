@@ -206,7 +206,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var txnID uuid.UUID
 	var txn TxnOperator
 	var err error
-	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 		txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetConciseProfile(), "RecordStatement. error:%v", err)
@@ -283,7 +283,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var err error
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
-		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			txn, err = handler.GetTxn()
 			if err != nil {
 				logErrorf(ses.GetConciseProfile(), "RecordStatementTxnID. error:%v", err)
