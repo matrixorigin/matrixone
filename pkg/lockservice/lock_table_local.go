@@ -85,6 +85,7 @@ func (l *localLockTable) lock(
 		err = w.wait(ctx)
 		logLocalLockWaitOnResult(txn, table, rows[idx], opts, w, err)
 		if err != nil {
+			w.close(err)
 			return err
 		}
 		w.resetWait()
@@ -145,11 +146,12 @@ func (l *localLockTable) close() {
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
 		if lock.isLockRow() || lock.isLockRangeEnd() {
 			w := lock.waiter
-			for {
-				w.clearAllNotify("close local")
-				if w = w.close(ErrLockTableNotFound); w == nil {
-					break
-				}
+			w.clearAllNotify("close local")
+			// if there are waiters in the current lock, just notify
+			// the head, and the subsequent waiters will be notified
+			// by the previous waiter.
+			if w = w.close(ErrLockTableNotFound); w != nil {
+				w.notify(ErrLockTableNotFound)
 			}
 		}
 		return true
