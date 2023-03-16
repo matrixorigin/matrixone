@@ -15,38 +15,53 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func constructLock(
+func constructLockWithInsert(
 	n *plan.Node,
 	eg engine.Engine,
 	proc *process.Process) (*lockop.Argument, error) {
-	n.TableDef.
-		insertCtx := n.InsertCtx
-	schemaName := insertCtx.Ref.SchemaName
-	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
-
-	if insertCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
-			schemaName = defines.TEMPORARY_DBNAME
-		}
+	ctx := n.InsertCtx
+	tableDef := ctx.TableDef
+	if tableDef == nil {
+		panic("missing table def")
+	}
+	// no primary key, no lock needed
+	if tableDef.Pkey == nil {
+		return nil, nil
 	}
 
-	return &preinsert.Argument{
-		Ctx:        proc.Ctx,
-		Eg:         eg,
-		SchemaName: schemaName,
-		TableDef:   insertCtx.TableDef,
-		ParentIdx:  insertCtx.ParentIdx,
-	}, nil
+	pkIdx := -1
+	var pkType types.Type
+	name := tableDef.Pkey.PkeyColName
+	for idx, c := range tableDef.Cols {
+		if c.Name == name {
+			pkIdx = idx
+			pkType = types.Type{
+				Oid:   types.T(c.Typ.Id),
+				Width: c.Typ.Width,
+				Size:  c.Typ.Size,
+				Scale: c.Typ.Scale,
+			}
+			break
+		}
+	}
+	if pkIdx == -1 {
+		panic("pk column not found")
+	}
+
+	return lockop.NewArgument(
+		tableDef.TblId,
+		tableDef.Name,
+		int32(pkIdx),
+		pkType,
+		lock.LockMode_Exclusive,
+		proc.LockService,
+	), nil
 }

@@ -363,6 +363,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 
+		lockArg, err := constructLockWithInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -406,6 +411,12 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Op:  vm.PreInsert,
 				Arg: preArg,
 			})
+			if lockArg != nil {
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.LockOp,
+					Arg: lockArg,
+				})
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
