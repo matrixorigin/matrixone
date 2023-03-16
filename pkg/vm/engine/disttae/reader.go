@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -87,6 +88,10 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 
 	// if it's not sorted, just return
 	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+		if r.tableDef.Name == "cms1" {
+			logutil.Infof("block read rows[%d]: snapshot is %s\n",
+				bat.Length(), r.ts)
+		}
 		return bat, nil
 	}
 
@@ -102,6 +107,10 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 			// maybe find row.
 			bat.Shrink([]int64{int64(row)})
 		}
+	}
+	if r.tableDef.Name == "cms1" {
+		logutil.Infof("block read rows[%d]: snapshot is %s\n",
+			bat.Length(), r.ts)
 	}
 	return bat, nil
 }
