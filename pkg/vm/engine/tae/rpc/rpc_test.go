@@ -43,6 +43,178 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+
+	//create  file service;
+	//dir := testutils.GetDefaultTestPath(ModuleName, t)
+	dir := "/tmp/s3"
+	dir = path.Join(dir, "/local")
+	//if dir exists, remove it.
+	os.RemoveAll(dir)
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	//create dir;
+	fs, err := fileservice.NewFileService(c, nil)
+	assert.Nil(t, err)
+	opts.Fs = fs
+	handle := mockTAEHandle(t, opts)
+	defer handle.HandleClose(context.TODO())
+	IDAlloc := catalog.NewIDAllocator()
+	txnEngine := handle.GetTxnEngine()
+
+	schema := catalog.MockSchema(2, 1)
+	schema.Name = "tbtest"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	//1000 segs, one seg contains 100 blocks, one block contains 10 rows.
+	taeBat := catalog.MockBatch(schema, 100*50*10)
+	defer taeBat.Close()
+	taeBats := taeBat.Split(100 * 50)
+
+	//taeBats[0] = taeBats[0].CloneWindow(0, 10)
+	//taeBats[1] = taeBats[1].CloneWindow(0, 10)
+	//taeBats[2] = taeBats[2].CloneWindow(0, 10)
+	//taeBats[3] = taeBats[3].CloneWindow(0, 10)
+
+	//sort by primary key
+	//_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
+	//assert.Nil(t, err)
+	//_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1)
+	//assert.Nil(t, err)
+	//_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1)
+	//assert.Nil(t, err)
+
+	//moBats := make([]*batch.Batch, 4)
+	//moBats[0] = containers.CopyToMoBatch(taeBats[0])
+	//moBats[1] = containers.CopyToMoBatch(taeBats[1])
+	//moBats[2] = containers.CopyToMoBatch(taeBats[2])
+	//moBats[3] = containers.CopyToMoBatch(taeBats[3])
+
+	var objNames []string
+	var blkMetas []string
+	offset := 0
+	for i := 0; i < 100; i++ {
+		objNames = append(objNames, fmt.Sprintf("%d.seg", i))
+		writer, err := blockio.NewBlockWriter(fs, objNames[i])
+		assert.Nil(t, err)
+		for i := 0; i < 50; i++ {
+			_, err := writer.WriteBlock(taeBats[offset+i])
+			assert.Nil(t, err)
+			//offset++
+		}
+		offset += 50
+		blocks, _, err := writer.Sync(context.Background())
+		assert.Nil(t, err)
+		assert.Equal(t, 50, len(blocks))
+		for _, blk := range blocks {
+			metaLoc, err := blockio.EncodeLocation(
+				blk.GetExtent(),
+				uint32(taeBats[0].Vecs[0].Length()),
+				blocks)
+			assert.Nil(t, err)
+			blkMetas = append(blkMetas, metaLoc)
+		}
+	}
+
+	//create dbtest and tbtest;
+	dbName := "dbtest"
+	ac := AccessInfo{
+		accountId: 0,
+		userId:    0,
+		roleId:    0,
+	}
+	//var entries []*api.Entry
+	entries := make([]*api.Entry, 0)
+	txn := mock1PCTxn(txnEngine)
+	dbTestID := IDAlloc.NextDB()
+	createDbEntries, err := makeCreateDatabaseEntries(
+		"",
+		ac,
+		dbName,
+		dbTestID,
+		handle.m)
+	assert.Nil(t, err)
+	entries = append(entries, createDbEntries...)
+	//create table from "dbtest"
+	defs, err := moengine.SchemaToDefs(schema)
+	for i := 0; i < len(defs); i++ {
+		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.Default = &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{
+					Expr: &plan.Expr_C{
+						C: &plan.Const{
+							Isnull: false,
+							Value: &plan.Const_Sval{
+								Sval: "expr" + strconv.Itoa(i),
+							},
+						},
+					},
+				},
+				OriginString: "expr" + strconv.Itoa(i),
+			}
+		}
+	}
+
+	assert.Nil(t, err)
+	tbTestID := IDAlloc.NextTable()
+	createTbEntries, err := makeCreateTableEntries(
+		"",
+		ac,
+		schema.Name,
+		tbTestID,
+		dbTestID,
+		dbName,
+		handle.m,
+		defs,
+	)
+	assert.Nil(t, err)
+	entries = append(entries, createTbEntries...)
+
+	//add 100 * 50 blocks from S3 into "tbtest" table
+	attrs := []string{catalog2.BlockMeta_MetaLoc}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	nullable := []bool{false}
+	vecOpts := containers.Options{}
+	vecOpts.Capacity = 0
+	offset = 0
+	for _, obj := range objNames {
+		metaLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+		for i := 0; i < 50; i++ {
+			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]))
+		}
+		offset += 50
+		metaLocMoBat := containers.CopyToMoBatch(metaLocBat)
+		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
+			tbTestID, dbName, schema.Name, obj, metaLocMoBat)
+		assert.NoError(t, err)
+		entries = append(entries, addS3BlkEntry)
+		metaLocBat.Close()
+	}
+	err = handle.HandlePreCommit(
+		context.TODO(),
+		txn,
+		api.PrecommitWriteCmd{
+			UserId:    ac.userId,
+			AccountId: ac.accountId,
+			RoleId:    ac.roleId,
+			EntryList: entries,
+		},
+		new(api.SyncLogTailResp),
+	)
+	assert.Nil(t, err)
+	//t.FailNow()
+	start := time.Now()
+	err = handle.HandleCommit(context.TODO(), txn)
+	assert.Nil(t, err)
+	t.Logf("Commit 10w blocks spend: %d", time.Since(start).Microseconds())
+}
+
 func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

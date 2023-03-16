@@ -44,3 +44,18 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 		return nil, moerr.NewInternalError(ctx, "type of dialect error")
 	}
 }
+
+func SplitSqlBySemicolon(sql string) []string {
+	var ret []string
+	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	lastEnd := 0
+	for scanner.Pos < len(sql) {
+		typ, _ := scanner.Scan()
+		for scanner.Pos < len(sql) && typ != ';' {
+			typ, _ = scanner.Scan()
+		}
+		ret = append(ret, sql[lastEnd:scanner.Pos-1])
+		lastEnd = scanner.Pos
+	}
+	return ret
+}

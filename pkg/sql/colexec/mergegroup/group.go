@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -57,8 +57,10 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal, isFirst); err != nil {
+			if end, err := ctr.build(proc, anal, isFirst); err != nil {
 				return false, err
+			} else if end {
+				return true, nil
 			}
 			ctr.state = Eval
 		case Eval:
@@ -94,17 +96,18 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	var err error
 	for {
 		if ctr.aliveMergeReceiver == 0 {
-			return nil
+			return false, nil
 		}
 
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+			logutil.Errorf("pipeline closed unexpectedly")
+			return true, nil
 		}
 		anal.WaitStop(start)
 
@@ -123,7 +126,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst
 		anal.Input(bat, isFirst)
 		if err = ctr.process(bat, proc); err != nil {
 			bat.Clean(proc.Mp())
-			return err
+			return false, err
 		}
 	}
 }

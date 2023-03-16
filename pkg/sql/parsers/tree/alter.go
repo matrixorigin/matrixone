@@ -174,7 +174,7 @@ func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL
 // see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
 type AlterTable struct {
 	statementImpl
-	Table   TableName
+	Table   *TableName
 	Options AlterTableOptions
 }
 
@@ -189,6 +189,9 @@ func (node *AlterTable) Format(ctx *FmtCtx) {
 		prefix = ", "
 	}
 }
+
+func (node *AlterTable) GetStatementType() string { return "Alter Table" }
+func (node *AlterTable) GetQueryType() string     { return QueryTypeDDL }
 
 type AlterTableOptions = []AlterTableOption
 
