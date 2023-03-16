@@ -136,6 +136,7 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool, er
 func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
 	var err error
 	m := &Merge{
+		FS:            GetDefaultFS(),
 		datetime:      time.Now(),
 		pathBuilder:   table.NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
@@ -800,8 +801,13 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 
 var maxFileSize atomic.Int64
 var mergedExtension = table.GetExtension(table.CsvExtension)
+var defaultFS fileservice.FileService
 
-func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
+func GetDefaultFS() fileservice.FileService {
+	return defaultFS
+}
+
+func InitMerge(ctx context.Context, SV *config.ObservabilityParameters, fs fileservice.FileService) error {
 	var err error
 	mergeCycle := SV.MergeCycle.Duration
 	filesize := SV.MergeMaxFileSize
@@ -814,5 +820,6 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
 	mergedExtension = table.GetExtension(ext)
+	defaultFS = fs
 	return nil
 }
