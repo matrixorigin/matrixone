@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +54,11 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 	if bat.Length() == 0 {
 		return false, nil
+	}
+
+	if insertArg.InsertCtx.TableDef.Name == "cms1" {
+		logutil.Infof("insert operator receive, [id: %d], bat length is %d, addr is %p",
+			insertArg.InsertCtx.TableDef.TblId, bat.Length(), bat)
 	}
 
 	defer func() {
