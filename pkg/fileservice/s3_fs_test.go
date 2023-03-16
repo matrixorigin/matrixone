@@ -103,6 +103,7 @@ func TestS3FS(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				true,
 			)
 			assert.Nil(t, err)
 
@@ -122,6 +123,7 @@ func TestS3FS(t *testing.T) {
 			-1,
 			cacheDir,
 			nil,
+			true,
 		)
 		assert.Nil(t, err)
 		ctx := context.Background()
@@ -148,6 +150,7 @@ func TestS3FS(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -167,6 +170,7 @@ func TestS3FS(t *testing.T) {
 				128*1024,
 				cacheDir,
 				nil,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -421,6 +425,7 @@ func TestS3FSMinioServer(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				true,
 			)
 			assert.Nil(t, err)
 
@@ -457,6 +462,7 @@ func BenchmarkS3FS(b *testing.B) {
 			-1,
 			cacheDir,
 			nil,
+			true,
 		)
 		assert.Nil(b, err)
 		return fs
