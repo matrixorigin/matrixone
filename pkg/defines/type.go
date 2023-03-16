@@ -176,6 +176,9 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
 
+// PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
+type PkCheckByDN struct{}
+
 type AutoIncrCaches struct {
 	Mu             *sync.Mutex
 	AutoIncrCaches map[string]AutoIncrCache

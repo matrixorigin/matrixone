@@ -73,9 +73,9 @@ message SyncLogTailResp {
 
 //How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
-    uint32 user_id = 1;
-    uint32 role_id = 2;
-    uint32 account_id = 3;
+    //uint32 user_id = 1;
+    //uint32 role_id = 2;
+    //uint32 account_id = 3;
     repeated Entry entry_list = 4;
 };
 

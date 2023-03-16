@@ -1606,6 +1606,11 @@ func (th *TxnHandler) CommitTxn() error {
 	if ses.tempTablestorage != nil {
 		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
+	val, e := ses.GetSessionVar("mo_pk_check_by_dn")
+	if e != nil {
+		return e
+	}
+	ctx = context.WithValue(ctx, defines.PkCheckByDN{}, val.(int8))
 	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
