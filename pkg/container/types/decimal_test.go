@@ -15,120 +15,260 @@
 package types
 
 import (
-	"strings"
+	"fmt"
+	"math/rand"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
-func TestBasic(t *testing.T) {
-	require.True(t, Decimal64_Zero.Lt(Decimal64_One))
-	require.True(t, Decimal64_Zero.Lt(Decimal64_Ten))
-	require.True(t, Decimal64_Zero.Lt(Decimal64Max))
-	require.True(t, Decimal64_Zero.Gt(Decimal64Min))
-	require.True(t, Decimal128_Zero.Lt(Decimal128_One))
-	require.True(t, Decimal128_Zero.Lt(Decimal128_Ten))
-	require.True(t, Decimal128_Zero.Lt(Decimal128Max))
-	require.True(t, Decimal128_Zero.Gt(Decimal128Min))
-
-	require.True(t, Decimal64_Ten.Eq(Decimal64FromInt32(10)))
-	require.True(t, Decimal64_Ten.Eq(MustDecimal64FromString("10")))
-	require.True(t, Decimal64_Ten.Eq(MustDecimal64FromString("10.000")))
-	require.True(t, Decimal128_Ten.Eq(Decimal128FromInt32(10)))
-	require.True(t, Decimal128_Ten.Eq(MustDecimal128FromString("10")))
-	require.True(t, Decimal128_Ten.Eq(MustDecimal128FromString("10.000")))
+func TestParse64(t *testing.T) {
+	x, y := ParseDecimal64("99999.99999999999999999999999999999999", 12, 6)
+	if y != nil || x != 100000000000 {
+		panic("Decimal64Parse wrong")
+	}
+}
+func TestParse128(t *testing.T) {
+	x, y := ParseDecimal128("99999.999999999999999999999999999999999", 12, 6)
+	if y != nil || x.B0_63 != 100000000000 {
+		panic("Decimal128Parse wrong")
+	}
+}
+func TestCompare64(t *testing.T) {
+	x := Decimal64(0)
+	y := ^x
+	if CompareDecimal64(x, y) != 1 {
+		panic("CompareDecimal64 wrong")
+	}
 }
 
-func TestParse(t *testing.T) {
-	d64, err := Decimal64_FromString("1.23456789")
-	require.True(t, err == nil)
-	require.True(t, d64.Gt(Decimal64_One))
-	require.True(t, d64.Lt(Decimal64_Ten))
-
-	d128, err := Decimal128_FromString("1.23456789")
-	require.True(t, err == nil)
-	dd, err := d128.ToDecimal64(64, 10)
-	require.True(t, d64.Eq(dd))
-	require.True(t, err == nil)
-
-	longstr := "1.23456789999999999999999"
-
-	d64, err = Decimal64_FromString(longstr)
-	require.True(t, err != nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataTruncated))
-	require.True(t, d64.Gt(Decimal64_One))
-	require.True(t, d64.Lt(Decimal64_Ten))
-
-	d128, err = Decimal128_FromString(longstr)
-	require.True(t, err == nil)
-	dd, err = d128.ToDecimal64(33, 15)
-	require.True(t, d64.Eq(dd))
-	require.True(t, err == nil)
+func TestCompare128(t *testing.T) {
+	x := Decimal128{0, 0}
+	y := Decimal128{^x.B0_63, ^x.B64_127}
+	if CompareDecimal128(x, y) != 1 {
+		panic("CompareDecimal128 wrong")
+	}
 }
 
-func TestNeg(t *testing.T) {
-	s := "123456.789"
-	d128, err := ParseStringToDecimal128(s, 20, 5, false)
-
-	require.True(t, err == nil)
-	require.Equal(t, d128.ToString(), s)
-
-	nd := NegDecimal128(d128)
-	require.Equal(t, nd.ToString(), "-"+s)
-
-	z := d128.Add(nd)
-	require.True(t, z.Eq(Decimal128_Zero))
+func TestCompare256(t *testing.T) {
+	x := Decimal256{0, 0, 0, 0}
+	y := Decimal256{^x.B0_63, ^x.B64_127, ^x.B128_191, ^x.B192_255}
+	if CompareDecimal256(x, y) != 1 {
+		panic("CompareDecimal256 wrong")
+	}
 }
 
-func TestAdd(t *testing.T) {
-	require.True(t, Decimal64_One.Eq(Decimal64_Zero.Add(Decimal64_One)))
-	require.True(t, Decimal64_Ten.Eq(Decimal64_Zero.Add(Decimal64_Ten)))
-	require.True(t, Decimal64Max.Eq(Decimal64_Zero.Add(Decimal64Max)))
-	require.True(t, Decimal128_One.Eq(Decimal128_Zero.Add(Decimal128_One)))
-	require.True(t, Decimal128_Ten.Eq(Decimal128_Zero.Add(Decimal128_Ten)))
-	require.True(t, Decimal128Max.Eq(Decimal128_Zero.Add(Decimal128Max)))
+func TestDecimal64Float(t *testing.T) {
+	x := Decimal64(rand.Int())
+	y := Decimal64ToFloat64(x, 15)
+	z, _ := Decimal64FromFloat64(y, 18, 5)
+	x, _ = x.Scale(-10)
+	if x != z {
+		panic("DecimalFloat wrong")
+	}
+}
+func TestDecimal128Float(t *testing.T) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	y := Decimal128ToFloat64(x, 30)
+	z, _ := Decimal128FromFloat64(y, 38, 7)
+	x, _ = x.Scale(-23)
+	if x != z {
+		panic("DecimalFloat wrong")
+	}
 }
 
-func TestBits(t *testing.T) {
-	d1, err := Decimal64_FromStringWithScale("9.2234", 5, 4)
-	require.True(t, err == nil)
-	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 5, 4)
-	require.True(t, err == nil)
-
-	require.Equal(t, d1.ToInt64(), d2.ToInt64())
-	require.Equal(t, Decimal64ToInt64Raw(d1), Decimal64ToInt64Raw(d2))
+func TestDecimal64AddSub(t *testing.T) {
+	x := Decimal64(rand.Int() >> 1)
+	z := x
+	err := error(nil)
+	y := Decimal64(rand.Int() >> 1)
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal64AddSub wrong")
+	}
+}
+func TestDecimal128AddSub(t *testing.T) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	z := x
+	err := error(nil)
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal128AddSub wrong")
+	}
 }
 
-func Test_ParseStringToDecimal64(t *testing.T) {
-	convey.Convey("ParseStringToDecimal64 succ", t, func() {
-		M := 15
-		for i := 1; i <= M; i++ {
-			for j := 0; j <= i; j++ {
-				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
-				_, err := ParseStringToDecimal64(str+"4", int32(i), int32(j), false)
-				convey.So(err, convey.ShouldBeNil)
-
-				_, err = ParseStringToDecimal64(str+"5", int32(i), int32(j), false)
-				convey.So(err, convey.ShouldNotBeNil)
-			}
-		}
-	})
+func TestDecimal256AddSub(t *testing.T) {
+	x := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	z := x
+	err := error(nil)
+	y := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	x, _, err = x.Add(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Sub(y, 0, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal256AddSub wrong")
+	}
 }
 
-func Test_ParseStringToDecimal128(t *testing.T) {
-	convey.Convey("ParseStringToDecimal64 succ", t, func() {
-		M := 33
-		for i := 16; i <= M; i++ {
-			for j := 0; j <= i && j <= 33; j++ {
-				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
-				_, err := ParseStringToDecimal128(str+"4", int32(i), int32(j), false)
-				convey.So(err, convey.ShouldBeNil)
+func TestDecimal64MulDiv(t *testing.T) {
+	x := Decimal64(rand.Int() >> 32)
+	z := x
+	err := error(nil)
+	y := Decimal64(rand.Int() >> 32)
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal64MulDiv wrong")
+	}
+}
+func TestDecimal128MulDiv(t *testing.T) {
+	x := Decimal128{uint64(rand.Int()) >> 8, 0}
+	z := x
+	err := error(nil)
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int() & 255)}
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		panic("Decimal128MulDiv wrong")
+	}
+}
 
-				_, err = ParseStringToDecimal128(str+"5", int32(i), int32(j), false)
-				convey.So(err, convey.ShouldNotBeNil)
-			}
-		}
-	})
+func TestDecimal256MulDiv(t *testing.T) {
+	x := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), 0}
+	z := x
+	err := error(nil)
+	y := Decimal256{uint64(rand.Int()), 0, 0, 0}
+	x, _, err = x.Mul(y, 0, 0)
+	if err == nil {
+		x, _, err = x.Div(y, 12, 0)
+	}
+	if err != nil || x != z {
+		fmt.Println(err)
+		panic("Decimal256MulDiv wrong")
+	}
+}
+func TestParseFormat(t *testing.T) {
+	x := Decimal128{0, 1}
+	c := x.Format(5)
+	y, err := ParseDecimal128(c, 30, 5)
+	if err != nil {
+		panic("error")
+	}
+	if x != y {
+		fmt.Println(x.B64_127, x.B0_63)
+		fmt.Println(y.B64_127, y.B0_63)
+		panic("wrong")
+	}
+}
+func BenchmarkFor(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+	}
+}
+func BenchmarkFloatAdd(b *testing.B) {
+	x := float64(rand.Int())
+	y := float64(rand.Int())
+	for i := 0; i < b.N; i++ {
+		x += y
+	}
+	z := Decimal128{uint64(x), 0}
+	z.Add128(z)
+}
+
+func BenchmarkAdd(b *testing.B) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
+	for i := 0; i < b.N; i++ {
+		x.Add128(y)
+	}
+}
+
+func BenchmarkFloatSub(b *testing.B) {
+	x := float64(rand.Int())
+	y := float64(rand.Int())
+	for i := 0; i < b.N; i++ {
+		x -= y
+	}
+	z := Decimal128{uint64(x), 0}
+	z.Add128(z)
+}
+
+func BenchmarkSub(b *testing.B) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	for i := 0; i < b.N; i++ {
+		x.Sub128(y)
+	}
+}
+
+func BenchmarkFloatMul(b *testing.B) {
+	x := float64(rand.Int())
+	y := float64(1.0001)
+	for i := 0; i < b.N; i++ {
+		x *= y
+	}
+	z := Decimal128{uint64(x), 0}
+	z.Add128(z)
+}
+
+func BenchmarkMul64(b *testing.B) {
+	x := Decimal64(rand.Int() >> 32)
+	y := Decimal64(rand.Int() >> 32)
+	for i := 0; i < b.N; i++ {
+		_, _ = x.Mul64(y)
+	}
+}
+func BenchmarkMul(b *testing.B) {
+	x := Decimal128{uint64(rand.Int()) >> 8, 0}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) & 255}
+	for i := 0; i < b.N; i++ {
+		x.Mul128(y)
+	}
+}
+
+func BenchmarkFloatDiv(b *testing.B) {
+	x := float64(rand.Int())
+	y := float64(1.0000001)
+	for i := 0; i < b.N; i++ {
+		x /= y
+	}
+	z := Decimal128{uint64(x), 0}
+	z.Add128(z)
+}
+
+func BenchmarkDiv(b *testing.B) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 4}
+	for i := 0; i < b.N; i++ {
+		x.Div128(y)
+	}
+}
+
+func BenchmarkIntMod(b *testing.B) {
+	x := rand.Int()
+	y := rand.Int()
+	z := int(0)
+	for i := 0; i < b.N; i++ {
+		z += x % y
+	}
+	w := Decimal128{uint64(z), 0}
+	w.Add128(w)
+
+}
+
+func BenchmarkMod(b *testing.B) {
+	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	y := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
+	for i := 0; i < b.N; i++ {
+		x.Mod128(y)
+	}
 }

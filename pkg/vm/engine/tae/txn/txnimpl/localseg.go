@@ -310,7 +310,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 		seg.registerNode(metaLoc, "", nil)
 		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
-		if pkVecs != nil && skip == txnif.PKDedupSkipNone {
+		if len(pkVecs) != 0 && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
 				seg.table.schema.GetSingleSortKey().Name,
 				pkVecs[i],

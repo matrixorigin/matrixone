@@ -209,13 +209,13 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal64),
 			v.(types.Decimal64),
-			types.CompareDecimal64Decimal64Aligned,
+			types.CompareDecimal64,
 			skipmask)
 	case types.T_decimal128:
 		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal128),
 			v.(types.Decimal128),
-			types.CompareDecimal128Decimal128Aligned,
+			types.CompareDecimal128,
 			skipmask)
 	case types.T_TS:
 		return GetOffsetWithFunc(

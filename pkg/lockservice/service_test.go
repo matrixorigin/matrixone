@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -51,10 +52,10 @@ func TestRowLock(t *testing.T) {
 			}
 			acquired := false
 
-			err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{1}, option)
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{1}, option)
 			assert.NoError(t, err)
 			go func() {
-				err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{2}, option)
+				_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{2}, option)
 				assert.NoError(t, err)
 				acquired = true
 				err = l.Unlock(ctx, []byte{2})
@@ -64,12 +65,37 @@ func TestRowLock(t *testing.T) {
 			err = l.Unlock(ctx, []byte{1})
 			assert.NoError(t, err)
 			time.Sleep(time.Second / 2)
-			err = l.Lock(ctx, 0, [][]byte{{1}}, []byte{3}, option)
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte{3}, option)
 			assert.NoError(t, err)
 			assert.True(t, acquired)
 
 			err = l.Unlock(ctx, []byte{3})
 			assert.NoError(t, err)
+		},
+	)
+}
+
+func TestRowLockWithMany(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}, {2}, {3}, {4}, {5}, {6}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+			lt, _ := l.getLockTable(0)
+			assert.Equal(t, 6, lt.(*localLockTable).mu.store.Len())
 		},
 	)
 }
@@ -93,7 +119,7 @@ func TestMultipleRowLocks(t *testing.T) {
 			for i := 0; i < sum; i++ {
 				wg.Add(1)
 				go func(i int) {
-					err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
+					_, err := l.Lock(ctx, 0, [][]byte{{1}, {2}, {3}, {4}, {5}, {6}}, []byte(strconv.Itoa(i)), option)
 					assert.NoError(t, err)
 					iter++
 					err = l.Unlock(ctx, []byte(strconv.Itoa(i)))
@@ -121,10 +147,10 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 			}
 			var wg sync.WaitGroup
 			wg.Add(1)
-			err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
 			assert.NoError(t, err)
 			go func(ctx context.Context) {
-				err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+				_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
 				assert.Error(t, err)
 				wg.Done()
 			}(ctx)
@@ -225,6 +251,34 @@ func TestDeadLockWithRange(t *testing.T) {
 	)
 }
 
+func TestRowLockWithSameTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			for i := 0; i < 10; i++ {
+				_, err := l.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn1"),
+					option)
+				assert.NoError(t, err)
+				lt, _ := l.getLockTable(0)
+				assert.Equal(t, 1, lt.(*localLockTable).mu.store.Len())
+			}
+		},
+	)
+}
+
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
 	l *service,
@@ -255,10 +309,10 @@ func TestRangeLock(t *testing.T) {
 			}
 			acquired := false
 
-			err := l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{1}, option)
+			_, err := l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{1}, option)
 			assert.NoError(t, err)
 			go func() {
-				err := l.Lock(ctx, 0, [][]byte{{1}, {2}}, []byte{2}, option)
+				_, err := l.Lock(ctx, 0, [][]byte{{1}, {2}}, []byte{2}, option)
 				assert.NoError(t, err)
 				acquired = true
 				err = l.Unlock(ctx, []byte{2})
@@ -268,12 +322,38 @@ func TestRangeLock(t *testing.T) {
 			err = l.Unlock(ctx, []byte{1})
 			assert.NoError(t, err)
 			time.Sleep(time.Second / 2)
-			err = l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{3}, option)
+			_, err = l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{3}, option)
 			assert.NoError(t, err)
 			assert.True(t, acquired)
 
 			err = l.Unlock(ctx, []byte{3})
 			assert.NoError(t, err)
+		},
+	)
+}
+
+func TestRangeLockWithMany(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}, {2}, {3}, {4}, {5}, {6}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+			lt, _ := l.getLockTable(0)
+			assert.Equal(t, 6, lt.(*localLockTable).mu.store.Len())
+
 		},
 	)
 }
@@ -284,9 +364,10 @@ func TestMultipleRangeLocks(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
+				Granularity: pb.Granularity_Range,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
 			}
@@ -303,10 +384,10 @@ func TestMultipleRangeLocks(t *testing.T) {
 						return
 					}
 					end := (i + 1) % 10
-					err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
-					assert.NoError(t, err)
+					_, err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
+					require.NoError(t, err, hex.EncodeToString([]byte(strconv.Itoa(i))))
 					err = l.Unlock(ctx, []byte(strconv.Itoa(i)))
-					assert.NoError(t, err)
+					require.NoError(t, err)
 				}(i)
 			}
 			wg.Wait()
@@ -316,7 +397,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
-	// runBenchmark(b, "unlimited-table", 32)
+	runBenchmark(b, "unlimited-table", 32)
 }
 
 var tableID atomic.Uint64
@@ -352,7 +433,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 					table := getTableID()
 					// fmt.Printf("on table %d\n", table)
 					for p.Next() {
-						if err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
+						if _, err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
 							panic(err)
 						}
 						if err := l.Unlock(ctx, txn); err != nil {
@@ -374,7 +455,7 @@ func maybeAddTestLockWithDeadlock(t *testing.T,
 	lock [][]byte,
 	granularity pb.Granularity) {
 	t.Logf("%s try lock %+v", string(txnID), lock)
-	err := l.Lock(ctx, table, lock, txnID, LockOptions{
+	_, err := l.Lock(ctx, table, lock, txnID, LockOptions{
 		Granularity: pb.Granularity_Row,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,

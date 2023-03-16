@@ -56,7 +56,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["int_var"] = 20
 	vars["bool_var"] = false
 	vars["float_var"] = 20.20
-	dec, _ := types.ParseStringToDecimal128("200.001", 2, 2, false)
+	dec, _ := types.ParseDecimal128("200.001", 38, 3)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
 

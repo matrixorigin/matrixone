@@ -126,12 +126,13 @@ jobs:
           cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | grep -v ${{ env.bvt_excluded_pkg }} | tee ${{ env.raw_bvt_coverage_temp }} > /dev/null
           cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | grep -v ${{ env.ut_excluded_pkg }} | tee ${{ env.raw_ut_coverage_temp }} > /dev/null
           echo "======================= Coverage Calculate Start ======================="
-          awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if(arr[$1,$2]==0 && $3>=1){arr[$1,$2]=1}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} | tee ${{ env.all_coverage }} > /dev/null
+          awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if($3>=1){arr[$1,$2]=1}else{arr[$1,$2]+=$3}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} | tee ${{ env.all_coverage }} > /dev/null
           awk -F '[:, ]+' '{all[$1]+=$4;hit[$1]+=0;if($5>0) hit[$1]+=$4;}END{for(i in all) print(i,all[i],hit[i],hit[i]/all[i]*100)}' ${{ env.all_coverage }} | tee ${{ env.test_report }} > /dev/null
           awk 'BEGIN{flag=1}{if($4<${{ env.coverage_line }}){flag=0;print("\033[31merror:\033[0m the code coverage of \033[31m"$1"\033[0m is \033[31m"$4"%\033[0m which is below ${{ env.coverage_line }}%");} else { print("\033[32minfo:\033[0m the code coverage of "$1" is "$4"% which is up to ${{ env.coverage_line }}%") }}END{if(flag==0) {exit 1;}}' ${{ env.test_report }}
 
       - name: Package Test Result
         if: ${{ steps.ut-pr.outputs.paths != '' && failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "======================= Coverage HTML Generate Start ======================="

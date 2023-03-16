@@ -90,7 +90,10 @@ func (l Lock) getLockMode() pb.LockMode {
 func (l Lock) String() string {
 	g := "row"
 	if !l.isLockRow() {
-		g = "range"
+		g = "range(start)"
+		if l.isLockRangeEnd() {
+			g = "range(end)"
+		}
 	}
 
 	// hold txn: mode-[row|range]
