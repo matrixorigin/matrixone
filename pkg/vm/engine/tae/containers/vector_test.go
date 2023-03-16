@@ -49,6 +49,49 @@ func withAllocator(opt Options) Options {
 // 	}
 // }
 
+func TestVectorShallowForeach(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opt := withAllocator(Options{})
+	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
+		vec := MakeVector(typ, true, opt)
+		for i := 0; i < 10; i++ {
+			if i%2 == 0 {
+				vec.Append(types.Null{})
+			} else {
+				switch typ.Oid {
+				case types.T_int32:
+					vec.Append(int32(i))
+				case types.T_char:
+					vec.Append([]byte("test null"))
+				}
+			}
+		}
+		vec.ForeachWindowShallow(0, 10, func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+
+		vec.ForeachShallow(func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+
+		vec.GetView().ForeachShallow(func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+	}
+}
+
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
