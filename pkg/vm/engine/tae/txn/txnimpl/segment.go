@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -233,13 +232,4 @@ func (seg *txnSegment) GetBlock(id uint64) (blk handle.Block, err error) {
 
 func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID(), is1PC)
-}
-
-func (seg *txnSegment) BatchDedup(pks containers.Vector) (err error) {
-	if isLocalSegment(seg.entry.AsCommonID()) {
-		return seg.table.localSegment.BatchDedup(pks)
-	}
-	segData := seg.entry.GetSegmentData()
-	seg.Txn.GetStore().LogSegmentID(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
-	return segData.BatchDedup(seg.Txn, pks)
 }

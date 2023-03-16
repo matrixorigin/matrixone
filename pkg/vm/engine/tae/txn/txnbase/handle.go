@@ -127,7 +127,6 @@ func (blk *TxnBlock) GetByFilter(*handle.Filter) (offset uint32, err error) { re
 
 func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
 
-func (blk *TxnBlock) BatchDedup(containers.Vector) (err error)                  { return }
 func (blk *TxnBlock) Append(*containers.Batch, uint32) (n uint32, err error)    { return }
 func (blk *TxnBlock) Update(uint32, uint16, any) (err error)                    { return }
 func (blk *TxnBlock) RangeDelete(uint32, uint32, handle.DeleteType) (err error) { return }

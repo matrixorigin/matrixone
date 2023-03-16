@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -74,16 +75,6 @@ func (db *txnDB) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*com
 		return
 	}
 	return table.LogTxnEntry(entry, readed)
-}
-
-func (db *txnDB) LogSegmentID(tid, sid uint64) {
-	table, _ := db.getOrSetTable(tid)
-	table.LogSegmentID(sid)
-}
-
-func (db *txnDB) LogBlockID(tid, bid uint64) {
-	table, _ := db.getOrSetTable(tid)
-	table.LogBlockID(bid)
 }
 
 func (db *txnDB) Close() error {

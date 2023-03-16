@@ -224,8 +224,6 @@ type TxnStore interface {
 	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
-	LogSegmentID(dbId, tid, sid uint64)
-	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
