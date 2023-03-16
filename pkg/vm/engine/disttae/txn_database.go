@@ -104,7 +104,10 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		Ts:         db.txn.meta.SnapshotTS,
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		item.AccountId = catalog.System_Account
+		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+			return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		}
 	}
 	tbl := &txnTable{
 		db:           db,
