@@ -885,7 +885,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 // 2. It is called when appending data into this table.
 func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
-	it := newRelationBlockIt(h)
+	it := newRelationBlockItOnSnap(h)
 	for it.Valid() {
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 		blkData := blk.GetBlockData()
@@ -917,7 +917,7 @@ func (tbl *txnTable) DedupByMetaLocs(metaLocs []string) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
-		it := newRelationBlockIt(h)
+		it := newRelationBlockItOnSnap(h)
 		for it.Valid() {
 			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 			blkData := blk.GetBlockData()

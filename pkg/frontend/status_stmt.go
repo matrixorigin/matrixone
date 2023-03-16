@@ -407,6 +407,11 @@ type DropViewExecutor struct {
 	dv *tree.DropView
 }
 
+type AlterTableExecutor struct {
+	*statusStmtExecutor
+	at *tree.AlterTable
+}
+
 type InsertExecutor struct {
 	*statusStmtExecutor
 	i *tree.Insert
