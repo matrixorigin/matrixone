@@ -1141,6 +1141,8 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowColumnNumber{}, true},
 		{&tree.ShowTableValues{}, true},
 		{&tree.ShowAccounts{}, true},
+		{&tree.ShowPublications{}, true},
+		{&tree.ShowCreatePublications{}, true},
 	}
 
 	for _, a := range args {
