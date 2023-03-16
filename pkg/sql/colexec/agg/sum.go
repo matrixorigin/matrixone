@@ -46,9 +46,9 @@ func SumReturnType(typs []types.Type) types.Type {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return types.T_uint64.ToType()
 	case types.T_decimal64:
-		return typs[0]
+		return types.New(types.T_decimal64, 18, typs[0].Scale)
 	case types.T_decimal128:
-		return typs[0]
+		return types.New(types.T_decimal128, 38, typs[0].Scale)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupport type '%v' for sum", typs[0]))
 }
@@ -103,7 +103,7 @@ func (s *Decimal64Sum) Eval(vs []types.Decimal64) []types.Decimal64 {
 
 func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, z int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
 	if !isNull {
-		return ov.Add(value.MulInt64(z)), false
+		return ov + value*types.Decimal64(z), false
 	}
 	return ov, isEmpty
 }
@@ -111,7 +111,7 @@ func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, 
 func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
 	if !yEmpty {
 		if !xEmpty {
-			return x.Add(y), false
+			return x + y, false
 		}
 		return y, false
 	}
@@ -143,7 +143,9 @@ func (s *Decimal128Sum) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		return ov.Add(value.MulInt64(z)), false
+		value, _, _ = value.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, 0, 0)
+		ov, _ = ov.Add128(value)
+		return ov, false
 	}
 	return ov, isEmpty
 }
@@ -151,7 +153,8 @@ func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal12
 func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool) {
 	if !yEmpty {
 		if !xEmpty {
-			return x.Add(y), false
+			x, _ = x.Add128(y)
+			return x, false
 		}
 		return y, false
 	}

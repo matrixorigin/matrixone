@@ -104,10 +104,10 @@ func TypeStringValue(t types.Type, v any, opts ...TypePrintOpt) string {
 		return val.String2(time.Local, 6)
 	case types.T_decimal64:
 		val := v.(types.Decimal64)
-		return val.String()
+		return val.Format(t.Scale)
 	case types.T_decimal128:
 		val := v.(types.Decimal128)
-		return val.String()
+		return val.Format(t.Scale)
 	case types.T_json:
 		val := v.([]byte)
 		j := types.DecodeJson(val)

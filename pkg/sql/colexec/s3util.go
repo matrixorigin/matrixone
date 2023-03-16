@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -290,6 +289,7 @@ func (w *S3Writer) mergeBlock(idx int, length int, proc *process.Process) error 
 			if err := w.writeBlock(w.buffers[idx]); err != nil {
 				return err
 			}
+			w.buffers[idx].CleanOnlyData()
 		}
 		if err := w.writeEndBlocks(proc, idx); err != nil {
 			return err
@@ -372,28 +372,6 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 		strCol = nil
 	}
 	sort.Sort(false, false, false, sels, ovec, strCol)
-	if len(sortIndex) == 1 {
-		return bat.Shuffle(sels, m)
-	}
-	ps := make([]int64, 0, 16)
-	ds := make([]bool, len(sels))
-	for i, j := 1, len(sortIndex); i < j; i++ {
-		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := bat.Vecs[sortIndex[i]]
-		if vec.GetType().IsString() {
-			strCol = vector.MustStrCol(vec)
-		} else {
-			strCol = nil
-		}
-		for i, j := 0, len(ps); i < j; i++ {
-			if i == j-1 {
-				sort.Sort(false, false, false, sels[ps[i]:], vec, strCol)
-			} else {
-				sort.Sort(false, false, false, sels[ps[i]:ps[i+1]], vec, strCol)
-			}
-		}
-		ovec = vec
-	}
 	return bat.Shuffle(sels, m)
 }
 
