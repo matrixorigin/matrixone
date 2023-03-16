@@ -1188,7 +1188,6 @@ const (
 	getDbIdAndTypFormat    = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat       = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	getAllAccountSql       = `select account_name from mo_catalog.mo_account order by account_name;`
 	updatePubInfoFormat    = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
 	dropPubFormat          = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 )
@@ -2635,11 +2634,6 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountList = ""
 		case len(ap.AccountsSet.SetAccounts) > 0:
 			/* do not check accountName if exists here */
-			//accountListSep, err = getAllAccountName(ctx, ses, bh)
-			//if err != nil {
-			//	goto handleFailed
-			//}
-
 			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
 			for _, acct := range ap.AccountsSet.SetAccounts {
 				s := string(acct)
@@ -2768,34 +2762,6 @@ handleFailed:
 		return rbErr
 	}
 	return err
-}
-
-func getAllAccountName(ctx context.Context, ses *Session, bh BackgroundExec) (ret []string, err error) {
-	if !ses.GetTenantInfo().IsSysTenant() {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, getAllAccountSql)
-	if err != nil {
-		return
-	}
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-	if !execResultArrayHasData(erArray) {
-		return nil, moerr.NewInternalError(ctx, "no account found")
-	}
-	ret = make([]string, 0, erArray[0].GetRowCount())
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		name, err := erArray[0].GetString(ctx, uint64(i), 0)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, name)
-	}
-	return
-
 }
 
 // doDropAccount accomplishes the DropAccount statement
