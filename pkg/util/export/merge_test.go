@@ -26,12 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/robfig/cron/v3"
@@ -222,15 +222,19 @@ var mergeLock sync.Mutex
 func TestNewMerge(t *testing.T) {
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
 	ctx := trace.Generate(context.Background())
 
-	defaultOpts := []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
-		WithFileService(fs), WithTable(dummyTable),
-		WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)}
+	defaultOpts := []MergeOption{
+		WithFileService(fs),
+		WithTable(dummyTable),
+		WithMaxFileSize(1),
+		WithMinFilesMerge(1),
+		WithMaxFileSize(16 * mpool.MB),
+		WithMaxMergeJobs(16),
+	}
 
 	type args struct {
 		ctx  context.Context
@@ -305,8 +309,7 @@ func TestNewMergeWithContextDone(t *testing.T) {
 	}
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
 	ctx := trace.Generate(context.Background())
@@ -324,9 +327,14 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx: ctx,
-				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
-					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+				opts: []MergeOption{
+					WithFileService(fs),
+					WithTable(dummyTable),
+					WithMaxFileSize(1),
+					WithMinFilesMerge(1),
+					WithMaxFileSize(16 * mpool.MB),
+					WithMaxMergeJobs(16),
+				},
 			},
 			want: nil,
 		},
@@ -360,8 +368,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 	}
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
 	ctx := trace.Generate(context.Background())
@@ -381,9 +388,14 @@ func TestNewMergeNOFiles(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx: ctx,
-				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
-					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+				opts: []MergeOption{
+					WithFileService(fs),
+					WithTable(dummyTable),
+					WithMaxFileSize(1),
+					WithMinFilesMerge(1),
+					WithMaxFileSize(16 * mpool.MB),
+					WithMaxMergeJobs(16),
+				},
 			},
 			want: nil,
 		},
@@ -408,8 +420,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 	targetDate := "2021-01-01"
 	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
 	require.Nil(t, err)
@@ -516,8 +527,7 @@ func TestCreateCronTask(t *testing.T) {
 func TestNewMergeService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	defer cancel()
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 
 	type args struct {
 		ctx  context.Context

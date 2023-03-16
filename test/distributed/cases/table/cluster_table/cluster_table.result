@@ -301,6 +301,9 @@ col1    col2
 use mo_catalog;
 desc cluster_table_4;
 Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    YES        null        
+col2    VARCHAR(65535)    YES        null        
+account_id    INT UNSIGNED(32)    NO        null        the account_id added by the mo
 show create table cluster_table_4;
 Table    Create Table
 cluster_table_4    CREATE CLUSTER TABLE `cluster_table_4` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
