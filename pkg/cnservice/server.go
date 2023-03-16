@@ -52,12 +52,12 @@ func NewService(
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 	// get etl fs
-	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	etlFS, err := fileservice.Get[fileservice.FileService](fileService, defines.ETLFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func NewService(
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
 		cfg:         cfg,
-		metadataFS:  fs,
+		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
 	}
