@@ -75,11 +75,6 @@ func (l *remoteLockTable) lock(
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
-	// we use mutex lock here to avoid the deadlock detection
-	// mechanism reading an incorrect data.
-	txn.Lock()
-	defer txn.Unlock()
-
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
@@ -88,6 +83,10 @@ func (l *remoteLockTable) lock(
 			return err
 		}
 
+		// we use mutex lock here to avoid the deadlock detection
+		// mechanism reading an incorrect data.
+		txn.Lock()
+		defer txn.Unlock()
 		txn.lockAdded(l.bind.Table, rows, true)
 		logRemoteLockAdded(txn, rows, opts, l.bind)
 		return nil
