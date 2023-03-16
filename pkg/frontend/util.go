@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"runtime"
 	"strconv"
@@ -484,4 +485,42 @@ func hideAccessKey(sql string) string {
 		}
 	}
 	return sql
+}
+
+// isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
+func isCmdFieldListSql(sql string) bool {
+	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+}
+
+// makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
+func makeCmdFieldListSql(query string) string {
+	return cmdFieldListSql + " " + query
+}
+
+// parseCmdFieldList parses the internal cmd field list
+func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, error) {
+	if !isCmdFieldListSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
+	}
+	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	//find null
+	nullIdx := strings.IndexRune(rest, rune(0))
+	var tableName string
+	if nullIdx < len(rest) {
+		tableName = rest[:nullIdx]
+		//neglect wildcard
+		//wildcard := payload[nullIdx+1:]
+		return &InternalCmdFieldList{tableName: tableName}, nil
+	} else {
+		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
+	}
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	var accountId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	return accountId
 }
