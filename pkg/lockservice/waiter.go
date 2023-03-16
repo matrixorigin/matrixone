@@ -97,9 +97,10 @@ func (w *waiter) String() string {
 	if w == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("%s-%p",
+	return fmt.Sprintf("%s-%p(%d)",
 		hex.EncodeToString(w.txnID),
-		w)
+		w,
+		w.refCount.Load())
 }
 
 func (w *waiter) setFinalizer() {
@@ -116,7 +117,7 @@ func (w *waiter) ref() int32 {
 func (w *waiter) unref() {
 	n := w.refCount.Add(-1)
 	if n < 0 {
-		panic("BUG: invalid ref count")
+		panic("BUG: invalid ref count, " + w.String())
 	}
 	if n == 0 {
 		w.reset()

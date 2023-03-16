@@ -21,10 +21,10 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -76,9 +76,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 
-	if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
 		ap.Free(proc, true)
 		return false, err
+	} else if end {
+		return end, nil
 	}
 
 	if ctr.bat == nil {
@@ -91,16 +93,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return err == nil, err
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
 		if ctr.aliveMergeReceiver == 0 {
-			return nil
+			return false, nil
 		}
 
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+			logutil.Errorf("pipeline closed unexpectedly")
+			return true, nil
 		}
 		anal.WaitStop(start)
 
@@ -123,7 +126,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		for _, f := range ap.Fs {
 			vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 			if err != nil {
-				return err
+				return false, err
 			}
 			flg := true
 			for i := range bat.Vecs {
@@ -169,7 +172,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
 			bat.Clean(proc.Mp())
-			return err
+			return false, err
 		}
 		bat.Clean(proc.Mp())
 	}

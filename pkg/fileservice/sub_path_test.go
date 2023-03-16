@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tree
+package fileservice
 
-type MoDump struct {
-	statementImpl
-	ExportParams *ExportParam
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestSubPathFS(t *testing.T) {
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func(name string) FileService {
+			upstream, err := NewMemoryFS(name)
+			assert.Nil(t, err)
+			return SubPath(upstream, "foo")
+		})
+	})
 }
-
-func (node *MoDump) Format(ctx *FmtCtx) {
-	ctx.WriteString("modump")
-	ctx.WriteString(" query_result")
-	ctx.WriteByte(' ')
-	ctx.WriteString(node.ExportParams.QueryId)
-	ctx.WriteByte(' ')
-	node.ExportParams.format(ctx, false)
-}
-
-func (node *MoDump) GetStatementType() string { return "MoDump" }
-func (node *MoDump) GetQueryType() string     { return QueryTypeDQL }
