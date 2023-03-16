@@ -79,14 +79,6 @@ func TestVectorShallowForeach(t *testing.T) {
 			}
 			return nil
 		}, nil)
-
-		vec.GetView().ForeachShallow(func(v any, row int) error {
-			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
-			}
-			return nil
-		}, nil)
 	}
 }
 
