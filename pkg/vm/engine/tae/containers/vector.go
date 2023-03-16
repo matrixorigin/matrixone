@@ -81,11 +81,14 @@ func (vec *vector[T]) Get(i int) any {
 		return any(ret).(T)
 	}
 
-	return vec.ShallowGet(i)
+	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 
 func (vec *vector[T]) ShallowGet(i int) any {
-	return GetValue(vec.downstreamVector, uint32(i))
+	if vec.IsNull(i) {
+		return types.Null{}
+	}
+	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 
 func (vec *vector[T]) Length() int {
@@ -369,37 +372,37 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 }
 
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
-	//TODO: Benchmark.
-	if !vec.Nullable() {
-		var v T
-		if _, ok := any(v).([]byte); !ok {
-			// Optimization for :- Vectors which are 1. not nullable & 2. not byte[]
-			slice := vec.Slice().([]T)
-			slice = slice[offset+bias : offset+length+bias]
-			if sels == nil || sels.IsEmpty() {
-				for i, elem := range slice {
-					if err = op(elem, i+offset); err != nil {
-						break
-					}
-				}
-			} else {
-				idxes := sels.ToArray()
-				end := offset + length
-				for _, idx := range idxes {
-					if int(idx) < offset {
-						continue
-					} else if int(idx) >= end {
-						break
-					}
-					if err = op(slice[int(idx)-offset], int(idx)); err != nil {
-						break
-					}
-				}
-			}
-			return
-		}
-
-	}
+	//TODO: Removing this optimization temporarily. Fix this bug of BVT later.
+	//if !vec.Nullable() {
+	//	var v T
+	//	if _, ok := any(v).([]byte); !ok {
+	//		// Optimization for :- Vectors which are 1. not nullable & 2. not byte[]
+	//		slice := vec.Slice().([]T)
+	//		slice = slice[offset+bias : offset+length+bias]
+	//		if sels == nil || sels.IsEmpty() {
+	//			for i, elem := range slice {
+	//				if err = op(elem, i+offset); err != nil {
+	//					break
+	//				}
+	//			}
+	//		} else {
+	//			idxes := sels.ToArray()
+	//			end := offset + length
+	//			for _, idx := range idxes {
+	//				if int(idx) < offset {
+	//					continue
+	//				} else if int(idx) >= end {
+	//					break
+	//				}
+	//				if err = op(slice[int(idx)-offset], int(idx)); err != nil {
+	//					break
+	//				}
+	//			}
+	//		}
+	//		return
+	//	}
+	//
+	//}
 	if sels == nil || sels.IsEmpty() {
 		for rowId := offset; rowId < offset+length; rowId++ {
 			var elem any

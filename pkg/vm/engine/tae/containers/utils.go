@@ -231,6 +231,11 @@ func GetValue(col *movec.Vector, row uint32) any {
 	if col.GetNulls().Np != nil && col.GetNulls().Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
+	return getNonNullValue(col, row)
+}
+
+// getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
+func getNonNullValue(col *movec.Vector, row uint32) any {
 
 	switch col.GetType().Oid {
 	case types.T_bool:
