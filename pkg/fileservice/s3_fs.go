@@ -73,6 +73,7 @@ func NewS3FS(
 	diskCacheCapacity int64,
 	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -88,12 +89,14 @@ func NewS3FS(
 
 	fs.perfCounterSets = perfCounterSets
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
@@ -111,6 +114,7 @@ func NewS3FSOnMinio(
 	diskCacheCapacity int64,
 	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -127,12 +131,14 @@ func NewS3FSOnMinio(
 
 	fs.perfCounterSets = perfCounterSets
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
