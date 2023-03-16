@@ -114,6 +114,7 @@ show variables like 'autocommit';
 drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;
+drop table t1;
 
 SHOW TRIGGERS;
 SHOW TRIGGERS like '*%';
@@ -221,9 +222,9 @@ show CREATE TABLE show_04;
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 DROP TABLE show_04;
-
-
 DROP DATABASE test;
+
+drop database test if exists;
 create database test;
 use test;
 drop table if exists t1;
@@ -240,7 +241,6 @@ drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 drop table t3;
-
 drop database test;
 
 drop database if exists test;
@@ -248,3 +248,108 @@ create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
 drop database test;
+
+-- show grants for role in sys account
+create role newrole;
+grant all on table *.* to newrole;
+grant create table, drop table on database *.* to newrole;
+create user newuser identified by 'passwd';
+grant newrole to newuser;
+show grants for 'newuser'@'localhost';
+show grants for role newrole;
+show grants for 'abcuser'@'localhost';
+show grants for role role1;
+
+create account if not exists `grant01` ADMIN_NAME 'wladmin' IDENTIFIED BY '123456';
+-- @session:id=2&user=grant01:wladmin&password=123456
+show grants for 'newuser'@'localhost';
+show grants for role newrole;
+-- @session
+drop user newuser;
+drop role newrole;
+drop account grant01;
+
+-- show grants for role in non-sys account
+create account if not exists `grant02` ADMIN_NAME 'wladmin' IDENTIFIED BY '123456';
+-- @session:id=1&user=grant02:wladmin&password=123456
+create role newrole1;
+grant all on table *.* to newrole1;
+grant create table, drop table on database *.* to newrole1;
+create user newuser1 identified by 'passwd';
+grant newrole1 to newuser1;
+show grants for 'newuser1'@'localhost';
+show grants for role newrole1;
+show grants for 'abcuser1'@'localhost';
+show grants for role role1;
+
+show grants for 'newuser1'@'localhost';
+show grants for role newrole1;
+-- @session
+drop user newuser1;
+drop role newrole1;
+drop account grant02;
+
+-- show index test in sys
+-- @bvt:issue#8392
+drop table if exists index01;
+create table index01(s varchar(20), id int);
+create index index1 on index01(s);
+show index from index01;
+
+-- if index is primary key, key_name is primary
+drop table if exists index02;
+create table index02(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into index02 values(1,"Abby", 24);
+insert into index02 values(2,"Bob", 25);
+create unique index idx on index02(name);
+select * from index02;
+show index from index02;
+
+drop table if exists index03;
+create table index03 (col1 bigint auto_increment primary key,col2 date,col3 varchar(20),unique key d1(col2),key d2(col3));
+insert into index03 values(37821,'2022-01-01','hjeiwqn328ljdvk数据库');
+show index from index03;
+
+create account accountindex03 admin_name = 'wladmin' identified by '123456';
+-- @session:id=2&user=accountindex03:wladmin&password='123456';
+show index from index01;
+show index from index02;
+show index from index03;
+-- @session
+drop table index01;
+drop table index02;
+drop table index03;
+-- @bvt:issue
+
+-- show index in non-sys
+-- @bvt:issue#8392
+create account aaa admin_name = 'wladmin' identified by '123456';
+-- @session:id=2&user=aaa:wladmin&password='123456';
+drop table if exists index04;
+create table index04(a int, b varchar(30), c bigint, d char, unique key(b,c),key d1(b));
+show index from index04;
+drop table index04;
+
+drop table if exists index05;
+create table index05(a int primary key auto_increment,b bigint,c char, key(c));
+show index from index05;
+drop table index05;
+
+drop table if exists index06;
+create table index06(a varchar(20), b int, c smallint);
+create index index6 on index06(a,b);
+show index from index06;
+drop table index06;
+
+drop table if exists index07;
+create table index07(a int unique key, b int unsigned, c decimal(10));
+show index from index07;
+drop table index07;
+
+drop table if exists index08;
+create table index08(a int auto_increment,b char,c varchar(10));
+create unique index index08 on index08(a,b);
+show index from index08;
+drop table index08;
+-- @session
+-- @bvt:issue

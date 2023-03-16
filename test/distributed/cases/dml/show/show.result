@@ -19,18 +19,18 @@ t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        null
-name    VARCHAR(10)    YES        null
 str    CHAR(10)    YES        null
+name    VARCHAR(10)    YES        null
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT(32)    null    NO        null        select,insert,update,references
-name    VARCHAR(10)    null    YES        null        select,insert,update,references
 str    CHAR(10)    null    YES        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT(32)    null    NO        null        select,insert,update,references
-name    VARCHAR(10)    null    YES        null        select,insert,update,references
 str    CHAR(10)    null    YES        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
 show full columns from t1 where Field ='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT(32)    null    NO        null        select,insert,update,references
@@ -137,10 +137,10 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 Grants for user1@localhost
+GRANT connect ON account  `user1`@`localhost`
 GRANT table all ON table *.* `user1`@`localhost`
 GRANT create table ON database *.* `user1`@`localhost`
 GRANT drop table ON database *.* `user1`@`localhost`
-GRANT connect ON account  `user1`@`localhost`
 drop user user1;
 drop role role1;
 create database if not exists test03;
@@ -212,6 +212,7 @@ create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(38,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+drop table t1;
 SHOW TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 SHOW TRIGGERS like '*%';
@@ -227,9 +228,9 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
+mo_columns
 mo_database
 mo_tables
-mo_columns
 show table_number from mo_catalog;
 Number of tables in mo_catalog
 11
@@ -320,9 +321,9 @@ DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
 show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
-show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_01;
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
@@ -332,10 +333,10 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
 show_02    1    PRIMARY    1    __mo_cpkey_col    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -356,11 +357,13 @@ show_04    CREATE TABLE `show_04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_04    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
 show_04    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
-show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_04;
 DROP DATABASE test;
+drop database test if exists;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " if exists;";
 create database test;
 use test;
 drop table if exists t1;
@@ -395,3 +398,158 @@ SHOW CREATE TABLE information_schema.columns;
 View    Create View
 columns    CREATE VIEW COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='%!%mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
 drop database test;
+create role newrole;
+grant all on table *.* to newrole;
+grant create table, drop table on database *.* to newrole;
+create user newuser identified by 'passwd';
+grant newrole to newuser;
+show grants for 'newuser'@'localhost';
+Grants for newuser@localhost
+GRANT connect ON account  `newuser`@`localhost`
+GRANT table all ON table *.* `newuser`@`localhost`
+GRANT create table ON database *.* `newuser`@`localhost`
+GRANT drop table ON database *.* `newuser`@`localhost`
+show grants for role newrole;
+Grants for newrole
+GRANT table all ON table *.* `newrole`
+GRANT create table ON database *.* `newrole`
+GRANT drop table ON database *.* `newrole`
+show grants for 'abcuser'@'localhost';
+Grants for abcuser@localhost
+show grants for role role1;
+Grants for role1
+create account if not exists `grant01` ADMIN_NAME 'wladmin' IDENTIFIED BY '123456';
+show grants for 'newuser'@'localhost';
+Grants for newuser@localhost
+show grants for role newrole;
+Grants for newrole
+drop user newuser;
+drop role newrole;
+drop account grant01;
+create account if not exists `grant02` ADMIN_NAME 'wladmin' IDENTIFIED BY '123456';
+create role newrole1;
+grant all on table *.* to newrole1;
+grant create table, drop table on database *.* to newrole1;
+create user newuser1 identified by 'passwd';
+grant newrole1 to newuser1;
+show grants for 'newuser1'@'localhost';
+Grants for newuser1@localhost
+GRANT connect ON account  `newuser1`@`localhost`
+GRANT table all ON table *.* `newuser1`@`localhost`
+GRANT create table ON database *.* `newuser1`@`localhost`
+GRANT drop table ON database *.* `newuser1`@`localhost`
+show grants for role newrole1;
+Grants for newrole1
+GRANT table all ON table *.* `newrole1`
+GRANT create table ON database *.* `newrole1`
+GRANT drop table ON database *.* `newrole1`
+show grants for 'abcuser1'@'localhost';
+Grants for abcuser1@localhost
+show grants for role role1;
+Grants for role1
+show grants for 'newuser1'@'localhost';
+Grants for newuser1@localhost
+GRANT connect ON account  `newuser1`@`localhost`
+GRANT table all ON table *.* `newuser1`@`localhost`
+GRANT create table ON database *.* `newuser1`@`localhost`
+GRANT drop table ON database *.* `newuser1`@`localhost`
+show grants for role newrole1;
+Grants for newrole1
+GRANT table all ON table *.* `newrole1`
+GRANT create table ON database *.* `newrole1`
+GRANT drop table ON database *.* `newrole1`
+drop user newuser1;
+internal error: there is no user newuser1
+drop role newrole1;
+internal error: there is no role newrole1
+drop account grant02;
+drop table if exists index01;
+[unknown result because it is related to issue#8392]
+create table index01(s varchar(20), id int);
+[unknown result because it is related to issue#8392]
+create index index1 on index01(s);
+[unknown result because it is related to issue#8392]
+show index from index01;
+[unknown result because it is related to issue#8392]
+drop table if exists index02;
+[unknown result because it is related to issue#8392]
+create table index02(id int PRIMARY KEY,name VARCHAR(255),age int);
+[unknown result because it is related to issue#8392]
+insert into index02 values(1,"Abby", 24);
+[unknown result because it is related to issue#8392]
+insert into index02 values(2,"Bob", 25);
+[unknown result because it is related to issue#8392]
+create unique index idx on index02(name);
+[unknown result because it is related to issue#8392]
+select * from index02;
+[unknown result because it is related to issue#8392]
+show index from index02;
+[unknown result because it is related to issue#8392]
+drop table if exists index03;
+[unknown result because it is related to issue#8392]
+create table index03 (col1 bigint auto_increment primary key,col2 date,col3 varchar(20),unique key d1(col2),key d2(col3));
+[unknown result because it is related to issue#8392]
+insert into index03 values(37821,'2022-01-01','hjeiwqn328ljdvk数据库');
+[unknown result because it is related to issue#8392]
+show index from index03;
+[unknown result because it is related to issue#8392]
+create account accountindex03 admin_name = 'wladmin' identified by '123456';
+[unknown result because it is related to issue#8392]
+show index from index01;
+[unknown result because it is related to issue#8392]
+show index from index02;
+[unknown result because it is related to issue#8392]
+show index from index03;
+[unknown result because it is related to issue#8392]
+drop table index01;
+[unknown result because it is related to issue#8392]
+drop table index02;
+[unknown result because it is related to issue#8392]
+drop table index03;
+[unknown result because it is related to issue#8392]
+create account aaa admin_name = 'wladmin' identified by '123456';
+[unknown result because it is related to issue#8392]
+drop table if exists index04;
+[unknown result because it is related to issue#8392]
+create table index04(a int, b varchar(30), c bigint, d char, unique key(b,c),key d1(b));
+[unknown result because it is related to issue#8392]
+show index from index04;
+[unknown result because it is related to issue#8392]
+drop table index04;
+[unknown result because it is related to issue#8392]
+drop table if exists index05;
+[unknown result because it is related to issue#8392]
+create table index05(a int primary key auto_increment,b bigint,c char, key(c));
+[unknown result because it is related to issue#8392]
+show index from index05;
+[unknown result because it is related to issue#8392]
+drop table index05;
+[unknown result because it is related to issue#8392]
+drop table if exists index06;
+[unknown result because it is related to issue#8392]
+create table index06(a varchar(20), b int, c smallint);
+[unknown result because it is related to issue#8392]
+create index index6 on index06(a,b);
+[unknown result because it is related to issue#8392]
+show index from index06;
+[unknown result because it is related to issue#8392]
+drop table index06;
+[unknown result because it is related to issue#8392]
+drop table if exists index07;
+[unknown result because it is related to issue#8392]
+create table index07(a int unique key, b int unsigned, c decimal(10));
+[unknown result because it is related to issue#8392]
+show index from index07;
+[unknown result because it is related to issue#8392]
+drop table index07;
+[unknown result because it is related to issue#8392]
+drop table if exists index08;
+[unknown result because it is related to issue#8392]
+create table index08(a int auto_increment,b char,c varchar(10));
+[unknown result because it is related to issue#8392]
+create unique index index08 on index08(a,b);
+[unknown result because it is related to issue#8392]
+show index from index08;
+[unknown result because it is related to issue#8392]
+drop table index08;
+[unknown result because it is related to issue#8392]
