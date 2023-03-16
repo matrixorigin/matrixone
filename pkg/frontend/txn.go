@@ -31,8 +31,16 @@ type TxnHandler struct {
 	txnClient   TxnClient
 	ses         *Session
 	txnOperator TxnOperator
-	mu          sync.Mutex
-	entryMu     sync.Mutex
+
+	// it is for the transaction and different from the requestCtx.
+	// it is created before the transaction is started and
+	// released after the transaction is commit or rollback.
+	// the lifetime of txnCtx is longer than the requestCtx.
+	// the timeout of txnCtx is from the FrontendParameters.SessionTimeout with
+	// default 24 hours.
+	txnCtx  context.Context
+	mu      sync.Mutex
+	entryMu sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -41,6 +49,22 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 		txnClient: txnClient,
 	}
 	return h
+}
+
+func (th *TxnHandler) ClearTxnCtx() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnCtx = nil
+}
+
+func (th *TxnHandler) GetTxnCtx() context.Context {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.txnCtx == nil {
+		th.txnCtx, _ = context.WithTimeout(th.ses.GetConnectContext(),
+			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
+	}
+	return th.txnCtx
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -112,11 +136,12 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	if ctx == nil {
+	txnCtx := th.GetTxnCtx()
+	if txnCtx == nil {
 		panic("context should not be nil")
 	}
 	storage := th.GetStorage()
-	err = storage.New(ctx, th.GetTxnOperator())
+	err = storage.New(txnCtx, th.GetTxnOperator())
 	return err
 }
 
@@ -159,16 +184,16 @@ func (th *TxnHandler) CommitTxn() error {
 	}
 	ses := th.GetSession()
 	sessionProfile := ses.GetConciseProfile()
-	ctx := ses.GetRequestContext()
-	if ctx == nil {
+	ctx1 := th.GetTxnCtx()
+	if ctx1 == nil {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
+		ctx1 = context.WithValue(ctx1, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
+	ctx2, cancel := context.WithTimeout(
+		ctx1,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
@@ -183,6 +208,8 @@ func (th *TxnHandler) CommitTxn() error {
 	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
+		th.SetTxnOperatorInvalid()
+		th.ClearTxnCtx()
 		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
 	}
 
@@ -191,11 +218,12 @@ func (th *TxnHandler) CommitTxn() error {
 	defer func() {
 		logDebugf(sessionProfile, "CommitTxn exit txnId:%s", txnId)
 	}()
-	if err = storage.Commit(ctx, txnOp); err != nil {
+	if err = storage.Commit(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
+		th.ClearTxnCtx()
 		logErrorf(sessionProfile, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx)
+			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
 				logErrorf(sessionProfile, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
@@ -203,13 +231,15 @@ func (th *TxnHandler) CommitTxn() error {
 		return err
 	}
 	if txnOp != nil {
-		err = txnOp.Commit(ctx)
+		err = txnOp.Commit(ctx2)
 		if err != nil {
 			th.SetTxnOperatorInvalid()
+			th.ClearTxnCtx()
 			logErrorf(sessionProfile, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()
+	th.ClearTxnCtx()
 	return err
 }
 
@@ -221,16 +251,16 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	ses := th.GetSession()
 	sessionProfile := ses.GetConciseProfile()
-	ctx := ses.GetRequestContext()
-	if ctx == nil {
+	ctx1 := th.GetTxnCtx()
+	if ctx1 == nil {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx = context.WithValue(ctx, defines.TemporaryDN{}, ses.tempTablestorage)
+		ctx1 = context.WithValue(ctx1, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
-	ctx, cancel := context.WithTimeout(
-		ctx,
+	ctx2, cancel := context.WithTimeout(
+		ctx1,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
@@ -246,6 +276,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
+		th.ClearTxnCtx()
 		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
 	}
 	txnId := txnOp.Txn().DebugString()
@@ -253,11 +284,12 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer func() {
 		logDebugf(sessionProfile, "RollbackTxn exit txnId:%s", txnId)
 	}()
-	if err = storage.Rollback(ctx, txnOp); err != nil {
+	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
+		th.ClearTxnCtx()
 		logErrorf(sessionProfile, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx)
+			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
 				logErrorf(sessionProfile, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
@@ -265,13 +297,15 @@ func (th *TxnHandler) RollbackTxn() error {
 		return err
 	}
 	if txnOp != nil {
-		err = txnOp.Rollback(ctx)
+		err = txnOp.Rollback(ctx2)
+		th.ClearTxnCtx()
 		if err != nil {
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionProfile, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()
+	th.ClearTxnCtx()
 	return err
 }
 
@@ -283,7 +317,7 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
 	ses := th.GetSession()
-	err := ses.TxnStart()
+	err := ses.TxnCreate()
 	if err != nil {
 		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
@@ -380,7 +414,7 @@ func (ses *Session) InActiveMultiStmtTransaction() bool {
 }
 
 /*
-TxnStart starts the transaction implicitly and idempotent
+TxnCreate creates the transaction implicitly and idempotent
 
 When it is in multi-statement transaction mode:
 
@@ -391,7 +425,7 @@ When it is not in single statement transaction mode:
 
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 */
-func (ses *Session) TxnStart() error {
+func (ses *Session) TxnCreate() error {
 	var err error
 	if ses.InMultiStmtTransactionMode() {
 		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)

@@ -115,6 +115,7 @@ type Session struct {
 	lastStmtId   uint32
 
 	requestCtx context.Context
+	connectCtx context.Context
 
 	//it gets the result set from the pipeline and send it to the client
 	outputCallback func(interface{}, *batch.Batch) error
@@ -180,26 +181,6 @@ type Session struct {
 	planCache *planCache
 
 	autoIncrCaches defines.AutoIncrCaches
-
-	// it is for the transaction and different from the requestCtx.
-	// it is created before the transaction is started and
-	// released after the transaction is commit or rollback.
-	// the lifetime of txnCtx is longer than the requestCtx.
-	// the timeout of txnCtx is from the FrontendParameters.SessionTimeout with
-	// default 24 hours.
-	txnCtx context.Context
-}
-
-func (ses *Session) SetTxnCtx(ctx context.Context) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.txnCtx = ctx
-}
-
-func (ses *Session) GetTxnCtx() context.Context {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.txnCtx
 }
 
 // The update version. Four function.
@@ -663,6 +644,18 @@ func (ses *Session) GetRequestContext() context.Context {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.requestCtx
+}
+
+func (ses *Session) SetConnectContext(conn context.Context) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.connectCtx = conn
+}
+
+func (ses *Session) GetConnectContext() context.Context {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.connectCtx
 }
 
 func (ses *Session) SetTimeZone(loc *time.Location) {
