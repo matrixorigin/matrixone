@@ -46,6 +46,10 @@ type = "distributed-tae"
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
 
+[cn.lockservice]
+listen-address = "0.0.0.0:7003"
+service-address = "127.0.0.1:7003"
+
 [cn.rpc]
 send-queue-size = 2
 busy-queue-size = 1
