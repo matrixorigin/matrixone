@@ -29,33 +29,57 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.localRegsCnt = len(ap.LocalRegs)
+	ap.remoteRegsCnt = len(ap.RemoteRegs)
+	ap.aliveRegCnt = ap.localRegsCnt + ap.remoteRegsCnt
 
 	switch ap.FuncId {
 	case SendToAllFunc:
-		if len(ap.RemoteRegs) == 0 {
+		if ap.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
 		}
 		ap.prepared = false
-		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
-		ap.ctr.sendFunc = sendToAllFunc
+		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, ap.remoteRegsCnt)
+		if len(ap.LocalRegs) == 0 {
+			ap.ctr.sendFunc = sendToAllRemoteFunc
+		} else {
+			ap.ctr.sendFunc = sendToAllFunc
+		}
+		for _, rr := range ap.RemoteRegs {
+			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+		}
+
+	case SendToAnyFunc:
+		if ap.remoteRegsCnt == 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAnyFunc should include RemoteRegs")
+		}
+		ap.prepared = false
+		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, ap.remoteRegsCnt)
+		if len(ap.LocalRegs) == 0 {
+			ap.ctr.sendFunc = sendToAnyRemoteFunc
+		} else {
+			ap.ctr.sendFunc = sendToAnyFunc
+		}
 		for _, rr := range ap.RemoteRegs {
 			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
 		}
 
 	case SendToAllLocalFunc:
-		if len(ap.RemoteRegs) != 0 {
+		if ap.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
 		}
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAllLocalFunc
+
 	case SendToAnyLocalFunc:
-		if len(ap.RemoteRegs) != 0 {
+		if ap.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
 		}
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
+
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}
@@ -91,14 +115,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	*/
 
-	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
-		return false, err
-	}
-	if len(ap.LocalRegs) == 0 {
-		return true, nil
-	}
-	proc.SetInputBatch(nil)
-	return false, nil
+	return ap.ctr.sendFunc(bat, ap, proc)
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) {
