@@ -105,7 +105,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 // send it to next one.
 func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	for {
-		sendto := ap.sendCnt % len(ap.LocalRegs)
+		sendto := ap.sendCnt % ap.localRegsCnt
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-reg.Ctx.Done():
@@ -117,7 +117,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				bat.Clean(proc.Mp())
 			}
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-			if len(ap.LocalRegs) == 0 {
+			ap.localRegsCnt--
+			ap.aliveRegCnt--
+			if ap.localRegsCnt == 0 {
 				return true, nil
 			}
 		case reg.Ch <- bat:
@@ -139,19 +141,21 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 
 	for {
-		regIdx := ap.sendCnt % len(ap.ctr.remoteReceivers)
+		regIdx := ap.sendCnt % ap.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 
 		if err := sendBatchToClientSession(encodeData, reg); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
 				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
-				if len(ap.ctr.remoteReceivers) == 0 {
+				ap.remoteRegsCnt--
+				ap.aliveRegCnt--
+				if ap.remoteRegsCnt == 0 {
 					return true, nil
 				}
 				ap.sendCnt++
 				continue
 			} else {
-				return false, nil
+				return false, err
 			}
 		}
 		ap.sendCnt++
@@ -159,27 +163,30 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 }
 
-// make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
+// Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
 func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	toLocal := (ap.sendCnt % 2) == 0
+	toLocal := (ap.sendCnt % ap.aliveRegCnt) < ap.localRegsCnt
 	if toLocal {
 		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)
 		if err != nil {
 			return false, nil
 		}
-		if allclosed { // all local reg closed
+		if allclosed { // all local reg closed, change sendFunc to send remote only
 			ap.ctr.sendFunc = sendToAnyRemoteFunc
+			return ap.ctr.sendFunc(bat, ap, proc)
 		}
 	} else {
 		allclosed, err := sendToAnyRemoteFunc(bat, ap, proc)
 		if err != nil {
 			return false, nil
 		}
-		if allclosed { // all remote reg closed
+		if allclosed { // all remote reg closed, change sendFunc to send local only
 			ap.ctr.sendFunc = sendToAnyLocalFunc
+			return ap.ctr.sendFunc(bat, ap, proc)
 		}
 	}
 	return false, nil
+
 }
 
 func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) error {
