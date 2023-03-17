@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -52,7 +53,7 @@ func (l *localLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
-	opts LockOptions) error {
+	opts LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
 	defer span.End()
@@ -62,7 +63,7 @@ func (l *localLockTable) lock(
 	var w *waiter
 	var err error
 	var idx int
-
+	var result pb.Result
 	logLocalLock(l.bind.ServiceID, txn, table, rows, opts)
 	for {
 		idx, w, err = l.doAcquireLock(
@@ -73,20 +74,21 @@ func (l *localLockTable) lock(
 			opts)
 		if err != nil {
 			logLocalLockFailed(l.bind.ServiceID, txn, table, rows, opts, err)
-			return err
+			return result, err
 		}
 		// no waiter, all locks are added
 		if w == nil {
 			txn.setBlocked(txn.txnID, nil)
 			logLocalLockAdded(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
-			return nil
+			return result, nil
 		}
 
+		// TODO(fagongzi): committed or rollback? get committed timestamp
 		err = w.wait(ctx, l.bind.ServiceID)
 		logLocalLockWaitOnResult(l.bind.ServiceID, txn, table, rows[idx], opts, w, err)
 		if err != nil {
 			w.close(l.bind.ServiceID, err)
-			return err
+			return result, err
 		}
 		w.resetWait(l.bind.ServiceID)
 		offset = idx
@@ -95,7 +97,8 @@ func (l *localLockTable) lock(
 
 func (l *localLockTable) unlock(
 	txn *activeTxn,
-	ls *cowSlice) {
+	ls *cowSlice,
+	committedTimestamp timestamp.Timestamp) {
 	logUnlockTableOnLocal(
 		l.bind.ServiceID,
 		txn,

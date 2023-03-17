@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -31,7 +33,9 @@ var (
 	}
 )
 
-func acquireWaiter(serviceID string, txnID []byte) *waiter {
+func acquireWaiter(
+	serviceID string,
+	txnID []byte) *waiter {
 	w := waiterPool.Get().(*waiter)
 	logWaiterContactPool(serviceID, w, "get")
 	w.txnID = txnID
@@ -44,7 +48,7 @@ func acquireWaiter(serviceID string, txnID []byte) *waiter {
 
 func newWaiter() *waiter {
 	w := &waiter{
-		c:       make(chan error, 1),
+		c:       make(chan notifyValue, 1),
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
@@ -84,7 +88,7 @@ const (
 type waiter struct {
 	txnID    []byte
 	status   atomic.Int32
-	c        chan error
+	c        chan notifyValue
 	waiters  waiterQueue
 	refCount atomic.Int32
 
@@ -307,4 +311,9 @@ func (w *waiter) reset(serviceID string) {
 	w.setStatus(serviceID, waiting)
 	w.waiters.reset()
 	waiterPool.Put(w)
+}
+
+type notifyValue struct {
+	err error
+	ts  timestamp.Timestamp
 }

@@ -19,6 +19,7 @@ package lock;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/lock";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
@@ -196,4 +197,13 @@ message KeepRemoteLockResponse {
   bool OK = 1;
 }
 
-
+// Result result is used to tell the caller the result of the lock operation.
+message Result {
+  // LockedOn lock is locked on which locktable
+  LockTable           LockedOn  = 1;
+  // AfterWait if true means current operation is blocked by a active txn.
+  bool                AfterWait = 2;
+  // CommitTS if current txn is blocked by a committed txn, the value is the
+  // committed txn's commit timestamp in dn 
+  timestamp.Timestamp CommitTS  = 3 [(gogoproto.nullable) = false];
+}

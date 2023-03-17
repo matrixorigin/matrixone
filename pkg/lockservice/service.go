@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -65,7 +66,7 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) (pb.LockTable, error) {
+	options LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
@@ -73,16 +74,15 @@ func (s *service) Lock(
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
 	if err != nil {
-		return pb.LockTable{}, err
+		return pb.Result{}, err
 	}
-
-	if err := l.lock(ctx, txn, rows, options); err != nil {
-		return pb.LockTable{}, err
-	}
-	return l.getBind(), nil
+	return l.lock(ctx, txn, rows, options)
 }
 
-func (s *service) Unlock(ctx context.Context, txnID []byte) error {
+func (s *service) Unlock(
+	ctx context.Context,
+	txnID []byte,
+	committedTimestamp timestamp.Timestamp) error {
 	// FIXME(fagongzi): too many mem alloc in trace
 	_, span := trace.Debug(ctx, "lockservice.unlock")
 	defer span.End()
