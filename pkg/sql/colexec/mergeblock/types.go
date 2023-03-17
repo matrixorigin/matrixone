@@ -35,7 +35,7 @@ type Argument struct {
 	Unique_tbls  []engine.Relation
 	AffectedRows uint64
 	// 3. used for ut_test, otherwise the batch will free,
-	// and we cna't get the result to check
+	// and we can't get the result to check
 	notFreeBatch bool
 	container    *Container
 }
@@ -72,7 +72,10 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			}
 			arg.AffectedRows += val
 		}
-		vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
+		err := vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
+		if err != nil {
+			return err
+		}
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())

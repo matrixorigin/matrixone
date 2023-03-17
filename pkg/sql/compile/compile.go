@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -335,7 +336,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	return c.compileApQuery(qry, ss)
+	s, err := c.compileApQuery(qry, ss)
+	logutil.Infof("%s", DebugShowScopes([]*Scope{s}))
+	return s, err
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
