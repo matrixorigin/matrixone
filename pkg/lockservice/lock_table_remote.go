@@ -63,7 +63,7 @@ func (l *remoteLockTable) lock(
 	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()
 
-	logRemoteLock(txn, rows, opts, l.bind)
+	logRemoteLock(l.serviceID, txn, rows, opts, l.bind)
 
 	req := acquireRequest()
 	defer releaseRequest(req)
@@ -79,7 +79,7 @@ func (l *remoteLockTable) lock(
 	if err == nil {
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
-			logRemoteLockFailed(txn, rows, opts, l.bind, err)
+			logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
 			return err
 		}
 
@@ -87,12 +87,12 @@ func (l *remoteLockTable) lock(
 		// mechanism reading an incorrect data.
 		txn.Lock()
 		defer txn.Unlock()
-		txn.lockAdded(l.bind.Table, rows, true)
-		logRemoteLockAdded(txn, rows, opts, l.bind)
+		txn.lockAdded(l.serviceID, l.bind.Table, rows, true)
+		logRemoteLockAdded(l.serviceID, txn, rows, opts, l.bind)
 		return nil
 	}
 
-	logRemoteLockFailed(txn, rows, opts, l.bind, err)
+	logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
@@ -104,6 +104,7 @@ func (l *remoteLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice) {
 	logUnlockTableOnRemote(
+		l.serviceID,
 		txn,
 		l.bind)
 	for {
@@ -113,6 +114,7 @@ func (l *remoteLockTable) unlock(
 		}
 
 		logUnlockTableOnRemoteFailed(
+			l.serviceID,
 			txn,
 			l.bind,
 			err)
@@ -136,7 +138,7 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 				fn(lock)
 				w := lock.waiter
 				for {
-					w = w.close(nil)
+					w = w.close(l.serviceID, nil)
 					if w == nil {
 						break
 					}
@@ -193,11 +195,11 @@ func (l *remoteLockTable) doGetLock(txnID, key []byte) (Lock, bool, error) {
 		lock := Lock{
 			txnID:  txnID,
 			value:  byte(resp.GetTxnLock.Value),
-			waiter: acquireWaiter(txnID),
+			waiter: acquireWaiter(l.serviceID, txnID),
 		}
 		for _, v := range resp.GetTxnLock.WaitingList {
-			w := acquireWaiter(v)
-			lock.waiter.add(w)
+			w := acquireWaiter(l.serviceID, v)
+			lock.waiter.add(l.serviceID, w)
 		}
 		return lock, true, nil
 	}
@@ -209,7 +211,7 @@ func (l *remoteLockTable) getBind() pb.LockTable {
 }
 
 func (l *remoteLockTable) close() {
-	logLockTableClosed(l.bind, true)
+	logLockTableClosed(l.serviceID, l.bind, true)
 }
 
 func (l *remoteLockTable) handleError(txnID []byte, err error) error {
@@ -228,7 +230,7 @@ func (l *remoteLockTable) handleError(txnID []byte, err error) error {
 		l.bind.Table,
 		l.serviceID)
 	if err != nil {
-		logGetRemoteBindFailed(l.bind.Table, err)
+		logGetRemoteBindFailed(l.serviceID, l.bind.Table, err)
 		return oldError
 	}
 	if new.Changed(l.bind) {
