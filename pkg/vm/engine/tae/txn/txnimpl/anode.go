@@ -200,7 +200,6 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 
 func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
-	buffers []*bytes.Buffer,
 ) (view *model.BlockView, err error) {
 	if !n.IsPersisted() {
 		view = model.NewBlockView(n.table.store.txn.GetStartTS())
