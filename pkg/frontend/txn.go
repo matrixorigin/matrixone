@@ -140,6 +140,7 @@ func (th *TxnHandler) NewTxn() error {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	logDebugf("TxnHandler => NewTxn", "%v", txnCtx)
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, th.GetTxnOperator())
 	return err
@@ -218,6 +219,7 @@ func (th *TxnHandler) CommitTxn() error {
 	defer func() {
 		logDebugf(sessionProfile, "CommitTxn exit txnId:%s", txnId)
 	}()
+	logDebugf("TxnHandler => CommitTxn", "%v", ctx2)
 	if err = storage.Commit(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ClearTxnCtx()
@@ -284,6 +286,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer func() {
 		logDebugf(sessionProfile, "RollbackTxn exit txnId:%s", txnId)
 	}()
+	logDebugf("TxnHandler => RollbackTxn", "%v", ctx2)
 	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ClearTxnCtx()

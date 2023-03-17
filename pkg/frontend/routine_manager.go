@@ -107,6 +107,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// this mpool will be deleted.  Maybe in the following Closed method.
 	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
+	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 
