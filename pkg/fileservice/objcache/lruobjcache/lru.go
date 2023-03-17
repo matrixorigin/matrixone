@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lrupolicy
+package lruobjcache
 
 import (
 	"container/list"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache"
 )
 
 type LRU struct {
@@ -99,7 +100,7 @@ func (l *LRU) evict() {
 			}
 
 			// Releasable
-			if v, ok := item.Value.(memcachepolicy.Releasable); ok {
+			if v, ok := item.Value.(objcache.Releasable); ok {
 				v.Release()
 			}
 
