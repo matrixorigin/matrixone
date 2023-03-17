@@ -87,7 +87,9 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.S3IOByte(bat)
 			a.Alloc(int64(bat.Size()))
 		}
-		logutil.Infof("pipeline.Run read a bat, bat size is %d, addr is %p", bat.Length(), bat)
+		if bat != nil {
+			logutil.Infof("pipeline.Run read a bat, bat size is %d, addr is %p", bat.Length(), bat)
+		}
 
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
