@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,6 +166,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
+	printCtx(tenantCtx, fmt.Sprintf("cmd %d data [%s]", req.GetCmd(), string(req.GetData().([]byte))))
 	ses.SetRequestContext(tenantCtx)
 	ses.SetConnectContext(routineCtx)
 	executor.SetSession(rt.getSession())

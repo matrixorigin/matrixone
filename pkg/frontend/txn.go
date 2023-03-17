@@ -51,18 +51,27 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	return h
 }
 
-func (th *TxnHandler) ClearTxnCtx() {
+func (th *TxnHandler) ResetTxnCtx() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.txnCtx = nil
 }
 
-func (th *TxnHandler) GetTxnCtx() context.Context {
+func (th *TxnHandler) GetTxnCtx(account *TenantInfo) context.Context {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.txnCtx == nil {
 		th.txnCtx, _ = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
+		if account != nil {
+			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
+			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
+			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
+		} else {
+			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, uint32(rootID))
+			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		}
 	}
 	return th.txnCtx
 }
@@ -106,11 +115,25 @@ func (th *TxnHandler) NewTxnOperator() error {
 	return err
 }
 
+func printCtx(ctx context.Context, tips string) {
+	//d, o := ctx.Deadline()
+	//select {
+	//case <-ctx.Done():
+	//	logutil.Errorf("%s err %v \n", tips, ctx.Err())
+	//default:
+	//}
+	//
+	//logutil.Errorf("%s ctx %p %v \n deadline %v \n ok %v \n err %v \n", tips, ctx, ctx, d, o, ctx.Err())
+}
+
 // NewTxn commits the old transaction if it existed.
 // Then it creates the new transaction by Engin.New.
 func (th *TxnHandler) NewTxn() error {
 	var err error
-	ctx := th.GetSession().GetRequestContext()
+	reqCtx := th.GetSession().GetRequestContext()
+	if reqCtx == nil {
+		panic("request context should not be nil")
+	}
 	if th.IsValidTxnOperator() {
 		err = th.CommitTxn()
 		if err != nil {
@@ -120,12 +143,13 @@ func (th *TxnHandler) NewTxn() error {
 				we convert the error into a readable error.
 			*/
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				return moerr.NewInternalError(ctx, writeWriteConflictsErrorInfo())
+				return moerr.NewInternalError(reqCtx, writeWriteConflictsErrorInfo())
 			}
 			return err
 		}
 	}
 	th.SetTxnOperatorInvalid()
+	th.ResetTxnCtx()
 	defer func() {
 		if err != nil {
 			tenant := th.ses.GetTenantName(nil)
@@ -136,10 +160,11 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	txnCtx := th.GetTxnCtx()
+	txnCtx := th.GetTxnCtx(th.GetSession().GetTenantInfo())
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	printCtx(txnCtx, "TxnHandler => NewTxn")
 	logDebugf("TxnHandler => NewTxn", "%v", txnCtx)
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, th.GetTxnOperator())
@@ -185,7 +210,7 @@ func (th *TxnHandler) CommitTxn() error {
 	}
 	ses := th.GetSession()
 	sessionProfile := ses.GetConciseProfile()
-	ctx1 := th.GetTxnCtx()
+	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
 	if ctx1 == nil {
 		panic("context should not be nil")
 	}
@@ -197,6 +222,7 @@ func (th *TxnHandler) CommitTxn() error {
 		ctx1,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
+	printCtx(ctx2, "TxnHandler => CommitTxn")
 	defer cancel()
 	var err, err2 error
 	defer func() {
@@ -210,7 +236,7 @@ func (th *TxnHandler) CommitTxn() error {
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
-		th.ClearTxnCtx()
+		th.ResetTxnCtx()
 		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
 	}
 
@@ -222,7 +248,7 @@ func (th *TxnHandler) CommitTxn() error {
 	logDebugf("TxnHandler => CommitTxn", "%v", ctx2)
 	if err = storage.Commit(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
-		th.ClearTxnCtx()
+		th.ResetTxnCtx()
 		logErrorf(sessionProfile, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx2)
@@ -236,12 +262,12 @@ func (th *TxnHandler) CommitTxn() error {
 		err = txnOp.Commit(ctx2)
 		if err != nil {
 			th.SetTxnOperatorInvalid()
-			th.ClearTxnCtx()
+			th.ResetTxnCtx()
 			logErrorf(sessionProfile, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()
-	th.ClearTxnCtx()
+	th.ResetTxnCtx()
 	return err
 }
 
@@ -253,7 +279,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	ses := th.GetSession()
 	sessionProfile := ses.GetConciseProfile()
-	ctx1 := th.GetTxnCtx()
+	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
 	if ctx1 == nil {
 		panic("context should not be nil")
 	}
@@ -265,6 +291,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		ctx1,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
+	printCtx(ctx2, "TxnHandler => RollbackTxn")
 	defer cancel()
 	var err, err2 error
 	defer func() {
@@ -278,7 +305,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	}()
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
-		th.ClearTxnCtx()
+		th.ResetTxnCtx()
 		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
 	}
 	txnId := txnOp.Txn().DebugString()
@@ -289,7 +316,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	logDebugf("TxnHandler => RollbackTxn", "%v", ctx2)
 	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
-		th.ClearTxnCtx()
+		th.ResetTxnCtx()
 		logErrorf(sessionProfile, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx2)
@@ -301,14 +328,14 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	if txnOp != nil {
 		err = txnOp.Rollback(ctx2)
-		th.ClearTxnCtx()
+		th.ResetTxnCtx()
 		if err != nil {
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionProfile, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()
-	th.ClearTxnCtx()
+	th.ResetTxnCtx()
 	return err
 }
 

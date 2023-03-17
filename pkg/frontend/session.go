@@ -1339,6 +1339,8 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
+// NewBackgroundHandler with first two parameters.
+// connCtx as the parent of the txnCtx
 var NewBackgroundHandler = func(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, autoincrcaches defines.AutoIncrCaches) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
