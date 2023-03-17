@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -63,7 +62,6 @@ const LoggerNameContentReader = "ETLContentReader"
 type Merge struct {
 	Table       *table.Table            // WithTable
 	FS          fileservice.FileService // WithFileService
-	FSName      string                  // WithFileServiceName, cooperate with FS
 	datetime    time.Time               // see Main
 	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
@@ -106,11 +104,6 @@ func WithFileService(fs fileservice.FileService) MergeOption {
 		m.FS = fs
 	})
 }
-func WithFileServiceName(name string) MergeOption {
-	return MergeOption(func(m *Merge) {
-		m.FSName = name
-	})
-}
 func WithMaxFileSize(filesize int64) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.MaxFileSize = filesize
@@ -143,7 +136,6 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool, er
 func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
 	var err error
 	m := &Merge{
-		FSName:        defines.ETLFileServiceName,
 		datetime:      time.Now(),
 		pathBuilder:   table.NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
@@ -155,9 +147,6 @@ func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
 		opt(m)
-	}
-	if m.FS, err = fileservice.Get[fileservice.FileService](m.FS, m.FSName); err != nil {
-		return nil, err
 	}
 	if m.mp, err = mpool.NewMPool("etl_merge_task", 0, mpool.NoFixed); err != nil {
 		return nil, err

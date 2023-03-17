@@ -56,6 +56,7 @@ type S3FS struct {
 	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
+	listMaxKeys     int32
 }
 
 // key mapping scheme:
@@ -73,6 +74,7 @@ func NewS3FS(
 	diskCacheCapacity int64,
 	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -88,12 +90,14 @@ func NewS3FS(
 
 	fs.perfCounterSets = perfCounterSets
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
@@ -111,6 +115,7 @@ func NewS3FSOnMinio(
 	diskCacheCapacity int64,
 	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -127,12 +132,14 @@ func NewS3FSOnMinio(
 
 	fs.perfCounterSets = perfCounterSets
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
@@ -201,16 +208,17 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	if prefix != "" {
 		prefix += "/"
 	}
-	var cont *string
+	var marker *string
 
 	for {
 		output, err := s.s3ListObjects(
 			ctx,
-			&s3.ListObjectsV2Input{
-				Bucket:            ptrTo(s.bucket),
-				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(prefix),
-				ContinuationToken: cont,
+			&s3.ListObjectsInput{
+				Bucket:    ptrTo(s.bucket),
+				Delimiter: ptrTo("/"),
+				Prefix:    ptrTo(prefix),
+				Marker:    marker,
+				MaxKeys:   s.listMaxKeys,
 			},
 		)
 		if err != nil {
@@ -238,11 +246,10 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 			})
 		}
 
-		if output.ContinuationToken == nil ||
-			*output.ContinuationToken == "" {
+		if !output.IsTruncated {
 			break
 		}
-		cont = output.ContinuationToken
+		marker = output.NextMarker
 	}
 
 	return
@@ -981,12 +988,12 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 }
 
-func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.S3.List.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
+	return s.s3Client.ListObjects(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
