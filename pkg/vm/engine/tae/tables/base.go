@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -97,15 +96,15 @@ func (blk *baseBlock) GetColumnData(
 	from uint32,
 	to uint32,
 	colIdx int,
-	buffer *bytes.Buffer) (vec containers.Vector, err error) {
+) (vec containers.Vector, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return node.GetColumnDataWindow(from, to, colIdx, buffer)
+		return node.GetColumnDataWindow(from, to, colIdx)
 	} else {
-		return node.GetColumnDataWindow(from, to, colIdx, buffer)
+		return node.GetColumnDataWindow(from, to, colIdx)
 	}
 }
 
@@ -202,7 +201,7 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 
 	var vec containers.Vector
 	for i, col := range schema.ColDefs {
-		vec, err = blk.LoadPersistedColumnData(i, nil)
+		vec, err = blk.LoadPersistedColumnData(i)
 		if err != nil {
 			return
 		}
@@ -211,10 +210,8 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 	return
 }
 
-func (blk *baseBlock) LoadPersistedColumnData(
-	colIdx int,
-	buffer *bytes.Buffer,
-) (vec containers.Vector, err error) {
+func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
+	vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
@@ -222,8 +219,7 @@ func (blk *baseBlock) LoadPersistedColumnData(
 		blk.fs,
 		blk.meta.AsCommonID(),
 		def,
-		location,
-		buffer)
+		location)
 }
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
@@ -266,7 +262,6 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	pnode *persistedNode,
 	ts types.TS,
 	colIdxs []int,
-	buffers []*bytes.Buffer,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	data, err := blk.LoadPersistedData()
 	if err != nil {
@@ -308,10 +303,9 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	pnode *persistedNode,
 	ts types.TS,
 	colIdx int,
-	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(ts, colIdx)
-	vec, err := blk.LoadPersistedColumnData(colIdx, buffer)
+	vec, err := blk.LoadPersistedColumnData(colIdx)
 	if err != nil {
 		return
 	}
@@ -364,7 +358,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 		pnode,
 		ts,
 		def.Idx,
-		nil,
 		false)
 	if err != nil {
 		return
@@ -403,7 +396,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, nil, true)
+	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, true)
 	if err != nil {
 		return
 	}

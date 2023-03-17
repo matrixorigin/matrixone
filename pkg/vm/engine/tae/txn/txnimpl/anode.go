@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -117,26 +116,17 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 	return
 }
 
-func (n *anode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error) {
-	for i, colIdx := range colIdxes {
+func (n *anode) FillBlockView(view *model.BlockView, colIdxes []int) (err error) {
+	for _, colIdx := range colIdxes {
 		orig := n.storage.mnode.data.Vecs[colIdx]
-		if buffers[i] != nil {
-			view.SetData(colIdx, containers.CloneWithBuffer(orig))
-		} else {
-			view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
-		}
-
+		view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
 	}
 	view.DeleteMask = n.storage.mnode.data.Deletes
 	return
 }
-func (n *anode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
+func (n *anode) FillColumnView(view *model.ColumnView) (err error) {
 	orig := n.storage.mnode.data.Vecs[view.ColIdx]
-	if buffer != nil {
-		view.SetData(containers.CloneWithBuffer(orig))
-	} else {
-		view.SetData(orig.CloneWindow(0, orig.Length()))
-	}
+	view.SetData(orig.CloneWindow(0, orig.Length()))
 	view.DeleteMask = n.storage.mnode.data.Deletes
 	return
 }
@@ -214,16 +204,16 @@ func (n *anode) GetColumnDataByIds(
 ) (view *model.BlockView, err error) {
 	if !n.IsPersisted() {
 		view = model.NewBlockView(n.table.store.txn.GetStartTS())
-		err = n.FillBlockView(view, buffers, colIdxes)
+		err = n.FillBlockView(view, colIdxes)
 		return
 	}
 	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
 }
 
-func (n *anode) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
 	if !n.IsPersisted() {
 		view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
-		err = n.FillColumnView(view, buffer)
+		err = n.FillColumnView(view)
 		return
 	}
 	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")

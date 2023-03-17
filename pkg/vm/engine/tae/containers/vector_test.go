@@ -21,8 +21,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -193,6 +195,52 @@ func TestVector3(t *testing.T) {
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
+func TestVector4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes(17)
+	for _, vecType := range vecTypes {
+		vec := MockVector(vecType, 1000, false, true, nil)
+		assert.Equal(t, 1000, vec.Length())
+		vec.Append(types.Null{})
+		w := new(bytes.Buffer)
+		_, err := vec.WriteTo(w)
+		assert.NoError(t, err)
+		srcBuf := w.Bytes()
+		srcSize := len(srcBuf)
+		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
+		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
+		assert.NoError(t, err)
+		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
+		vec2 := MakeVector(vecType, true)
+		err = vec2.ReadFromFile(f, nil)
+		assert.NoError(t, err)
+		assert.True(t, vec.Equals(vec2))
+		vec.Close()
+		vec2.Close()
+	}
+	buffer := new(bytes.Buffer)
+	for _, vecType := range vecTypes {
+		vec := MockVector(vecType, 1000, false, true, nil)
+		assert.Equal(t, 1000, vec.Length())
+		vec.Append(types.Null{})
+		w := new(bytes.Buffer)
+		_, err := vec.WriteTo(w)
+		assert.NoError(t, err)
+		srcBuf := w.Bytes()
+		srcSize := len(srcBuf)
+		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
+		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
+		assert.NoError(t, err)
+		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
+		vec2 := MakeVector(vecType, true)
+		err = vec2.ReadFromFile(f, buffer)
+		assert.NoError(t, err)
+		assert.True(t, vec.Equals(vec2))
+		vec.Close()
+		vec2.Close()
+	}
+}
+
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
@@ -246,6 +294,7 @@ func TestVector6(t *testing.T) {
 		bias := 0
 		win := vec.Window(bias, 8)
 		assert.Equal(t, 8, win.Length())
+		assert.Equal(t, 8, win.Capacity())
 		rows := make([]int, 0)
 		op := func(v any, row int) (err error) {
 			rows = append(rows, row)
@@ -423,9 +472,17 @@ func TestCloneWithBuffer(t *testing.T) {
 	vec.Append(types.Null{})
 	vec.Append([]byte("h4444"))
 
-	cloned := CloneWithBuffer(vec)
+	buffer := new(bytes.Buffer)
+	cloned := CloneWithBuffer(vec, buffer)
 	assert.True(t, vec.Equals(cloned))
 	assert.Zero(t, cloned.Allocated())
+
+	bs := vec.Bytes()
+	buf := buffer.Bytes()
+	res := bytes.Compare(bs.Storage, buf[:len(bs.Storage)])
+	assert.Zero(t, res)
+	res = bytes.Compare(bs.HeaderBuf(), buf[len(bs.Storage):len(bs.HeaderBuf())+len(bs.Storage)])
+	assert.Zero(t, res)
 }
 
 func TestCompact(t *testing.T) {
@@ -477,105 +534,3 @@ func BenchmarkVectorExtend(t *testing.B) {
 		vec1.Extend(vec2)
 	}
 }
-
-//func TestResetWithIntData1(t *testing.T) {
-//	defer testutils.AfterTest(t)()
-//	opts1 := withAllocator(Options{})
-//	vec1 := MakeVector(types.T_int64.ToType(), false, opts1)
-//
-//	vec1.Append(int64(1)) // vec.Capacity is 4, length is 1
-//
-//	opts2 := withAllocator(Options{})
-//	vec2 := MakeVector(types.T_int64.ToType(), false, opts2)
-//
-//	// vec2 and vec shares the same memory and only vec has the ownership of the memory
-//	bs := vec1.Bytes()
-//	vec2.ResetWithData(bs, nil)
-//
-//	vec2.Append(int64(2))
-//	vec2.Append(int64(3))
-//	vec2.Append(int64(4))
-//
-//	assert.Equal(t, 1, vec1.Length())
-//	assert.Equal(t, 4, vec2.Length())
-//
-//	vec1.Append(int64(5))
-//	vec2.Append(int64(6))
-//
-//	assert.Equal(t, 2, vec1.Length())
-//	assert.Equal(t, 5, vec2.Length())
-//
-//	vec1.Close()
-//	assert.Zero(t, opts1.Allocator.CurrNB())
-//
-//	vec2.Close()
-//	assert.Zero(t, opts2.Allocator.CurrNB())
-//}
-
-//func TestResetWithIntData2(t *testing.T) {
-//	defer testutils.AfterTest(t)()
-//	opts1 := withAllocator(Options{})
-//	vec1 := MakeVector(types.T_int64.ToType(), false, opts1)
-//
-//	vec1.Append(int64(1)) // vec.Capacity is 4, length is 1
-//
-//	opts2 := withAllocator(Options{})
-//	vec2 := MakeVector(types.T_int64.ToType(), false, opts2)
-//
-//	// vec2 and vec shares the same memory and only vec has the ownership of the memory
-//	bs := vec1.Bytes()
-//	vec2.ResetWithData(bs, nil)
-//
-//	vec1.Append(int64(2))
-//	vec1.Append(int64(3))
-//	vec1.Append(int64(4))
-//
-//	assert.Equal(t, 4, vec1.Length())
-//	assert.Equal(t, 1, vec2.Length())
-//
-//	vec1.Append(int64(5))
-//	vec2.Append(int64(6))
-//
-//	assert.Equal(t, 5, vec1.Length())
-//	assert.Equal(t, 2, vec2.Length())
-//
-//	vec1.Close()
-//	assert.Zero(t, opts1.Allocator.CurrNB())
-//
-//	vec2.Close()
-//	assert.Zero(t, opts2.Allocator.CurrNB())
-//}
-
-//func TestResetWithIntString(t *testing.T) {
-//	defer testutils.AfterTest(t)()
-//	opts1 := withAllocator(Options{})
-//	vec1 := MakeVector(types.T_varchar.ToType(), false, opts1)
-//
-//	vec1.Append([]byte("a")) // vec.Capacity is 4, length is 1
-//
-//	opts2 := withAllocator(Options{})
-//	vec2 := MakeVector(types.T_varchar.ToType(), false, opts2)
-//
-//	// vec2 and vec shares the same memory and only vec has the ownership of the memory
-//	bs := vec1.Bytes()
-//	vec2.ResetWithData(bs, nil)
-//
-//	vec2.Append([]byte("b"))
-//	vec2.Append([]byte("c"))
-//	vec2.Append([]byte("d"))
-//
-//	assert.Equal(t, 1, vec1.Length())
-//	assert.Equal(t, 4, vec2.Length())
-//
-//	vec1.Append([]byte("e"))
-//	vec2.Append([]byte("f"))
-//
-//	assert.Equal(t, 2, vec1.Length())
-//	assert.Equal(t, 5, vec2.Length())
-//
-//	vec1.Close()
-//	assert.Zero(t, opts1.Allocator.CurrNB())
-//
-//	vec2.Close()
-//	assert.Zero(t, opts2.Allocator.CurrNB())
-//}
