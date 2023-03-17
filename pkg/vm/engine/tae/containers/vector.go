@@ -143,10 +143,10 @@ func (vec *vector[T]) Slice() any {
 	return cnVector.MustFixedCol[T](vec.downstreamVector)
 }
 
-func (vec *vector[T]) Bytes() *Bytes {
-	//TODO: get rid of Bytes type
-	return MoVecToBytes(vec.downstreamVector)
-}
+//func (vec *vector[T]) Bytes() *Bytes {
+//	//TODO: get rid of Bytes type
+//	return MoVecToBytes(vec.downstreamVector)
+//}
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	// 1. Nullable Flag [1 byte]

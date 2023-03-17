@@ -78,11 +78,11 @@ func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
 	return a
 }
 
-func (win *vectorWindow[T]) Bytes() *Bytes {
-	bs := win.ref.Bytes()
-	bs = bs.Window(win.offset, win.length)
-	return bs
-}
+//func (win *vectorWindow[T]) Bytes() *Bytes {
+//	bs := win.ref.Bytes()
+//	bs = bs.Window(win.offset, win.length)
+//	return bs
+//}
 
 func (win *vectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]

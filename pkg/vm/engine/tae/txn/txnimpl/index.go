@@ -242,11 +242,11 @@ func (idx *simpleTableIndex) BatchInsert(
 		return InsertOp[types.Rowid](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		vs := col.Bytes()
+		vs := col
 		if dedupInput {
 			set := make(map[string]bool)
 			for i := start; i < start+count; i++ {
-				v := string(vs.GetVarValueAt(i))
+				v := string(vs.Get(i).([]byte))
 				if _, ok := set[v]; ok {
 					entry := common.TypeStringValue(colType, []byte(v))
 					return moerr.NewDuplicateEntryNoCtx(entry, attr)
@@ -256,7 +256,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			break
 		}
 		for i := start; i < start+count; i++ {
-			v := string(vs.GetVarValueAt(i))
+			v := string(vs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(colType, []byte(v))
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
@@ -335,9 +335,9 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		return DedupOp[types.Rowid](colType, attr, vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		bs := col.Bytes()
+		bs := col
 		for i := 0; i < col.Length(); i++ {
-			v := string(bs.GetVarValueAt(i))
+			v := string(bs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(colType, []byte(v))
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)

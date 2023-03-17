@@ -70,7 +70,6 @@ type Vector interface {
 	HasNull() bool
 	NullMask() *cnNulls.Nulls
 
-	Bytes() *Bytes
 	Slice() any
 
 	Close()

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 // ### Shallow copy Functions
@@ -142,71 +141,71 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 
 // ### Bytes Functions
 
-func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
-	bs := stl.NewFixedTypeBytes[T]()
-	if v.Length() == 0 {
-		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-	} else {
-		bs.Storage = types.EncodeSlice(movec.MustFixedCol[T](v))
-	}
-	return bs
-}
-
-func MoVecToBytes(v *movec.Vector) *Bytes {
-	var bs *Bytes
-
-	switch v.GetType().Oid {
-	case types.T_bool:
-		bs = movecToBytes[bool](v)
-	case types.T_int8:
-		bs = movecToBytes[int8](v)
-	case types.T_int16:
-		bs = movecToBytes[int16](v)
-	case types.T_int32:
-		bs = movecToBytes[int32](v)
-	case types.T_int64:
-		bs = movecToBytes[int64](v)
-	case types.T_uint8:
-		bs = movecToBytes[uint8](v)
-	case types.T_uint16:
-		bs = movecToBytes[uint16](v)
-	case types.T_uint32:
-		bs = movecToBytes[uint32](v)
-	case types.T_uint64:
-		bs = movecToBytes[uint64](v)
-	case types.T_float32:
-		bs = movecToBytes[float32](v)
-	case types.T_float64:
-		bs = movecToBytes[float64](v)
-	case types.T_date:
-		bs = movecToBytes[types.Date](v)
-	case types.T_time:
-		bs = movecToBytes[types.Time](v)
-	case types.T_datetime:
-		bs = movecToBytes[types.Datetime](v)
-	case types.T_timestamp:
-		bs = movecToBytes[types.Timestamp](v)
-	case types.T_decimal64:
-		bs = movecToBytes[types.Decimal64](v)
-	case types.T_decimal128:
-		bs = movecToBytes[types.Decimal128](v)
-	case types.T_uuid:
-		bs = movecToBytes[types.Uuid](v)
-	case types.T_TS:
-		bs = movecToBytes[types.TS](v)
-	case types.T_Rowid:
-		bs = movecToBytes[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
-		if v.Length() > 0 {
-			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
-		}
-	default:
-		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
-	}
-	return bs
-}
+//func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
+//	bs := stl.NewFixedTypeBytes[T]()
+//	if v.Length() == 0 {
+//		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
+//	} else {
+//		bs.Storage = types.EncodeSlice(movec.MustFixedCol[T](v))
+//	}
+//	return bs
+//}
+//
+//func MoVecToBytes(v *movec.Vector) *Bytes {
+//	var bs *Bytes
+//
+//	switch v.GetType().Oid {
+//	case types.T_bool:
+//		bs = movecToBytes[bool](v)
+//	case types.T_int8:
+//		bs = movecToBytes[int8](v)
+//	case types.T_int16:
+//		bs = movecToBytes[int16](v)
+//	case types.T_int32:
+//		bs = movecToBytes[int32](v)
+//	case types.T_int64:
+//		bs = movecToBytes[int64](v)
+//	case types.T_uint8:
+//		bs = movecToBytes[uint8](v)
+//	case types.T_uint16:
+//		bs = movecToBytes[uint16](v)
+//	case types.T_uint32:
+//		bs = movecToBytes[uint32](v)
+//	case types.T_uint64:
+//		bs = movecToBytes[uint64](v)
+//	case types.T_float32:
+//		bs = movecToBytes[float32](v)
+//	case types.T_float64:
+//		bs = movecToBytes[float64](v)
+//	case types.T_date:
+//		bs = movecToBytes[types.Date](v)
+//	case types.T_time:
+//		bs = movecToBytes[types.Time](v)
+//	case types.T_datetime:
+//		bs = movecToBytes[types.Datetime](v)
+//	case types.T_timestamp:
+//		bs = movecToBytes[types.Timestamp](v)
+//	case types.T_decimal64:
+//		bs = movecToBytes[types.Decimal64](v)
+//	case types.T_decimal128:
+//		bs = movecToBytes[types.Decimal128](v)
+//	case types.T_uuid:
+//		bs = movecToBytes[types.Uuid](v)
+//	case types.T_TS:
+//		bs = movecToBytes[types.TS](v)
+//	case types.T_Rowid:
+//		bs = movecToBytes[types.Rowid](v)
+//	case types.T_char, types.T_varchar, types.T_json,
+//		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+//		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
+//		if v.Length() > 0 {
+//			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
+//		}
+//	default:
+//		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
+//	}
+//	return bs
+//}
 
 // ### Get Functions
 
