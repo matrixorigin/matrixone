@@ -104,7 +104,7 @@ func TestStatsLogWriter(t *testing.T) {
 	service.Do()
 
 	// 4. Wait for log to print in console. (Busy Loop)
-	err := waitUtil(60*time.Second, 30*time.Millisecond, func() bool {
+	err := waitUtil(60*time.Second, 100*time.Millisecond, func() bool {
 		return len(writtenLogs) >= 10
 	})
 	require.NoError(t, err)
