@@ -106,6 +106,7 @@ func TestS3FS(t *testing.T) {
 				true,
 			)
 			assert.Nil(t, err)
+			fs.listMaxKeys = 5 // to test continuation
 
 			return fs
 		})
@@ -133,8 +134,8 @@ func TestS3FS(t *testing.T) {
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
-		assert.Equal(t, int64(1), counterSet.S3.List.Load())
-		assert.Equal(t, int64(1), counterSet2.S3.List.Load())
+		assert.True(t, counterSet.S3.List.Load() > 0)
+		assert.True(t, counterSet2.S3.List.Load() > 0)
 	})
 
 	t.Run("mem caching file service", func(t *testing.T) {
