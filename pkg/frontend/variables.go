@@ -1079,7 +1079,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("autocommit"),
-		Default:           int64(1),
+		Default:           int8(1),
 	},
 	"sql_mode": {
 		Name:              "sql_mode",
@@ -1257,7 +1257,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
-		Default:           int64(0),
+		Default:           int8(0),
 	},
 }
 

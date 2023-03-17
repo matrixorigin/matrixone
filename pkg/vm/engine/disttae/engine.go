@@ -431,7 +431,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
 	}
-	reqs, err := genWriteReqs(txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes)
 	if err != nil {
 		return err
 	}

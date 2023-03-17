@@ -200,9 +200,9 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
 		new(api.SyncLogTailResp),
@@ -403,9 +403,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
 		new(api.SyncLogTailResp),
@@ -522,9 +522,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: delApiEntries,
 		},
 		new(api.SyncLogTailResp),
@@ -589,9 +589,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		createDbTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: createDbEntries,
 		},
 		new(api.SyncLogTailResp),
@@ -664,9 +664,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		createTbTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: createTbEntries,
 		},
 		new(api.SyncLogTailResp))
@@ -705,9 +705,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		insertTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: []*api.Entry{insertEntry},
 		},
 		new(api.SyncLogTailResp),
@@ -762,9 +762,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		deleteTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: append([]*api.Entry{}, deleteEntry),
 		},
 		new(api.SyncLogTailResp),
@@ -821,9 +821,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 		{typ: CmdPrepare},
@@ -893,9 +893,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -937,9 +937,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -964,9 +964,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1018,9 +1018,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1047,9 +1047,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1108,9 +1108,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1179,9 +1179,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1222,9 +1222,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1248,9 +1248,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1272,9 +1272,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdRollback},
@@ -1325,9 +1325,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1355,9 +1355,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1416,9 +1416,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 	}
@@ -1524,9 +1524,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1582,9 +1582,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1664,9 +1664,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
