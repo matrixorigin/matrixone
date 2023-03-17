@@ -63,16 +63,16 @@ func (th *TxnHandler) GetTxnCtx(account *TenantInfo) context.Context {
 	if th.txnCtx == nil {
 		th.txnCtx, _ = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
-		if account != nil {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
-			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
-			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
-		} else {
-			acc := getDefaultAccount()
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, acc.GetTenantID())
-			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, acc.GetUserID())
-			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, acc.GetDefaultRoleID())
-		}
+		//if account != nil {
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
+		//} else {
+		//	acc := getDefaultAccount()
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, acc.GetTenantID())
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, acc.GetUserID())
+		//	th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, acc.GetDefaultRoleID())
+		//}
 	}
 	return th.txnCtx
 }
