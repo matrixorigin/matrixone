@@ -57,22 +57,19 @@ func (th *TxnHandler) ResetTxnCtx() {
 	th.txnCtx = nil
 }
 
-func (th *TxnHandler) GetTxnCtx(account *TenantInfo) context.Context {
+func (th *TxnHandler) GetTxnCtx() context.Context {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.txnCtx == nil {
 		th.txnCtx, _ = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
-		//if account != nil {
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
-		//} else {
-		//	acc := getDefaultAccount()
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, acc.GetTenantID())
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, acc.GetUserID())
-		//	th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, acc.GetDefaultRoleID())
-		//}
+		account := th.ses.GetTenantInfo()
+		if account == nil {
+			account = getDefaultAccount()
+		}
+		th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
+		th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
+		th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
 	}
 	return th.txnCtx
 }
@@ -161,7 +158,7 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	txnCtx := th.GetTxnCtx(th.GetSession().GetTenantInfo())
+	txnCtx := th.GetTxnCtx()
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
@@ -210,17 +207,17 @@ func (th *TxnHandler) CommitTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionProfile := ses.GetDebugString()
-	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
-	if ctx1 == nil {
+	sessionInfo := ses.GetDebugString()
+	txnCtx := th.GetTxnCtx()
+	if txnCtx == nil {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx1 = context.WithValue(ctx1, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
-		ctx1,
+		txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	printCtx(ctx2, "TxnHandler => CommitTxn")
@@ -238,23 +235,23 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
 		th.ResetTxnCtx()
-		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
+		logErrorf(sessionInfo, "CommitTxn: txn operator is null")
 	}
 
 	txnId := txnOp.Txn().DebugString()
-	logDebugf(sessionProfile, "CommitTxn txnId:%s", txnId)
+	logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
 	defer func() {
-		logDebugf(sessionProfile, "CommitTxn exit txnId:%s", txnId)
+		logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 	}()
 	logDebugf("TxnHandler => CommitTxn", "%v", ctx2)
 	if err = storage.Commit(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ResetTxnCtx()
-		logErrorf(sessionProfile, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
+		logErrorf(sessionInfo, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
-				logErrorf(sessionProfile, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
+				logErrorf(sessionInfo, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
 		}
 		return err
@@ -264,7 +261,7 @@ func (th *TxnHandler) CommitTxn() error {
 		if err != nil {
 			th.SetTxnOperatorInvalid()
 			th.ResetTxnCtx()
-			logErrorf(sessionProfile, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()
@@ -279,17 +276,17 @@ func (th *TxnHandler) RollbackTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionProfile := ses.GetDebugString()
-	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
-	if ctx1 == nil {
+	sessionInfo := ses.GetDebugString()
+	txnCtx := th.GetTxnCtx()
+	if txnCtx == nil {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		ctx1 = context.WithValue(ctx1, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
-		ctx1,
+		txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	printCtx(ctx2, "TxnHandler => RollbackTxn")
@@ -307,22 +304,22 @@ func (th *TxnHandler) RollbackTxn() error {
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.ResetTxnCtx()
-		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
+		logErrorf(sessionInfo, "RollbackTxn: txn operator is null")
 	}
 	txnId := txnOp.Txn().DebugString()
-	logDebugf(sessionProfile, "RollbackTxn txnId:%s", txnId)
+	logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
 	defer func() {
-		logDebugf(sessionProfile, "RollbackTxn exit txnId:%s", txnId)
+		logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 	}()
 	logDebugf("TxnHandler => RollbackTxn", "%v", ctx2)
 	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ResetTxnCtx()
-		logErrorf(sessionProfile, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
+		logErrorf(sessionInfo, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
-				logErrorf(sessionProfile, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
+				logErrorf(sessionInfo, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
 		}
 		return err
@@ -332,7 +329,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		th.ResetTxnCtx()
 		if err != nil {
 			th.SetTxnOperatorInvalid()
-			logErrorf(sessionProfile, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logErrorf(sessionInfo, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
 	}
 	th.SetTxnOperatorInvalid()

@@ -208,8 +208,6 @@ type ProtocolImpl struct {
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
 	sequenceId atomic.Uint32
-
-	profiles [8]string
 }
 
 func (pi *ProtocolImpl) setQuit(b bool) bool {
@@ -424,13 +422,6 @@ func (fp *FakeProtocol) GetSequenceId() uint8 {
 }
 
 func (fp *FakeProtocol) SetSequenceID(value uint8) {
-}
-
-func (fp *FakeProtocol) makeProfile(profileTyp profileType) {
-}
-
-func (fp *FakeProtocol) getProfile(profileTyp profileType) string {
-	return ""
 }
 
 func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {

@@ -235,14 +235,6 @@ func (ip *internalProtocol) GetSequenceId() uint8 {
 func (ip *internalProtocol) SetSequenceID(value uint8) {
 }
 
-func (ip *internalProtocol) makeProfile(profileTyp profileType) {
-
-}
-
-func (ip *internalProtocol) getProfile(profileTyp profileType) string {
-	return ""
-}
-
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }

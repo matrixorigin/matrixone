@@ -109,7 +109,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
-	ses.setSkipCheckPrivilege(true)
+	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 
 	// Add  autoIncrCaches in session structure.
 	ses.SetAutoIncrCaches(rm.autoIncrCaches)
@@ -224,14 +224,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
-	protoProfile := protocol.GetDebugString()
+	protoInfo := protocol.GetDebugString()
 	packet, ok := msg.(*Packet)
 
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
 	var seq = protocol.GetSequenceId()
 	if !ok {
 		err = moerr.NewInternalError(ctx, "message is not Packet")
-		logErrorf(protoProfile, "error:%v", err)
+		logErrorf(protoInfo, "error:%v", err)
 		return err
 	}
 
@@ -240,14 +240,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
-			logErrorf(protoProfile, "read message failed. error:%s", err)
+			logErrorf(protoInfo, "read message failed. error:%s", err)
 			return err
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
 			err = moerr.NewInternalError(ctx, "message is not Packet")
-			logErrorf(protoProfile, "error:%v", err)
+			logErrorf(protoInfo, "error:%v", err)
 			return err
 		}
 
@@ -259,7 +259,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
-		logDebugf(protoProfile, "HANDLE HANDSHAKE")
+		logDebugf(protoInfo, "HANDLE HANDSHAKE")
 
 		/*
 			di := MakeDebugInfo(payload,80,8)
@@ -267,28 +267,28 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		*/
 		ses := routine.getSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
-			logDebugf(protoProfile, "setup ssl")
+			logDebugf(protoInfo, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoProfile, "error:%v", err)
+				logErrorf(protoInfo, "error:%v", err)
 				return err
 			}
 			if isTlsHeader {
-				logDebugf(protoProfile, "upgrade to TLS")
+				logDebugf(protoInfo, "upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
-				logDebugf(protoProfile, "get TLS conn ok")
+				logDebugf(protoInfo, "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					logErrorf(protoProfile, "before cancel() error:%v", err)
+					logErrorf(protoInfo, "before cancel() error:%v", err)
 					cancelFun()
-					logErrorf(protoProfile, "after cancel() error:%v", err)
+					logErrorf(protoInfo, "after cancel() error:%v", err)
 					return err
 				}
 				cancelFun()
-				logDebugf(protoProfile, "TLS handshake ok")
+				logDebugf(protoInfo, "TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logDebugf(protoProfile, "TLS handshake finished")
+				logDebugf(protoInfo, "TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
@@ -298,10 +298,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				protocol.SetEstablished()
 			}
 		} else {
-			logDebugf(protoProfile, "handleHandshake")
+			logDebugf(protoInfo, "handleHandshake")
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoProfile, "error:%v", err)
+				logErrorf(protoInfo, "error:%v", err)
 				return err
 			}
 			protocol.SetEstablished()
@@ -320,7 +320,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
-		logErrorf(protoProfile, "error:%v", err)
+		logErrorf(protoInfo, "error:%v", err)
 		return err
 	}
 

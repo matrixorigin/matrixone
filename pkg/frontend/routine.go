@@ -17,13 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -168,7 +168,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 	printCtx(tenantCtx, fmt.Sprintf("cmd %d data [%s]", req.GetCmd(), string(req.GetData().([]byte))))
 	ses.SetRequestContext(tenantCtx)
-	ses.SetConnectContext(routineCtx)
 	executor.SetSession(rt.getSession())
 
 	rt.increaseCount(func() {

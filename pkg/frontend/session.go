@@ -57,21 +57,6 @@ const (
 	ShowTableStatus  ShowStatementType = 1
 )
 
-type profileType uint8
-
-const (
-	profileTypeAccountWithName  profileType = 1 << 0
-	profileTypeAccountWithId                = 1 << 1
-	profileTypeSessionId                    = 1 << 2
-	profileTypeConnectionWithId             = 1 << 3
-	profileTypeConnectionWithIp             = 1 << 4
-
-	profileTypeAll = profileTypeAccountWithName | profileTypeAccountWithId |
-		profileTypeSessionId | profileTypeConnectionWithId | profileTypeConnectionWithIp
-
-	profileTypeConcise = profileTypeConnectionWithId
-)
-
 type Session struct {
 	// account id
 	accountId uint32
@@ -982,9 +967,9 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	ses.SetTenantInfo(tenant)
 	ses.UpdateDebugString()
-	sessionProfile := ses.GetDebugString()
+	sessionInfo := ses.GetDebugString()
 
-	logDebugf(sessionProfile, "check special user")
+	logDebugf(sessionInfo, "check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -1004,7 +989,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
-	logDebugf(sessionProfile, "check tenant %s exists", tenant)
+	logDebugf(sessionInfo, "check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
@@ -1035,7 +1020,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
-	logDebugf(sessionProfile, "check user of %s exists", tenant)
+	logDebugf(sessionInfo, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
 	if err != nil {
@@ -1081,7 +1066,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
-		logDebugf(sessionProfile, "check default role of user %s.", tenant)
+		logDebugf(sessionInfo, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
 		if err != nil {
@@ -1096,7 +1081,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
-		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
+		logDebugf(sessionInfo, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser, err := getSqlForRoleOfUser(tenantCtx, userID, tenant.GetDefaultRole())
 		if err != nil {
@@ -1117,7 +1102,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	} else {
-		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
+		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sql, ses.GetAutoIncrCaches())
@@ -1135,7 +1120,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 
-	logInfo(sessionProfile, tenant.String())
+	logInfo(sessionInfo, tenant.String())
 
 	return []byte(pwd), nil
 }
