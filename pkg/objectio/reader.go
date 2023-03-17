@@ -28,18 +28,31 @@ import (
 type ObjectReader struct {
 	object *Object
 	name   string
+	// noCache true means NOT cache IOVector in FileService's cache
+	noCache bool
 }
 
 const ExtentTypeSize = 4 * 3
 const ExtentsLength = 20
 const FooterSize = 8 + 4
 
-func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
+func NewObjectReader(name string, fs fileservice.FileService, opts ...ObjectReaderOption) (Reader, error) {
 	reader := &ObjectReader{
 		name:   name,
 		object: NewObject(name, fs),
 	}
+	for _, f := range opts {
+		f(reader)
+	}
 	return reader, nil
+}
+
+type ObjectReaderOption func(reader *ObjectReader)
+
+func WithNoCacheReader(noCache bool) ObjectReaderOption {
+	return ObjectReaderOption(func(r *ObjectReader) {
+		r.noCache = noCache
+	})
 }
 
 func (r *ObjectReader) ReadMeta(ctx context.Context,
@@ -52,6 +65,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 1, l),
+		NoCache:  r.noCache,
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{
@@ -130,6 +144,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
+		NoCache:  r.noCache,
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {
@@ -209,6 +224,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 				},
 			},
 		},
+		NoCache: r.noCache,
 	}
 	err := r.object.fs.Read(ctx, data)
 	if err != nil {
