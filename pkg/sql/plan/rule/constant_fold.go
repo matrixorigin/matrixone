@@ -327,6 +327,13 @@ func IsConstant(e *plan.Expr) bool {
 			}
 		}
 		return true
+	case *plan.Expr_List:
+		for _, arg := range ef.List.List {
+			if !IsConstant(arg) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}

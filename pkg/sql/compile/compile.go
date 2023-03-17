@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalfill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -179,6 +180,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		}
 	case AlterView:
 		return c.scope.AlterView(c)
+	case AlterTable:
+		return c.scope.AlterTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
 	case CreateIndex:
@@ -239,6 +242,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 		case plan.DataDefinition_ALTER_VIEW:
 			return &Scope{
 				Magic: AlterView,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_ALTER_TABLE:
+			return &Scope{
+				Magic: AlterTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
@@ -626,7 +634,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	}
 }
 
-func (c *Compile) ConstructScope() *Scope {
+func (c *Compile) constructScopeForExternal() *Scope {
 	ds := &Scope{Magic: Normal}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	ds.Proc.LoadTag = true
@@ -639,11 +647,10 @@ func (c *Compile) ConstructScope() *Scope {
 	return ds
 }
 
-func (c *Compile) ConstructMergeScope() *Scope {
+func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := &Scope{Magic: Merge}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
 	ds.Proc.LoadTag = true
-	ds.Proc.ParallelLoad = true
 	ds.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
@@ -656,7 +663,6 @@ func (c *Compile) ConstructMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
-	return c.compileExternScanParallel(ctx, n)
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
@@ -681,6 +687,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	if param.Parallel && param.CompressType != "" && param.CompressType != tree.NOCOMPRESS {
+		return c.compileExternScanParallel(ctx, n)
+	}
 	if n.ObjRef != nil {
 		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
@@ -733,7 +742,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	currentFirstFlag := c.anal.isFirst
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = c.ConstructScope()
+		ss[i] = c.constructScopeForExternal()
 		var fileListTmp []string
 		if i < tag {
 			fileListTmp = fileList[index : index+cnt+1]
@@ -760,6 +769,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	return ss, nil
 }
 
+// construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScanParallel")
 	defer span.End()
@@ -775,6 +785,7 @@ func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) (
 	if n.ObjRef != nil {
 		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
+	param.Parallel = false
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var fileList []string
@@ -789,18 +800,25 @@ func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) (
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = c.ConstructMergeScope()
+		ss[i] = c.constructLoadMergeScope()
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.ExternalFill,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     &externalfill.Argument{},
+		})
 	}
 	offset := make([][2]int, 0)
-	tmp := c.ConstructScope()
-	tmp.Proc.ParallelLoad = true
+	extern := constructExternal(n, param, c.ctx, fileList, fileSize, offset)
+	extern.Es.ParallelLoad = true
+	tmp := c.constructScopeForExternal()
 	tmp.appendInstruction(vm.Instruction{
 		Op:      vm.External,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     constructExternal(n, param, c.ctx, fileList, fileSize, offset),
+		Arg:     extern,
 	})
-	arg := constructBroadcastJoinDispatch(0, ss, c.addr, ss[0].Proc)
+	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr, ss[0].Proc)
 	arg.FuncId = dispatch.SendToAnyLocalFunc
 	tmp.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,

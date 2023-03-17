@@ -606,12 +606,12 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	plh.batchSize = cnt
-	if proc.ParallelLoad {
+	if param.ParallelLoad {
 		bat = &batch.Batch{
 			Ht: &LoadItem{
 				Param: param,
 				Plh: &ParseLineHandler{
-					batchSize: plh.batchSize,
+					batchSize:      plh.batchSize,
 					moCsvLineArray: plh.moCsvLineArray,
 				},
 			},
@@ -1024,12 +1024,7 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
 		return param.Fileparam.Filepath
 	} else {
-		var str string
-		if param.Extern.SysTable && int(param.Name2ColIndex[param.Attrs[colIdx]]) >= len(Line) {
-			str = "\\N"
-		} else {
-			str = Line[param.Name2ColIndex[param.Attrs[colIdx]]]
-		}
+		str := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
 		if param.Extern.Tail.Fields.EnclosedBy != 0 {
 			tmp := strings.TrimSpace(str)
 			if len(tmp) >= 2 && tmp[0] == param.Extern.Tail.Fields.EnclosedBy && tmp[len(tmp)-1] == param.Extern.Tail.Fields.EnclosedBy {
@@ -1042,10 +1037,6 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 
 func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
-		//for cluster table, the column account_id need not be filled here
-		if param.ClusterTable.GetIsClusterTable() && int(param.ClusterTable.GetColumnIndexOfAccountId()) == colIdx {
-			continue
-		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&

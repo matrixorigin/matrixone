@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -50,12 +49,11 @@ type TAEWriter struct {
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
-	filename := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	w := &TAEWriter{
 		ctx:       ctx,
 		batchSize: BatchSize,
 		mp:        mp,
-		filename:  filename,
+		filename:  filePath,
 		fs:        fs,
 		rows:      make([]*table.Row, 0, BatchSize),
 	}
@@ -65,7 +63,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, _ = blockio.NewBlockWriter(fs, filename)
+	w.writer, _ = blockio.NewBlockWriter(fs, filePath)
 	return w
 }
 
@@ -303,10 +301,9 @@ type TAEReader struct {
 
 func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
-	path := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	r := &TAEReader{
 		ctx:      ctx,
-		filepath: path,
+		filepath: filePath,
 		filesize: filesize,
 		fs:       fs,
 		mp:       mp,

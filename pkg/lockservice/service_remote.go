@@ -125,14 +125,19 @@ func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response) error {
-	txn := s.activeTxnHolder.getActiveTxn(req.GetWaitingList.TxnID, false, "")
+	txn := s.activeTxnHolder.getActiveTxn(
+		req.GetWaitingList.Txn.TxnID,
+		false,
+		"")
 	if txn == nil {
 		return nil
 	}
 	txn.fetchWhoWaitingMe(
-		req.GetWaitingList.TxnID,
-		func(v []byte) bool {
-			resp.GetWaitingList.WaitingList = append(resp.GetWaitingList.WaitingList, v)
+		s.cfg.ServiceID,
+		req.GetWaitingList.Txn.TxnID,
+		s.activeTxnHolder,
+		func(w pb.WaitTxn) bool {
+			resp.GetWaitingList.WaitingList = append(resp.GetWaitingList.WaitingList, w)
 			return true
 		},
 		s.getLockTable)
@@ -173,7 +178,7 @@ func (s *service) getLocalLockTable(
 
 func (s *service) getTxnWaitingList(
 	txnID []byte,
-	remoteService string) ([][]byte, error) {
+	createdOn string) ([]pb.WaitTxn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -181,8 +186,8 @@ func (s *service) getTxnWaitingList(
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_GetWaitingList
-	req.GetWaitingList.TxnID = txnID
-	req.GetWaitingList.ServiceID = remoteService
+	req.GetWaitingList.Txn.TxnID = txnID
+	req.GetWaitingList.Txn.CreatedOn = createdOn
 
 	resp, err := s.remote.client.Send(ctx, req)
 	if err != nil {

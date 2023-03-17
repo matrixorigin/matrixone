@@ -34,7 +34,7 @@ func ColumnCntLargerErrorInfo() string {
 
 type LoadItem struct {
 	Param *ExternalParam
-	Plh *ParseLineHandler
+	Plh   *ParseLineHandler
 }
 
 // Use for External table scan param
@@ -48,6 +48,7 @@ type ExternalParam struct {
 type ExParamConst struct {
 	IgnoreLine    int
 	IgnoreLineTag int
+	ParallelLoad  bool
 	maxBatchSize  uint64
 	CreateSql     string
 	Attrs         []string

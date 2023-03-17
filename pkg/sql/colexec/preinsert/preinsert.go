@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -46,14 +45,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	if proc.ParallelLoad {
-		var err error
-		item := bat.Ht.(*external.LoadItem)
-		bat, err = external.GetBatchData(item.Param, item.Plh, proc)
-		if err != nil {
-			return false, err
-		}
-	}
+
 	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
 
 	//get insert batch
