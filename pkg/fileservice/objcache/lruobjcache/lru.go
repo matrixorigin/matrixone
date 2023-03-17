@@ -43,7 +43,7 @@ func New(capacity int64) *LRU {
 	}
 }
 
-func (l *LRU) Set(key any, value any, size int64) {
+func (l *LRU) Set(key any, value any, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -52,7 +52,9 @@ func (l *LRU) Set(key any, value any, size int64) {
 		item := elem.Value.(*lruItem)
 		l.size -= item.Size
 		l.size += size
-		l.evicts.MoveToFront(elem)
+		if !preloading {
+			l.evicts.MoveToFront(elem)
+		}
 		item.Size = size
 		item.Key = key
 		item.Value = value
@@ -64,7 +66,12 @@ func (l *LRU) Set(key any, value any, size int64) {
 			Value: value,
 			Size:  size,
 		}
-		elem := l.evicts.PushFront(item)
+		var elem *list.Element
+		if preloading {
+			elem = l.evicts.PushBack(item)
+		} else {
+			elem = l.evicts.PushFront(item)
+		}
 		l.kv[key] = elem
 		l.size += size
 	}
@@ -113,11 +120,13 @@ func (l *LRU) evict() {
 	}
 }
 
-func (l *LRU) Get(key any) (value any, size int64, ok bool) {
+func (l *LRU) Get(key any, preloading bool) (value any, size int64, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
-		l.evicts.MoveToFront(elem)
+		if !preloading {
+			l.evicts.MoveToFront(elem)
+		}
 		item := elem.Value.(*lruItem)
 		return item.Value, item.Size, true
 	}

@@ -111,7 +111,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.objCache.Get(key)
+		obj, size, ok := m.objCache.Get(key, vector.Preloading)
 		numRead++
 		if ok {
 			vector.Entries[i].Object = obj
@@ -150,10 +150,10 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.objCache.Set(key, obj, objSize)
+				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			m.objCache.Set(key, entry.Object, entry.ObjectSize)
+			m.objCache.Set(key, entry.Object, entry.ObjectSize, vector.Preloading)
 		}
 	}
 	return nil
