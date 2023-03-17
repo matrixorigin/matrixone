@@ -24,7 +24,6 @@ import (
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-	"unsafe"
 )
 
 // DN vector is different from CN vector by
@@ -45,6 +44,10 @@ type vector[T any] struct {
 
 	// isOwner is used to implement the SharedMemory Logic from the previous DN vector implementation.
 	isOwner bool
+}
+
+func (vec *vector[T]) GetMpool() *mpool.MPool {
+	return vec.mpool
 }
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
@@ -262,60 +265,55 @@ func (vec *vector[T]) Allocated() int {
 func (vec *vector[T]) tryPromoting() {
 
 	if !vec.isOwner {
-		src := vec.Bytes()
-
-		// deep copy
-		newDownstream, _ := newDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
-		cnNulls.Add(newDownstream.GetNulls(), vec.downstreamVector.GetNulls().ToArray()...)
-
-		vec.downstreamVector = newDownstream
+		newCnVector, _ := vec.downstreamVector.Dup(vec.mpool)
+		vec.downstreamVector = newCnVector
 		vec.isOwner = true
 	}
 }
 
-func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*cnVector.Vector, error) {
-
-	var mov *cnVector.Vector
-	if typ.IsVarlen() {
-
-		// 1. Mpool Allocate Header
-		var header []types.Varlena
-		headerByteArr := bs.HeaderBuf()
-
-		if len(headerByteArr) > 0 {
-			headerAllocated, err := pool.Alloc(len(headerByteArr))
-			if err != nil {
-				return nil, err
-			}
-			copy(headerAllocated, headerByteArr)
-
-			sz := typ.TypeSize()
-			header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&headerAllocated[0])), len(headerAllocated)/sz)
-		}
-
-		// 2. Mpool Allocate Storage
-		storageByteArr := bs.StorageBuf()
-		storageAllocated, err := pool.Alloc(len(storageByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(storageAllocated, storageByteArr)
-
-		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated, false)
-	} else {
-
-		// 1. Mpool Allocate Storage
-		storageByteArr := bs.StorageBuf()
-		storageAllocated, err := pool.Alloc(len(storageByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(storageAllocated, storageByteArr)
-
-		mov, _ = cnVector.FromDNVector(typ, nil, storageAllocated, false)
-	}
-	return mov, nil
-}
+//func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*cnVector.Vector, error) {
+//
+//	var mov *cnVector.Vector
+//	if typ.IsVarlen() {
+//
+//		// 1. Mpool Allocate Header
+//		var header []types.Varlena
+//		headerByteArr := bs.HeaderBuf()
+//
+//		if len(headerByteArr) > 0 {
+//			headerAllocated, err := pool.Alloc(len(headerByteArr))
+//			if err != nil {
+//				return nil, err
+//			}
+//			copy(headerAllocated, headerByteArr)
+//
+//			sz := typ.TypeSize()
+//			header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&headerAllocated[0])), len(headerAllocated)/sz)
+//		}
+//
+//		// 2. Mpool Allocate Storage
+//		storageByteArr := bs.StorageBuf()
+//		storageAllocated, err := pool.Alloc(len(storageByteArr))
+//		if err != nil {
+//			return nil, err
+//		}
+//		copy(storageAllocated, storageByteArr)
+//
+//		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated, false)
+//	} else {
+//
+//		// 1. Mpool Allocate Storage
+//		storageByteArr := bs.StorageBuf()
+//		storageAllocated, err := pool.Alloc(len(storageByteArr))
+//		if err != nil {
+//			return nil, err
+//		}
+//		copy(storageAllocated, storageByteArr)
+//
+//		mov, _ = cnVector.FromDNVector(typ, nil, storageAllocated, false)
+//	}
+//	return mov, nil
+//}
 
 func (vec *vector[T]) Window(offset, length int) Vector {
 

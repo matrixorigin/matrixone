@@ -40,14 +40,14 @@ func CloneWithBuffer(src Vector, allocator ...*mpool.MPool) (cloned Vector) {
 }
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	bs := vec.Bytes()
+	return vec.GetDownstreamVector()
+	//bs := vec.Bytes()
+	//
+	//mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
+	//cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
+	//
+	////mov.SetOriginal(true)
 
-	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
-	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-
-	//mov.SetOriginal(true)
-
-	return mov
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -76,45 +76,52 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 // ### Deep copy Functions
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
-	bs := vec.Bytes()
-	typ := vec.GetType()
+	//TODO: XuPeng. Need your help here. Should we do alloc from mpool or just copy()?
+	// @Long can this be implemented in CN vector?
+	a, _ := vec.GetDownstreamVector().Dup(vec.GetMpool())
+	return a
 
-	if vec.GetType().IsVarlen() {
-		var header []types.Varlena
-		if bs.AsWindow {
-			header = make([]types.Varlena, bs.WinLength)
-			copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
-		} else {
-			header = make([]types.Varlena, len(bs.Header))
-			copy(header, bs.Header)
-		}
-		storage := make([]byte, len(bs.Storage))
-		if len(storage) > 0 {
-			copy(storage, bs.Storage)
-		}
-		mov, _ = movec.FromDNVector(typ, header, storage, true)
-		//} else if vec.GetType().IsTuple() {
-		//	mov = movec.NewVector(vec.GetType())
-		//	cnt := types.DecodeInt32(bs.Storage)
-		//	if cnt != 0 {
-		//		if err := types.Decode(bs.Storage, &mov.Col); err != nil {
-		//			panic(any(err))
-		//		}
-		//	}
-	} else {
-		data := make([]byte, len(bs.Storage))
-		if len(data) > 0 {
-			copy(data, bs.Storage)
-		}
-		mov, _ = movec.FromDNVector(typ, nil, data, true)
-	}
-
-	if vec.HasNull() {
-		cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-		//mov.GetNulls().Np = vec.NullMask()
-	}
-
-	return mov
+	//movec.FromDNVector()
+	//bs := vec.Bytes()
+	//typ := vec.GetType()
+	//
+	//if vec.GetType().IsVarlen() {
+	//	var header []types.Varlena
+	//	if bs.AsWindow {
+	//		header = make([]types.Varlena, bs.WinLength)
+	//		copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
+	//	} else {
+	//		header = make([]types.Varlena, len(bs.Header))
+	//		copy(header, bs.Header)
+	//	}
+	//	storage := make([]byte, len(bs.Storage))
+	//	if len(storage) > 0 {
+	//		copy(storage, bs.Storage)
+	//	}
+	//
+	//	mov, _ = movec.FromDNVector(typ, header, storage, true)
+	//	//} else if vec.GetType().IsTuple() {
+	//	//	mov = movec.NewVector(vec.GetType())
+	//	//	cnt := types.DecodeInt32(bs.Storage)
+	//	//	if cnt != 0 {
+	//	//		if err := types.Decode(bs.Storage, &mov.Col); err != nil {
+	//	//			panic(any(err))
+	//	//		}
+	//	//	}
+	//} else {
+	//	data := make([]byte, len(bs.Storage))
+	//	if len(data) > 0 {
+	//		copy(data, bs.Storage)
+	//	}
+	//	mov, _ = movec.FromDNVector(typ, nil, data, true)
+	//}
+	//
+	//if vec.HasNull() {
+	//	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
+	//	//mov.GetNulls().Np = vec.NullMask()
+	//}
+	//
+	//return mov
 }
 
 func CopyToMoVecs(vecs []Vector) []*movec.Vector {
