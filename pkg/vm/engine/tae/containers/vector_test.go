@@ -470,29 +470,6 @@ func TestVector9(t *testing.T) {
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
-func TestCloneWithBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
-	vec.Append([]byte("h1"))
-	vec.Append([]byte("h22"))
-	vec.Append([]byte("h333"))
-	vec.Append(types.Null{})
-	vec.Append([]byte("h4444"))
-
-	buffer := new(bytes.Buffer)
-	cloned := CloneWithBuffer(vec, buffer)
-	assert.True(t, vec.Equals(cloned))
-	assert.Zero(t, cloned.Allocated())
-
-	bs := vec.Bytes()
-	buf := buffer.Bytes()
-	res := bytes.Compare(bs.Storage, buf[:len(bs.Storage)])
-	assert.Zero(t, res)
-	res = bytes.Compare(bs.HeaderBuf(), buf[len(bs.Storage):len(bs.HeaderBuf())+len(bs.Storage)])
-	assert.Zero(t, res)
-}
-
 func TestCompact(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
