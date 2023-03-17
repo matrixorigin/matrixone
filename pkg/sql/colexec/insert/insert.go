@@ -71,12 +71,14 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	if insertArg.IsRemote {
 		// write to s3
+		logutil.Infof("write a bat to s3, bat length is %d, addr is %p", bat.Length(), bat)
 		err := s3Writer.WriteS3Batch(bat, proc, 0)
 		if err != nil {
 			return false, err
 		}
 	} else {
 		// write origin table
+		logutil.Infof("write a bat, bat length is %d, addr is %p", bat.Length(), bat)
 		err := insertCtx.Source.Write(proc.Ctx, bat)
 		if err != nil {
 			return false, err

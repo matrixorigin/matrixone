@@ -151,6 +151,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
+			if p.tblCmsWant {
+				logutil.Infof("partition read bat[%d] from workspace\n", rbat.Length())
+			}
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
@@ -162,6 +165,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			if _, err := b.Append(ctx, mp, bat); err != nil {
 				return nil, err
+			}
+			if p.tblCmsWant {
+				logutil.Infof("partition read bat[%d] from workspace\n", b.Length())
 			}
 			return b, nil
 		}
