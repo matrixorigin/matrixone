@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -97,7 +96,7 @@ func (blk *baseBlock) GetColumnData(
 	from uint32,
 	to uint32,
 	colIdx int,
-	buffer *bytes.Buffer) (vec containers.Vector, err error) {
+) (vec containers.Vector, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {

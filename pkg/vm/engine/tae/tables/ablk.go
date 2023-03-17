@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"time"
 
 	"sync/atomic"
@@ -121,26 +120,26 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 func (blk *ablock) GetColumnDataByNames(
 	txn txnif.AsyncTxn,
 	attrs []string,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	colIdxes := make([]int, len(attrs))
 	for i, attr := range attrs {
 		colIdxes[i] = blk.meta.GetSchema().GetColIdx(attr)
 	}
-	return blk.GetColumnDataByIds(txn, colIdxes, buffers)
+	return blk.GetColumnDataByIds(txn, colIdxes)
 }
 
 func (blk *ablock) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx, buffer)
+	return blk.GetColumnDataById(txn, colIdx)
 }
 
 func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		txn.GetStartTS(),
 		colIdxes,
@@ -150,7 +149,7 @@ func (blk *ablock) GetColumnDataByIds(
 func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	return blk.resolveColumnData(
 		txn.GetStartTS(),
 		colIdx,
