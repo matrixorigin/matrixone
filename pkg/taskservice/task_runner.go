@@ -275,6 +275,7 @@ func (r *taskRunner) fetch(ctx context.Context) {
 func (r *taskRunner) doFetch() ([]task.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
 	tasks, err := r.service.QueryTask(ctx,
+		WithTaskStatusCond(EQ, task.TaskStatus_Running),
 		WithTaskIDCond(GT, r.lastTaskID),
 		WithLimitCond(r.options.queryLimit),
 		WithTaskRunnerCond(EQ, r.runnerID))
