@@ -632,19 +632,45 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	zm []dataio.Index,
 	metaLocs []string) (err error) {
 	var pkVecs []containers.Vector
+	defer func() {
+		for _, v := range pkVecs {
+			v.Close()
+		}
+	}()
 	if tbl.schema.HasPK() {
 		skip := tbl.store.txn.GetPKDedupSkip()
 		if skip == txnif.PKDedupSkipNone {
 			//TODO::parallel load pk.
+			for _, loc := range metaLocs {
+				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
+				if err != nil {
+					return err
+				}
+				_, id, _, _, err := blockio.DecodeLocation(loc)
+				if err != nil {
+					return err
+				}
+				bats, err := reader.LoadColumns(
+					context.Background(),
+					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					[]uint32{id},
+					nil,
+				)
+				if err != nil {
+					return err
+				}
+				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+				pkVecs = append(pkVecs, vec)
+			}
 			for _, v := range pkVecs {
 				//do PK deduplication check against txn's work space.
 				if err = tbl.DedupWorkSpace(v); err != nil {
 					return
 				}
-			}
-			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(metaLocs); err != nil {
-				return
+				//do PK deduplication check against txn's snapshot data.
+				if err = tbl.DedupSnapByPK(v); err != nil {
+					return
+				}
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
 			//do PK deduplication check against txn's snapshot data.
