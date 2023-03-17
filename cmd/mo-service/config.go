@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"hash/fnv"
 	"math"
 	"net"
@@ -177,13 +178,18 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 		if err != nil {
 			return nil, err
 		}
-		perfCounterSet.FileServices[strings.Join([]string{
+		counterSetName := strings.Join([]string{
 			serviceType.String(),
 			nodeUUID,
 			service.Name(),
-		}, " ")] = counterSet
+		}, " ")
+		perfCounterSet.FileServices[counterSetName] = counterSet
 		services = append(services, service)
 
+		// Create "Log Exporter" for this PerfCounter
+		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)
+		// Register this PerfCounter's "Log Exporter" to global stats registry.
+		stats.Register(counterSetName, stats.WithLogExporter(counterLogExporter))
 	}
 
 	// create FileServices
