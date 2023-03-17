@@ -15,41 +15,41 @@
 package perfcounter
 
 import (
-	"sync/atomic"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 type CounterSet struct {
 	S3 struct {
-		List        atomic.Int64
-		Head        atomic.Int64
-		Put         atomic.Int64
-		Get         atomic.Int64
-		Delete      atomic.Int64
-		DeleteMulti atomic.Int64
+		List        stats.Counter
+		Head        stats.Counter
+		Put         stats.Counter
+		Get         stats.Counter
+		Delete      stats.Counter
+		DeleteMulti stats.Counter
 	}
 
 	Cache struct {
-		Read     atomic.Int64
-		Hit      atomic.Int64
-		MemRead  atomic.Int64
-		MemHit   atomic.Int64
-		DiskRead atomic.Int64
-		DiskHit  atomic.Int64
+		Read     stats.Counter
+		Hit      stats.Counter
+		MemRead  stats.Counter
+		MemHit   stats.Counter
+		DiskRead stats.Counter
+		DiskHit  stats.Counter
 	}
 
 	FileServices map[string]*CounterSet
 
 	DistTAE struct {
 		Logtail struct {
-			Entries               atomic.Int64
-			InsertEntries         atomic.Int64
-			MetadataInsertEntries atomic.Int64
-			DeleteEntries         atomic.Int64
-			MetadataDeleteEntries atomic.Int64
+			Entries               stats.Counter
+			InsertEntries         stats.Counter
+			MetadataInsertEntries stats.Counter
+			DeleteEntries         stats.Counter
+			MetadataDeleteEntries stats.Counter
 
-			InsertRows   atomic.Int64
-			ActiveRows   atomic.Int64
-			InsertBlocks atomic.Int64
+			InsertRows   stats.Counter
+			ActiveRows   stats.Counter
+			InsertBlocks stats.Counter
 		}
 	}
 }
