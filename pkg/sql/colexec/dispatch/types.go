@@ -39,15 +39,22 @@ type container struct {
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*WrapperClientSession
 	// sendFunc is the rule you want to send batch
-	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
+	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 }
 
 type Argument struct {
-	ctr      *container
-	prepared bool
-	sendCnt  int
+	ctr *container
 
-	// FuncId means the sendFunc
+	// prepared specify waiting remote receiver ready or not
+	prepared bool
+
+	// for send-to-any function decide send to which reg
+	sendCnt       int
+	aliveRegCnt   int
+	localRegsCnt  int
+	remoteRegsCnt int
+
+	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
 	LocalRegs []*process.WaitRegister

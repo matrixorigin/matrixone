@@ -86,6 +86,9 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
+	if vector.NoCache {
+		return nil
+	}
 
 	var numHit, numRead int64
 	defer func() {
@@ -132,6 +135,9 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
+	if vector.NoCache {
+		return nil
+	}
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
 			continue

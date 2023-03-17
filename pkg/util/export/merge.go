@@ -737,6 +737,7 @@ func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 		ID:       path.Join("ETL_merge_task", path.Join(args...)),
 		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
+		Options:  task.TaskOptions{Concurrency: 1},
 	}
 }
 

@@ -214,7 +214,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(sortColDef.Idx, nil); err != nil {
+		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
 			return
 		}
 		defer view.Close()
@@ -292,7 +292,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx); err != nil {
 				return
 			}
 			defer view.Close()

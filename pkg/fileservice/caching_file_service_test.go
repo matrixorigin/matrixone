@@ -75,9 +75,21 @@ func testCachingFileService(
 		},
 	}
 
+	// nocache
+	vec.NoCache = true
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	m, ok := vec.Entries[0].Object.(map[int]int)
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(m))
+	assert.Equal(t, 42, m[42])
+	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+
+	// cache
+	vec.NoCache = false
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	m, ok = vec.Entries[0].Object.(map[int]int)
 	assert.True(t, ok)
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
