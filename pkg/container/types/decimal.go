@@ -944,7 +944,7 @@ func (x Decimal64) Div(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 		return
 	}
 	z, err = z.Div64(y1)
-	if signx {
+	if signx || signy {
 		z = z.Minus()
 	}
 	return
@@ -986,7 +986,7 @@ func (x Decimal128) Div(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		return
 	}
 	z, err = z.Div128(y1)
-	if signx {
+	if signx || signy {
 		z = z.Minus()
 	}
 	return
@@ -1016,7 +1016,7 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 		return
 	}
 	z, err = z.Div256(y1)
-	if signx {
+	if signx || signy {
 		z = z.Minus()
 	}
 	return
