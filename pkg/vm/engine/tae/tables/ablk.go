@@ -378,9 +378,7 @@ func (blk *ablock) getPersistedRowByFilter(
 		return
 	}
 	sortKey, err := blk.LoadPersistedColumnData(
-		blk.meta.GetSchema().GetSingleSortKeyIdx(),
-		nil,
-	)
+		blk.meta.GetSchema().GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}

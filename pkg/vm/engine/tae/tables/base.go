@@ -202,7 +202,7 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 
 	var vec containers.Vector
 	for i, col := range schema.ColDefs {
-		vec, err = blk.LoadPersistedColumnData(i, nil)
+		vec, err = blk.LoadPersistedColumnData(i)
 		if err != nil {
 			return
 		}
@@ -211,10 +211,8 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 	return
 }
 
-func (blk *baseBlock) LoadPersistedColumnData(
-	colIdx int,
-	buffer *bytes.Buffer,
-) (vec containers.Vector, err error) {
+func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
+	vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
@@ -310,7 +308,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(ts, colIdx)
-	vec, err := blk.LoadPersistedColumnData(colIdx, buffer)
+	vec, err := blk.LoadPersistedColumnData(colIdx)
 	if err != nil {
 		return
 	}

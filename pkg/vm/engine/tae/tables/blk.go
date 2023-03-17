@@ -247,7 +247,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	if sortKey, err = blk.LoadPersistedColumnData(
 		blk.meta.GetSchema().GetSingleSortKeyIdx(),
-		nil); err != nil {
+	); err != nil {
 		return
 	}
 	defer sortKey.Close()
