@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"net/http"
 	"strings"
 	"sync"
@@ -52,6 +54,7 @@ type statusServer struct {
 var registry *prom.Registry
 var moExporter metric.MetricExporter
 var moCollector MetricCollector
+var statsLogWriter *StatsLogWriter
 var statusSvr *statusServer
 var multiTable = false // need set before newMetricFSCollector and initTables
 
@@ -80,6 +83,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
+	statsLogWriter = newStatsLogWriter(&stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -92,6 +96,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	serviceCtx := context.Background()
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
+	statsLogWriter.Start(serviceCtx)
 	metric.SetMetricExporter(moExporter)
 
 	if metric.GetExportToProm() {
@@ -130,6 +135,12 @@ func StopMetricSync() {
 			<-ch
 		}
 		moExporter = nil
+	}
+	if statsLogWriter != nil {
+		if ch, effect := statsLogWriter.Stop(true); effect {
+			<-ch
+		}
+		statsLogWriter = nil
 	}
 	if statusSvr != nil {
 		_ = statusSvr.Shutdown(context.TODO())
