@@ -31,9 +31,9 @@ var (
 	}
 )
 
-func acquireWaiter(txnID []byte) *waiter {
+func acquireWaiter(serviceID string, txnID []byte) *waiter {
 	w := waiterPool.Get().(*waiter)
-	logWaiterContactPool(w, "get")
+	logWaiterContactPool(serviceID, w, "get")
 	w.txnID = txnID
 	if w.ref() != 1 {
 		panic("BUG: invalid ref count")
@@ -48,7 +48,7 @@ func newWaiter() *waiter {
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
-	w.setStatus(waiting)
+	w.setStatus("", waiting)
 	return w
 }
 
@@ -114,17 +114,19 @@ func (w *waiter) ref() int32 {
 	return w.refCount.Add(1)
 }
 
-func (w *waiter) unref() {
+func (w *waiter) unref(serviceID string) {
 	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())
 	}
 	if n == 0 {
-		w.reset()
+		w.reset(serviceID)
 	}
 }
 
-func (w *waiter) add(waiters ...*waiter) {
+func (w *waiter) add(
+	serviceID string,
+	waiters ...*waiter) {
 	if len(waiters) == 0 {
 		return
 	}
@@ -132,38 +134,44 @@ func (w *waiter) add(waiters ...*waiter) {
 		waiters[i].ref()
 	}
 	w.waiters.put(waiters...)
-	logWaitersAdded(w, waiters...)
+	logWaitersAdded(serviceID, w, waiters...)
 }
 
 func (w *waiter) getStatus() waiterStatus {
 	return waiterStatus(w.status.Load())
 }
 
-func (w *waiter) setStatus(status waiterStatus) {
+func (w *waiter) setStatus(
+	serviceID string,
+	status waiterStatus) {
 	w.status.Store(int32(status))
-	logWaiterStatusUpdate(w, status)
+	logWaiterStatusUpdate(serviceID, w, status)
 }
 
-func (w *waiter) casStatus(old, new waiterStatus) bool {
+func (w *waiter) casStatus(
+	serviceID string,
+	old, new waiterStatus) bool {
 	if w.status.CompareAndSwap(int32(old), int32(new)) {
-		logWaiterStatusChanged(w, old, new)
+		logWaiterStatusChanged(serviceID, w, old, new)
 		return true
 	}
 	return false
 }
 
-func (w *waiter) mustRecvNotification(ctx context.Context) error {
+func (w *waiter) mustRecvNotification(
+	ctx context.Context,
+	serviceID string) error {
 	select {
 	case err := <-w.c:
-		logWaiterGetNotify(w, err)
+		logWaiterGetNotify(serviceID, w, err)
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (w *waiter) mustSendNotification(value error) {
-	logWaiterNotified(w, value)
+func (w *waiter) mustSendNotification(serviceID string, value error) {
+	logWaiterNotified(serviceID, w, value)
 	select {
 	case w.c <- value:
 		return
@@ -172,14 +180,16 @@ func (w *waiter) mustSendNotification(value error) {
 	panic("BUG: must send value to channel, " + w.String())
 }
 
-func (w *waiter) resetWait() {
-	if w.casStatus(completed, waiting) {
+func (w *waiter) resetWait(serviceID string) {
+	if w.casStatus(serviceID, completed, waiting) {
 		return
 	}
 	panic("invalid reset wait")
 }
 
-func (w *waiter) wait(ctx context.Context) error {
+func (w *waiter) wait(
+	ctx context.Context,
+	serviceID string) error {
 	status := w.getStatus()
 	if status != waiting &&
 		status != notified {
@@ -190,8 +200,8 @@ func (w *waiter) wait(ctx context.Context) error {
 
 	select {
 	case err := <-w.c:
-		logWaiterGetNotify(w, err)
-		w.setStatus(completed)
+		logWaiterGetNotify(serviceID, w, err)
+		w.setStatus(serviceID, completed)
 		return err
 	case <-ctx.Done():
 	}
@@ -199,48 +209,50 @@ func (w *waiter) wait(ctx context.Context) error {
 	w.beforeSwapStatusAdjustFunc()
 
 	// context is timeout, and status not changed, no concurrent happen
-	if w.casStatus(status, completed) {
+	if w.casStatus(serviceID, status, completed) {
 		return ctx.Err()
 	}
 
 	// notify and timeout are concurrently issued, we use real result to replace
 	// timeout error
-	w.setStatus(completed)
-	return w.mustRecvNotification(ctx)
+	w.setStatus(serviceID, completed)
+	return w.mustRecvNotification(ctx, serviceID)
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
-func (w *waiter) notify(value error) bool {
+func (w *waiter) notify(serviceID string, value error) bool {
 	for {
 		status := w.getStatus()
 		// already notified, no wait on w
 		if status == notified {
-			logWaiterNotifySkipped(w, "already notified")
+			logWaiterNotifySkipped(serviceID, w, "already notified")
 			return false
 		}
 		if status == completed {
 			// wait already completed, wait timeout or wait a result.
-			logWaiterNotifySkipped(w, "already completed")
+			logWaiterNotifySkipped(serviceID, w, "already completed")
 			return false
 		}
 
 		w.beforeSwapStatusAdjustFunc()
 		// if status changed, notify and timeout are concurrently issued, need
 		// retry.
-		if w.casStatus(status, notified) {
-			w.mustSendNotification(value)
+		if w.casStatus(serviceID, status, notified) {
+			w.mustSendNotification(serviceID, value)
 			return true
 		}
-		logWaiterNotifySkipped(w, "concurrently issued")
+		logWaiterNotifySkipped(serviceID, w, "concurrently issued")
 	}
 }
 
-func (w *waiter) clearAllNotify(reason string) {
+func (w *waiter) clearAllNotify(
+	serviceID string,
+	reason string) {
 	for {
 		select {
 		case <-w.c:
 		default:
-			logWaiterClearNotify(w, reason)
+			logWaiterClearNotify(serviceID, w, reason)
 			return
 		}
 	}
@@ -248,47 +260,51 @@ func (w *waiter) clearAllNotify(reason string) {
 
 // close returns the next waiter to hold the lock, and others waiters will move
 // into the next waiter.
-func (w *waiter) close(err error) *waiter {
-	nextWaiter := w.fetchNextWaiter(err)
-	logWaiterClose(w)
-	w.unref()
+func (w *waiter) close(
+	serviceID string,
+	err error) *waiter {
+	nextWaiter := w.fetchNextWaiter(serviceID, err)
+	logWaiterClose(serviceID, w)
+	w.unref(serviceID)
 	return nextWaiter
 }
 
-func (w *waiter) fetchNextWaiter(err error) *waiter {
+func (w *waiter) fetchNextWaiter(
+	serviceID string,
+	err error) *waiter {
 	if w.waiters.len() == 0 {
-		logWaiterFetchNextWaiter(w, nil)
+		logWaiterFetchNextWaiter(serviceID, w, nil)
 		return nil
 	}
-	next := w.awakeNextWaiter()
-	logWaiterFetchNextWaiter(w, next)
+	next := w.awakeNextWaiter(serviceID)
+	logWaiterFetchNextWaiter(serviceID, w, next)
 	for {
-		if next.notify(err) {
-			next.unref()
+		if next.notify(serviceID, err) {
+			next.unref(serviceID)
 			return next
 		}
 		if next.waiters.len() == 0 {
 			return nil
 		}
-		next = next.awakeNextWaiter()
+		next = next.awakeNextWaiter(serviceID)
 	}
 }
 
-func (w *waiter) awakeNextWaiter() *waiter {
+func (w *waiter) awakeNextWaiter(serviceID string) *waiter {
 	next, remains := w.waiters.pop()
-	next.add(remains...)
+	next.add(serviceID, remains...)
 	w.waiters.reset()
 	return next
 }
 
-func (w *waiter) reset() {
+func (w *waiter) reset(serviceID string) {
 	if w.waiters.len() > 0 || len(w.c) > 0 {
 		panic("BUG: waiter should be empty.")
 	}
 
-	logWaiterContactPool(w, "put")
+	logWaiterContactPool(serviceID, w, "put")
 	w.txnID = nil
-	w.setStatus(waiting)
+	w.setStatus(serviceID, waiting)
 	w.waiters.reset()
 	waiterPool.Put(w)
 }
