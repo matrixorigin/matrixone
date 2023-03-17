@@ -58,5 +58,5 @@ Usage:
 
  4. Register LogExporter to global stats registry using stats.Register()
 
-	stats.Register("FamilyName", stats.WithLogExporter(&counterLogExporter))
+	stats.Register("FamilyName", stats.WithLogExporter(counterLogExporter))
 */
