@@ -17,6 +17,7 @@ package pipeline
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -86,6 +87,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.S3IOByte(bat)
 			a.Alloc(int64(bat.Size()))
 		}
+		logutil.Infof("pipeline.Run read a bat, bat size is %d, addr is %p", bat.Length(), bat)
 
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
