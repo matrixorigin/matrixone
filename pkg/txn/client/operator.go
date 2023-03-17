@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -84,6 +85,13 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+// WithTxnLockService set txn lock service
+func WithTxnLockService(lockService lockservice.LockService) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.lockService = lockService
+	}
+}
+
 // WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
 // to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
@@ -117,6 +125,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		lockService      lockservice.LockService
 	}
 
 	mu struct {
@@ -270,6 +279,10 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	if tc.option.lockService != nil {
+		defer tc.unlock(ctx)
+	}
+
 	return tc.doWrite(ctx, requests, true)
 }
 
@@ -278,6 +291,10 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 	if tc.option.readyOnly {
 		return nil
+	}
+
+	if tc.option.lockService != nil {
+		defer tc.unlock(ctx)
 	}
 
 	result, err := tc.doWrite(ctx, nil, true)
@@ -301,6 +318,10 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 
 	if len(tc.mu.txn.DNShards) == 0 {
 		return nil
+	}
+
+	if tc.option.lockService != nil {
+		defer tc.unlock(ctx)
 	}
 
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
@@ -670,4 +691,12 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 	}
 	result.Responses = values
 	return result, nil
+}
+
+func (tc *txnOperator) unlock(ctx context.Context) {
+	if err := tc.option.lockService.Unlock(ctx, tc.mu.txn.ID); err != nil {
+		tc.rt.Logger().Error("failed to unlock txn",
+			util.TxnField(tc.mu.txn),
+			zap.Error(err))
+	}
 }

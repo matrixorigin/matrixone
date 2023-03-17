@@ -40,6 +40,12 @@ func constructLockWithInsert(
 	pkIdx := -1
 	var pkType types.Type
 	name := tableDef.Pkey.PkeyColName
+	if name == "" {
+		if len(tableDef.Pkey.Names) != 1 {
+			panic("BUG: multi pk names")
+		}
+		name = tableDef.Pkey.Names[0]
+	}
 	for idx, c := range tableDef.Cols {
 		if c.Name == name {
 			pkIdx = idx
@@ -62,6 +68,5 @@ func constructLockWithInsert(
 		int32(pkIdx),
 		pkType,
 		lock.LockMode_Exclusive,
-		proc.LockService,
 	), nil
 }

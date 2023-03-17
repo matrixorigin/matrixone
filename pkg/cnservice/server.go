@@ -128,6 +128,7 @@ func NewService(
 		cs morpc.ClientSession,
 		engine engine.Engine,
 		fService fileservice.FileService,
+		lockService lockservice.LockService,
 		cli client.TxnClient,
 		messageAcquirer func() morpc.Message) error {
 		return nil
@@ -239,6 +240,7 @@ func (s *service) handleRequest(
 		cs,
 		s.storeEngine,
 		s.fileService,
+		s.lockService,
 		s._txnClient,
 		s.acquireMessage)
 	return nil
@@ -251,6 +253,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	s.cancelMoServerFunc = cancelMoServerFunc
 
 	pu.FileService = s.fileService
+	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
@@ -427,7 +430,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(runtime.ProcessLevelRuntime(), sender)
+		c = client.NewTxnClient(runtime.ProcessLevelRuntime(),
+			sender,
+			client.WithLockService(s.lockService))
 		s._txnClient = c
 	})
 	c = s._txnClient

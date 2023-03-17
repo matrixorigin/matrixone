@@ -333,7 +333,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }

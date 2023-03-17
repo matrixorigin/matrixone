@@ -61,6 +61,7 @@ func (s *service) initDistributedTAE(
 		ctx,
 		mp,
 		fs,
+		s.lockService,
 		client,
 		hakeeper,
 	)

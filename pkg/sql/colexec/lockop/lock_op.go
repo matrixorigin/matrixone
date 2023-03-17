@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,14 +30,13 @@ func NewArgument(
 	tableName string,
 	pkIndx int32,
 	pkType types.Type,
-	mode lock.LockMode,
-	svc lockservice.LockService) *Argument {
+	mode lock.LockMode) *Argument {
 	arg := argPool.Get().(*Argument)
 	arg.tableID = tableID
 	arg.tabaleName = tableName
 	arg.pkIdx = pkIndx
+	arg.pkType = pkType
 	arg.mode = mode
-	arg.svc = svc
 	return arg
 }
 
@@ -97,11 +95,10 @@ func Call(
 	}
 
 	arg := v.(*Argument)
-	s := arg.svc
 	vec := bat.GetVector(arg.pkIdx)
 	rows, g := arg.fetcher(vec, arg.packer, 0)
 	txnOp := proc.TxnOperator
-	bind, err := s.Lock(
+	bind, err := proc.LockService.Lock(
 		proc.Ctx,
 		arg.tableID,
 		rows,

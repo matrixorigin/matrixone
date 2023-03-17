@@ -17,7 +17,6 @@ package lockop
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -33,7 +32,6 @@ type Argument struct {
 	pkIdx      int32
 	pkType     types.Type
 	mode       lock.LockMode
-	svc        lockservice.LockService
 	fetcher    fetchRowsFunc
 	packer     *types.Packer
 }

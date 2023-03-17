@@ -16,6 +16,7 @@ package client
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -27,12 +28,20 @@ func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
 	}
 }
 
+// WithLockService setup lock service
+func WithLockService(lockService lockservice.LockService) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.lockService = lockService
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	rt        runtime.Runtime
-	sender    rpc.TxnSender
-	generator TxnIDGenerator
+	rt          runtime.Runtime
+	sender      rpc.TxnSender
+	generator   TxnIDGenerator
+	lockService lockservice.LockService
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
@@ -66,7 +75,9 @@ func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
-	options = append(options, WithTxnCNCoordinator())
+	options = append(options,
+		WithTxnCNCoordinator(),
+		WithTxnLockService(client.lockService))
 	return newTxnOperator(client.rt, client.sender, txnMeta, options...), nil
 }
 

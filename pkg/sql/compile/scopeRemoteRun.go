@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
@@ -87,6 +88,7 @@ func CnServerMessageHandler(
 	cs morpc.ClientSession,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
+	lockService lockservice.LockService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
 
@@ -97,7 +99,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, msg,
-		cs, messageAcquirer, storeEngine, fileService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)

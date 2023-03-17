@@ -256,6 +256,7 @@ type service struct {
 		cs morpc.ClientSession,
 		engine engine.Engine,
 		fService fileservice.FileService,
+		lockService lockservice.LockService,
 		cli client.TxnClient,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
