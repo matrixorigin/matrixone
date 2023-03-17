@@ -141,15 +141,19 @@ message GetTxnLockResponse {
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
 message GetWaitingListRequest {
-  bytes     TxnID     = 1;
-  string    ServiceID = 2;
+  WaitTxn Txn = 1 [(gogoproto.nullable) = false];
 }
 
 // GetWaitingListResponse get a waiting txn list on a specical txn response. CN -> CN
 message GetWaitingListResponse {
-  repeated bytes WaitingList = 2;
+  repeated WaitTxn WaitingList = 1 [(gogoproto.nullable) = false];
 }
 
+// WaitTxn wait txn include txn created on
+message WaitTxn {
+  bytes     TxnID     = 1;
+  string    CreatedOn = 2;
+}
 
 // UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {

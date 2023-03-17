@@ -131,3 +131,5 @@ insert into t1 values (1, 3);
 select count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ from t1 group by MAX_REQ;
 select Case When Count(*) < MAX_REQ Then 1 Else 0 End from t1 where t1.USR_ID = 1 group by MAX_REQ;
 DROP TABLE if exists t1;
+
+select case when 1 in (1.0, 2.0, 3.0) then true else false end;

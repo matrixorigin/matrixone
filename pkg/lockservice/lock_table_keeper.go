@@ -66,7 +66,9 @@ func (k *lockTableKeeper) Close() error {
 }
 
 func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
-	defer getLogger().InfoAction("keep lock table bind task")()
+	defer getLogger().InfoAction(
+		"keep lock table bind task",
+		serviceIDField(k.serviceID))()
 
 	timer := time.NewTimer(k.keepLockTableBindInterval)
 	defer timer.Stop()
@@ -83,7 +85,9 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 }
 
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
-	defer getLogger().InfoAction("keep remote locks task")()
+	defer getLogger().InfoAction(
+		"keep remote locks task",
+		serviceIDField(k.serviceID))()
 
 	timer := time.NewTimer(k.keepRemoteLockInterval)
 	defer timer.Stop()
@@ -145,7 +149,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			binds = append(binds, bind)
 			continue
 		}
-		logKeepRemoteLocksFailed(bind, err)
+		logKeepRemoteLocksFailed(k.serviceID, bind, err)
 	}
 
 	for idx, f := range futures {
@@ -153,7 +157,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		if err == nil {
 			releaseResponse(v.(*pb.Response))
 		} else {
-			logKeepRemoteLocksFailed(binds[idx], err)
+			logKeepRemoteLocksFailed(k.serviceID, binds[idx], err)
 		}
 		f.Close()
 		futures[idx] = nil // gc
@@ -172,7 +176,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
-		logKeepBindFailed(err)
+		logKeepBindFailed(k.serviceID, err)
 		return
 	}
 	defer releaseResponse(resp)
@@ -184,7 +188,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	// Keep bind receiving an explicit failure means that all the bings of the local
 	// locktable are invalid. We just need to remove it from the map, and the next
 	// time we access it, we will automatically get the latest bind from allocate.
-	logLocalBindsInvalid()
+	logLocalBindsInvalid(k.serviceID)
 	k.tables.Range(func(key, value any) bool {
 		lb := value.(lockTable)
 		bind := lb.getBind()
