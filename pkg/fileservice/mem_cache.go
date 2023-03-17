@@ -86,6 +86,9 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
+	if vector.NoCache {
+		return nil
+	}
 
 	var numHit, numRead int64
 	defer func() {
