@@ -109,7 +109,6 @@ func (blk *block) GetColumnDataByIds(
 		node.MustPNode(),
 		txn.GetStartTS(),
 		colIdxes,
-		buffers,
 		false)
 }
 
@@ -126,7 +125,6 @@ func (blk *block) GetColumnDataById(
 		node.MustPNode(),
 		txn.GetStartTS(),
 		colIdx,
-		buffer,
 		false)
 }
 

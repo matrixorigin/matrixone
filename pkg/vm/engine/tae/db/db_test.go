@@ -2649,7 +2649,7 @@ func TestGetColumnData(t *testing.T) {
 	view, _ = blk.GetColumnDataById(2, buffer)
 	defer view.Close()
 	assert.Equal(t, bats[0].Length(), view.Length())
-	assert.Zero(t, view.GetData().Allocated())
+	assert.NotZero(t, view.GetData().Allocated())
 	assert.NoError(t, txn.Commit())
 
 	tae.compactBlocks(false)
@@ -2664,7 +2664,7 @@ func TestGetColumnData(t *testing.T) {
 	view, _ = blk.GetColumnDataById(2, buffer)
 	defer view.Close()
 	assert.Equal(t, bats[0].Length(), view.Length())
-	assert.Zero(t, view.GetData().Allocated())
+	assert.NotZero(t, view.GetData().Allocated())
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
