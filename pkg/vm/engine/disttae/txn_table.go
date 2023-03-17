@@ -763,7 +763,7 @@ func (tbl *txnTable) newReader(
 				blks:     []ModifyBlockMeta{blks[i]},
 			})
 		}
-		return []engine.Reader{&mergeReader{readers}}, nil
+		return []engine.Reader{&mergeReader{tbl.tableName, readers}}, nil
 	}
 
 	if len(blks) < readerNumber-1 {
