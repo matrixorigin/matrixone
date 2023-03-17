@@ -132,6 +132,9 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
+	if vector.NoCache {
+		return nil
+	}
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
 			continue

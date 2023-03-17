@@ -71,6 +71,8 @@ type IOVector struct {
 	ExpireAt time.Time
 	// Preload indicates whether the I/O is for preloading
 	Preload bool
+	// NoCache true, means the data NOT cache if FileService has cache instance.
+	NoCache bool
 }
 
 type IOEntry struct {
