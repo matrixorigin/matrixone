@@ -171,6 +171,10 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 		r.sels = append(r.sels, int64(i))
 	}
 	bat.Shrink(r.sels)
+	if r.tableDef.Name == "cms1" {
+		logutil.Infof("merge block read rows[%d]: snapshot is %s\n",
+			bat.Length(), r.ts)
+	}
 	return bat, nil
 }
 
@@ -194,6 +198,10 @@ func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, 
 			r.rds = r.rds[1:]
 		}
 		if bat != nil {
+			if r.tblName == "cms1" {
+				logutil.Infof("merge reader read rows[%d]",
+					bat.Length())
+			}
 			return bat, nil
 		}
 	}

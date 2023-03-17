@@ -540,6 +540,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 			return nil, err
 		}
 		for i := range rds0 {
+			mrds[i].tblName = tbl.tableName
 			mrds[i].rds = append(mrds[i].rds, rds0[i])
 		}
 		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])

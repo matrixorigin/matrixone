@@ -252,7 +252,8 @@ type blockMergeReader struct {
 }
 
 type mergeReader struct {
-	rds []engine.Reader
+	tblName string
+	rds     []engine.Reader
 }
 
 type emptyReader struct {
