@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"io"
 )
 
 const (
@@ -370,7 +371,5 @@ func (n *baseNode) LoadPersistedColumnData(colIdx int, buffer *bytes.Buffer) (ve
 		n.fs,
 		n.meta.AsCommonID(),
 		def,
-		location,
-		buffer,
-	)
+		location)
 }

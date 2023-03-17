@@ -222,8 +222,7 @@ func (blk *baseBlock) LoadPersistedColumnData(
 		blk.fs,
 		blk.meta.AsCommonID(),
 		def,
-		location,
-		buffer)
+		location)
 }
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
