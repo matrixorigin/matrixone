@@ -79,7 +79,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
-        if: ${{ failure() || cancelled()}}
+        if: ${{ always() }}
         continue-on-error: true
         with:
           name: e2e_linux_x86_reports
@@ -157,7 +157,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
-        if: ${{ failure() || cancelled()}}
+        if: ${{ always() }}
         continue-on-error: true
         with:
           name: multi-cn-e2e_linux_x86_reports
