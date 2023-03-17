@@ -81,7 +81,7 @@ func TestStatsLogWriter(t *testing.T) {
 	// 1. Register Dev Stats
 	service := NewMockService()
 	serviceLogExporter := NewMockServiceLogExporter(service)
-	stats.Register("MockServiceStats", stats.WithLogExporter(&serviceLogExporter))
+	stats.Register("MockServiceStats", stats.WithLogExporter(serviceLogExporter))
 
 	//2.1 Setup a Runtime
 	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))

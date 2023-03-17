@@ -41,13 +41,13 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 func (r *Registry) ExportLog() map[string][]zap.Field {
 	families := make(map[string][]zap.Field)
 	for familyName, family := range *r {
-		families[familyName] = (*family.logExporter).Export()
+		families[familyName] = family.logExporter.Export()
 	}
 	return families
 }
 
 // WithLogExporter registers Family with the LogExporter
-func WithLogExporter(logExporter *LogExporter) Options {
+func WithLogExporter(logExporter LogExporter) Options {
 	return func(o *options) {
 		o.logExporter = logExporter
 	}
@@ -56,7 +56,7 @@ func WithLogExporter(logExporter *LogExporter) Options {
 type Options func(*options)
 
 type options struct {
-	logExporter *LogExporter
+	logExporter LogExporter
 }
 
 func defaultOptions() options {

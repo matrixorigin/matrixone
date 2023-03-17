@@ -189,7 +189,7 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 		// Create "Log Exporter" for this PerfCounter
 		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)
 		// Register this PerfCounter's "Log Exporter" to global stats registry.
-		stats.Register(counterSetName, stats.WithLogExporter(&counterLogExporter))
+		stats.Register(counterSetName, stats.WithLogExporter(counterLogExporter))
 	}
 
 	// create FileServices

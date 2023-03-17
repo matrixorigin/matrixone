@@ -78,10 +78,10 @@ func TestRegister(t *testing.T) {
 	serviceLogExporter := NewMockServiceLogExporter(service)
 
 	// 3. Register LogExporter to the default stats registry
-	Register("MockServiceStats1", WithLogExporter(&serviceLogExporter))
+	Register("MockServiceStats1", WithLogExporter(serviceLogExporter))
 
 	assert.Equal(t, 1, len(DefaultRegistry))
-	assert.Equal(t, &serviceLogExporter, DefaultRegistry["MockServiceStats1"].logExporter)
+	assert.Equal(t, serviceLogExporter, DefaultRegistry["MockServiceStats1"].logExporter)
 }
 
 func TestExportLog(t *testing.T) {
@@ -92,7 +92,7 @@ func TestExportLog(t *testing.T) {
 	serviceLogExporter := NewMockServiceLogExporter(service)
 
 	// 3. Register LogExporter to the default stats registry
-	Register("MockServiceStats2", WithLogExporter(&serviceLogExporter))
+	Register("MockServiceStats2", WithLogExporter(serviceLogExporter))
 
 	// 4. Let the service perform some operations
 	service.Do()
