@@ -74,6 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if bat.Length() == 0 {
 			continue
 		}
+		logutil.Infof("merge operator receive, bat length is %d", bat.Length())
 		anal.Input(bat, isFirst)
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)

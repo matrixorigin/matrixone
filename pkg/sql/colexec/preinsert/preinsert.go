@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -45,6 +46,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
+	logutil.Infof("pre-insert operator receive, bat length is %d", bat.Length())
 
 	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
 

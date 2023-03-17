@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,6 +39,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	if bat.Length() == 0 {
 		return false, nil
 	}
+	logutil.Infof("connector operator receive, bat length is %d", bat.Length())
 
 	// do not send the source batch to remote node.
 	for i := range bat.Vecs {
