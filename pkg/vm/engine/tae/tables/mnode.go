@@ -128,7 +128,7 @@ func (node *memoryNode) GetColumnDataWindow(
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
 		data = data.Window(int(from), int(to-from))
-		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
+		vec = containers.CloneWithBuffer(data, common.DefaultAllocator)
 	} else {
 		vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
 	}

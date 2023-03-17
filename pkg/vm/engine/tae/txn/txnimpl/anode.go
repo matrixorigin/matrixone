@@ -121,8 +121,7 @@ func (n *anode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, co
 	for i, colIdx := range colIdxes {
 		orig := n.storage.mnode.data.Vecs[colIdx]
 		if buffers[i] != nil {
-			buffers[i].Reset()
-			view.SetData(colIdx, containers.CloneWithBuffer(orig, buffers[i]))
+			view.SetData(colIdx, containers.CloneWithBuffer(orig))
 		} else {
 			view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
 		}
@@ -134,8 +133,7 @@ func (n *anode) FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, co
 func (n *anode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
 	orig := n.storage.mnode.data.Vecs[view.ColIdx]
 	if buffer != nil {
-		buffer.Reset()
-		view.SetData(containers.CloneWithBuffer(orig, buffer))
+		view.SetData(containers.CloneWithBuffer(orig))
 	} else {
 		view.SetData(orig.CloneWindow(0, orig.Length()))
 	}

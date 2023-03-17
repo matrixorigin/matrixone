@@ -236,27 +236,27 @@ func (vec *vector[T]) Allocated() int {
 	return vec.downstreamVector.Size()
 }
 
-// ResetWithData is used by CloneWithBuffer to create a shallow copy of the srcVector.
-// When the shallowCopy undergoes an append, we allocate mpool memory. So we need isOwner flag.
-func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
+//// ResetWithData is used by CloneWithBuffer to create a shallow copy of the srcVector.
+//// When the shallowCopy undergoes an append, we allocate mpool memory. So we need isOwner flag.
+//func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
+//
+//	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
+//	if nulls != nil {
+//		cnNulls.Add(newDownstream.GetNulls(), nulls.ToArray()...)
+//	}
+//
+//	vec.releaseDownstream()
+//	vec.downstreamVector = newDownstream
+//}
 
-	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
-	if nulls != nil {
-		cnNulls.Add(newDownstream.GetNulls(), nulls.ToArray()...)
-	}
-
-	vec.releaseDownstream()
-	vec.downstreamVector = newDownstream
-}
-
-func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
-	if typ.IsVarlen() {
-		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage, true)
-	} else {
-		mov, _ = cnVector.FromDNVector(typ, nil, bs.Storage, true)
-	}
-	return mov
-}
+//func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
+//	if typ.IsVarlen() {
+//		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage, true)
+//	} else {
+//		mov, _ = cnVector.FromDNVector(typ, nil, bs.Storage, true)
+//	}
+//	return mov
+//}
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
 func (vec *vector[T]) tryPromoting() {
@@ -458,6 +458,7 @@ func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 }
 
 func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
+	vec.isOwner = false
 	vec.downstreamVector = dsVec
 }
 
