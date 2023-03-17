@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"bytes"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -200,36 +199,36 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, buffers)
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes, buffers)
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes)
 }
 
-func (blk *txnBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, error) {
 	if blk.isUncommitted {
 		attrIds := make([]int, len(attrs))
 		for i, attr := range attrs {
 			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
 		}
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds, buffers)
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs, buffers)
+	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs)
 }
 
-func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataById(colIdx int) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx, buffer)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx, buffer)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx)
 }
-func (blk *txnBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
-		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId, buffer)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr, buffer)
+	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {

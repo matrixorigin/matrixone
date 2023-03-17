@@ -161,3 +161,6 @@ select Case When Count(*) < MAX_REQ Then 1 Else 0 End from t1 where t1.USR_ID = 
 Case When Count(*) < MAX_REQ Then 1 Else 0 End
 1
 DROP TABLE if exists t1;
+select case when 1 in (1.0, 2.0, 3.0) then true else false end;
+case when 1 in (1.0, 2.0, 3.0) then true else false end
+true
