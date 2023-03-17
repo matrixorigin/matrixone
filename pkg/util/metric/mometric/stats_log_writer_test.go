@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"sync"
 	"testing"
 	"time"
 )
@@ -89,9 +90,17 @@ func TestStatsLogWriter(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	//2.2 Create custom Hook logger
-	var writtenLogs []zapcore.Entry
+	type threadSafeWrittenLog struct {
+		content []zapcore.Entry
+		// This is because, BusyLoop and StatsLogger read (ie len) and write (content) to the same field.
+		sync.Mutex
+	}
+
+	writtenLogs := threadSafeWrittenLog{}
 	customLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
-		writtenLogs = append(writtenLogs, entry)
+		writtenLogs.Lock()
+		defer writtenLogs.Unlock()
+		writtenLogs.content = append(writtenLogs.content, entry)
 		return nil
 	}))
 
@@ -105,7 +114,9 @@ func TestStatsLogWriter(t *testing.T) {
 
 	// 4. Wait for log to print in console. (Busy Loop)
 	err := waitUtil(60*time.Second, 100*time.Millisecond, func() bool {
-		return len(writtenLogs) >= 10
+		writtenLogs.Lock()
+		defer writtenLogs.Unlock()
+		return len(writtenLogs.content) >= 10
 	})
 	require.NoError(t, err)
 
@@ -116,8 +127,10 @@ func TestStatsLogWriter(t *testing.T) {
 	println("StatsLogWriter has stopped gracefully.")
 
 	//6. Validate the log printed.
-	assert.True(t, len(writtenLogs) >= 10)
-	for _, log := range writtenLogs {
+	writtenLogs.Lock()
+	defer writtenLogs.Unlock()
+	assert.True(t, len(writtenLogs.content) >= 10)
+	for _, log := range writtenLogs.content {
 		assert.Contains(t, log.Message, "stats ")
 	}
 
