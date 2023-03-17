@@ -379,13 +379,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				}
 			}
 		}
-		fmt.Println("XXXXXX build pipeline for table:", preArg.SchemaName, preArg.TableDef.Name)
-		fmt.Println("XXXXXX pkIdx:", pkIdx)
-		//pkIdx := insertNode.InsertCtx.TableDef.CompositePkey
-		//pkIdx := insertNode.InsertCtx.TableDef.Name2ColIndex[insertNode.InsertCtx.TableDef.Pkey.PkeyColName]
 		// select count(pk), * from table group by table.pk;
-
-		if pkIdx != -1 {
+		if pkIdx != -1 && preArg.TableDef.Name != "mo_mysql_compatbility_mode" {
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Group,
 				Idx: c.anal.curr,
@@ -415,7 +410,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 							},
 						},
 					})
-
 			*/
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Projection,
@@ -513,7 +507,7 @@ func groupArgument(insertNode *plan.Node, pkIdx int32) *group.Argument {
 	}
 	for i, def := range insertNode.InsertCtx.TableDef.Cols {
 		arg.Aggs = append(arg.Aggs, agg.Aggregate{
-			Op:   agg.AggregateMax,
+			Op:   agg.AggregateAnyValue,
 			Dist: false,
 			E: &plan.Expr{
 				Typ: insertNode.InsertCtx.TableDef.Cols[pkIdx].Typ,

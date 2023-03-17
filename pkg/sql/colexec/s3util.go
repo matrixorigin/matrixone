@@ -15,7 +15,6 @@
 package colexec
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -145,7 +144,6 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	for i := range w.tableBatches {
-		fmt.Println("XXXXXX table batch:", w.tableBatches[i])
 		if w.tableBatchSizes[i] > 0 {
 			if err := w.mergeBlock(i, len(w.tableBatches[i]), proc); err != nil {
 				return err

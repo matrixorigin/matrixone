@@ -77,9 +77,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 
-	fmt.Println("XXXXXX group:", ap.Exprs)
-	fmt.Println("XXXXXX group input batch:", proc.InputBatch())
-
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -202,7 +199,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
-			fmt.Println("XXXXXX group output batch:", proc.InputBatch())
 			ctr.bat = nil
 			return true, nil
 		}

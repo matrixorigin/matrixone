@@ -16,7 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -78,7 +77,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
-	fmt.Println("XXXXXX preinsert output batch", insertBatch)
 	proc.SetInputBatch(insertBatch)
 	return false, nil
 }
