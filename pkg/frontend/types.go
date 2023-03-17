@@ -145,15 +145,6 @@ type BackgroundExec interface {
 
 var _ BackgroundExec = &BackgroundHandler{}
 
-// profile makes the debug info
-type profile interface {
-	makeProfile(profileTyp profileType)
-
-	getProfile(profileTyp profileType) string
-}
-
-var _ profile = &Session{}
-
 type unknownStatementType struct {
 	tree.StatementType
 }

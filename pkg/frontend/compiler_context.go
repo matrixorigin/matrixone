@@ -135,7 +135,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(ses.GetRequestContext(), name, txn)
 	if err != nil {
-		logErrorf(ses.GetConciseProfile(), "get database %v failed. error %v", name, err)
+		logErrorf(ses.GetDebugString(), "get database %v failed. error %v", name, err)
 		return false
 	}
 
@@ -167,7 +167,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
 	if err != nil {
-		logErrorf(ses.GetConciseProfile(), "get database %v error %v", dbName, err)
+		logErrorf(ses.GetDebugString(), "get database %v error %v", dbName, err)
 		return nil, nil, err
 	}
 
@@ -175,7 +175,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 	// if err != nil {
 	// 	return nil, nil, err
 	// }
-	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)

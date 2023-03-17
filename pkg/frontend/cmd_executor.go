@@ -127,7 +127,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	logInfof(ses.GetConciseProfile(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+	logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
 	if err != nil {
@@ -141,7 +141,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	logInfof(ses.GetConciseProfile(), "time of Exec.Run : %s", time.Since(runBegin).String())
+	logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
 
 	_ = stmtExec.RecordExecPlan(ctx)
 
@@ -213,7 +213,7 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetConciseProfile(), bse.err.Error())
+		logError(ses.GetDebugString(), bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)

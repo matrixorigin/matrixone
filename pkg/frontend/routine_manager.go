@@ -117,17 +117,17 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
-	logDebugf(pro.GetConciseProfile(), "have done some preparation for the connection %s", rs.RemoteAddress())
+	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logErrorf(pro.GetConciseProfile(), "failed to handshake with server, quiting routine... %s", err)
+		logErrorf(pro.GetDebugString(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
 		return
 	}
 
-	logDebugf(pro.GetConciseProfile(), "have sent handshake packet to connection %s", rs.RemoteAddress())
+	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, routine)
 }
 
@@ -160,7 +160,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				}
 				metric.ConnectionCounter(accountName).Dec()
 			})
-			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
+			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
 		rt.cleanup()
 	}
@@ -224,7 +224,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
-	protoProfile := protocol.GetConciseProfile()
+	protoProfile := protocol.GetDebugString()
 	packet, ok := msg.(*Packet)
 
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))

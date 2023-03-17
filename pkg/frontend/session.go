@@ -139,7 +139,7 @@ type Session struct {
 
 	cache *privilegeCache
 
-	profiles [8]string
+	debugStr string
 
 	mu sync.Mutex
 
@@ -407,68 +407,34 @@ func (ses *Session) skipCheckPrivilege() bool {
 	return ses.skipAuth
 }
 
-func (ses *Session) makeProfile(profileTyp profileType) {
+func (ses *Session) UpdateDebugString() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	var mask profileType
-	var profile string
-	account := ses.tenant
-	for i := uint8(0); i < 8; i++ {
-		mask = 1 << i
-		switch mask & profileTyp {
-		case profileTypeAccountWithName:
-			if account != nil {
-				profile = fmt.Sprintf("account: %s user: %s role: %s", account.GetTenant(), account.GetUser(), account.GetDefaultRole())
-			}
-		case profileTypeAccountWithId:
-			if account != nil {
-				profile = fmt.Sprintf("accountId: %d userId: %d roleId: %d", account.GetTenantID(), account.GetUserID(), account.GetDefaultRoleID())
-			}
-		case profileTypeSessionId:
-			profile = "sessionId " + ses.uuid.String()
-		case profileTypeConnectionWithId:
-			if ses.protocol != nil {
-				profile = fmt.Sprintf("connectionId %d", ses.protocol.ConnectionID())
-			}
-		case profileTypeConnectionWithIp:
-			if ses.protocol != nil {
-				h, p, _, _ := ses.protocol.Peer()
-				profile = "client " + h + ":" + p
-			}
-		default:
-			profile = ""
-		}
-		ses.profiles[i] = profile
-	}
-}
-
-func (ses *Session) MakeProfile() {
-	ses.makeProfile(profileTypeAll)
-}
-
-func (ses *Session) getProfile(profileTyp profileType) string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	var mask profileType
 	sb := bytes.Buffer{}
-	for i := uint8(0); i < 8; i++ {
-		mask = 1 << i
-		if mask&profileTyp != 0 {
-			if sb.Len() != 0 {
-				sb.WriteByte(' ')
-			}
-			sb.WriteString(ses.profiles[i])
-		}
+	//option connection id , ip
+	if ses.protocol != nil {
+		sb.WriteString(fmt.Sprintf("connectionId %d", ses.protocol.ConnectionID()))
+		sb.WriteByte('|')
+		sb.WriteString(ses.protocol.Peer())
 	}
-	return sb.String()
+	sb.WriteByte('|')
+	//account info
+	if ses.tenant != nil {
+		sb.WriteString(ses.tenant.String())
+	} else {
+		acc := getDefaultAccount()
+		sb.WriteString(acc.String())
+	}
+	sb.WriteByte('|')
+	//session id
+	sb.WriteString(ses.uuid.String())
+	ses.debugStr = sb.String()
 }
 
-func (ses *Session) GetConciseProfile() string {
-	return ses.getProfile(profileTypeConcise)
-}
-
-func (ses *Session) GetCompleteProfile() string {
-	return ses.getProfile(profileTypeAll)
+func (ses *Session) GetDebugString() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.debugStr
 }
 
 func (ses *Session) IfInitedTempEngine() bool {
@@ -980,11 +946,6 @@ func (ses *Session) GetConnectionID() uint32 {
 	return ses.GetMysqlProtocol().ConnectionID()
 }
 
-func (ses *Session) GetPeer() (string, string) {
-	rh, rp, _, _ := ses.GetMysqlProtocol().Peer()
-	return rh, rp
-}
-
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1020,8 +981,8 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 
 	ses.SetTenantInfo(tenant)
-	ses.MakeProfile()
-	sessionProfile := ses.GetConciseProfile()
+	ses.UpdateDebugString()
+	sessionProfile := ses.GetDebugString()
 
 	logDebugf(sessionProfile, "check special user")
 	// check the special user for initilization

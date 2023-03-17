@@ -107,7 +107,7 @@ func (oq *outputQueue) flush() error {
 	}
 	if oq.ep.Outfile {
 		if err := exportDataToCSVFile(oq); err != nil {
-			logErrorf(oq.ses.GetConciseProfile(), "export to csv file error %v", err)
+			logErrorf(oq.ses.GetDebugString(), "export to csv file error %v", err)
 			return err
 		}
 	} else {
@@ -118,7 +118,7 @@ func (oq *outputQueue) flush() error {
 		}
 
 		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
-			logErrorf(oq.ses.GetConciseProfile(), "flush error %v", err)
+			logErrorf(oq.ses.GetDebugString(), "flush error %v", err)
 			return err
 		}
 	}
@@ -229,7 +229,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
 	default:
-		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		logErrorf(ses.GetDebugString(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil

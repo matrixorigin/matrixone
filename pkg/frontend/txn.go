@@ -68,9 +68,10 @@ func (th *TxnHandler) GetTxnCtx(account *TenantInfo) context.Context {
 			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
 			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
 		} else {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
-			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, uint32(rootID))
-			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+			acc := getDefaultAccount()
+			th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, acc.GetTenantID())
+			th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, acc.GetUserID())
+			th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, acc.GetDefaultRoleID())
 		}
 	}
 	return th.txnCtx
@@ -209,7 +210,7 @@ func (th *TxnHandler) CommitTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionProfile := ses.GetConciseProfile()
+	sessionProfile := ses.GetDebugString()
 	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
 	if ctx1 == nil {
 		panic("context should not be nil")
@@ -278,7 +279,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionProfile := ses.GetConciseProfile()
+	sessionProfile := ses.GetDebugString()
 	ctx1 := th.GetTxnCtx(th.GetSession().GetTenantInfo())
 	if ctx1 == nil {
 		panic("context should not be nil")
@@ -349,7 +350,7 @@ func (th *TxnHandler) GetTxn() (TxnOperator, error) {
 	ses := th.GetSession()
 	err := ses.TxnCreate()
 	if err != nil {
-		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
+		logErrorf(ses.GetDebugString(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
