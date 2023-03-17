@@ -15,11 +15,6 @@
 package containers
 
 import (
-	"bytes"
-	"strconv"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -30,41 +25,6 @@ import (
 )
 
 // ### Shallow copy Functions
-
-func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := Options{}
-	// XXX what does the following test mean?
-	if len(allocator) > 0 {
-		opts.Allocator = common.DefaultAllocator
-	} else {
-		opts.Allocator = src.GetAllocator()
-	}
-	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
-	bs := src.Bytes()
-	var nulls *cnNulls.Nulls
-	if src.HasNull() {
-		nulls = src.NullMask().Clone()
-	}
-	nbs := FillBufferWithBytes(bs, buffer)
-	cloned.ResetWithData(nbs, nulls)
-	return
-}
-
-func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
-	buffer.Reset()
-	size := bs.Size()
-	if buffer.Cap() < size {
-		buffer.Grow(size)
-	}
-	nbs := stl.NewBytesWithTypeSize(bs.TypeSize)
-	buf := buffer.Bytes()[:size]
-	copy(buf, bs.StorageBuf())
-	copy(buf[bs.StorageSize():], bs.HeaderBuf())
-
-	nbs.SetStorageBuf(buf[:bs.StorageSize()])
-	nbs.SetHeaderBuf(buf[bs.StorageSize():bs.Size()])
-	return nbs
-}
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
