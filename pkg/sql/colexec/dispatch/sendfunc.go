@@ -129,6 +129,10 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 }
 
 func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	if !ap.prepared {
+		ap.waitRemoteRegsReady(proc)
+	}
+
 	encodeData, errEncode := types.Encode(bat)
 	if errEncode != nil {
 		return false, errEncode
