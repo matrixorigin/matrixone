@@ -28,31 +28,22 @@ import (
 type ObjectReader struct {
 	object *Object
 	name   string
-	// noCache true means NOT cache IOVector in FileService's cache
-	noCache bool
+	ReaderOptions
 }
 
 const ExtentTypeSize = 4 * 3
 const ExtentsLength = 20
 const FooterSize = 8 + 4
 
-func NewObjectReader(name string, fs fileservice.FileService, opts ...ObjectReaderOption) (Reader, error) {
+func NewObjectReader(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
 	reader := &ObjectReader{
 		name:   name,
 		object: NewObject(name, fs),
 	}
 	for _, f := range opts {
-		f(reader)
+		f(&reader.ReaderOptions)
 	}
 	return reader, nil
-}
-
-type ObjectReaderOption func(reader *ObjectReader)
-
-func WithNoCacheReader(noCache bool) ObjectReaderOption {
-	return ObjectReaderOption(func(r *ObjectReader) {
-		r.noCache = noCache
-	})
 }
 
 func (r *ObjectReader) ReadMeta(ctx context.Context,
@@ -255,4 +246,17 @@ func newDecompressToObject(size int64) ToObjectFunc {
 		}
 		return decompressed, int64(len(decompressed)), nil
 	}
+}
+
+type ReaderOptions struct {
+	// noCache true means NOT cache IOVector in FileService's cache
+	noCache bool
+}
+
+type ReaderOptionFunc func(opt *ReaderOptions)
+
+func WithNoCacheReader(noCache bool) ReaderOptionFunc {
+	return ReaderOptionFunc(func(opt *ReaderOptions) {
+		opt.noCache = noCache
+	})
 }

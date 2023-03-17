@@ -54,8 +54,19 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 	}, nil
 }
 
-func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
+func NewFileReader(service fileservice.FileService, name string, opts ...objectio.ReaderOptionFunc) (*BlockReader, error) {
 	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader: reader,
+		name:   name,
+	}, nil
+}
+
+func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
+	reader, err := objectio.NewObjectReader(name, service, objectio.WithNoCacheReader(true))
 	if err != nil {
 		return nil, err
 	}
