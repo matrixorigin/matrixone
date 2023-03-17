@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -41,6 +43,8 @@ import (
 var (
 	defaultListenAddress     = "127.0.0.1:6002"
 	defaultLockListenAddress = "127.0.0.1:6003"
+	defaultTxnIsolation      = txn.TxnIsolation_SI
+	defaultTxnMode           = txn.TxnMode_Optimistic
 )
 
 type Service interface {
@@ -167,6 +171,14 @@ type Config struct {
 		// remote lock before releasing the lock
 		RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
 	} `toml:"lockservice"`
+
+	// Txn txn config
+	Txn struct {
+		// Isolation txn isolation. SI or RC, default is SI
+		Isolation string `toml:"isolation"`
+		// Mode txn mode. optimistic or pessimistic, default is optimistic
+		Mode string `toml:"mode"`
+	} `toml:"txn"`
 }
 
 func (c *Config) Validate() error {
@@ -229,6 +241,18 @@ func (c *Config) Validate() error {
 	}
 	if c.LockService.ServiceAddress == "" {
 		c.LockService.ServiceAddress = c.LockService.ListenAddress
+	}
+	if c.Txn.Isolation == "" {
+		c.Txn.Isolation = defaultTxnIsolation.String()
+	}
+	if !txn.ValidTxnIsolation(c.Txn.Isolation) {
+		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
+	}
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+	if !txn.ValidTxnMode(c.Txn.Mode) {
+		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
 	return nil
 }

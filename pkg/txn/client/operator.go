@@ -115,6 +115,20 @@ func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
 	}
 }
 
+// WithTxnMode set txn mode
+func WithTxnMode(value txn.TxnMode) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.Mode = value
+	}
+}
+
+// WithTxnIsolation set txn isolation
+func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.Isolation = value
+	}
+}
+
 type txnOperator struct {
 	rt     runtime.Runtime
 	sender rpc.TxnSender
@@ -279,10 +293,6 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	if tc.option.lockService != nil {
-		defer tc.unlock(ctx)
-	}
-
 	return tc.doWrite(ctx, requests, true)
 }
 
@@ -291,10 +301,6 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 	if tc.option.readyOnly {
 		return nil
-	}
-
-	if tc.option.lockService != nil {
-		defer tc.unlock(ctx)
 	}
 
 	result, err := tc.doWrite(ctx, nil, true)
@@ -320,7 +326,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		return nil
 	}
 
-	if tc.option.lockService != nil {
+	if tc.needUnlockLocked() {
 		defer tc.unlock(ctx)
 	}
 
@@ -343,6 +349,9 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
 
 	if err := tc.checkStatus(true); err != nil {
 		return err
@@ -392,7 +401,10 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			tc.mu.closed = true
 			tc.mu.Unlock()
 		}()
-		tc.mu.txn.LockTables = tc.mu.lockTables
+		if tc.needUnlockLocked() {
+			tc.mu.txn.LockTables = tc.mu.lockTables
+			defer tc.unlock(ctx)
+		}
 	}
 
 	if err := tc.validate(ctx, commit); err != nil {
@@ -699,4 +711,12 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
 	}
+}
+
+func (tc *txnOperator) needUnlockLocked() bool {
+	if tc.mu.txn.Mode !=
+		txn.TxnMode_Optimistic {
+		return false
+	}
+	return tc.option.lockService != nil
 }

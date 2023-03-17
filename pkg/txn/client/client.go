@@ -69,16 +69,21 @@ func (client *txnClient) adjust() {
 func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
-
 	now, _ := client.rt.Clock().Now()
 	// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
+	txnMeta.Mode = client.getTxnMode()
+	txnMeta.Isolation = client.getTxnIsolation()
 	options = append(options,
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))
-	return newTxnOperator(client.rt, client.sender, txnMeta, options...), nil
+	return newTxnOperator(
+		client.rt,
+		client.sender,
+		txnMeta,
+		options...), nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
@@ -87,4 +92,18 @@ func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
 
 func (client *txnClient) Close() error {
 	return client.sender.Close()
+}
+
+func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
+	if v, ok := client.rt.GetGlobalVariables(runtime.TxnIsolation); ok {
+		return v.(txn.TxnIsolation)
+	}
+	return txn.TxnIsolation_SI
+}
+
+func (client *txnClient) getTxnMode() txn.TxnMode {
+	if v, ok := client.rt.GetGlobalVariables(runtime.TxnMode); ok {
+		return v.(txn.TxnMode)
+	}
+	return txn.TxnMode_Optimistic
 }

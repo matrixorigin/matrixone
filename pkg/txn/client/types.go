@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -101,4 +102,13 @@ type DebugableTxnOperator interface {
 type TxnIDGenerator interface {
 	// Generate returns a unique transaction id
 	Generate() []byte
+}
+
+// SetupRuntimeTxnOptions setup runtime based txn options
+func SetupRuntimeTxnOptions(
+	rt runtime.Runtime,
+	m txn.TxnMode,
+	iso txn.TxnIsolation) {
+	rt.SetGlobalVariables(runtime.TxnIsolation, iso)
+	rt.SetGlobalVariables(runtime.TxnMode, m)
 }

@@ -346,14 +346,29 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Deletion
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+
+		node := qry.Nodes[qry.Steps[0]]
+		locks, err := constructLockWithDelete(node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
+		scp, err := constructDeletion(node, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range locks {
+			rs.Instructions = append(rs.Instructions,
+				vm.Instruction{
+					Op:  vm.LockOp,
+					Arg: v,
+				},
+			)
+		}
+		rs.Instructions = append(rs.Instructions,
+			vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: scp,
+			})
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
