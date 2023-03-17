@@ -28,9 +28,9 @@ func TestLockAdded(t *testing.T) {
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 
-	txn.lockAdded(1, [][]byte{[]byte("k1")}, false)
-	txn.lockAdded(1, [][]byte{[]byte("k11")}, false)
-	txn.lockAdded(2, [][]byte{[]byte("k2"), []byte("k22")}, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, false)
+	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, false)
 
 	assert.Equal(t, 2, len(txn.holdLocks))
 
@@ -59,6 +59,7 @@ func TestClose(t *testing.T) {
 	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
 
 	txn.close(
+		"s1",
 		txn.txnID,
 		func(table uint64) (lockTable, error) {
 			return tables[table], nil
