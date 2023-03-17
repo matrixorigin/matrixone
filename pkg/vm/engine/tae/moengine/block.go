@@ -36,7 +36,7 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 	var err error
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
-	view, err = blk.handle.GetColumnDataByNames(attrs, deCompressed)
+	view, err = blk.handle.GetColumnDataByNames(attrs)
 	if err != nil {
 		return nil, err
 	}
