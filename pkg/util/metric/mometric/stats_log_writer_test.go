@@ -16,13 +16,16 @@ package mometric
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"sync"
 	"testing"
 	"time"
 )
@@ -87,22 +90,35 @@ func TestStatsLogWriter(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	//2.2 Create custom Hook logger
-	var writtenLogs []zapcore.Entry
+	type threadSafeWrittenLog struct {
+		content []zapcore.Entry
+		// This is because, BusyLoop and StatsLogger read (ie len) and write (content) to the same field.
+		sync.Mutex
+	}
+
+	writtenLogs := threadSafeWrittenLog{}
 	customLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
-		writtenLogs = append(writtenLogs, entry)
+		writtenLogs.Lock()
+		defer writtenLogs.Unlock()
+		writtenLogs.content = append(writtenLogs.content, entry)
 		return nil
 	}))
 
 	// 2.3 Start the LogWriter
-	c := newStatsLogWriter(&stats.DefaultRegistry, customLogger, 2*time.Second)
+	c := newStatsLogWriter(&stats.DefaultRegistry, customLogger, 100*time.Millisecond)
 	serviceCtx := context.Background()
 	assert.True(t, c.Start(serviceCtx))
 
 	// 3. Perform operations on Dev Stats
 	service.Do()
 
-	// 4. Wait for log to print in console.
-	time.Sleep(6 * time.Second)
+	// 4. Wait for log to print in console. (Busy Loop)
+	err := waitUtil(60*time.Second, 100*time.Millisecond, func() bool {
+		writtenLogs.Lock()
+		defer writtenLogs.Unlock()
+		return len(writtenLogs.content) >= 10
+	})
+	require.NoError(t, err)
 
 	// 5. Stop the LogWriter
 	if ch, effect := c.Stop(true); effect {
@@ -111,8 +127,10 @@ func TestStatsLogWriter(t *testing.T) {
 	println("StatsLogWriter has stopped gracefully.")
 
 	//6. Validate the log printed.
-	assert.Equal(t, 3, len(writtenLogs))
-	for _, log := range writtenLogs {
+	writtenLogs.Lock()
+	defer writtenLogs.Unlock()
+	assert.True(t, len(writtenLogs.content) >= 10)
+	for _, log := range writtenLogs.content {
 		assert.Contains(t, log.Message, "stats ")
 	}
 
@@ -122,4 +140,20 @@ func TestStatsLogWriter(t *testing.T) {
 	// 2023/03/15 02:37:35.767608 -0500 INFO cn-service mometric/stats_log_writer.go:86 MockServiceStats stats  {"uuid": "test", "reads": 0, "hits": 0}
 	// StatsLogWriter has stopped gracefully.
 
+}
+
+// waitUtil Busy Loop to wait until check() is true.
+func waitUtil(timeout, checkInterval time.Duration, check func() bool) error {
+	timeoutTimer := time.After(timeout)
+	for {
+		select {
+		case <-timeoutTimer:
+			return moerr.NewInternalError(context.TODO(), "timeout")
+		default:
+			if check() {
+				return nil
+			}
+			time.Sleep(checkInterval)
+		}
+	}
 }
