@@ -22,7 +22,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -112,8 +111,6 @@ type FSWriter struct {
 
 	mux sync.Mutex
 
-	fileServiceName string // const
-
 	offset int // see Write, should not have size bigger than 2GB
 }
 
@@ -125,9 +122,8 @@ func (f FSWriterOption) Apply(w *FSWriter) {
 
 func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWriterOption) *FSWriter {
 	w := &FSWriter{
-		ctx:             ctx,
-		fs:              fs,
-		fileServiceName: defines.ETLFileServiceName,
+		ctx: ctx,
+		fs:  fs,
 	}
 	for _, o := range opts {
 		o.Apply(w)
@@ -153,7 +149,7 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + w.filepath,
+		FilePath: w.filepath,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),
