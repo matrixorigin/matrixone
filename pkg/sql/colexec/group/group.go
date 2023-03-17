@@ -202,6 +202,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
+			fmt.Println("XXXXXX group output batch:", proc.InputBatch())
 			ctr.bat = nil
 			return true, nil
 		}
@@ -262,6 +263,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
 		ctr.bat.Zs = proc.Mp().GetSels()
+		ctr.bat.SetAttributes(bat.Attrs)
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())

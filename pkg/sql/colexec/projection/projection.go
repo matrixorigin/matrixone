@@ -77,6 +77,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	}
 	rbat.Zs = bat.Zs
+	rbat.SetAttributes(bat.Attrs)
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)

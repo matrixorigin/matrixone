@@ -123,6 +123,8 @@ const (
 	ErrFunctionAlreadyExists        uint16 = 20441
 	ErrDropNonExistsFunction        uint16 = 20442
 	ErrNoConfig                     uint16 = 20443
+	ErrBadTableError                uint16 = 20444
+	ErrDDTableNotFound              uint16 = 20445
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -277,6 +279,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
 	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
+	ErrBadTableError:                {ER_BAD_TABLE_ERROR, []string{MySQLDefaultSqlState}, "Unknown table '%s'"},
+	ErrDDTableNotFound:              {ER_DD_TABLE_NOT_FOUND, []string{MySQLDefaultSqlState}, "Unable to start server. The data dictionary table '%s' does not exist."},
+
 	// Group 5: rpc timeout
 	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -600,6 +605,14 @@ func NewResultFileNotFound(ctx context.Context, f string) *Error {
 
 func NewNoConfig(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrNoConfig, f)
+}
+
+func NewBadTableError(ctx context.Context, t string) *Error {
+	return newError(ctx, ErrBadTableError, t)
+}
+
+func NewDDTableNotFound(ctx context.Context, t string) *Error {
+	return newError(ctx, ErrDDTableNotFound, t)
 }
 
 func NewFileAlreadyExists(ctx context.Context, f string) *Error {

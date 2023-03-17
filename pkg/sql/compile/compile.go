@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -213,9 +214,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		rs, err := c.compileQuery(ctx, qry.Query)
-		fmt.Println("XXXXXXXX", DebugShowScopes([]*Scope{rs}))
-		return rs, err
+		return c.compileQuery(ctx, qry.Query)
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
@@ -368,60 +367,62 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Op:  vm.PreInsert,
 			Arg: preArg,
 		})
-		var pkIdx int32
+
+		pkIdx := -1
 		if insertNode.InsertCtx.TableDef.CompositePkey != nil {
-			pkIdx = int32(insertNode.InsertCtx.TableDef.CompositePkey.ColId)
+			pkIdx = int(insertNode.InsertCtx.TableDef.CompositePkey.ColId)
 		} else {
 			for i := range insertNode.InsertCtx.TableDef.Cols {
 				if insertNode.InsertCtx.TableDef.Cols[i].Primary {
-					pkIdx = int32(i)
+					pkIdx = i
 					break
 				}
 			}
 		}
+		fmt.Println("XXXXXX build pipeline for table:", preArg.SchemaName, preArg.TableDef.Name)
+		fmt.Println("XXXXXX pkIdx:", pkIdx)
 		//pkIdx := insertNode.InsertCtx.TableDef.CompositePkey
 		//pkIdx := insertNode.InsertCtx.TableDef.Name2ColIndex[insertNode.InsertCtx.TableDef.Pkey.PkeyColName]
 		// select count(pk), * from table group by table.pk;
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Group,
-			Idx: c.anal.curr,
-			Arg: groupArgument(insertNode, pkIdx),
-		})
-		// select *, assert(count(pk) = 1) from table;
-		/*		rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.Restrict,
-					Idx: c.anal.curr,
-					Arg: &restrict.Argument{
-						E: &plan.Expr{
-							Typ: &plan.Type{
-								Id:          int32(types.T_bool),
-								NotNullable: false,
-								AutoIncr:    false,
-								Width:       10,
-								Size:        10,
-								Scale:       0,
-								Table:       "",
-							},
-							Expr: &plan.Expr_F{
-								F: &plan.Function{
-									Func: nil,
-									Args: nil,
+
+		if pkIdx != -1 {
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Group,
+				Idx: c.anal.curr,
+				Arg: groupArgument(insertNode, int32(pkIdx)),
+			})
+			// select *, assert(count(pk) = 1) from table;
+			/*		rs.Instructions = append(rs.Instructions, vm.Instruction{
+						Op:  vm.Restrict,
+						Idx: c.anal.curr,
+						Arg: &restrict.Argument{
+							E: &plan.Expr{
+								Typ: &plan.Type{
+									Id:          int32(types.T_bool),
+									NotNullable: false,
+									AutoIncr:    false,
+									Width:       10,
+									Size:        10,
+									Scale:       0,
+									Table:       "",
+								},
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: nil,
+										Args: nil,
+									},
 								},
 							},
 						},
-					},
-				})
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.Projection,
-					Idx: c.anal.curr,
-					Arg: &projection.Argument{
-						Es: []*plan.Expr{{
-							Typ:  nil,
-							Expr: nil,
-						}},
-					},
-				})*/
-		ss = []*Scope{rs}
+					})
+
+			*/
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Projection,
+				Idx: c.anal.curr,
+				Arg: projArgument(insertNode),
+			})
+		}
 
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
@@ -445,7 +446,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				return rs, nil
 			}
 		*/
-		rs = c.newMergeScope(ss)
 		rs.Magic = Insert
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -526,6 +526,26 @@ func groupArgument(insertNode *plan.Node, pkIdx int32) *group.Argument {
 			},
 		})
 	}
+	return arg
+}
+
+func projArgument(insertNode *plan.Node) *projection.Argument {
+	arg := &projection.Argument{
+		Es: []*plan.Expr{},
+	}
+
+	for i, col := range insertNode.TableDef.Cols {
+		arg.Es = append(arg.Es, &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(i + 2),
+					Name:   col.Name,
+				},
+			},
+		})
+	}
+
 	return arg
 }
 

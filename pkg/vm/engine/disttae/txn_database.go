@@ -104,7 +104,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		Ts:         db.txn.meta.SnapshotTS,
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewDDTableNotFound(ctx, name)
 	}
 	tbl := &txnTable{
 		db:           db,
