@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -104,12 +103,11 @@ func (node *persistedNode) GetColumnDataWindow(
 	from uint32,
 	to uint32,
 	colIdx int,
-	buffer *bytes.Buffer,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
 		colIdx,
-		buffer); err != nil {
+	); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
