@@ -69,7 +69,7 @@ var DefaultRegistry = Registry{}
 // Register registers stats family to default stats registry
 // familyName is a unique family name for the stats
 // opts can contain logExporter  etc. for the stats.
-// Usage: stats.Register("FamilyName", stats.WithLogExporter(&customStatsLogExporter))
+// Usage: stats.Register("FamilyName", stats.WithLogExporter(customStatsLogExporter))
 func Register(familyName string, opts ...Options) {
 	DefaultRegistry.Register(familyName, opts...)
 }
