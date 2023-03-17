@@ -15,7 +15,6 @@
 package data
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -73,10 +72,10 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
-	GetColumnDataByNames(txn txnif.AsyncTxn, attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error)
-	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error)
-	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
-	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
+	GetColumnDataByNames(txn txnif.AsyncTxn, attrs []string) (*model.BlockView, error)
+	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int) (*model.BlockView, error)
+	GetColumnDataByName(txn txnif.AsyncTxn, attr string) (*model.ColumnView, error)
+	GetColumnDataById(txn txnif.AsyncTxn, colIdx int) (*model.ColumnView, error)
 	GetMeta() any
 	GetBufMgr() base.INodeManager
 

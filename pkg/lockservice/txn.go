@@ -17,6 +17,8 @@ package lockservice
 import (
 	"bytes"
 	"sync"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 var (
@@ -52,6 +54,7 @@ func newActiveTxn(
 }
 
 func (txn *activeTxn) lockAdded(
+	serviceID string,
 	table uint64,
 	locks [][]byte,
 	locked bool) {
@@ -76,7 +79,7 @@ func (txn *activeTxn) lockAdded(
 		txn.Lock()
 		defer txn.Unlock()
 	}
-	defer logTxnLockAdded(txn, locks)
+	defer logTxnLockAdded(serviceID, txn, locks)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
@@ -86,6 +89,7 @@ func (txn *activeTxn) lockAdded(
 }
 
 func (txn *activeTxn) close(
+	serviceID string,
 	txnID []byte,
 	lockTableFunc func(uint64) (lockTable, error)) error {
 	txn.Lock()
@@ -94,7 +98,7 @@ func (txn *activeTxn) close(
 		return nil
 	}
 
-	logTxnReadyToClose(txn)
+	logTxnReadyToClose(serviceID, txn)
 	// TODO(fagongzi): parallel unlock
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
@@ -108,10 +112,12 @@ func (txn *activeTxn) close(
 		}
 
 		logTxnUnlockTable(
+			serviceID,
 			txn,
 			table)
 		l.unlock(txn, cs)
 		logTxnUnlockTableCompleted(
+			serviceID,
 			txn,
 			table,
 			cs)
@@ -126,7 +132,7 @@ func (txn *activeTxn) close(
 	return nil
 }
 
-func (txn *activeTxn) abort(txnID []byte) {
+func (txn *activeTxn) abort(serviceID string, txnID []byte) {
 	txn.RLock()
 	defer txn.RUnlock()
 
@@ -138,12 +144,14 @@ func (txn *activeTxn) abort(txnID []byte) {
 	if txn.blockedWaiter == nil {
 		return
 	}
-	txn.blockedWaiter.notify(ErrDeadLockDetected)
+	txn.blockedWaiter.notify(serviceID, ErrDeadLockDetected)
 }
 
 func (txn *activeTxn) fetchWhoWaitingMe(
+	serviceID string,
 	txnID []byte,
-	waiters func([]byte) bool,
+	holder activeTxnHolder,
+	waiters func(pb.WaitTxn) bool,
 	lockTableFunc func(uint64) (lockTable, error)) bool {
 	txn.RLock()
 	defer txn.RUnlock()
@@ -178,8 +186,11 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				lockKey,
 				func(lock Lock) {
 					lock.waiter.waiters.iter(func(id []byte) bool {
-						hasDeadLock = !waiters(id)
-						return !hasDeadLock
+						if txn := holder.getActiveTxn(id, false, ""); txn != nil {
+							hasDeadLock = !waiters(txn.toWaitTxn(serviceID, false))
+							return !hasDeadLock
+						}
+						return false
 					})
 				})
 			return !hasDeadLock
@@ -210,11 +221,15 @@ func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
 }
 
-func (txn *activeTxn) getRemoteService() string {
-	txn.RLock()
-	defer txn.RUnlock()
-	if !txn.isRemoteLocked() {
-		return ""
+func (txn *activeTxn) toWaitTxn(serviceID string, locked bool) pb.WaitTxn {
+	if !locked {
+		txn.RLock()
+		defer txn.RUnlock()
 	}
-	return txn.remoteService
+
+	v := txn.remoteService
+	if v == "" {
+		v = serviceID
+	}
+	return pb.WaitTxn{TxnID: txn.txnID, CreatedOn: v}
 }
