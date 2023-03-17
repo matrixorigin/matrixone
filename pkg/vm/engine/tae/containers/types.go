@@ -32,7 +32,6 @@ type ItOp = func(v any, row int) error
 
 type Vector interface {
 	GetType() types.Type
-	GetMpool() *mpool.MPool
 
 	// Deep copy ops
 	Get(i int) any

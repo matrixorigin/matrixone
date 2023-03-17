@@ -46,10 +46,6 @@ type vector[T any] struct {
 	isOwner bool
 }
 
-func (vec *vector[T]) GetMpool() *mpool.MPool {
-	return vec.mpool
-}
-
 func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
 	vec := &vector[T]{
 		downstreamVector: cnVector.NewVec(typ),

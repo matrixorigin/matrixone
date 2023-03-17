@@ -48,10 +48,6 @@ type vectorWindow[T any] struct {
 	ref *vector[T]
 }
 
-func (win *vectorWindow[T]) GetMpool() *mpool.MPool {
-	return win.ref.mpool
-}
-
 func (win *vectorWindow[T]) Nullable() bool {
 	return win.ref.Nullable()
 }
