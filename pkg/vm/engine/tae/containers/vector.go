@@ -373,7 +373,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 
-	if !vec.Nullable() {
+	if !vec.HasNull() {
 		var v T
 		if _, ok := any(v).([]byte); !ok {
 			// Optimization for :- Vectors which are 1. not nullable & 2. not byte[]
