@@ -444,6 +444,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 
 	// Write S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		logutil.Infof("write a bat[s3 block], bat length is %d, addr is %p", bat.Length(), bat)
 		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
@@ -456,6 +457,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
 	}
 	if tbl.insertExpr == nil {
+		logutil.Infof("write a bat[insert expr], bat length is %d, addr is %p", bat.Length(), bat)
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
