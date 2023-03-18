@@ -190,6 +190,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
 		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
@@ -288,12 +289,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnHandler.GetTxnCtx(), cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
 	}
-	err = cwft.compile.Compile(requestCtx, cwft.plan, cwft.ses, fill)
+	err = cwft.compile.Compile(txnHandler.GetTxnCtx(), cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
 	}
@@ -325,10 +326,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		)
 
 		// 2. bind the temporary engine to the session and txnHandler
-		cwft.ses.SetTempEngine(requestCtx, tempEngine)
+		_ = cwft.ses.SetTempEngine(requestCtx, tempEngine)
 		cwft.compile.SetTempEngine(requestCtx, tempEngine)
-		txnHandler := cwft.ses.txnCompileCtx.txnHandler
 		txnHandler.SetTempEngine(tempEngine)
+		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 
 		// 3. init temp-db to store temporary relations
 		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txnOperator)
@@ -337,9 +338,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		// 4. add auto_IncrementTable fortemp-db
-		colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
+		err = colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
+		if err != nil {
+			return nil, err
+		}
 
-		cwft.ses.InitTempEngine = true
+		cwft.ses.EnableInitTempEngine()
 	}
 	return cwft.compile, err
 }

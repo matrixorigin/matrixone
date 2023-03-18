@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
@@ -38,9 +39,10 @@ type TxnHandler struct {
 	// the lifetime of txnCtx is longer than the requestCtx.
 	// the timeout of txnCtx is from the FrontendParameters.SessionTimeout with
 	// default 24 hours.
-	txnCtx  context.Context
-	mu      sync.Mutex
-	entryMu sync.Mutex
+	txnCtx       context.Context
+	txnCtxCancel context.CancelFunc
+	mu           sync.Mutex
+	entryMu      sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -54,14 +56,21 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 func (th *TxnHandler) ResetTxnCtx() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
+	if th.txnCtxCancel != nil {
+		th.txnCtxCancel()
+	}
 	th.txnCtx = nil
 }
 
 func (th *TxnHandler) GetTxnCtx() context.Context {
 	th.mu.Lock()
 	defer th.mu.Unlock()
+	return th.createTxnCtx()
+}
+
+func (th *TxnHandler) createTxnCtx() context.Context {
 	if th.txnCtx == nil {
-		th.txnCtx, _ = context.WithTimeout(th.ses.GetConnectContext(),
+		th.txnCtx, th.txnCtxCancel = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
 		account := th.ses.GetTenantInfo()
 		if account == nil {
@@ -70,12 +79,25 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 		th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
 		th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
 		th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
+
+		storage, ok := th.ses.GetRequestContext().Value(defines.TemporaryDN{}).(*memorystorage.Storage)
+		if ok {
+			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryDN{}, storage)
+		}
 	}
 	return th.txnCtx
 }
 
+func (th *TxnHandler) AttachTempStorageToTxnCtx() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryDN{}, th.ses.GetTempTableStorage())
+}
+
 // we don't need to lock. TxnHandler is holded by one session.
 func (th *TxnHandler) SetTempEngine(te engine.Engine) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	ee := th.storage.(*engine.EntireEngine)
 	ee.TempEngine = te
 }
@@ -128,10 +150,6 @@ func printCtx(ctx context.Context, tips string) {
 // Then it creates the new transaction by Engin.New.
 func (th *TxnHandler) NewTxn() error {
 	var err error
-	reqCtx := th.GetSession().GetRequestContext()
-	if reqCtx == nil {
-		panic("request context should not be nil")
-	}
 	if th.IsValidTxnOperator() {
 		err = th.CommitTxn()
 		if err != nil {
@@ -141,7 +159,7 @@ func (th *TxnHandler) NewTxn() error {
 				we convert the error into a readable error.
 			*/
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				return moerr.NewInternalError(reqCtx, writeWriteConflictsErrorInfo())
+				return moerr.NewInternalError(th.GetSession().GetRequestContext(), writeWriteConflictsErrorInfo())
 			}
 			return err
 		}
