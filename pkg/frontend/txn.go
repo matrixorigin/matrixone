@@ -135,17 +135,6 @@ func (th *TxnHandler) NewTxnOperator() error {
 	return err
 }
 
-func printCtx(ctx context.Context, tips string) {
-	//d, o := ctx.Deadline()
-	//select {
-	//case <-ctx.Done():
-	//	logutil.Errorf("%s err %v \n", tips, ctx.Err())
-	//default:
-	//}
-	//
-	//logutil.Errorf("%s ctx %p %v \n deadline %v \n ok %v \n err %v \n", tips, ctx, ctx, d, o, ctx.Err())
-}
-
 // NewTxn commits the old transaction if it existed.
 // Then it creates the new transaction by Engin.New.
 func (th *TxnHandler) NewTxn() error {
@@ -180,7 +169,6 @@ func (th *TxnHandler) NewTxn() error {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
-	printCtx(txnCtx, "TxnHandler => NewTxn")
 	logDebugf("TxnHandler => NewTxn", "%v", txnCtx)
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, th.GetTxnOperator())
@@ -238,7 +226,6 @@ func (th *TxnHandler) CommitTxn() error {
 		txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
-	printCtx(ctx2, "TxnHandler => CommitTxn")
 	defer cancel()
 	var err, err2 error
 	defer func() {
@@ -307,7 +294,6 @@ func (th *TxnHandler) RollbackTxn() error {
 		txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
-	printCtx(ctx2, "TxnHandler => RollbackTxn")
 	defer cancel()
 	var err, err2 error
 	defer func() {
