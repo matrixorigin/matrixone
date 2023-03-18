@@ -17,6 +17,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
 	"math"
 	"sort"
 	"strings"
@@ -772,4 +775,10 @@ func mustVectorToProto(v *vector.Vector) *api.Vector {
 		panic(err)
 	}
 	return ret
+}
+
+func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...string) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("%s"+msg, txnMeta.DebugString(), infos)
+	}
 }
