@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -64,9 +65,13 @@ type TenantInfo struct {
 }
 
 func (ti *TenantInfo) String() string {
+	delimiter := ti.delimiter
+	if !strconv.IsPrint(rune(delimiter)) {
+		delimiter = ':'
+	}
 	return fmt.Sprintf("{account %s%c%s%c%s -- %d%c%d%c%d}",
-		ti.Tenant, ti.delimiter, ti.User, ti.delimiter, ti.DefaultRole,
-		ti.TenantID, ti.delimiter, ti.UserID, ti.delimiter, ti.DefaultRoleID)
+		ti.Tenant, delimiter, ti.User, delimiter, ti.DefaultRole,
+		ti.TenantID, delimiter, ti.UserID, delimiter, ti.DefaultRoleID)
 }
 
 func (ti *TenantInfo) GetTenant() string {
