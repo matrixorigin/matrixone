@@ -434,8 +434,7 @@ func TestLockResultWithNoConfict(t *testing.T) {
 				[]byte("txn1"),
 				option)
 			require.NoError(t, err)
-			assert.False(t, res.AfterWait)
-			assert.True(t, res.CommitTS.IsEmpty())
+			assert.False(t, res.Timestamp.IsEmpty())
 
 			lb, err := l.getLockTable(0)
 			require.NoError(t, err)
@@ -482,8 +481,7 @@ func TestLockResultWithConfictAndTxnCommitted(t *testing.T) {
 					[]byte("txn2"),
 					option)
 				require.NoError(t, err)
-				assert.True(t, res.AfterWait)
-				assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, res.CommitTS)
+				assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, res.Timestamp)
 			}()
 
 			waitWaiters(t, l, 0, []byte{1}, 1)
@@ -534,8 +532,7 @@ func TestLockResultWithConfictAndTxnAborted(t *testing.T) {
 					[]byte("txn2"),
 					option)
 				require.NoError(t, err)
-				assert.True(t, res.AfterWait)
-				assert.True(t, res.CommitTS.IsEmpty())
+				assert.False(t, res.Timestamp.IsEmpty())
 			}()
 
 			waitWaiters(t, l, 0, []byte{1}, 1)
@@ -600,7 +597,8 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 	})
 }
 
-func maybeAddTestLockWithDeadlock(t *testing.T,
+func maybeAddTestLockWithDeadlock(
+	t *testing.T,
 	ctx context.Context,
 	l *service,
 	table uint64,

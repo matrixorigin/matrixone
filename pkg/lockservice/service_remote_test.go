@@ -180,8 +180,7 @@ func TestLockResultWithNoConfictOnRemote(t *testing.T) {
 			go func() {
 				// txn2 try lock row1 on l2
 				res := mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row2}, pb.Granularity_Row)
-				require.False(t, res.AfterWait)
-				require.True(t, res.CommitTS.IsEmpty())
+				require.False(t, res.Timestamp.IsEmpty())
 				close(c)
 			}()
 			<-c
@@ -222,11 +221,10 @@ func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.True(t, res.AfterWait)
 				assert.Equal(
 					t,
 					timestamp.Timestamp{PhysicalTime: 1},
-					res.CommitTS)
+					res.Timestamp)
 			}()
 			waitWaiters(t, l1, 1, row1, 1)
 			require.NoError(t, l1.Unlock(
@@ -271,8 +269,7 @@ func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.True(t, res.AfterWait)
-				assert.True(t, res.CommitTS.IsEmpty())
+				assert.False(t, res.Timestamp.IsEmpty())
 			}()
 			waitWaiters(t, l1, 1, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))

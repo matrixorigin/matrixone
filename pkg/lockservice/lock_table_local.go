@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -30,8 +31,8 @@ import (
 type localLockTable struct {
 	bind     pb.LockTable
 	detector *detector
-
-	mu struct {
+	clock    clock.Clock
+	mu       struct {
 		sync.RWMutex
 		closed bool
 		store  LockStorage
@@ -40,10 +41,12 @@ type localLockTable struct {
 
 func newLocalLockTable(
 	bind pb.LockTable,
-	detector *detector) lockTable {
+	detector *detector,
+	clock clock.Clock) lockTable {
 	l := &localLockTable{
 		bind:     bind,
 		detector: detector,
+		clock:    clock,
 	}
 	l.mu.store = newBtreeBasedStorage()
 	return l
@@ -63,10 +66,11 @@ func (l *localLockTable) lock(
 	var w *waiter
 	var err error
 	var idx int
+	var lockedTS timestamp.Timestamp
 	result := pb.Result{LockedOn: l.bind}
 	logLocalLock(l.bind.ServiceID, txn, table, rows, opts)
 	for {
-		idx, w, err = l.doAcquireLock(
+		idx, w, lockedTS, err = l.doAcquireLock(
 			txn,
 			w,
 			offset,
@@ -80,6 +84,9 @@ func (l *localLockTable) lock(
 		if w == nil {
 			txn.setBlocked(txn.txnID, nil)
 			logLocalLockAdded(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
+			if result.Timestamp.IsEmpty() {
+				result.Timestamp = lockedTS
+			}
 			return result, nil
 		}
 
@@ -91,8 +98,7 @@ func (l *localLockTable) lock(
 		}
 		w.resetWait(l.bind.ServiceID)
 		offset = idx
-		result.AfterWait = true
-		result.CommitTS = v.ts
+		result.Timestamp = v.ts
 	}
 }
 
@@ -170,25 +176,27 @@ func (l *localLockTable) doAcquireLock(
 	w *waiter,
 	offset int,
 	rows [][]byte,
-	opts LockOptions) (int, *waiter, error) {
+	opts LockOptions) (int, *waiter, timestamp.Timestamp, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.mu.closed {
-		return 0, nil, moerr.NewInvalidStateNoCtx("local lock table closed")
+		return 0, nil,
+			timestamp.Timestamp{},
+			moerr.NewInvalidStateNoCtx("local lock table closed")
 	}
 
 	switch opts.Granularity {
 	case pb.Granularity_Row:
-		idx, w := l.acquireRowLockLocked(txn, w, offset, rows, opts.Mode)
-		return idx, w, nil
+		idx, w, lockedTS := l.acquireRowLockLocked(txn, w, offset, rows, opts.Mode)
+		return idx, w, lockedTS, nil
 	case pb.Granularity_Range:
 		if len(rows) == 0 ||
 			len(rows)%2 != 0 {
 			panic("invalid range lock")
 		}
-		idx, w := l.acquireRangeLockLocked(txn, w, offset, rows, opts.Mode)
-		return idx, w, nil
+		idx, w, lockedTS := l.acquireRangeLockLocked(txn, w, offset, rows, opts.Mode)
+		return idx, w, lockedTS, nil
 	default:
 		panic(fmt.Sprintf("not support lock granularity %d", opts))
 	}
@@ -199,7 +207,7 @@ func (l *localLockTable) acquireRowLockLocked(
 	w *waiter,
 	offset int,
 	rows [][]byte,
-	mode pb.LockMode) (int, *waiter) {
+	mode pb.LockMode) (int, *waiter, timestamp.Timestamp) {
 	n := len(rows)
 	for idx := offset; idx < n; idx++ {
 		row := rows[idx]
@@ -217,13 +225,14 @@ func (l *localLockTable) acquireRowLockLocked(
 			}
 			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
 			l.handleLockConflict(txn, w, key, lock)
-			return idx, w
+			return idx, w, timestamp.Timestamp{}
 		}
 		l.addRowLockLocked(txn, row, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
 		// lock added, need create new waiter next time
 		w = nil
 	}
-	return 0, nil
+	now, _ := l.clock.Now()
+	return 0, nil, now
 }
 
 func (l *localLockTable) acquireRangeLockLocked(
@@ -231,7 +240,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 	w *waiter,
 	offset int,
 	rows [][]byte,
-	mode pb.LockMode) (int, *waiter) {
+	mode pb.LockMode) (int, *waiter, timestamp.Timestamp) {
 	n := len(rows)
 	for i := offset; i < n; {
 		start := rows[i]
@@ -252,7 +261,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 
 			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
 			l.handleLockConflict(txn, w, key, lock)
-			return i, w
+			return i, w, timestamp.Timestamp{}
 		}
 
 		l.addRangeLockLocked(txn, start, end, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
@@ -260,7 +269,8 @@ func (l *localLockTable) acquireRangeLockLocked(
 		w = nil
 		i += 2
 	}
-	return 0, nil
+	now, _ := l.clock.Now()
+	return 0, nil, now
 }
 
 func (l *localLockTable) addRowLockLocked(

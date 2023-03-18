@@ -20,9 +20,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -33,6 +35,7 @@ type service struct {
 	activeTxnHolder  activeTxnHolder
 	fsp              *fixedSlicePool
 	deadlockDetector *detector
+	clock            clock.Clock
 	stopper          *stopper.Stopper
 	stopOnce         sync.Once
 
@@ -57,6 +60,7 @@ func NewLockService(cfg Config) LockService {
 		s.cfg.ServiceID,
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
+	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	return s
 }
@@ -215,7 +219,8 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,
-			s.deadlockDetector)
+			s.deadlockDetector,
+			s.clock)
 	} else {
 		return newRemoteLockTable(
 			s.cfg.ServiceID,

@@ -204,9 +204,8 @@ message KeepRemoteLockResponse {
 message Result {
   // LockedOn lock is locked on which locktable
   LockTable           LockedOn  = 1 [(gogoproto.nullable) = false];
-  // AfterWait if true means current operation is blocked by a active txn.
-  bool                AfterWait = 2;
-  // CommitTS if current txn is blocked by a committed txn, the value is the
-  // committed txn's commit timestamp in dn 
-  timestamp.Timestamp CommitTS  = 3 [(gogoproto.nullable) = false];
+  // Timestamp The timestamp is used to help determine which version of RC 
+  // should be queried under the RC isolation level, this timestamp ensures that
+  // the latest data is always read.
+  timestamp.Timestamp Timestamp = 2 [(gogoproto.nullable) = false];
 }
