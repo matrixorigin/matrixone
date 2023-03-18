@@ -1930,6 +1930,10 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 
 func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *plan2.TableDef) {
 	ses := tcc.GetSession()
+	logDebugf(ses.GetConciseProfile(), "ResolveById-1 %d", tableId)
+	defer func() {
+		logDebugf(ses.GetConciseProfile(), "ResolveById-2 %d", tableId)
+	}()
 	ctx := ses.GetRequestContext()
 	txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
@@ -1943,6 +1947,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	logDebugf(tcc.GetSession().GetConciseProfile(), "Resolve-1 %s %s", dbName, tableName)
+	defer func() {
+		logDebugf(tcc.GetSession().GetConciseProfile(), "Resolve-2 %s %s", dbName, tableName)
+	}()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil
@@ -1955,6 +1963,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (string, error) {
+	logDebugf(tcc.GetSession().GetConciseProfile(), "ResolveUdf-1 %s", name)
+	defer func() {
+		logDebugf(tcc.GetSession().GetConciseProfile(), "ResolveUdf-2 %s", name)
+	}()
 	var expectInvalidArgErr bool
 	var expectedInvalidArgLengthErr bool
 	var badValue string

@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -323,6 +325,7 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	logutil.Debug("UpdateOfPull", zap.String("txn", op.Txn().DebugString()))
 	e.Lock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table

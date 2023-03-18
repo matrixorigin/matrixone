@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +41,7 @@ func updatePartitionOfPull(
 	dn DNStore,
 	req api.SyncLogTailReq,
 ) error {
+	logutil.Debug("updatePartitionOfPull", zap.String("txn", op.Txn().DebugString()))
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -64,6 +66,7 @@ func updatePartitionOfPull(
 }
 
 func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
+	logutil.Debug("getLogTail", zap.String("txn", op.Txn().DebugString()))
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	result, err := op.Read(ctx, reqs)
@@ -88,6 +91,7 @@ func consumeLogTailOfPull(
 	state *PartitionState,
 	logTail *api.SyncLogTailResp,
 ) (err error) {
+	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(

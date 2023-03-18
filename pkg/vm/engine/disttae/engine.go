@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"math"
 	"runtime"
 	"sync"
@@ -122,6 +124,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
+	logutil.Debug("Engine.Database", zap.String("txn", op.Txn().DebugString()), zap.String("name", name))
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
@@ -346,6 +349,7 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
+	logutil.Debug("Engine.New", zap.String("txn", op.Txn().DebugString()))
 	proc := process.New(
 		ctx,
 		e.mp,
@@ -417,6 +421,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
+	logutil.Debug("Engine.Commit", zap.String("txn", op.Txn().DebugString()))
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
@@ -440,6 +445,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
+	logutil.Debug("Engine.Rollback", zap.String("txn", op.Txn().DebugString()))
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return nil // compatible with existing logic

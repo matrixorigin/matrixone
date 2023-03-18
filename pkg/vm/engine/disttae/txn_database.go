@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -75,6 +77,7 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
+	logutil.Debug("txnDatabase.Relation", zap.String("txn", db.txn.meta.DebugString()), zap.String("table", name))
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
