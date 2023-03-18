@@ -777,8 +777,9 @@ func mustVectorToProto(v *vector.Vector) *api.Vector {
 	return ret
 }
 
-func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...string) {
+func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("%s"+msg, txnMeta.DebugString(), infos)
+		infos = append(infos, txnMeta.DebugString())
+		logutil.Debugf(msg+" %s", infos...)
 	}
 }
