@@ -269,6 +269,7 @@ type service struct {
 	_txnClient             client.TxnClient
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
+	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster

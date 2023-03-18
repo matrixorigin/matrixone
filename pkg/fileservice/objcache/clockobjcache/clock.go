@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package clockpolicy
+package clockobjcache
 
 // TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
 
@@ -23,12 +23,12 @@ func New(capacity int64) *Clock {
 	return &Clock{}
 }
 
-func (c *Clock) Set(key any, value any, size int64) {
+func (c *Clock) Set(key any, value any, size int64, preloading bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c *Clock) Get(key any) (value any, size int64, ok bool) {
+func (c *Clock) Get(key any, preloading bool) (value any, size int64, ok bool) {
 	//TODO implement me
 	panic("implement me")
 }

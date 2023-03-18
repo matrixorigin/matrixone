@@ -2598,6 +2598,10 @@ func (ses *Session) getSqlType(sql string) {
 		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
+	if len(sql) == 0 {
+		ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+		return
+	}
 	for len(sql) > 0 {
 		p1 := strings.Index(sql, "/*")
 		p2 := strings.Index(sql, "*/")

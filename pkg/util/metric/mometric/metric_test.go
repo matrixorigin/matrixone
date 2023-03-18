@@ -17,6 +17,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"io"
 	"net/http"
@@ -37,6 +40,8 @@ const FileService = "FileService"
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
+
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	withModifiedConfig(func() {
 		SV := &config.ObservabilityParameters{}
