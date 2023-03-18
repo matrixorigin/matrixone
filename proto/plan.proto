@@ -986,9 +986,7 @@ enum TableLockType {
 
 message TableLockInfo {
 	TableLockType lockType = 1;
-	uint64 tableID = 2;
-	bytes SessionID = 3;
-	repeated bytes rows = 4;
+	TableDef tableDef     = 2;
 }
 
 message LockTables {
