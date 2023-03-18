@@ -141,3 +141,5 @@ replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => githu
 replace github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 
 replace github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
+
+replace github.com/fagongzi/goetty/v2 v2.0.3-0.20221212132037-abf2d4c05484 => github.com/matrixorigin/goetty/v2 v2.0.0-20221212132037-abf2d4c05484
