@@ -644,12 +644,16 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 func genWriteReqs(ctx context.Context, writes [][]Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
+	v := ctx.Value(defines.PkCheckByDN{})
 	for i := range writes {
 		for _, e := range writes[i] {
 			if e.bat.Length() == 0 {
 				continue
 			}
-			v := ctx.Value(defines.PkCheckByDN{})
+			//v := ctx.Value(defines.PkCheckByDN{})
+			//if v != nil {
+			//	e.pkChkByDN = v.(int8)
+			//}
 			if v != nil {
 				e.pkChkByDN = v.(int8)
 			}

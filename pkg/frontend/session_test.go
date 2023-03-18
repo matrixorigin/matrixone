@@ -67,11 +67,25 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
 
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		_, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
 		txn := InitTxnHandler(eng, txnClient)
 		txn.ses = &Session{
 			requestCtx: ctx,
+			gSysVars:   &gSys,
 		}
-		err := txn.NewTxn()
+		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.NewTxn()
 		convey.So(err, convey.ShouldNotBeNil)
@@ -110,11 +124,25 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		_, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
 		txn := InitTxnHandler(eng, txnClient)
 		txn.ses = &Session{
 			requestCtx: ctx,
+			gSysVars:   &gSys,
 		}
-		err := txn.NewTxn()
+		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
