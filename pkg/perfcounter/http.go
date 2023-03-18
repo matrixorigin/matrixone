@@ -16,6 +16,7 @@ package perfcounter
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"io"
 	"net/http"
 	"reflect"
@@ -41,6 +42,8 @@ func (c *CounterSet) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func format(w io.Writer, v reflect.Value, t reflect.Type) {
 	switch val := v.Interface().(type) {
 	case atomic.Int64:
+		fmt.Fprintf(w, "%v", val.Load())
+	case stats.Counter:
 		fmt.Fprintf(w, "%v", val.Load())
 
 	default:

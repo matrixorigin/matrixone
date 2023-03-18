@@ -105,7 +105,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	case pb.Method_GetWaitingList:
 		c.cluster.GetCNService(
 			clusterservice.NewServiceIDSelector(
-				request.GetWaitingList.ServiceID),
+				request.GetWaitingList.Txn.CreatedOn),
 			func(s metadata.CNService) bool {
 				address = s.LockServiceAddress
 				return false

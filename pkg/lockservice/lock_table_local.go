@@ -63,7 +63,7 @@ func (l *localLockTable) lock(
 	var err error
 	var idx int
 
-	logLocalLock(txn, table, rows, opts)
+	logLocalLock(l.bind.ServiceID, txn, table, rows, opts)
 	for {
 		idx, w, err = l.doAcquireLock(
 			txn,
@@ -72,22 +72,23 @@ func (l *localLockTable) lock(
 			rows,
 			opts)
 		if err != nil {
-			logLocalLockFailed(txn, table, rows, opts, err)
+			logLocalLockFailed(l.bind.ServiceID, txn, table, rows, opts, err)
 			return err
 		}
 		// no waiter, all locks are added
 		if w == nil {
 			txn.setBlocked(txn.txnID, nil)
-			logLocalLockAdded(txn, l.bind.Table, rows, opts)
+			logLocalLockAdded(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
 			return nil
 		}
 
-		err = w.wait(ctx)
-		logLocalLockWaitOnResult(txn, table, rows[idx], opts, w, err)
+		err = w.wait(ctx, l.bind.ServiceID)
+		logLocalLockWaitOnResult(l.bind.ServiceID, txn, table, rows[idx], opts, w, err)
 		if err != nil {
+			w.close(l.bind.ServiceID, err)
 			return err
 		}
-		w.resetWait()
+		w.resetWait(l.bind.ServiceID)
 		offset = idx
 	}
 }
@@ -96,6 +97,7 @@ func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice) {
 	logUnlockTableOnLocal(
+		l.bind.ServiceID,
 		txn,
 		l.bind)
 
@@ -111,9 +113,9 @@ func (l *localLockTable) unlock(
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
-				lock.waiter.clearAllNotify("unlock")
-				next := lock.waiter.close(nil)
-				logUnlockTableKeyOnLocal(txn, l.bind, key, lock, next)
+				lock.waiter.clearAllNotify(l.bind.ServiceID, "unlock")
+				next := lock.waiter.close(l.bind.ServiceID, nil)
+				logUnlockTableKeyOnLocal(l.bind.ServiceID, txn, l.bind, key, lock, next)
 			}
 			l.mu.store.Delete(key)
 		}
@@ -145,17 +147,18 @@ func (l *localLockTable) close() {
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
 		if lock.isLockRow() || lock.isLockRangeEnd() {
 			w := lock.waiter
-			for {
-				w.clearAllNotify("close local")
-				if w = w.close(ErrLockTableNotFound); w == nil {
-					break
-				}
+			w.clearAllNotify(l.bind.ServiceID, "close local")
+			// if there are waiters in the current lock, just notify
+			// the head, and the subsequent waiters will be notified
+			// by the previous waiter.
+			if w = w.close(l.bind.ServiceID, ErrLockTableNotFound); w != nil {
+				w.notify(l.bind.ServiceID, ErrLockTableNotFound)
 			}
 		}
 		return true
 	})
 	l.mu.store.Clear()
-	logLockTableClosed(l.bind, false)
+	logLockTableClosed(l.bind.ServiceID, l.bind, false)
 }
 
 func (l *localLockTable) doAcquireLock(
@@ -196,7 +199,7 @@ func (l *localLockTable) acquireRowLockLocked(
 	n := len(rows)
 	for idx := offset; idx < n; idx++ {
 		row := rows[idx]
-		logLocalLockRow(txn, l.bind.Table, row, mode)
+		logLocalLockRow(l.bind.ServiceID, txn, l.bind.Table, row, mode)
 		key, lock, ok := l.mu.store.Seek(row)
 		if ok &&
 			(bytes.Equal(key, row) ||
@@ -208,11 +211,11 @@ func (l *localLockTable) acquireRowLockLocked(
 				}
 				continue
 			}
-			w = getWaiter(w, txn.txnID)
+			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
 			l.handleLockConflict(txn, w, key, lock)
 			return idx, w
 		}
-		l.addRowLockLocked(txn, row, getWaiter(w, txn.txnID), mode)
+		l.addRowLockLocked(txn, row, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
 		// lock added, need create new waiter next time
 		w = nil
 	}
@@ -233,7 +236,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 			panic(fmt.Sprintf("lock error: start[%v] is greater than end[%v]",
 				start, end))
 		}
-		logLocalLockRange(txn, l.bind.Table, start, end, mode)
+		logLocalLockRange(l.bind.ServiceID, txn, l.bind.Table, start, end, mode)
 		key, lock, ok := l.mu.store.Seek(start)
 		if ok &&
 			bytes.Compare(key, end) <= 0 {
@@ -243,12 +246,12 @@ func (l *localLockTable) acquireRangeLockLocked(
 				panic("BUG: current not support")
 			}
 
-			w = getWaiter(w, txn.txnID)
+			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
 			l.handleLockConflict(txn, w, key, lock)
 			return i, w
 		}
 
-		l.addRangeLockLocked(txn, start, end, getWaiter(w, txn.txnID), mode)
+		l.addRangeLockLocked(txn, start, end, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
 		// lock added, need create new waiter next time
 		w = nil
 		i += 2
@@ -266,7 +269,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.bind.Table, [][]byte{row}, false)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, false)
 	l.mu.store.Add(row, lock)
 }
 
@@ -280,7 +283,7 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiter = waiter
 
 	// similar to row lock
-	txn.lockAdded(l.bind.Table, [][]byte{start, end}, false)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, false)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 }
@@ -293,16 +296,19 @@ func (l *localLockTable) handleLockConflict(
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w.txnID, w)
-	conflictWith.waiter.add(w)
-	if err := l.detector.check(txn.txnID); err != nil {
+	conflictWith.waiter.add(l.bind.ServiceID, w)
+	if err := l.detector.check(
+		txn.toWaitTxn(
+			l.bind.ServiceID,
+			false)); err != nil {
 		panic("BUG: active dead lock check can not fail")
 	}
-	logLocalLockWaitOn(txn, l.bind.Table, w, key, conflictWith)
+	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
 }
 
-func getWaiter(w *waiter, txnID []byte) *waiter {
+func getWaiter(serviceID string, w *waiter, txnID []byte) *waiter {
 	if w != nil {
 		return w
 	}
-	return acquireWaiter(txnID)
+	return acquireWaiter(serviceID, txnID)
 }
