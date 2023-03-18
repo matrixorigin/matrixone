@@ -152,7 +152,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
 			if p.tblCmsWant {
-				logutil.Infof("partition read bat[%d] from workspace\n", rbat.Length())
+				logutil.Infof("partition read bat[%d] from workspace1, addr is %p\n", rbat.Length(), rbat)
 			}
 			return rbat, nil
 		} else {
@@ -167,7 +167,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				return nil, err
 			}
 			if p.tblCmsWant {
-				logutil.Infof("partition read bat[%d] from workspace\n", b.Length())
+				logutil.Infof("partition read bat[%d] from workspace2, addr is %p\n", b.Length(), b)
 			}
 			return b, nil
 		}
