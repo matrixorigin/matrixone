@@ -15,10 +15,10 @@
 package lockservice
 
 import (
-	"context"
 	"testing"
 	"time"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,94 +28,44 @@ func TestCheckWithDeadlock(t *testing.T) {
 	txn3 := []byte("t3")
 	txn4 := []byte("t4")
 
-	m := map[string][][]byte{
-		string(txn1): {txn2},
-		string(txn2): {txn3},
-		string(txn3): {txn1},
+	m := map[string][]pb.WaitTxn{
+		string(txn1): {{TxnID: txn2}},
+		string(txn2): {{TxnID: txn3}},
+		string(txn3): {{TxnID: txn1}},
 	}
 	abortC := make(chan []byte, 1)
 	defer close(abortC)
 
-	d := newDeadlockDetector(func(txn []byte, w *waiters) bool {
-		for _, id := range m[string(txn)] {
-			if !w.add(id) {
-				return false
+	d := newDeadlockDetector(
+		"s1",
+		func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			for _, v := range m[string(txn.TxnID)] {
+				if !w.add(v) {
+					return false, nil
+				}
 			}
-		}
-		return true
-	}, func(txn []byte) {
-		abortC <- txn
-	})
+			return true, nil
+		}, func(txn pb.WaitTxn) {
+			abortC <- txn.TxnID
+		})
 	defer d.close()
 
-	assert.NoError(t, d.check(txn1))
+	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn1}))
 	assert.Equal(t, txn1, <-abortC)
 	d.txnClosed(txn1)
 
-	assert.NoError(t, d.check(txn2))
+	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn2}))
 	assert.Equal(t, txn2, <-abortC)
 	d.txnClosed(txn2)
 
-	assert.NoError(t, d.check(txn3))
+	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn3}))
 	assert.Equal(t, txn3, <-abortC)
 	d.txnClosed(txn3)
 
-	assert.NoError(t, d.check(txn4))
+	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn4}))
 	select {
 	case <-abortC:
 		assert.Fail(t, "can not found dead lock")
 	case <-time.After(time.Millisecond * 100):
 	}
-}
-
-type rowToLock struct {
-	tableID uint64
-	row     []byte
-}
-
-func TestTwoTxsDeadlock(t *testing.T) {
-	cases := []struct {
-		row1, row2 rowToLock
-	}{
-		{
-			rowToLock{0, []byte{1}},
-			rowToLock{0, []byte{2}},
-		},
-		{
-			rowToLock{0, []byte{1}},
-			rowToLock{1, []byte{1}},
-		},
-	}
-
-	for _, c := range cases {
-		runDeadlock(t, c.row1, c.row2)
-	}
-}
-
-//			txnA			txnB
-//	   locks row1		locks row2
-//					 	locks row1 		(txnB waits for txnA)
-//	   locks row2						(deadlock happens)
-func runDeadlock(t *testing.T, row1, row2 rowToLock) {
-	txnA := []byte("txnA")
-	txnB := []byte("txnB")
-	l := NewLockService()
-	ctx := context.Background()
-	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
-	}
-
-	err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)
-	assert.NoError(t, err)
-	go func() {
-		err := l.Lock(ctx, row2.tableID, [][]byte{row2.row}, txnB, option)
-		assert.NoError(t, err)
-		err = l.Lock(ctx, row1.tableID, [][]byte{row1.row}, txnB, option)
-		assert.NoError(t, err)
-	}()
-	time.Sleep(time.Second / 2)
-	err = l.Lock(context.Background(), row2.tableID, [][]byte{row2.row}, txnA, option)
-	assert.Error(t, err)
 }

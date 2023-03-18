@@ -767,7 +767,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 
 	if !strings.Contains(sql, "select") {
 		sql = "select " + sql
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -776,7 +776,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 			return nil, err
 		}
 	} else {
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -1009,7 +1009,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
-				tp, _ := binary.JudgmentToDateReturnType(sval.Sval)
+				tp, _ := binary.ExtractToDateReturnType(sval.Sval)
 				args = append(args, makePlan2DateConstNullExpr(tp))
 			} else {
 				return nil, moerr.NewInvalidArg(ctx, "to_date format", "not constant")
@@ -1171,6 +1171,9 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				if argsType[idx].Oid == castType.Oid && types.IsDecimal(castType.Oid) && argsType[idx].Scale == castType.Scale {
+					continue
+				}
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
@@ -1244,7 +1247,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_decimal:
 		if typ != nil {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.Decimal64_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -1253,7 +1256,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 						C: &Const{
 							Isnull: false,
 							Value: &plan.Const_Decimal64Val{
-								Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(d64)},
+								Decimal64Val: &plan.Decimal64{A: int64(d64)},
 							},
 						},
 					},
@@ -1261,11 +1264,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				}, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.Decimal128_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
-				a, b := types.Decimal128ToInt64Raw(d128)
+				a := int64(d128.B0_63)
+				b := int64(d128.B64_127)
 				return &Expr{
 					Expr: &plan.Expr_C{
 						C: &Const{
@@ -1280,11 +1284,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
 		}
-		d128, scale, err := types.ParseStringToDecimal128WithoutTable(astExpr.String())
+		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
 			return nil, err
 		}
-		a, b := types.Decimal128ToInt64Raw(d128)
+		a := int64(d128.B0_63)
+		b := int64(d128.B64_127)
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -1296,7 +1301,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 			Typ: &plan.Type{
 				Id:          int32(types.T_decimal128),
-				Width:       34,
+				Width:       38,
 				Scale:       scale,
 				NotNullable: true,
 			},

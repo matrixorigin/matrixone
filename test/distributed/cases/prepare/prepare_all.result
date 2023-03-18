@@ -28,7 +28,7 @@ PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
 pk    ui    si
 EXECUTE s2 USING @ui_max;
-Data truncation: data out of range: data type int64,
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 EXECUTE s2 USING @si_min;
 pk    ui    si
 0    0    -9223372036854775808
@@ -274,6 +274,7 @@ prepare s7 from 'select * from t3 where dec1 between ? and ?';
 prepare s8 from 'select * from t3 where dec1 not between ? and ?';
 execute s1 using @hit_dec1;
 dec1    dec2
+12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333
@@ -316,7 +317,6 @@ execute s3 using @dec1_min;
 dec1    dec2
 execute s4 using @hit_dec1;
 dec1    dec2
-12.34    10000.2222233333
 execute s4 using @dec1_max;
 dec1    dec2
 12.35    10000.2222233333
@@ -328,6 +328,7 @@ execute s4 using @dec1_min;
 dec1    dec2
 execute s5 using @hit_dec1;
 dec1    dec2
+12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333
@@ -348,6 +349,7 @@ dec1    dec2
 123.46    111112222233333.2222233333
 execute s6 using @hit_dec1;
 dec1    dec2
+12.35    10000.2222233333
 123.45    1111122222.2222233333
 133.45    1111122222.2222233333
 153.45    1111122222.2222233333
@@ -642,7 +644,7 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64,
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;

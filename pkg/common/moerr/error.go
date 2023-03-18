@@ -67,14 +67,16 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 
 	// Group 3: invalid input
-	ErrBadConfig           uint16 = 20300
-	ErrInvalidInput        uint16 = 20301
-	ErrSyntaxError         uint16 = 20302
-	ErrParseError          uint16 = 20303
-	ErrConstraintViolation uint16 = 20304
-	ErrDuplicate           uint16 = 20305
-	ErrRoleGrantedToSelf   uint16 = 20306
-	ErrDuplicateEntry      uint16 = 20307
+	ErrBadConfig            uint16 = 20300
+	ErrInvalidInput         uint16 = 20301
+	ErrSyntaxError          uint16 = 20302
+	ErrParseError           uint16 = 20303
+	ErrConstraintViolation  uint16 = 20304
+	ErrDuplicate            uint16 = 20305
+	ErrRoleGrantedToSelf    uint16 = 20306
+	ErrDuplicateEntry       uint16 = 20307
+	ErrWrongValueCountOnRow uint16 = 20308
+	ErrBadFieldError        uint16 = 20309
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -117,7 +119,7 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
-	ErrQueryIdNotFound              uint16 = 20440
+	ErrResultFileNotFound           uint16 = 20440
 	ErrFunctionAlreadyExists        uint16 = 20441
 	ErrDropNonExistsFunction        uint16 = 20442
 	ErrNoConfig                     uint16 = 20443
@@ -133,6 +135,8 @@ const (
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
 	ErrNoAvailableBackend uint16 = 20504
+	// ErrBackendCannotConnect can not connect to remote backend
+	ErrBackendCannotConnect uint16 = 20505
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -174,6 +178,10 @@ const (
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
+	// ErrLockTableBindChanged lockservice and lock table bind changed
+	ErrLockTableBindChanged uint16 = 20702
+	// ErrLockTableNotFound lock table not found on remote lock service instance
+	ErrLockTableNotFound uint16 = 20703
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -213,14 +221,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 
 	// Group 3: invalid input
-	ErrBadConfig:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
-	ErrInvalidInput:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:         {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
-	ErrParseError:          {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
-	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
-	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
-	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
-	ErrDuplicateEntry:      {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
+	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
+	ErrInvalidInput:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
+	ErrSyntaxError:          {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
+	ErrParseError:           {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
+	ErrConstraintViolation:  {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicate:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
+	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
+	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
+	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -265,14 +275,15 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
+	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
-	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
-	ErrBackendClosed:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
-	ErrStreamClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
-	ErrNoAvailableBackend: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
+	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrBackendClosed:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},
 
 	// Group 6: txn
 	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -304,7 +315,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
+	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -581,8 +594,8 @@ func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
 }
 
-func NewQueryIdNotFound(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrQueryIdNotFound, f)
+func NewResultFileNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrResultFileNotFound, f)
 }
 
 func NewNoConfig(ctx context.Context, f string) *Error {
@@ -700,6 +713,10 @@ func NewStreamClosed(ctx context.Context) *Error {
 
 func NewNoAvailableBackend(ctx context.Context) *Error {
 	return newError(ctx, ErrNoAvailableBackend)
+}
+
+func NewBackendCannotConnect(ctx context.Context) *Error {
+	return newError(ctx, ErrBackendCannotConnect)
 }
 
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
@@ -858,6 +875,14 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
 }
 
+func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
+	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewBadFieldError(ctx context.Context, column, table string) *Error {
+	return newError(ctx, ErrBadFieldError, column, table)
+}
+
 func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {
 	return newError(ctx, ErrRoleGrantedToSelf, from, to)
 }
@@ -889,6 +914,14 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewLockTableBindChanged(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableBindChanged)
+}
+
+func NewLockTableNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableNotFound)
 }
 
 var contextFunc atomic.Value

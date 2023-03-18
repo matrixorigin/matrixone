@@ -36,6 +36,10 @@ import (
     statement tree.Statement
     statements []tree.Statement
 
+    alterTable tree.AlterTable
+    alterTableOptions tree.AlterTableOptions
+    alterTableOption tree.AlterTableOption
+
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -202,6 +206,8 @@ import (
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
+    subscriptionOption *tree.SubscriptionOption
+    accountsSetOption *tree.AccountsSetOption
 }
 
 %token LEX_ERROR
@@ -279,6 +285,10 @@ import (
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
+
+// publication
+%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+
 
 // MO table option
 %token <str> PROPERTIES
@@ -382,7 +392,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -403,6 +413,10 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <str> comment_opt
+%type <subscriptionOption> subcription_opt
+%type <accountsSetOption> alter_publication_accounts_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -417,7 +431,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list accounts_without_parenthesis_opt
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <functionName> func_name
@@ -445,6 +459,8 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
+%type <alterTableOptions> alter_options
+%type <alterTableOption> alter_table_drop
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -734,26 +750,7 @@ statement_id_opt:
 }
 
 mo_dump_stmt:
-    MODUMP DATABASE ident INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
-	    OutFile: $5,
-	    MaxFileSize: int64($6),
-	}
-    }
-|   MODUMP DATABASE ident TABLES table_name_list INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
-	    Tables: $5,
-	    OutFile: $7,
-	    MaxFileSize: int64($8),
-	}
-    }
-|   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
         ep := &tree.ExportParam{
 		Outfile:    true,
@@ -766,7 +763,6 @@ mo_dump_stmt:
 		ForceQuote: $10,
 	}
         $$ = &tree.MoDump{
-            DumpDatabase: false,
             ExportParams: ep,
         }
     }
@@ -775,17 +771,16 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
             DuplicateHandling: $5,
             Table: $8,
-            Accounts: $9,
         }
-        $$.(*tree.Load).Param.Tail = $10
-        $$.(*tree.Load).Param.Parallel = $11
+        $$.(*tree.Load).Param.Tail = $9
+        $$.(*tree.Load).Param.Parallel = $10
     }
 
 load_extension_stmt:
@@ -851,15 +846,15 @@ parallel_opt:
 normal_ident:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 columns_or_variable_list_opt:
@@ -1243,22 +1238,22 @@ priv_level:
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-            DbName: $1.ToLowerForConfig(),
+            DbName: $1.Compare(),
         }
     }
 |   ident '.' ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-            DbName: $1.ToLowerForConfig(),
-            TabName: $3.ToLowerForConfig(),
+            DbName: $1.Compare(),
+            TabName: $3.Compare(),
         }
     }
 |   ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-            TabName: $1.ToLowerForConfig(),
+            TabName: $1.Compare(),
         }
     }
 
@@ -1784,11 +1779,11 @@ equal_or_assignment:
 var_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $1.ToLowerForConfig() + "." + $3.ToLowerForConfig()
+        $$ = $1.Compare() + "." + $3.Compare()
     }
 
 var_name_list:
@@ -1888,7 +1883,7 @@ use_stmt:
     {
         $$ = &tree.Use{
             SecondaryRole: false,
-            Name: $2.ToLowerForConfig(),
+            Name: $2,
         }
     }
 |   USE
@@ -2195,6 +2190,8 @@ alter_stmt:
 |   alter_account_stmt
 |   alter_database_config_stmt
 |   alter_view_stmt
+|   alter_table_stmt
+|   alter_publication_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2207,6 +2204,73 @@ alter_view_stmt:
             IfExists: $3,
         }
     }
+
+alter_table_stmt:
+    ALTER TABLE table_name alter_options
+    {
+        $$ = &tree.AlterTable{
+            Table: $3,
+            Options: $4,
+        }
+    }
+
+alter_options:
+ADD table_elem
+    {
+        opt := &tree.AlterOptionAdd{
+            Def:  $2,
+        }
+        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+    }
+|   DROP alter_table_drop
+    {
+        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+    }
+| table_option_list
+    {
+        opts := make([]tree.AlterTableOption, len($1))
+        for i, opt := range $1 {
+            opts[i] = tree.AlterTableOption(opt)
+        }
+        $$ =  opts
+    }
+
+alter_table_drop:
+    INDEX ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropIndex,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   KEY ident
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropKey,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   COLUMN ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   FOREIGN KEY ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropForeignKey,
+            Name: tree.Identifier($3.Compare()),
+        }
+    }
+|   PRIMARY KEY 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropPrimaryKey,
+        }
+    }
+    
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -2405,6 +2469,8 @@ show_stmt:
 |   show_column_num_stmt
 |   show_table_values_stmt
 |   show_accounts_stmt
+|   show_publications_stmt
+|   show_subscriptions_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2423,7 +2489,7 @@ show_grants_stmt:
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
-        roles := []*tree.Role{tree.NewRole($5.ToLowerForConfig())}
+        roles := []*tree.Role{tree.NewRole($5.Compare())}
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
         $$ = s
@@ -2548,8 +2614,8 @@ show_index_stmt:
     }
 |	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
      {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.ToLowerForConfig()), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5.ToLowerForConfig()), prefix)
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.Compare()), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5.Compare()), prefix)
          $$ = &tree.ShowIndex{
              TableName: *tbl,
              Where: $8,
@@ -2681,6 +2747,19 @@ show_accounts_stmt:
         $$ = &tree.ShowAccounts{Like: $3}
     }
 
+show_publications_stmt:
+    SHOW PUBLICATIONS like_opt
+    {
+	$$ = &tree.ShowPublications{Like: $3}
+    }
+
+
+show_subscriptions_stmt:
+    SHOW SUBSCRIPTIONS like_opt
+    {
+	$$ = &tree.ShowSubscriptions{Like: $3}
+    }
+
 like_opt:
     {
         $$ = nil
@@ -2700,7 +2779,7 @@ database_name_opt:
     }
 |   from_or_in ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 table_column_name:
@@ -2740,35 +2819,39 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
     }
+|   SHOW CREATE PUBLICATION db_name
+    {
+	$$ = &tree.ShowCreatePublications{Name: $4}
+    }
 
 table_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 
 db_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 unresolved_object_name:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.ToLowerForConfig(), $3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.Compare(), $3.Compare(), $1.Compare()})
     }
 
 truncate_table_stmt:
@@ -2794,6 +2877,7 @@ drop_ddl_stmt:
 |   drop_user_stmt
 |   drop_account_stmt
 |   drop_function_stmt
+|   drop_publication_stmt
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
@@ -2845,7 +2929,7 @@ drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
         $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             TableName: *$6,
             IfExists: $3,
         }
@@ -2866,7 +2950,7 @@ drop_view_stmt:
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.ToLowerForConfig()), IfExists: $3}
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
     }
 
 drop_prepare_stmt:
@@ -2952,12 +3036,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |    ident '.' ident wild_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 wild_opt:
@@ -3057,13 +3141,13 @@ insert_stmt:
         $$ = ins
     }
 
-accounts_opt:
+accounts_without_parenthesis_opt:
     {
-        $$ = nil
+	$$ = nil
     }
-|   ACCOUNTS '(' accounts_list ')'
+|   ACCOUNT accounts_list
     {
-        $$ = $3
+	$$ = $2
     }
 
 accounts_list:
@@ -3077,11 +3161,10 @@ accounts_list:
     }
 
 insert_data:
-    accounts_opt VALUES values_list
+    VALUES values_list
     {
-        vc := tree.NewValuesClause($3)
+        vc := tree.NewValuesClause($2)
         $$ = &tree.Insert{
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -3091,54 +3174,43 @@ insert_data:
             Rows: $1,
         }
     }
-|   ACCOUNTS '(' accounts_list ')' select_stmt
-   {
-        $$ = &tree.Insert{
-            Accounts: $3,
-	    Rows: $5,
-        }
-    }
-|   '(' insert_column_list ')' accounts_opt VALUES values_list
-    {
-        vc := tree.NewValuesClause($6)
-        $$ = &tree.Insert{
-            Columns: $2,
-            Accounts: $4,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   '(' ')' accounts_opt VALUES values_list
+|   '(' insert_column_list ')' VALUES values_list
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Accounts: $3,
+            Columns: $2,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   '(' insert_column_list ')' accounts_opt select_stmt
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Insert{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Accounts: $4,
-            Rows: $5,
+            Rows: $4,
         }
     }
-|   accounts_opt SET set_value_list
+|   SET set_value_list
     {
-        if $3 == nil {
+        if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
             return 1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
-        for _, a := range $3 {
+        for _, a := range $2 {
             identList = append(identList, a.Column)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
             Columns: identList,
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -3187,11 +3259,11 @@ insert_column_list:
 insert_column:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $3.ToLowerForConfig()
+        $$ = $3.Compare()
     }
 
 values_list:
@@ -3249,11 +3321,11 @@ partition_clause_opt:
 partition_id_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   partition_id_list ',' ident
     {
-        $$ = append($1 , tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1 , tree.Identifier($3.Compare()))
     }
 
 into_table_name:
@@ -3387,11 +3459,11 @@ force_quote_list:
     ident
     {
         $$ = make([]string, 0, 4)
-        $$ = append($$, $1.ToLowerForConfig())
+        $$ = append($$, $1.Compare())
     }
 |   force_quote_list ',' ident
     {
-        $$ = append($1, $3.ToLowerForConfig())
+        $$ = append($1, $3.Compare())
     }
 
 select_stmt:
@@ -3457,7 +3529,7 @@ common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.ToLowerForConfig()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
             Stmt: $5,
         }
     }
@@ -3823,11 +3895,11 @@ select_expression:
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.Compare())}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.ToLowerForConfig(), $1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.Compare(), $1.Compare())}
     }
 
 from_opt:
@@ -4023,11 +4095,11 @@ join_condition:
 column_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   column_list ',' ident
     {
-        $$ = append($1, tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1, tree.Identifier($3.Compare()))
     }
 
 table_factor:
@@ -4072,7 +4144,7 @@ table_subquery:
 table_function:
     ident '(' expression_list_opt ')'
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1.ToLowerForConfig()))
+        name := tree.SetUnresolvedName(strings.ToLower($1.Compare()))
         $$ = &tree.TableFunction{
        	    Func: &tree.FuncExpr{
         	Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -4157,11 +4229,11 @@ index_name_list:
 	}
 |	ident
 	{
-		$$ = []string{$1.ToLowerForConfig()}
+		$$ = []string{$1.Compare()}
 	}
 |	index_name_list ',' ident
 	{
-		$$ = append($1, $3.ToLowerForConfig())
+		$$ = append($1, $3.Compare())
 	}
 |	PRIMARY
 	{
@@ -4188,13 +4260,13 @@ as_opt_id:
 table_alias:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
 as_name_opt:
     {
-        $$ = tree.NewCStr("", false)
+        $$ = tree.NewCStr("", yylex.(*Lexer).lower)
     }
 |   ident
     {
@@ -4206,17 +4278,17 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = tree.NewCStr($1, true)
+        $$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   AS STRING
     {
-        $$ = tree.NewCStr($2, true)
+        $$ = tree.NewCStr($2, yylex.(*Lexer).lower)
     }
 
 stmt_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 //table_id:
@@ -4234,6 +4306,7 @@ create_stmt:
 |   create_role_stmt
 |   create_user_stmt
 |   create_account_stmt
+|   create_publication_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -4256,13 +4329,13 @@ create_extension_stmt:
 extension_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 extension_name:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 
@@ -4282,12 +4355,12 @@ func_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewFuncName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewFuncName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewFuncName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3.Compare()), prefix)
     }
 
 func_args_list_opt:
@@ -4329,7 +4402,7 @@ func_arg_decl:
 func_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 func_return:
@@ -4364,7 +4437,7 @@ create_account_stmt:
 account_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 account_auth_option:
@@ -4384,7 +4457,7 @@ account_admin_name:
     }
 |	ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 account_identified:
@@ -4456,10 +4529,81 @@ create_user_stmt:
         }
     }
 
+create_publication_stmt:
+    CREATE PUBLICATION not_exists_opt ident DATABASE ident accounts_without_parenthesis_opt comment_opt
+    {
+	$$ = &tree.CreatePublication{
+	    IfNotExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    Database: tree.Identifier($6.Compare()),
+	    Accounts: $7,
+	    Comment: $8,
+	}
+    }
+
+comment_opt:
+    {
+    	$$ = ""
+    }
+    | COMMENT_KEYWORD STRING
+    {
+    	$$ = $2
+    }
+
+alter_publication_stmt:
+ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    {
+	$$ = &tree.AlterPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    AccountsSet: $5,
+	    Comment: $6,
+	}
+    }
+
+alter_publication_accounts_opt:
+    {
+	$$ = nil
+    }
+    | ACCOUNT ALL
+    {
+	$$ = &tree.AccountsSetOption{
+	    All: true,
+	}
+    }
+    | ACCOUNT accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    SetAccounts: $2,
+	}
+    }
+    | ACCOUNT ADD accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    AddAccounts: $3,
+	}
+    }
+    | ACCOUNT DROP accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    DropAccounts: $3,
+	}
+    }
+
+
+drop_publication_stmt:
+DROP PUBLICATION exists_opt ident
+    {
+	$$ = &tree.DropPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	}
+    }
+
 account_role_name:
     ident
     {
-   		$$ = $1.ToLowerForConfig()
+   		$$ = $1.Compare()
     }
 
 user_comment_or_attribute_opt:
@@ -4669,7 +4813,7 @@ user_identified:
 name_string:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
@@ -4695,7 +4839,7 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1.ToLowerForConfig()}
+        $$ = &tree.Role{UserName: $1.Compare()}
     }
 //|   name_string '@' name_string
 //    {
@@ -4709,15 +4853,15 @@ role_spec:
 role_name:
     ID
 	{
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   QUOTE_ID
 	{
-		$$ = tree.NewCStr($1, true)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   STRING
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 index_prefix:
@@ -4748,7 +4892,7 @@ create_index_stmt:
             io.IType = $5
         }
         $$ = &tree.CreateIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             Table: *$7,
             IndexCat: $2,
             KeyParts: $9,
@@ -4793,7 +4937,7 @@ index_option:
     }
 |   WITH PARSER ident
     {
-        $$ = &tree.IndexOption{ParserName: $3.ToLowerForConfig()}
+        $$ = &tree.IndexOption{ParserName: $3.Compare()}
     }
 |   VISIBLE
     {
@@ -4847,15 +4991,26 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident create_option_list_opt
+    CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
-            Name: tree.Identifier($4.ToLowerForConfig()),
-            CreateOptions: $5,
+            Name: tree.Identifier($4.Compare()),
+            SubscriptionOption: $5,
+            CreateOptions: $6,
         }
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
+
+subcription_opt:
+    {
+	$$ = nil
+    }
+|   FROM account_name PUBLICATION ident
+    {
+   	$$ = &tree.SubscriptionOption{From: tree.Identifier($2), Publication: tree.Identifier($4.Compare())}
+    }
+
 
 database_or_schema:
     DATABASE
@@ -5091,7 +5246,7 @@ partition:
     PARTITION ident values_opt sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: nil,
             Subs: $4,
@@ -5100,7 +5255,7 @@ partition:
 |   PARTITION ident values_opt partition_option_list sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: $4,
             Subs: $5,
@@ -5130,14 +5285,14 @@ sub_partition:
     SUBPARTITION ident
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: nil,
         }
     }
 |   SUBPARTITION ident partition_option_list
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: $3,
         }
     }
@@ -5412,7 +5567,7 @@ table_option:
     }
 |   TABLESPACE equal_opt ident storage_opt
     {
-        $$= tree.NewTableOptionTablespace($3.ToLowerForConfig(), $4)
+        $$= tree.NewTableOptionTablespace($3.Compare(), $4)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
@@ -5504,12 +5659,12 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 table_elem_list_opt:
@@ -5660,7 +5815,7 @@ index_name_and_type_opt:
 |    ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.ToLowerForConfig()
+        $$[0] = $1.Compare()
         $$[1] = $3
     }
 
@@ -5677,7 +5832,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 column_def:
@@ -5689,47 +5844,47 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |	QUOTE_ID
 	{
-    	$$ = tree.NewCStr($1, true)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 column_attribute_list_opt:
@@ -5849,7 +6004,7 @@ constraint_keyword:
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 references_def:
@@ -7527,6 +7682,10 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            return 1
+        }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
@@ -7548,6 +7707,10 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for float out of range (max = 30)")
             return 1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
@@ -8054,7 +8217,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 34,           // this is the default scale for decimal
+            DisplayWith: 38,           // this is the default precision for decimal
             Scale: 0,
         }
     }
@@ -8483,6 +8646,10 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|	PROCESSLIST
+|   PUBLICATION
+|   SUBSCRIPTIONS
+|   PUBLICATIONS
 
 func_not_keyword:
     DATE_ADD

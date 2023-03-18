@@ -328,14 +328,14 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
+		//tenant := &TenantInfo{
+		//	Tenant:        sysAccountName,
+		//	User:          rootName,
+		//	DefaultRole:   moAdminRoleName,
+		//	TenantID:      sysAccountID,
+		//	UserID:        rootID,
+		//	DefaultRoleID: moAdminRoleID,
+		//}
 
 		ca := &tree.CreateAccount{
 			Name:        "test",
@@ -346,10 +346,10 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, _, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2880,7 +2880,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -2917,7 +2917,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -2964,7 +2964,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)

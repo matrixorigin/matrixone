@@ -22,12 +22,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
 )
 
 // only use in developing
@@ -771,6 +769,8 @@ func TestDdl(t *testing.T) {
 		"lock tables nation read",
 		"lock tables nation write, supplier read",
 		"unlock tables",
+		"alter table emp drop foreign key fk1",
+		"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(n_nationkey)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -787,6 +787,9 @@ func TestDdl(t *testing.T) {
 		"lock tables t3 read",
 		"lock tables t1 read, t1 write",
 		"lock tables nation read, nation write",
+		"alter table nation drop foreign key fk1", //key not exists
+		"alter table nation add FOREIGN KEY fk_t1(col_not_exist) REFERENCES nation2(n_nationkey)",
+		"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(col_not_exist)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -1010,7 +1013,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 }
 
 func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

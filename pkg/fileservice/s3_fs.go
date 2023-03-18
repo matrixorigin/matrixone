@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 
@@ -53,6 +54,9 @@ type S3FS struct {
 	memCache    *MemCache
 	diskCache   *DiskCache
 	asyncUpdate bool
+
+	perfCounterSets []*perfcounter.CounterSet
+	listMaxKeys     int32
 }
 
 // key mapping scheme:
@@ -69,6 +73,8 @@ func NewS3FS(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
+	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -82,12 +88,16 @@ func NewS3FS(
 		return nil, err
 	}
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	fs.perfCounterSets = perfCounterSets
+
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
@@ -104,6 +114,8 @@ func NewS3FSOnMinio(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
+	perfCounterSets []*perfcounter.CounterSet,
+	noCache bool,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -118,12 +130,16 @@ func NewS3FSOnMinio(
 		return nil, err
 	}
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
-		return nil, err
+	fs.perfCounterSets = perfCounterSets
+
+	if !noCache {
+		if err := fs.initCaches(
+			memCacheCapacity,
+			diskCacheCapacity,
+			diskCachePath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return fs, nil
@@ -140,7 +156,10 @@ func (s *S3FS) initCaches(
 		memCacheCapacity = 512 << 20
 	}
 	if memCacheCapacity > 0 {
-		s.memCache = NewMemCache(memCacheCapacity)
+		s.memCache = NewMemCache(
+			WithLRU(memCacheCapacity),
+			WithPerfCounterSets(s.perfCounterSets),
+		)
 		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
 	}
 
@@ -150,7 +169,11 @@ func (s *S3FS) initCaches(
 	}
 	if diskCacheCapacity > 0 && diskCachePath != "" {
 		var err error
-		s.diskCache, err = NewDiskCache(diskCachePath, diskCacheCapacity)
+		s.diskCache, err = NewDiskCache(
+			diskCachePath,
+			diskCacheCapacity,
+			s.perfCounterSets,
+		)
 		if err != nil {
 			return err
 		}
@@ -185,16 +208,17 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	if prefix != "" {
 		prefix += "/"
 	}
-	var cont *string
+	var marker *string
 
 	for {
 		output, err := s.s3ListObjects(
 			ctx,
-			&s3.ListObjectsV2Input{
-				Bucket:            ptrTo(s.bucket),
-				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(prefix),
-				ContinuationToken: cont,
+			&s3.ListObjectsInput{
+				Bucket:    ptrTo(s.bucket),
+				Delimiter: ptrTo("/"),
+				Prefix:    ptrTo(prefix),
+				Marker:    marker,
+				MaxKeys:   s.listMaxKeys,
 			},
 		)
 		if err != nil {
@@ -222,11 +246,10 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 			})
 		}
 
-		if output.ContinuationToken == nil ||
-			*output.ContinuationToken == "" {
+		if !output.IsTruncated {
 			break
 		}
-		cont = output.ContinuationToken
+		marker = output.NextMarker
 	}
 
 	return
@@ -371,9 +394,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return ctx.Err()
 	default:
 	}
-
-	ctx, span := trace.Start(ctx, "S3FS.Read")
-	defer span.End()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -761,16 +781,6 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
-func (s *S3FS) CacheStats() *CacheStats {
-	if s.memCache != nil {
-		return s.memCache.CacheStats()
-	}
-	if s.diskCache != nil {
-		return s.diskCache.CacheStats()
-	}
-	return nil
-}
-
 func newS3FS(arguments []string) (*S3FS, error) {
 	if len(arguments) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
@@ -978,32 +988,50 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 }
 
-func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	FSProfileHandler.AddSample()
-	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.List.Add(1)
+	}, s.perfCounterSets...)
+	return s.s3Client.ListObjects(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	FSProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.Head.Add(1)
+	}, s.perfCounterSets...)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	FSProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.Put.Add(1)
+	}, s.perfCounterSets...)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	FSProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.Get.Add(1)
+	}, s.perfCounterSets...)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	FSProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.DeleteMulti.Add(1)
+	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	FSProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.S3.Delete.Add(1)
+	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }

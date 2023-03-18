@@ -66,7 +66,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
-		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		var newStmt *tree.ShowCreateView
+		if stmt.Name.NumParts == 1 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		} else if stmt.Name.NumParts == 2 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+		}
+
 		return buildShowCreateView(newStmt, ctx)
 	}
 
@@ -84,6 +90,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemClusterRel {
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
 	}
 	rowCount := 0
 	var pkDefs []string
@@ -187,7 +195,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 			indexStr += ")"
 			if indexdef.Comment != "" {
-				indexStr += fmt.Sprintf(" COMMENT `%s`", indexdef.Comment)
+				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -900,7 +909,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql)
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		return nil, err
 	}

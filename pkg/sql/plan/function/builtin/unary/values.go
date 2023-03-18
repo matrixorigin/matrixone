@@ -27,6 +27,6 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	for j := 0; j < len(sels); j++ {
 		sels[j] = int64(j)
 	}
-	vector.Union(toVec, fromVec, sels, fromVec.Nsp.Any(), proc.GetMPool())
+	toVec.Union(fromVec, sels, proc.GetMPool())
 	return nil
 }

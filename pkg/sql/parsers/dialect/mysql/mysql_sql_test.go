@@ -27,17 +27,16 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create table t1 (a int comment '\"123123\\'')",
-		output: "create table t1 (a int comment \"123123'')",
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
 	}
 )
 
-// character set latin1 NOT NULL default
 func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -49,10 +48,42 @@ func TestDebug(t *testing.T) {
 }
 
 var (
+	orginSQL = struct {
+		input  string
+		output string
+	}{
+		input:  "select A from t1",
+		output: "select A from t1",
+	}
+)
+
+// character set latin1 NOT NULL default
+func TestOriginSQL(t *testing.T) {
+	if orginSQL.output == "" {
+		orginSQL.output = orginSQL.input
+	}
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
+	if err != nil {
+		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
+		return
+	}
+	out := tree.String(ast, dialect.MYSQL)
+	if orginSQL.output != out {
+		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", orginSQL.output, out)
+	}
+}
+
+var (
 	validSQL = []struct {
 		input  string
 		output string
 	}{{
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+	}, {
+		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
+		output: "show create table information_schema.processlist",
+	}, {
 		input:  "create table t1 (a int comment '\"123123\\'')",
 		output: "create table t1 (a int comment \"123123'')",
 	}, {
@@ -104,10 +135,10 @@ var (
 		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
 	}, {
 		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+		output: "alter view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
 	}, {
 		input: "select time from t1 as value",
 	}, {
@@ -484,7 +515,7 @@ var (
 		output: "select md.datname as Database from tt as md",
 	}, {
 		input:  "select * from t where a = `Hello`",
-		output: "select * from t where a = Hello",
+		output: "select * from t where a = hello",
 	}, {
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
@@ -531,7 +562,7 @@ var (
 		input: "create table deci_table (a decimal(20, 5))",
 	}, {
 		input:  "create table deci_table (a decimal)",
-		output: "create table deci_table (a decimal(34))",
+		output: "create table deci_table (a decimal(38))",
 	}, {
 		input: "create table deci_table (a decimal(20))",
 	}, {
@@ -723,7 +754,7 @@ var (
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
 		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 	}, {
 		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
 		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
@@ -748,10 +779,10 @@ var (
 		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 	}, {
 		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	},
 		{
-			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
 		}, {
@@ -1723,30 +1754,6 @@ var (
 			output: `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
 		},
 		{
-			input:  `modump database t into 'a.sql'`,
-			output: `modump database t into a.sql`,
-		},
-		{
-			input:  `modump database t into 'a.sql' max_file_size 1`,
-			output: `modump database t into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql'`,
-			output: `modump database t tables t1 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1 into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql'`,
-			output: `modump database t tables t1, t2 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
-		},
-		{
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
@@ -1795,32 +1802,32 @@ var (
 			input: `create cluster table a (a int)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a select a, b from a`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a (a, b) values (1, 2), (1, 2)`,
 		},
 		{
-			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
-			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input:  `insert into a () values (1, 2), (1, 2)`,
+			output: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a (a, b) select a, b from a`,
 		},
 		{
-			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
-			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+			input:  `insert into a set a = b, b = b + 1`,
+			output: `insert into a (a, b) values (b, b + 1)`,
 		},
 		{
-			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
-			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
@@ -1951,6 +1958,88 @@ var (
 			input:  "UNLOCK TABLES",
 			output: "UnLock Tables",
 		},
+		{
+			input: "alter table tbl1 drop column col1",
+		},
+		{
+			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input: "alter table tbl1 drop key idx_name",
+		},
+		{
+			input: "alter table tbl1 drop primary key",
+		},
+		{
+			input: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input: "alter table tbl1 add foreign key sdf (a, b) references b(a asc, b desc)",
+		},
+		{
+			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
+			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
+		{
+			input: "create publication pub1 database db1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1, acc2 comment 'test'",
+		},
+		{
+			input: "create publication pub1 database db1 comment 'test'",
+		},
+		{
+			input: "create database db1 from acc0 publication pub1",
+		},
+		{
+			input: "drop publication pub1",
+		},
+		{
+			input: "drop publication if exists pub1",
+		},
+		{
+			input: "alter publication pub1 account all",
+		},
+		{
+			input: "alter publication pub1 account acc0",
+		},
+		{
+			input: "alter publication pub1 account acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account add acc0",
+		},
+		{
+			input: "alter publication pub1 account add acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc0",
+		},
+		{
+			input: "alter publication if exists pub1 account drop acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc1 comment 'test'",
+		},
+		{
+			input: "alter publication if exists pub1 account acc1 comment 'test'",
+		},
+		{
+			input: "show create publication pub1",
+		},
+		{
+			input: "show publications",
+		},
+		{
+			input: "show subscriptions",
+		},
 	}
 )
 
@@ -1960,7 +2049,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1992,7 +2081,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input)
+		asts, err := Parse(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue

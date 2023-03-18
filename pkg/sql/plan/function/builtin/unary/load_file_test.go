@@ -32,6 +32,7 @@ func TestLoadFile(t *testing.T) {
 	ctx := context.Background()
 	filepath := dir + "test"
 	fs, readPath, err := fileservice.GetForETL(proc.FileService, filepath)
+	assert.Nil(t, err)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
@@ -67,13 +68,14 @@ func TestLoadFile(t *testing.T) {
 			inVector := testutil.MakeVarcharVector(inStrs, nil)
 			res, err := LoadFile([]*vector.Vector{inVector}, proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.GetBytes(0), convey.ShouldResemble, c.want)
+			convey.So(res.GetBytesAt(0), convey.ShouldResemble, c.want)
 		})
 	}
 
 	//Test empty file
 	filepath = dir + "emptyfile"
 	fs, readPath, err = fileservice.GetForETL(proc.FileService, filepath)
+	assert.Nil(t, err)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
@@ -89,12 +91,11 @@ func TestLoadFile(t *testing.T) {
 	cases2 := []struct {
 		name     string
 		filename string
-		want     []byte
+		want     [][]byte
 	}{
 		{
 			name:     "Empty File Case",
 			filename: filepath,
-			want:     []byte{},
 		},
 	}
 	for _, c := range cases2 {
@@ -104,7 +105,7 @@ func TestLoadFile(t *testing.T) {
 			inVector := testutil.MakeVarcharVector(inStrs, nil)
 			res, err := LoadFile([]*vector.Vector{inVector}, proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.GetBytes(0), convey.ShouldResemble, c.want)
+			convey.So(vector.MustBytesCol(res), convey.ShouldResemble, c.want)
 		})
 	}
 
@@ -113,6 +114,7 @@ func TestLoadFile(t *testing.T) {
 	data := make([]byte, size)
 	filepath = dir + "bigfile"
 	fs, readPath, err = fileservice.GetForETL(proc.FileService, filepath)
+	assert.Nil(t, err)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{

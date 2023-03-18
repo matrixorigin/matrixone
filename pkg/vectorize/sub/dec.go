@@ -23,67 +23,89 @@ package sub
 import "C"
 
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
+func Decimal64VecSub(xs, ys, rs *vector.Vector) (err error) {
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal64](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
+	} else {
+		rs.GetType().Scale = ys.GetType().Scale
+	}
+	n := len(rt)
+	if xs.IsConst() {
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[0].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+	if ys.IsConst() {
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[i].Sub(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+	for i := 0; i < n; i++ {
+		rt[i], _, err = xt[i].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
+		}
+	}
+	return
 }
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
 
-func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal64](rs)
-
-	flag := 0
-	if xs.IsScalar() {
-		flag |= LEFT_IS_SCALAR
+func Decimal128VecSub(xs, ys, rs *vector.Vector) (err error) {
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
+	} else {
+		rs.GetType().Scale = ys.GetType().Scale
 	}
-	if ys.IsScalar() {
-		flag |= RIGHT_IS_SCALAR
+	n := len(rt)
+	if xs.IsConst() {
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[0].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-
-	rc := C.Decimal64_VecSub(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal SUB")
+	if ys.IsConst() {
+		for i := 0; i < n; i++ {
+			rt[i], _, err = xt[i].Sub(yt[0], xs.GetType().Scale, ys.GetType().Scale)
+			if err != nil {
+				return
+			}
+		}
+		return
 	}
-	return nil
-}
-
-func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
-
-	flag := 0
-	if xs.IsScalar() {
-		flag |= LEFT_IS_SCALAR
+	for i := 0; i < n; i++ {
+		rt[i], _, err = xt[i].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
+		}
 	}
-	if ys.IsScalar() {
-		flag |= RIGHT_IS_SCALAR
-	}
-	rc := C.Decimal128_VecSub(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUB")
-	}
-	return nil
+	return
 }
 
 func DatetimeSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Datetime](xs)
-	yt := vector.MustTCols[types.Datetime](ys)
-	rt := vector.MustTCols[int64](rs)
+	xt := vector.MustFixedCol[types.Datetime](xs)
+	yt := vector.MustFixedCol[types.Datetime](ys)
+	rt := vector.MustFixedCol[int64](rs)
 
 	if len(xt) == 1 && len(yt) == 1 {
 		res := xt[0].DatetimeMinusWithSecond(yt[0])

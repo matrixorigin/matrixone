@@ -15,8 +15,10 @@
 package txnimpl
 
 import (
-	"bytes"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -88,7 +90,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc string, deltaLoc string) {
+func (seg *localSegment) registerNode(metaLoc string, deltaLoc string, zm dataio.Index) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
 		uint64(len(seg.nodes)),
@@ -277,7 +279,8 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		if err != nil {
 			return
 		}
-		if seg.table.schema.HasPK() {
+		skip := seg.table.store.txn.GetPKDedupSkip()
+		if seg.table.schema.HasPK() && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
 				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
 				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
@@ -300,13 +303,14 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	file string,
+	zm []dataio.Index,
 	metaLocs []string,
 ) (err error) {
 	for i, metaLoc := range metaLocs {
-		seg.registerNode(metaLoc, "")
+		seg.registerNode(metaLoc, "", nil)
+		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
-		if pkVecs != nil {
+		if len(pkVecs) != 0 && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
 				seg.table.schema.GetSingleSortKey().Name,
 				pkVecs[i],
@@ -451,19 +455,19 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	return n.GetColumnDataByIds(colIdxes, buffers)
+	return n.GetColumnDataByIds(colIdxes)
 }
 
 func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	return n.GetColumnDataById(colIdx, buffer)
+	return n.GetColumnDataById(colIdx)
 }
 
 func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {

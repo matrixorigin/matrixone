@@ -66,6 +66,7 @@
 
 # pkg/container
 /pkg/container @nnsgmsone
+/pkg/container/vector @aunjgr
 
 # pkg/defines
 /pkg/defines @daviszhen
@@ -107,6 +108,9 @@
 /pkg/pb/plan @nnsgmsone
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126 
+
+# pkg/perfcounter
+/pkg/perfcounter @reusee
 
 # pkg/sort 
 /pkg/sort @nnsgmsone

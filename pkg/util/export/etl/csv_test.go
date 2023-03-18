@@ -23,8 +23,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +38,7 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
 	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB)
+	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB, nil)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
@@ -150,13 +150,7 @@ func TestFSWriter_Write(t *testing.T) {
 		p []byte
 	}
 
-	basedir := t.TempDir()
-	path, err := filepath.Abs(".")
-	require.Equal(t, nil, err)
-	t.Logf("path: %s", path)
-
-	localFs, err := fileservice.NewLocalFS(defines.ETLFileServiceName, basedir, mpool.MB) // db root database.
-	require.Equal(t, nil, err)
+	fs := testutil.NewFS()
 	tests := []struct {
 		name    string
 		fields  fields
@@ -168,7 +162,7 @@ func TestFSWriter_Write(t *testing.T) {
 			name: "local_fs",
 			fields: fields{
 				ctx:      context.Background(),
-				fs:       localFs,
+				fs:       fs,
 				table:    "dummy",
 				database: "system",
 				nodeUUID: "node_uuid",

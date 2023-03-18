@@ -55,11 +55,11 @@ func Int64ToTime(xs []int64, rs []types.Time) ([]types.Time, error) {
 	return rs, nil
 }
 
-func Decimal128ToTime(xs []types.Decimal128, rs []types.Time) ([]types.Time, error) {
+func Decimal128ToTime(xs []types.Decimal128, rs []types.Time, scale int32) ([]types.Time, error) {
 	for i, s := range xs {
-		t, e := types.ParseDecimal128lToTime(s, 6)
+		t, e := types.ParseDecimal128ToTime(s, scale, 6)
 		if e != nil {
-			return rs, moerr.NewOutOfRangeNoCtx("time", "'%s'", s)
+			return rs, moerr.NewOutOfRangeNoCtx("time", "'%s'", s.Format(0))
 		}
 		rs[i] = t
 	}

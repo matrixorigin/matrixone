@@ -23,10 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, dialectType dialect.DialectType, sql string) ([]tree.Statement, error) {
+func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.Parse(ctx, sql)
+		return mysql.Parse(ctx, sql, lower)
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(ctx, sql)
 	default:
@@ -34,13 +34,28 @@ func Parse(ctx context.Context, dialectType dialect.DialectType, sql string) ([]
 	}
 }
 
-func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string) (tree.Statement, error) {
+func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) (tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.ParseOne(ctx, sql)
+		return mysql.ParseOne(ctx, sql, lower)
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(ctx, sql)
 	default:
 		return nil, moerr.NewInternalError(ctx, "type of dialect error")
 	}
+}
+
+func SplitSqlBySemicolon(sql string) []string {
+	var ret []string
+	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	lastEnd := 0
+	for scanner.Pos < len(sql) {
+		typ, _ := scanner.Scan()
+		for scanner.Pos < len(sql) && typ != ';' {
+			typ, _ = scanner.Scan()
+		}
+		ret = append(ret, sql[lastEnd:scanner.Pos-1])
+		lastEnd = scanner.Pos
+	}
+	return ret
 }

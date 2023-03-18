@@ -22,6 +22,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -102,11 +104,13 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.u = u
+	c.ctx = c.proc.Ctx
 	c.fill = fill
 	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
-	s, err := c.compileScope(ctx, pn)
+	s, err := c.compileScope(c.proc.Ctx, pn)
 	if err != nil {
 		return err
 	}
@@ -128,10 +132,11 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
-	defer func() { c.scope = nil }() // free pipeline
+	defer func() {
+		// free pipeline
+		c.scope = nil
+	}()
 
-	// XXX PrintScope has a none-trivial amount of logging
-	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -173,6 +178,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		}
 	case AlterView:
 		return c.scope.AlterView(c)
+	case AlterTable:
+		return c.scope.AlterTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
 	case CreateIndex:
@@ -233,6 +240,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 		case plan.DataDefinition_ALTER_VIEW:
 			return &Scope{
 				Magic: AlterView,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_ALTER_TABLE:
+			return &Scope{
+				Magic: AlterTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
@@ -346,13 +358,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
 
-		var err error
-		var onDuplicateKeyArg *onduplicatekey.Argument
-		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
+		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
 		}
 
 		arg, err := constructInsert(insertNode, c.e, c.proc)
@@ -364,14 +372,15 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
-			rs = c.newInsertMergeScope(arg, ss)
-			rs.Magic = MergeInsert
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
+			for _, scope := range ss {
+				scope.Instructions = append(scope.Instructions, vm.Instruction{
+					Op:  vm.PreInsert,
+					Arg: preArg,
 				})
 			}
+
+			rs = c.newInsertMergeScope(arg, preArg, ss)
+			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
@@ -384,11 +393,19 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op:  vm.OnDuplicateKey,
 					Arg: onDuplicateKeyArg,
 				})
 			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -425,8 +442,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.InitZsOne(1)
 		return bat, nil
 	}
@@ -622,8 +638,7 @@ func (c *Compile) ConstructScope() *Scope {
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
@@ -933,7 +948,6 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Arg: constructIntersectAll(n, c.proc, i, len(rs)),
 			}
 		}
-
 	}
 	return rs
 }
@@ -1022,15 +1036,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = make([]*Scope, len(ss))
-			for i := range rs {
-				rs[i] = new(Scope)
-				rs[i].Magic = Remote
-				rs[i].IsJoin = true
-				rs[i].NodeInfo = ss[i].NodeInfo
-				rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-			}
-			rs = c.newJoinScopeListWithBucket(rs, ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, int(n.Stats.BlockNum)), ss, children)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1107,7 +1113,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vec.Col.([]int64)[0], ss)
+		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
@@ -1121,7 +1127,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec2.Free(c.proc.Mp())
-		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
@@ -1301,7 +1307,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Argument, ss []*Scope) *Scope {
 	ss2 := make([]*Scope, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {
@@ -1384,6 +1390,22 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 		})
 	}
 	c.anal.isFirst = false
+	return ss
+}
+
+func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Scope {
+	var ss []*Scope
+	for _, n := range c.cnList {
+		cpunum := c.generateCPUNumber(n.Mcpu, blocks)
+		tmps := make([]*Scope, cpunum)
+		for j := range tmps {
+			tmps[j] = new(Scope)
+			tmps[j].Magic = Remote
+			tmps[j].IsJoin = true
+			tmps[j].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+		}
+		ss = append(ss, tmps...)
+	}
 	return ss
 }
 
@@ -1566,9 +1588,17 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		analInfos: anals,
 		curr:      int(qry.Steps[0]),
 	}
+	c.proc.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {
+	// record the number of s3 requests
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -1582,7 +1612,8 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount = atomic.LoadInt64(&anal.S3IOInputCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount = atomic.LoadInt64(&anal.S3IOOutputCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
 		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
@@ -1760,6 +1791,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	//return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -1772,13 +1804,13 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	for _, e := range exprs {
 		if e.Typ.Id != int32(types.T_any) {
 			typ = plan2.MakeTypeByPlan2Type(e.Typ)
-			vec = vector.New(typ)
+			vec = vector.NewVec(typ)
 			break
 		}
 	}
 	if vec == nil {
 		typ = types.T_int32.ToType()
-		vec = vector.New(typ)
+		vec = vector.NewVec(typ)
 	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
@@ -1789,50 +1821,49 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		if err != nil {
 			return nil, err
 		}
-		if tmp.IsScalarNull() {
-			vec.Append(vector.GetInitConstVal(typ), true, proc.Mp())
+		if tmp.IsConstNull() {
+			vector.AppendFixed(vec, 0, true, proc.Mp())
 			continue
 		}
 		switch typ.Oid {
 		case types.T_bool:
-			vec.Append(vector.MustTCols[bool](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[bool](tmp)[0], false, proc.Mp())
 		case types.T_int8:
-			vec.Append(vector.MustTCols[int8](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int8](tmp)[0], false, proc.Mp())
 		case types.T_int16:
-			vec.Append(vector.MustTCols[int16](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int16](tmp)[0], false, proc.Mp())
 		case types.T_int32:
-			vec.Append(vector.MustTCols[int32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int32](tmp)[0], false, proc.Mp())
 		case types.T_int64:
-			vec.Append(vector.MustTCols[int64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int64](tmp)[0], false, proc.Mp())
 		case types.T_uint8:
-			vec.Append(vector.MustTCols[uint8](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint8](tmp)[0], false, proc.Mp())
 		case types.T_uint16:
-			vec.Append(vector.MustTCols[uint16](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint16](tmp)[0], false, proc.Mp())
 		case types.T_uint32:
-			vec.Append(vector.MustTCols[uint32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint32](tmp)[0], false, proc.Mp())
 		case types.T_uint64:
-			vec.Append(vector.MustTCols[uint64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint64](tmp)[0], false, proc.Mp())
 		case types.T_float32:
-			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[float32](tmp)[0], false, proc.Mp())
 		case types.T_float64:
-			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_json,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[float64](tmp)[0], false, proc.Mp())
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+			vector.AppendBytes(vec, tmp.GetBytesAt(0), false, proc.Mp())
 		case types.T_date:
-			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Date](tmp)[0], false, proc.Mp())
 		case types.T_datetime:
-			vec.Append(vector.MustTCols[types.Datetime](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Datetime](tmp)[0], false, proc.Mp())
 		case types.T_time:
-			vec.Append(vector.MustTCols[types.Time](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Time](tmp)[0], false, proc.Mp())
 		case types.T_timestamp:
-			vec.Append(vector.MustTCols[types.Timestamp](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Timestamp](tmp)[0], false, proc.Mp())
 		case types.T_decimal64:
-			vec.Append(vector.MustTCols[types.Decimal64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal64](tmp)[0], false, proc.Mp())
 		case types.T_decimal128:
-			vec.Append(vector.MustTCols[types.Decimal128](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal128](tmp)[0], false, proc.Mp())
 		case types.T_uuid:
-			vec.Append(vector.MustTCols[types.Uuid](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}

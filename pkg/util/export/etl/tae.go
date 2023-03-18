@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -50,12 +49,11 @@ type TAEWriter struct {
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
-	filename := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	w := &TAEWriter{
 		ctx:       ctx,
 		batchSize: BatchSize,
 		mp:        mp,
-		filename:  filename,
+		filename:  filePath,
 		fs:        fs,
 		rows:      make([]*table.Row, 0, BatchSize),
 	}
@@ -65,7 +63,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, _ = blockio.NewBlockWriter(fs, filename)
+	w.writer, _ = blockio.NewBlockWriter(fs, filePath)
 	return w
 }
 
@@ -76,9 +74,10 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 		case types.T_datetime:
 			typ.Scale = 6
 		}
-		vec := vector.NewOriginal(typ)
-		vector.PreAlloc(vec, batchSize, batchSize, pool)
-		vec.SetOriginal(false)
+		vec := vector.NewVec(typ)
+		vec.PreExtend(batchSize, pool)
+		vec.SetLength(batchSize)
+		//vec.SetOriginal(false)
 		batch.Vecs[i] = vec
 	}
 	return batch
@@ -190,7 +189,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 		vec := bat.Vecs[colIdx]
 		switch id {
 		case types.T_int64:
-			cols := vector.MustTCols[int64](vec)
+			cols := vector.MustFixedCol[int64](vec)
 			switch t := field.(type) {
 			case int32:
 				cols[rowIdx] = (int64)(field.(int32))
@@ -200,7 +199,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
 			}
 		case types.T_uint64:
-			cols := vector.MustTCols[uint64](vec)
+			cols := vector.MustFixedCol[uint64](vec)
 			switch t := field.(type) {
 			case int32:
 				cols[rowIdx] = (uint64)(field.(int32))
@@ -214,7 +213,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
 			}
 		case types.T_float64:
-			cols := vector.MustTCols[float64](vec)
+			cols := vector.MustFixedCol[float64](vec)
 
 			switch t := field.(type) {
 			case float64:
@@ -253,11 +252,11 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			}
 
 		case types.T_datetime:
-			cols := vector.MustTCols[types.Datetime](vec)
+			cols := vector.MustFixedCol[types.Datetime](vec)
 			switch t := field.(type) {
 			case time.Time:
 				datetimeStr := Time2DatetimeString(field.(time.Time))
-				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
+				d, err := types.ParseDatetime(datetimeStr, vec.GetType().Scale)
 				if err != nil {
 					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
@@ -267,7 +266,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				if len(datetimeStr) == 0 {
 					cols[rowIdx] = types.Datetime(0)
 				} else {
-					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
+					d, err := types.ParseDatetime(datetimeStr, vec.GetType().Scale)
 					if err != nil {
 						return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 					}
@@ -277,7 +276,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support datetime type %v", t))
 			}
 		default:
-			return moerr.NewInternalError(ctx, "the value type %s is not support now", vec.Typ)
+			return moerr.NewInternalError(ctx, "the value type %s is not support now", *vec.GetType())
 		}
 	}
 	return nil
@@ -302,10 +301,9 @@ type TAEReader struct {
 
 func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
-	path := defines.ETLFileServiceName + fileservice.ServiceNameSeparator + filePath
 	r := &TAEReader{
 		ctx:      ctx,
-		filepath: path,
+		filepath: filePath,
 		filesize: filesize,
 		fs:       fs,
 		mp:       mp,
@@ -366,43 +364,42 @@ func (r *TAEReader) Close() {
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
-	typ := vec.Typ
+	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustTCols[int64](vec)
+		cols := vector.MustFixedCol[int64](vec)
 		return len(cols), nil
 	case types.T_uint64:
-		cols := vector.MustTCols[uint64](vec)
+		cols := vector.MustFixedCol[uint64](vec)
 		return len(cols), nil
 	case types.T_float64:
-		cols := vector.MustTCols[float64](vec)
+		cols := vector.MustFixedCol[float64](vec)
 		return len(cols), nil
-	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		cols := vector.MustTCols[types.Varlena](vec)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
-		cols := vector.MustTCols[types.Varlena](vec)
+		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_datetime:
-		cols := vector.MustTCols[types.Datetime](vec)
+		cols := vector.MustFixedCol[types.Datetime](vec)
 		return len(cols), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ)
+		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
 	}
 }
 
 func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, error) {
-	typ := vec.Typ
+	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustTCols[int64](vec)
+		cols := vector.MustFixedCol[int64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_uint64:
-		cols := vector.MustTCols[uint64](vec)
+		cols := vector.MustFixedCol[uint64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_float64:
-		cols := vector.MustTCols[float64](vec)
+		cols := vector.MustFixedCol[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
@@ -414,10 +411,10 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		bjson := types.DecodeJson(val)
 		return bjson.String(), nil
 	case types.T_datetime:
-		cols := vector.MustTCols[types.Datetime](vec)
+		cols := vector.MustFixedCol[types.Datetime](vec)
 		return Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
-		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", vec.Typ)
+		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
 	}
 }
 

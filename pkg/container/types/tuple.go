@@ -31,8 +31,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -97,9 +99,9 @@ func printTuple(tuple Tuple) string {
 		case Timestamp:
 			res += fmt.Sprintf("(timestamp: %v)", t.String())
 		case Decimal64:
-			res += fmt.Sprintf("(decimal64: %v)", t.String())
+			res += fmt.Sprintf("(decimal64: %v)", t.Format(0))
 		case Decimal128:
-			res += fmt.Sprintf("(decimal128: %v)", t.String())
+			res += fmt.Sprintf("(decimal128: %v)", t.Format(0))
 		case []byte:
 			res += fmt.Sprintf("([]byte: %v)", t)
 		case float32:
@@ -174,19 +176,19 @@ func adjustFloatBytes(b []byte, encode bool) {
 
 const PackerMemUnit = 64
 
-type packer struct {
+type Packer struct {
 	buf      []byte
 	size     int
 	capacity int
 	mp       *mpool.MPool
 }
 
-func NewPacker(mp *mpool.MPool) *packer {
+func NewPacker(mp *mpool.MPool) *Packer {
 	bytes, err := mp.Alloc(PackerMemUnit)
 	if err != nil {
 		panic(err)
 	}
-	return &packer{
+	return &Packer{
 		buf:      bytes,
 		size:     0,
 		capacity: PackerMemUnit,
@@ -194,14 +196,14 @@ func NewPacker(mp *mpool.MPool) *packer {
 	}
 }
 
-func NewPackerArray(length int, mp *mpool.MPool) []*packer {
-	packerArr := make([]*packer, length)
+func NewPackerArray(length int, mp *mpool.MPool) []*Packer {
+	packerArr := make([]*Packer, length)
 	for num := range packerArr {
 		bytes, err := mp.Alloc(PackerMemUnit)
 		if err != nil {
 			panic(err)
 		}
-		packerArr[num] = &packer{
+		packerArr[num] = &Packer{
 			buf:      bytes,
 			size:     0,
 			capacity: PackerMemUnit,
@@ -211,7 +213,7 @@ func NewPackerArray(length int, mp *mpool.MPool) []*packer {
 	return packerArr
 }
 
-func (p *packer) FreeMem() {
+func (p *Packer) FreeMem() {
 	if p.buf != nil {
 		p.mp.Free(p.buf)
 		p.size = 0
@@ -220,11 +222,11 @@ func (p *packer) FreeMem() {
 	}
 }
 
-func (p *packer) Reset() {
+func (p *Packer) Reset() {
 	p.size = 0
 }
 
-func (p *packer) putByte(b byte) {
+func (p *Packer) putByte(b byte) {
 	if p.size < p.capacity {
 		p.buf[p.size] = b
 		p.size++
@@ -236,7 +238,7 @@ func (p *packer) putByte(b byte) {
 	}
 }
 
-func (p *packer) putBytes(bs []byte) {
+func (p *Packer) putBytes(bs []byte) {
 	if p.size+len(bs) < p.capacity {
 		for _, b := range bs {
 			p.buf[p.size] = b
@@ -253,7 +255,7 @@ func (p *packer) putBytes(bs []byte) {
 	}
 }
 
-func (p *packer) putBytesNil(b []byte, i int) {
+func (p *Packer) putBytesNil(b []byte, i int) {
 	for i >= 0 {
 		p.putBytes(b[:i+1])
 		p.putByte(0xFF)
@@ -263,7 +265,7 @@ func (p *packer) putBytesNil(b []byte, i int) {
 	p.putBytes(b)
 }
 
-func (p *packer) encodeBytes(code byte, b []byte) {
+func (p *Packer) encodeBytes(code byte, b []byte) {
 	p.putByte(code)
 	if i := bytes.IndexByte(b, 0x00); i >= 0 {
 		p.putBytesNil(b, i)
@@ -273,7 +275,7 @@ func (p *packer) encodeBytes(code byte, b []byte) {
 	p.putByte(0x00)
 }
 
-func (p *packer) encodeUint(i uint64) {
+func (p *Packer) encodeUint(i uint64) {
 	if i == 0 {
 		p.putByte(intZeroCode)
 		return
@@ -288,7 +290,7 @@ func (p *packer) encodeUint(i uint64) {
 	p.putBytes(scratch[8-n:])
 }
 
-func (p *packer) encodeInt(i int64) {
+func (p *Packer) encodeInt(i int64) {
 	if i >= 0 {
 		p.encodeUint(uint64(i))
 		return
@@ -304,7 +306,7 @@ func (p *packer) encodeInt(i int64) {
 	p.putBytes(scratch[8-n:])
 }
 
-func (p *packer) encodeFloat32(f float32) {
+func (p *Packer) encodeFloat32(f float32) {
 	var scratch [4]byte
 	binary.BigEndian.PutUint32(scratch[:], math.Float32bits(f))
 	adjustFloatBytes(scratch[:], true)
@@ -313,7 +315,7 @@ func (p *packer) encodeFloat32(f float32) {
 	p.putBytes(scratch[:])
 }
 
-func (p *packer) encodeFloat64(d float64) {
+func (p *Packer) encodeFloat64(d float64) {
 	var scratch [8]byte
 	binary.BigEndian.PutUint64(scratch[:], math.Float64bits(d))
 	adjustFloatBytes(scratch[:], true)
@@ -322,55 +324,55 @@ func (p *packer) encodeFloat64(d float64) {
 	p.putBytes(scratch[:])
 }
 
-func (p *packer) EncodeInt8(e int8) {
+func (p *Packer) EncodeInt8(e int8) {
 	p.putByte(int8Code)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeInt16(e int16) {
+func (p *Packer) EncodeInt16(e int16) {
 	p.putByte(int16Code)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeInt32(e int32) {
+func (p *Packer) EncodeInt32(e int32) {
 	p.putByte(int32Code)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeInt64(e int64) {
+func (p *Packer) EncodeInt64(e int64) {
 	p.putByte(int64Code)
 	p.encodeInt(e)
 }
 
-func (p *packer) EncodeUint8(e uint8) {
+func (p *Packer) EncodeUint8(e uint8) {
 	p.putByte(uint8Code)
 	p.encodeUint(uint64(e))
 }
 
-func (p *packer) EncodeUint16(e uint16) {
+func (p *Packer) EncodeUint16(e uint16) {
 	p.putByte(uint16Code)
 	p.encodeUint(uint64(e))
 }
 
-func (p *packer) EncodeUint32(e uint32) {
+func (p *Packer) EncodeUint32(e uint32) {
 	p.putByte(uint32Code)
 	p.encodeUint(uint64(e))
 }
 
-func (p *packer) EncodeUint64(e uint64) {
+func (p *Packer) EncodeUint64(e uint64) {
 	p.putByte(uint64Code)
 	p.encodeUint(e)
 }
 
-func (p *packer) EncodeFloat32(e float32) {
+func (p *Packer) EncodeFloat32(e float32) {
 	p.encodeFloat32(e)
 }
 
-func (p *packer) EncodeFloat64(e float64) {
+func (p *Packer) EncodeFloat64(e float64) {
 	p.encodeFloat64(e)
 }
 
-func (p *packer) EncodeBool(e bool) {
+func (p *Packer) EncodeBool(e bool) {
 	if e {
 		p.putByte(trueCode)
 	} else {
@@ -378,48 +380,48 @@ func (p *packer) EncodeBool(e bool) {
 	}
 }
 
-func (p *packer) EncodeDate(e Date) {
+func (p *Packer) EncodeDate(e Date) {
 	p.putByte(dateCode)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeTime(e Time) {
+func (p *Packer) EncodeTime(e Time) {
 	p.putByte(timeCode)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeDatetime(e Datetime) {
+func (p *Packer) EncodeDatetime(e Datetime) {
 	p.putByte(datetimeCode)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeTimestamp(e Timestamp) {
+func (p *Packer) EncodeTimestamp(e Timestamp) {
 	p.putByte(timestampCode)
 	p.encodeInt(int64(e))
 }
 
-func (p *packer) EncodeDecimal64(e Decimal64) {
+func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
-	b := [8]byte(e)
+	b := *(*[8]byte)(unsafe.Pointer(&e))
 	p.encodeBytes(bytesCode, b[:])
 }
 
-func (p *packer) EncodeDecimal128(e Decimal128) {
+func (p *Packer) EncodeDecimal128(e Decimal128) {
 	p.putByte(decimal128Code)
-	b := [16]byte(e)
+	b := *(*[16]byte)(unsafe.Pointer(&e))
 	p.encodeBytes(bytesCode, b[:])
 }
 
-func (p *packer) EncodeStringType(e []byte) {
+func (p *Packer) EncodeStringType(e []byte) {
 	p.putByte(stringTypeCode)
 	p.encodeBytes(bytesCode, e)
 }
 
-func (p *packer) GetBuf() []byte {
+func (p *Packer) GetBuf() []byte {
 	return p.buf[:p.size]
 }
 
-func (p *packer) Bytes() []byte {
+func (p *Packer) Bytes() []byte {
 	ret := make([]byte, p.size)
 	copy(ret, p.buf[:p.size])
 	return ret
@@ -444,7 +446,7 @@ func findTerminator(b []byte) int {
 
 func decodeBytes(b []byte) ([]byte, int) {
 	idx := findTerminator(b[1:])
-	return bytes.Replace(b[1:idx+1], []byte{0x00, 0xFF}, []byte{0x00}, -1), idx + 2
+	return bytes.ReplaceAll(b[1:idx+1], []byte{0x00, 0xFF}, []byte{0x00}), idx + 2
 }
 
 func decodeInt(code byte, b []byte) (interface{}, int) {
@@ -629,13 +631,13 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 			dEl, off = decodeBytes(b[i+1:])
 			var bb [8]byte
 			copy(bb[:], dEl[:8])
-			el = Decimal64(bb)
+			el = *(*Decimal64)(unsafe.Pointer(&bb))
 			off += 1
 		case b[i] == decimal128Code:
 			dEl, off = decodeBytes(b[i+1:])
 			var bb [16]byte
 			copy(bb[:], dEl[:16])
-			el = Decimal128(bb)
+			el = *(*Decimal128)(unsafe.Pointer(&bb))
 			off += 1
 		case b[i] == stringTypeCode:
 			el, off = decodeBytes(b[i+1:])

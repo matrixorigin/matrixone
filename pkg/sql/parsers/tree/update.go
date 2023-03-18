@@ -198,15 +198,6 @@ type Load struct {
 	Param *ExternParam
 }
 
-type Import struct {
-	statementImpl
-	Local             bool
-	DuplicateHandling DuplicateKey
-	Table             *TableName
-	//Partition
-	Param *ExternParam
-}
-
 func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString("load data")
 	if node.Local {
@@ -231,9 +222,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 			case "region":
 				ctx.WriteString("'region'='" + node.Param.Option[i+1] + "'")
 			case "access_key_id":
-				ctx.WriteString("'access_key_id'='" + node.Param.Option[i+1] + "'")
+				ctx.WriteString("'access_key_id'='******'")
 			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='" + node.Param.Option[i+1] + "'")
+				ctx.WriteString("'secret_access_key'='******'")
 			case "bucket":
 				ctx.WriteString("'bucket'='" + node.Param.Option[i+1] + "'")
 			case "filepath":
@@ -244,6 +235,10 @@ func (node *Load) Format(ctx *FmtCtx) {
 				ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
 			case "jsondata":
 				ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
+			case "role_arn":
+				ctx.WriteString("'role_arn'='" + node.Param.Option[i+1] + "'")
+			case "external_id":
+				ctx.WriteString("'external_id'='" + node.Param.Option[i+1] + "'")
 			}
 			if i != len(node.Param.Option)-2 {
 				ctx.WriteString(", ")
@@ -301,64 +296,6 @@ func (node *Load) Format(ctx *FmtCtx) {
 
 func (node *Load) GetStatementType() string { return "Load" }
 func (node *Load) GetQueryType() string     { return QueryTypeDML }
-
-func (node *Import) Format(ctx *FmtCtx) {
-	ctx.WriteString("import data")
-	if node.Local {
-		ctx.WriteString(" local")
-	}
-
-	if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
-		ctx.WriteString(" infile ")
-		ctx.WriteString(node.Param.Filepath)
-	} else {
-		ctx.WriteString(" infile ")
-		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
-	}
-
-	switch node.DuplicateHandling.(type) {
-	case *DuplicateKeyError:
-		break
-	case *DuplicateKeyIgnore:
-		ctx.WriteString(" ignore")
-	case *DuplicateKeyReplace:
-		ctx.WriteString(" replace")
-	}
-	ctx.WriteString(" into table ")
-	node.Table.Format(ctx)
-
-	if node.Param.Tail.Fields != nil {
-		ctx.WriteByte(' ')
-		node.Param.Tail.Fields.Format(ctx)
-	}
-
-	if node.Param.Tail.Lines != nil {
-		ctx.WriteByte(' ')
-		node.Param.Tail.Lines.Format(ctx)
-	}
-
-	if node.Param.Tail.IgnoredLines != 0 {
-		ctx.WriteString(" ignore ")
-		ctx.WriteString(strconv.FormatUint(node.Param.Tail.IgnoredLines, 10))
-		ctx.WriteString(" lines")
-	}
-	if node.Param.Tail.ColumnList != nil {
-		prefix := " ("
-		for _, c := range node.Param.Tail.ColumnList {
-			ctx.WriteString(prefix)
-			c.Format(ctx)
-			prefix = ", "
-		}
-		ctx.WriteByte(')')
-	}
-	if node.Param.Tail.Assignments != nil {
-		ctx.WriteString(" set ")
-		node.Param.Tail.Assignments.Format(ctx)
-	}
-}
-
-func (node *Import) GetStatementType() string { return "Import" }
-func (node *Import) GetQueryType() string     { return QueryTypeDML }
 
 type DuplicateKey interface{}
 

@@ -20,183 +20,159 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Hour()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range inputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Hour()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range ivals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Hour())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	convertedInputValues := make([]types.Datetime, len(inputValues))
-	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+func TimestampToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
+	dtvals := make([]types.Datetime, len(ivals))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Hour()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range convertedInputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Hour()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range dtvals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Hour())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
+func DatetimeToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Minute()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range inputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Minute()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range ivals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Minute())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	convertedInputValues := make([]types.Datetime, len(inputValues))
-	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+func TimestampToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
+	dtvals := make([]types.Datetime, len(ivals))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Minute()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range convertedInputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Minute()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range dtvals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Minute())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Sec()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range inputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Sec()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range ivals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Sec())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	convertedInputValues := make([]types.Datetime, len(inputValues))
-	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+func TimestampToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
+	dtvals := make([]types.Datetime, len(ivals))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
 	}
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Sec()), proc.Mp())
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i, v := range convertedInputValues {
-			if inputVector.GetNulls().Contains(uint64(i)) {
-				resultVector.GetNulls().Set(uint64(i))
-				if err := resultVector.Append(uint8(0), true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := resultVector.Append(uint8(v.Sec()), false, proc.Mp()); err != nil {
-				return nil, err
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rs := vector.MustFixedCol[uint8](rvec)
+		for i, v := range dtvals {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rs[i] = uint8(v.Sec())
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }

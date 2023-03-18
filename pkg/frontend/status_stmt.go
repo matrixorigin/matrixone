@@ -76,7 +76,12 @@ type UseExecutor struct {
 }
 
 func (ue *UseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doUse(ctx, ses, ue.u.Name)
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	ue.u.Name.SetConfig(v.(int64))
+	return doUse(ctx, ses, ue.u.Name.Compare())
 }
 
 type DropDatabaseExecutor struct {
@@ -400,6 +405,11 @@ type AlterViewExecutor struct {
 type DropViewExecutor struct {
 	*statusStmtExecutor
 	dv *tree.DropView
+}
+
+type AlterTableExecutor struct {
+	*statusStmtExecutor
+	at *tree.AlterTable
 }
 
 type InsertExecutor struct {

@@ -38,12 +38,12 @@ const (
 )
 
 var (
-	// responseBufferSize is the size of buffer channel.
+	// responseBufferSize is the buffer channel capacity for every morpc stream.
 	// We couldn't set this size to an unlimited value,
 	// because channel's memory is allocated according to the specified size.
-	// NOTE: we afford 1GiB heap memory for this buffer channel's own.
+	// NOTE: we afford 1MiB heap memory for every morpc stream.
 	// but items within the channel would consume extra heap memory.
-	responseBufferSize = 1024 * 1024 * 1024 / int(unsafe.Sizeof(message{}))
+	responseBufferSize = 1024 * 1024 / int(unsafe.Sizeof(message{}))
 )
 
 // SessionManager manages all client sessions.
@@ -204,10 +204,11 @@ func NewSession(
 		tables:      make(map[TableID]TableState),
 	}
 
+	ss.logger.Info("initialize new session for morpc stream")
+
 	sender := func() {
 		defer ss.wg.Done()
 
-		sizeMarker := 0
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
@@ -220,25 +221,25 @@ func NewSession(
 					return
 				}
 
-				// FIXME: update with metrics
-				// log real buffer size every 1024*1024 change
-				stride := 1024 * 1024
-				realSize := len(ss.sendChan)
-				if (realSize-sizeMarker) == stride || (realSize-sizeMarker) == -stride {
-					sizeMarker = realSize
-					ss.logger.Info("logtail response waiting to be sent", zap.Int("size", realSize))
-				}
-
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
 
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
-					return ss.stream.write(ctx, msg.response)
+
+					err := ss.stream.write(ctx, msg.response)
+					if err != nil {
+						ss.logger.Error("fail to send logtail response",
+							zap.Error(err),
+							zap.String("timeout", msg.timeout.String()),
+							zap.String("response", msg.response.String()),
+						)
+						return err
+					}
+					return nil
 				}
 
 				if err := sendFunc(); err != nil {
-					ss.logger.Error("fail to send logtail response", zap.Error(err))
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
@@ -254,6 +255,13 @@ func NewSession(
 
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
+	ss.logger.Info("clean session for morpc stream")
+
+	// close morpc stream, maybe verbose
+	if err := ss.stream.Close(); err != nil {
+		ss.logger.Error("fail to close morpc client session", zap.Error(err))
+	}
+
 	ss.cancelFunc()
 	ss.wg.Wait()
 }
@@ -308,12 +316,17 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	for _, t := range tails {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
+		} else {
+			ss.logger.Info("table not subscribed, filter out",
+				zap.String("id", string(t.id)),
+				zap.String("checkpoint", t.tail.CkpLocation),
+			)
 		}
 	}
 	return qualified
 }
 
-// Publish publishes additional logtail.
+// Publish publishes incremental logtail.
 func (ss *Session) Publish(
 	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
 ) error {
@@ -341,7 +354,7 @@ func (ss *Session) AdvanceState(id TableID) {
 func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
-	ss.logger.Debug("send error response", zap.Any("table", table), zap.Uint16("code", code), zap.String("message", message))
+	ss.logger.Warn("send error response", zap.Any("table", table), zap.Uint16("code", code), zap.String("message", message))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
@@ -352,7 +365,7 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
-	ss.logger.Debug("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
@@ -363,7 +376,7 @@ func (ss *Session) SendSubscriptionResponse(
 func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
-	ss.logger.Debug("send unsubscription response", zap.Any("table", table))
+	ss.logger.Info("send unsubscription response", zap.Any("table", table))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
@@ -374,7 +387,7 @@ func (ss *Session) SendUnsubscriptionResponse(
 func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
-	ss.logger.Debug("send additional logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
+	ss.logger.Debug("send incremental logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, to, tails...)
@@ -402,7 +415,10 @@ func (ss *Session) SendResponse(
 
 	select {
 	case <-time.After(ss.poisionTime):
-		ss.logger.Error("poision morpc client session detected, close it")
+		ss.logger.Error("poision morpc client session detected, close it",
+			zap.Int("buffer-capacity", cap(ss.sendChan)),
+			zap.Int("buffer-length", len(ss.sendChan)),
+		)
 		ss.responses.Release(response)
 		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
@@ -414,7 +430,6 @@ func (ss *Session) SendResponse(
 }
 
 // newUnsubscriptionResponse constructs response for unsubscription.
-// go:inline
 func newUnsubscriptionResponse(
 	table api.TableID,
 ) *logtail.LogtailResponse_UnsubscribeResponse {
@@ -426,7 +441,6 @@ func newUnsubscriptionResponse(
 }
 
 // newUpdateResponse constructs response for publishment.
-// go:inline
 func newUpdateResponse(
 	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) *logtail.LogtailResponse_UpdateResponse {
@@ -440,7 +454,6 @@ func newUpdateResponse(
 }
 
 // newSubscritpionResponse constructs response for subscription.
-// go:inline
 func newSubscritpionResponse(
 	tail logtail.TableLogtail,
 ) *logtail.LogtailResponse_SubscribeResponse {
@@ -452,7 +465,6 @@ func newSubscritpionResponse(
 }
 
 // newErrorResponse constructs response for error condition.
-// go:inline
 func newErrorResponse(
 	table api.TableID, code uint16, message string,
 ) *logtail.LogtailResponse_Error {

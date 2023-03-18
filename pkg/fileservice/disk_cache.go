@@ -22,9 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 //TODO LRU
@@ -32,21 +31,25 @@ import (
 //TODO full data. If we know the size and it's small, we can get the whole object in one request and save it to a file named full_data
 
 type DiskCache struct {
-	capacity   int64
-	path       string
-	stats      *CacheStats
-	fileExists sync.Map
+	capacity        int64
+	path            string
+	fileExists      sync.Map
+	perfCounterSets []*perfcounter.CounterSet
 }
 
-func NewDiskCache(path string, capacity int64) (*DiskCache, error) {
+func NewDiskCache(
+	path string,
+	capacity int64,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*DiskCache, error) {
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
 	}
 	return &DiskCache{
-		capacity: capacity,
-		path:     path,
-		stats:    new(CacheStats),
+		capacity:        capacity,
+		path:            path,
+		perfCounterSets: perfCounterSets,
 	}, nil
 }
 
@@ -58,15 +61,18 @@ func (d *DiskCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "DiskCache.Read")
-	defer span.End()
+	if vector.NoCache {
+		return nil
+	}
 
-	numHit := 0
+	var numHit, numRead int64
 	defer func() {
-		if d.stats != nil {
-			atomic.AddInt64(&d.stats.NumRead, int64(len(vector.Entries)))
-			atomic.AddInt64(&d.stats.NumHit, int64(numHit))
-		}
+		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.DiskRead.Add(numRead)
+			c.Cache.DiskHit.Add(numHit)
+		}, d.perfCounterSets...)
 	}()
 
 	for i, entry := range vector.Entries {
@@ -77,6 +83,8 @@ func (d *DiskCache) Read(
 			// ignore size unknown entry
 			continue
 		}
+
+		numRead++
 
 		linkPath := d.entryLinkPath(vector, entry)
 		file, err := os.Open(linkPath)
@@ -130,6 +138,9 @@ func (d *DiskCache) Update(
 ) (
 	err error,
 ) {
+	if vector.NoCache {
+		return nil
+	}
 
 	for _, entry := range vector.Entries {
 		if len(entry.Data) == 0 {
@@ -190,10 +201,6 @@ func (d *DiskCache) Update(
 
 func (d *DiskCache) Flush() {
 	//TODO
-}
-
-func (d *DiskCache) CacheStats() *CacheStats {
-	return d.stats
 }
 
 func (d *DiskCache) entryLinkPath(vector *IOVector, entry IOEntry) string {

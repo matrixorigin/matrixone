@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -56,11 +57,10 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 
 func (rel *txnRelation) AddBlksWithMetaLoc(
 	ctx context.Context,
-	pkVecs []containers.Vector,
-	file string,
+	zm []dataio.Index,
 	metaLocs []string,
-	flag int32) error {
-	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
+) error {
+	return rel.handle.AddBlksWithMetaLoc(zm, metaLocs)
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
@@ -79,8 +79,8 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
-	if data.Typ.Oid == types.T_any {
-		data.Typ = schema.ColDefs[idx].Type
+	if data.GetType().Oid == types.T_any {
+		data.SetType(schema.ColDefs[idx].Type)
 	}
 	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()

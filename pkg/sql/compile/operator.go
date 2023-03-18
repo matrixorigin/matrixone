@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -58,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -370,25 +372,19 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			Ts: t.Ts,
-			// TargetTable:          t.TargetTable,
-			// TargetColDefs:        t.TargetColDefs,
-			Affected: t.Affected,
-			Engine:   t.Engine,
-			// DB:                   t.DB,
-			// TableID:              t.TableID,
-			// CPkeyColDef:          t.CPkeyColDef,
-			// DBName:               t.DBName,
-			// TableName:            t.TableName,
-			// UniqueIndexTables:    t.UniqueIndexTables,
-			// UniqueIndexDef:       t.UniqueIndexDef,
-			// SecondaryIndexTables: t.SecondaryIndexTables,
-			// SecondaryIndexDef:    t.SecondaryIndexDef,
-			// ClusterTable:         t.ClusterTable,
-			// ClusterByDef:         t.ClusterByDef,
+			Affected:  t.Affected,
+			Engine:    t.Engine,
 			IsRemote:  t.IsRemote,
 			InsertCtx: t.InsertCtx,
-			// HasAutoCol:           t.HasAutoCol,
+		}
+	case vm.PreInsert:
+		t := sourceIns.Arg.(*preinsert.Argument)
+		res.Arg = &preinsert.Argument{
+			Ctx:        t.Ctx,
+			Eg:         t.Eg,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			ParentIdx:  t.ParentIdx,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -501,6 +497,32 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		Source:          originRel,
 		UniqueSource:    indexRels,
+
+		IdxIdx: oldCtx.IdxIdx,
+	}, nil
+}
+
+func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+	insertCtx := n.InsertCtx
+	schemaName := insertCtx.Ref.SchemaName
+	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+
+	if insertCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+			schemaName = defines.TEMPORARY_DBNAME
+		}
+	}
+
+	return &preinsert.Argument{
+		Ctx:        proc.Ctx,
+		Eg:         eg,
+		SchemaName: schemaName,
+		TableDef:   insertCtx.TableDef,
+		ParentIdx:  insertCtx.ParentIdx,
 	}, nil
 }
 
@@ -514,8 +536,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
 
-		ParentIdx:    oldCtx.ParentIdx,
-		ClusterTable: oldCtx.ClusterTable,
+		ParentIdx: oldCtx.ParentIdx,
 	}
 
 	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
@@ -839,7 +860,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 	defer vec.Free(proc.Mp())
 	return &limit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -855,7 +876,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			if len(f.F.Args) > 1 {
 				// vec is separator
 				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
-				sepa := vec.GetString(0)
+				sepa := vec.GetStringAt(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
 					GroupExpr: f.F.Args[:len(f.F.Args)-1],
@@ -933,9 +954,9 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 	return arg
 }
 
-// ShuffleJoinDispatch is a cross-cn dispath
-// and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+// This function do not setting funcId.
+// PLEASE SETTING FuncId AFTER YOU CALL IT.
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
 
 	scopeLen := len(ss)
@@ -971,7 +992,13 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 			})
 		}
 	}
+	return hasRemote, arg
+}
 
+// ShuffleJoinDispatch is a cross-cn dispath
+// and it will send same batch to all register
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, proc)
 	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
@@ -1001,7 +1028,7 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 	}
 	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
-		Offset: uint64(vec.Col.([]int64)[0]),
+		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -1012,7 +1039,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	}
 	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -1321,7 +1348,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		}
 		relation, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
-			isTemp = false
+			isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
 		} else {
 			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {

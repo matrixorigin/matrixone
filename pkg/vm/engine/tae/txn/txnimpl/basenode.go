@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"io"
 )
 
 const (
@@ -51,10 +51,10 @@ type InsertNode interface {
 	IsRowDeleted(row uint32) bool
 	IsPersisted() bool
 	PrintDeletes() string
-	GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error)
-	GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error)
-	FillBlockView(view *model.BlockView, buffers []*bytes.Buffer, colIdxes []int) (err error)
-	FillColumnView(*model.ColumnView, *bytes.Buffer) error
+	GetColumnDataByIds([]int) (*model.BlockView, error)
+	GetColumnDataById(int) (*model.ColumnView, error)
+	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
+	FillColumnView(*model.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
@@ -360,4 +360,15 @@ func (n *baseNode) TryUpgrade() (err error) {
 		n.storage.pnode.Ref()
 	}
 	return
+}
+
+func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
+	def := n.meta.GetSchema().ColDefs[colIdx]
+	location := n.meta.GetMetaLoc()
+	return tables.LoadPersistedColumnData(
+		n.bufMgr,
+		n.fs,
+		n.meta.AsCommonID(),
+		def,
+		location)
 }

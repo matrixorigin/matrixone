@@ -261,19 +261,21 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					case <-cs.ctx.Done():
 						responses = nil
 						return
-					case resp := <-cs.c:
-						responses = append(responses, resp)
+					case resp, ok := <-cs.c:
+						if ok {
+							responses = append(responses, resp)
+						}
 					}
 				} else {
 					select {
 					case <-ctx.Done():
-						responses = nil
 						return
 					case <-cs.ctx.Done():
-						responses = nil
 						return
-					case resp := <-cs.c:
-						responses = append(responses, resp)
+					case resp, ok := <-cs.c:
+						if ok {
+							responses = append(responses, resp)
+						}
 					default:
 						return
 					}
@@ -342,7 +344,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 								fields = append(fields, zap.Error(err))
 							}
 							for _, f := range responses {
-								if !s.options.filter(f.send.Message) {
+								if s.options.filter(f.send.Message) {
 									id := f.getSendMessageID()
 									s.logger.Error("write response failed",
 										zap.Uint64("request-id", id),
@@ -449,13 +451,25 @@ func (cs *clientSession) Close() error {
 		return nil
 	}
 	close(cs.closedC)
-	close(cs.c)
+	cs.cleanSend()
 	cs.mu.closed = true
 	for _, c := range cs.mu.caches {
 		c.cache.Close()
 	}
 	cs.mu.caches = nil
 	return cs.conn.Close()
+}
+
+func (cs *clientSession) cleanSend() {
+	for {
+		select {
+		case f := <-cs.c:
+			f.messageSended(backendClosed)
+		default:
+			close(cs.c)
+			return
+		}
+	}
 }
 
 func (cs *clientSession) Write(

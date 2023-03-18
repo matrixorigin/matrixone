@@ -70,8 +70,8 @@ func absSigned[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 
 func absDecimal128(xs []types.Decimal128, rs []types.Decimal128) []types.Decimal128 {
 	for i := range xs {
-		if xs[i].Lt(types.Decimal128_FromInt32(0)) {
-			rs[i] = types.NegDecimal128(xs[i])
+		if xs[i].Sign() {
+			rs[i] = xs[i].Minus()
 		} else {
 			rs[i] = xs[i]
 		}

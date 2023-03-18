@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"hash/fnv"
 	"math"
 	"net"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -150,9 +152,14 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) createFileService(defaultName string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+
+	if perfCounterSet.FileServices == nil {
+		perfCounterSet.FileServices = make(map[string]*perfcounter.CounterSet)
+	}
+
 	for _, config := range c.FileServices {
 
 		// for old config compatibility
@@ -160,11 +167,29 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			config.Name = defines.SharedFileServiceName
 		}
 
-		service, err := fileservice.NewFileService(config)
+		counterSet := new(perfcounter.CounterSet)
+		service, err := fileservice.NewFileService(
+			config,
+			[]*perfcounter.CounterSet{
+				counterSet,
+				perfCounterSet,
+			},
+		)
 		if err != nil {
 			return nil, err
 		}
+		counterSetName := strings.Join([]string{
+			serviceType.String(),
+			nodeUUID,
+			service.Name(),
+		}, " ")
+		perfCounterSet.FileServices[counterSetName] = counterSet
 		services = append(services, service)
+
+		// Create "Log Exporter" for this PerfCounter
+		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)
+		// Register this PerfCounter's "Log Exporter" to global stats registry.
+		stats.Register(counterSetName, stats.WithLogExporter(counterLogExporter))
 	}
 
 	// create FileServices

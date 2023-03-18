@@ -19,10 +19,10 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// shuffle the ctr.bat
 	if ctr.bat != nil {
 		for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-			vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+			ctr.bat.Vecs[i].Free(proc.Mp())
 		}
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 		ctr.bat.ExpandNulls()
@@ -129,7 +129,8 @@ func receiveBatch(proc *process.Process, ctr *container) (*batch.Batch, bool, er
 	}
 	chosen, value, ok := reflect.Select(ctr.receiverListener)
 	if !ok {
-		return nil, false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+		logutil.Errorf("pipeline closed unexpectedly")
+		return nil, true, nil
 	}
 	pointer := value.UnsafePointer()
 	bat := (*batch.Batch)(pointer)
@@ -180,7 +181,7 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 			} else {
 				nullsLast = desc
 			}
-			ctr.cmps[i] = compare.New(bat2.Vecs[ctr.poses[i]].Typ, desc, nullsLast)
+			ctr.cmps[i] = compare.New(*bat2.Vecs[ctr.poses[i]].GetType(), desc, nullsLast)
 		}
 	}
 

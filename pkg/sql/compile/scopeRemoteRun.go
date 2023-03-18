@@ -21,14 +21,17 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -86,8 +89,14 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
+
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -151,9 +160,17 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
+		defer func() {
+			// record the number of s3 requests
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil
-
 	default:
 		return moerr.NewInternalError(receiver.ctx, "unknown message type")
 	}
@@ -189,7 +206,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
@@ -576,6 +593,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -584,6 +602,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
+		}
+	case *preinsert.Argument:
+		in.PreInsert = &pipeline.PreInsert{
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			ParentIdxPreInsert: t.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -655,6 +679,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
+	case *right.Argument:
+		rels, poses := getRelColList(t.Result)
+		in.RightJoin = &pipeline.RightJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			RelList:    rels,
+			ColList:    poses,
+			Expr:       t.Cond,
+			LeftTypes:  convertToPlanTypes(t.Left_typs),
+			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
 	case *limit.Argument:
 		in.Limit = t.Limit
 	case *loopanti.Argument:
@@ -692,6 +729,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
+		}
+	case *loopmark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
+			Result: t.Result,
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -839,6 +882,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				ClusterTable: t.ClusterTable,
 			},
 		}
+	case vm.PreInsert:
+		t := opr.GetPreInsert()
+		v.Arg = &preinsert.Argument{
+			SchemaName: t.GetSchemaName(),
+			TableDef:   t.GetTableDef(),
+			ParentIdx:  t.GetParentIdxPreInsert(),
+		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
@@ -915,7 +965,17 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
-
+	case vm.Right:
+		t := opr.GetRightJoin()
+		v.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Left_typs:  convertToTypes(t.LeftTypes),
+			Right_typs: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
@@ -1118,7 +1178,8 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
 		target.analInfos[i].DiskIO += n.DiskIO
 		target.analInfos[i].S3IOByte += n.S3IOByte
-		target.analInfos[i].S3IOCount += n.S3IOCount
+		target.analInfos[i].S3IOInputCount += n.S3IOInputCount
+		target.analInfos[i].S3IOOutputCount += n.S3IOOutputCount
 		target.analInfos[i].NetworkIO += n.NetworkIO
 		target.analInfos[i].ScanTime += n.ScanTime
 		target.analInfos[i].InsertTime += n.InsertTime
@@ -1251,7 +1312,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		WaitTimeConsumed: info.WaitTimeConsumed,
 		DiskIO:           info.DiskIO,
 		S3IOByte:         info.S3IOByte,
-		S3IOCount:        info.S3IOCount,
+		S3IOInputCount:   info.S3IOInputCount,
+		S3IOOutputCount:  info.S3IOOutputCount,
 		NetworkIO:        info.NetworkIO,
 		ScanTime:         info.ScanTime,
 		InsertTime:       info.InsertTime,
@@ -1265,7 +1327,7 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)

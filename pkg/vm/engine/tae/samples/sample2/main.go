@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"runtime/pprof"
 	"sync"
@@ -114,7 +113,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		var buffer bytes.Buffer
 		segIt := rel.MakeSegmentIt()
 		for segIt.Valid() {
 			seg := segIt.GetSegment()
@@ -123,8 +121,7 @@ func main() {
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
-				buffer.Reset()
-				view, err := blk.GetColumnDataById(0, &buffer)
+				view, err := blk.GetColumnDataById(0)
 				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)

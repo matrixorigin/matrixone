@@ -17,21 +17,18 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-)
-
-var (
-	// ErrDeadlockDetectorClosed deadlock detector is closed
-	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 type detector struct {
-	c                 chan []byte
-	waitTxnsFetchFunc func([]byte, *waiters) bool
-	waitTxnAbortFunc  func([]byte)
+	serviceID         string
+	c                 chan pb.WaitTxn
+	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
+	waitTxnAbortFunc  func(pb.WaitTxn)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
 	mu                struct {
@@ -44,13 +41,17 @@ type detector struct {
 // for the given txn. Then the detector will recursively check all txns's waiting txns until deadlock
 // is found. When a deadlock is found, waitTxnAbortFunc is used to notify the external abort to drop a
 // txn.
-func newDeadlockDetector(waitTxnsFetchFunc func([]byte, *waiters) bool,
-	waitTxnAbortFunc func([]byte)) *detector {
+func newDeadlockDetector(
+	serviceID string,
+	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
+	waitTxnAbortFunc func(pb.WaitTxn)) *detector {
 	d := &detector{
-		c:                 make(chan []byte, 1024),
+		serviceID:         serviceID,
+		c:                 make(chan pb.WaitTxn, 1024),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
-		stopper:           stopper.NewStopper("deadlock-detector"),
+		stopper: stopper.NewStopper("deadlock-detector",
+			stopper.WithLogger(getLogger().RawLogger())),
 	}
 	err := d.stopper.RunTask(d.doCheck)
 	if err != nil {
@@ -72,56 +73,69 @@ func (d *detector) txnClosed(txnID []byte) {
 	d.ignoreTxns.Delete(v)
 }
 
-func (d *detector) check(txnID []byte) error {
+func (d *detector) check(txn pb.WaitTxn) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if d.mu.closed {
 		return ErrDeadlockDetectorClosed
 	}
 
-	d.c <- txnID
+	d.c <- txn
 	return nil
 }
 
 func (d *detector) doCheck(ctx context.Context) {
-	w := &waiters{ignoreTxns: &d.ignoreTxns}
+	defer getLogger().InfoAction(
+		"dead lock checker",
+		serviceIDField(d.serviceID))()
+
+	w := &waiters{ignoreTxns: &d.ignoreTxns, serviceID: d.serviceID}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case txnID := <-d.c:
-			w.reset(txnID)
-			v := string(txnID)
-			if !d.checkDeadlock(w) {
+		case txn := <-d.c:
+			w.reset(txn)
+			v := string(txn.TxnID)
+			hasDeadlock, err := d.checkDeadlock(w)
+			if hasDeadlock || err != nil {
 				d.ignoreTxns.Store(v, struct{}{})
-				d.waitTxnAbortFunc(txnID)
+				d.waitTxnAbortFunc(txn)
 			}
 		}
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) bool {
+func (d *detector) checkDeadlock(w *waiters) (bool, error) {
+	waitingTxn := w.getCheckTargetTxn()
 	for {
 		if w.completed() {
-			return true
+			return false, nil
 		}
 
 		// find deadlock
-		txnID := w.getCheckTargetTxn()
-		if !d.waitTxnsFetchFunc(txnID, w) {
-			return false
+		txn := w.getCheckTargetTxn()
+		added, err := d.waitTxnsFetchFunc(txn, w)
+		if err != nil {
+			logCheckDeadLockFailed(d.serviceID, txn, waitingTxn, err)
+			return false, err
+		}
+		if !added {
+			logDeadLockFound(d.serviceID, waitingTxn, w)
+			return true, nil
 		}
 		w.next()
 	}
 }
 
 type waiters struct {
+	serviceID  string
 	ignoreTxns *sync.Map
-	waitTxns   [][]byte
+	waitTxns   []pb.WaitTxn
 	pos        int
 }
 
-func (w *waiters) getCheckTargetTxn() []byte {
+func (w *waiters) getCheckTargetTxn() pb.WaitTxn {
 	return w.waitTxns[w.pos]
 }
 
@@ -129,22 +143,29 @@ func (w *waiters) next() {
 	w.pos++
 }
 
-func (w *waiters) add(txnID []byte) bool {
-	if bytes.Equal(w.waitTxns[0], txnID) {
-		return false
+func (w *waiters) String() string {
+	return fmt.Sprintf("%p", w)
+}
+
+func (w *waiters) add(txn pb.WaitTxn) bool {
+	for i := 0; i < w.pos; i++ {
+		if bytes.Equal(w.waitTxns[i].TxnID, txn.TxnID) {
+			w.waitTxns = append(w.waitTxns, txn)
+			return false
+		}
 	}
-	v := unsafeByteSliceToString(txnID)
+	v := unsafeByteSliceToString(txn.TxnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {
 		return true
 	}
-	w.waitTxns = append(w.waitTxns, txnID)
+	w.waitTxns = append(w.waitTxns, txn)
 	return true
 }
 
-func (w *waiters) reset(txnID []byte) {
+func (w *waiters) reset(txn pb.WaitTxn) {
 	w.pos = 0
 	w.waitTxns = w.waitTxns[:0]
-	w.waitTxns = append(w.waitTxns, txnID)
+	w.waitTxns = append(w.waitTxns, txn)
 }
 
 func (w *waiters) completed() bool {
