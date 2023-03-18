@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"strings"
@@ -111,6 +112,18 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
+		if p.tblCmsWant {
+			str := ""
+			if len(p.inserts) > 0 {
+				for _, b := range p.inserts {
+					str += b.String()
+					str += "\n\t"
+					str += fmt.Sprintf("%v\n", b)
+				}
+			}
+			logutil.Infof("partition reader, len(insert) is %d, and %s", len(p.inserts), str)
+		}
+
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc {
 			var err error
 			//var ivec *fileservice.IOVector
