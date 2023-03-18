@@ -72,20 +72,24 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	if th.txnCtx == nil {
 		th.txnCtx, th.txnCtxCancel = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
-		account := th.ses.GetTenantInfo()
-		if account == nil {
-			account = getDefaultAccount()
-		}
-		th.txnCtx = context.WithValue(th.txnCtx, defines.TenantIDKey{}, account.GetTenantID())
-		th.txnCtx = context.WithValue(th.txnCtx, defines.UserIDKey{}, account.GetUserID())
-		th.txnCtx = context.WithValue(th.txnCtx, defines.RoleIDKey{}, account.GetDefaultRoleID())
-
-		storage, ok := th.ses.GetRequestContext().Value(defines.TemporaryDN{}).(*memorystorage.Storage)
-		if ok {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryDN{}, storage)
-		}
 	}
-	return th.txnCtx
+
+	reqCtx := th.ses.GetRequestContext()
+	retTxnCtx := th.txnCtx
+	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
+	}
+	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey{}, v)
+	}
+	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
+	}
+
+	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
+	}
+	return retTxnCtx
 }
 
 func (th *TxnHandler) AttachTempStorageToTxnCtx() {
@@ -169,7 +173,6 @@ func (th *TxnHandler) NewTxn() error {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
-	logDebugf("TxnHandler => NewTxn", "%v", txnCtx)
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, th.GetTxnOperator())
 	return err
@@ -248,7 +251,6 @@ func (th *TxnHandler) CommitTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 	}()
-	logDebugf("TxnHandler => CommitTxn", "%v", ctx2)
 	if err = storage.Commit(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ResetTxnCtx()
@@ -315,7 +317,6 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 	}()
-	logDebugf("TxnHandler => RollbackTxn", "%v", ctx2)
 	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		th.SetTxnOperatorInvalid()
 		th.ResetTxnCtx()
