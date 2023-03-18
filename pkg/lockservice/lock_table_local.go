@@ -63,7 +63,7 @@ func (l *localLockTable) lock(
 	var w *waiter
 	var err error
 	var idx int
-	var result pb.Result
+	result := pb.Result{LockedOn: l.bind}
 	logLocalLock(l.bind.ServiceID, txn, table, rows, opts)
 	for {
 		idx, w, err = l.doAcquireLock(
@@ -83,22 +83,23 @@ func (l *localLockTable) lock(
 			return result, nil
 		}
 
-		// TODO(fagongzi): committed or rollback? get committed timestamp
-		err = w.wait(ctx, l.bind.ServiceID)
+		v := w.wait(ctx, l.bind.ServiceID)
 		logLocalLockWaitOnResult(l.bind.ServiceID, txn, table, rows[idx], opts, w, err)
-		if err != nil {
-			w.close(l.bind.ServiceID, err)
-			return result, err
+		if v.err != nil {
+			w.close(l.bind.ServiceID, v)
+			return result, v.err
 		}
 		w.resetWait(l.bind.ServiceID)
 		offset = idx
+		result.AfterWait = true
+		result.CommitTS = v.ts
 	}
 }
 
 func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
-	committedTimestamp timestamp.Timestamp) {
+	commitTS timestamp.Timestamp) {
 	logUnlockTableOnLocal(
 		l.bind.ServiceID,
 		txn,
@@ -117,7 +118,7 @@ func (l *localLockTable) unlock(
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
 				lock.waiter.clearAllNotify(l.bind.ServiceID, "unlock")
-				next := lock.waiter.close(l.bind.ServiceID, nil)
+				next := lock.waiter.close(l.bind.ServiceID, notifyValue{ts: commitTS})
 				logUnlockTableKeyOnLocal(l.bind.ServiceID, txn, l.bind, key, lock, next)
 			}
 			l.mu.store.Delete(key)
@@ -154,8 +155,8 @@ func (l *localLockTable) close() {
 			// if there are waiters in the current lock, just notify
 			// the head, and the subsequent waiters will be notified
 			// by the previous waiter.
-			if w = w.close(l.bind.ServiceID, ErrLockTableNotFound); w != nil {
-				w.notify(l.bind.ServiceID, ErrLockTableNotFound)
+			if w = w.close(l.bind.ServiceID, notifyValue{err: ErrLockTableNotFound}); w != nil {
+				w.notify(l.bind.ServiceID, notifyValue{err: ErrLockTableNotFound})
 			}
 		}
 		return true

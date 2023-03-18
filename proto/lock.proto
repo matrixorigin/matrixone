@@ -124,7 +124,7 @@ message LockRequest {
 
 // LockResponse lock response
 message LockResponse {
-
+  Result Result = 1 [(gogoproto.nullable) = false];
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 
@@ -158,7 +158,10 @@ message WaitTxn {
 
 // UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {
-  bytes TxnID     = 1;
+  bytes               TxnID     = 1;
+  // CommitTS is the commit timestamp of the current txn. Empty if txn is
+  // roll backed
+  timestamp.Timestamp CommitTS  = 2 [(gogoproto.nullable) = false];
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
@@ -200,7 +203,7 @@ message KeepRemoteLockResponse {
 // Result result is used to tell the caller the result of the lock operation.
 message Result {
   // LockedOn lock is locked on which locktable
-  LockTable           LockedOn  = 1;
+  LockTable           LockedOn  = 1 [(gogoproto.nullable) = false];
   // AfterWait if true means current operation is blocked by a active txn.
   bool                AfterWait = 2;
   // CommitTS if current txn is blocked by a committed txn, the value is the

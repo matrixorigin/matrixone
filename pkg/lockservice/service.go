@@ -82,7 +82,7 @@ func (s *service) Lock(
 func (s *service) Unlock(
 	ctx context.Context,
 	txnID []byte,
-	committedTimestamp timestamp.Timestamp) error {
+	commitTS timestamp.Timestamp) error {
 	// FIXME(fagongzi): too many mem alloc in trace
 	_, span := trace.Debug(ctx, "lockservice.unlock")
 	defer span.End()
@@ -92,7 +92,7 @@ func (s *service) Unlock(
 		return nil
 	}
 	defer logUnlockTxn(s.cfg.ServiceID, txn)()
-	txn.close(s.cfg.ServiceID, txnID, s.getLockTable)
+	txn.close(s.cfg.ServiceID, txnID, commitTS, s.getLockTable)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector

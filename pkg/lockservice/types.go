@@ -82,9 +82,9 @@ type LockService interface {
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.Result, error)
-	// Unlock release all locks associated with the transaction. If committedTimestamp is not
-	// empty, means the txn was committed.
-	Unlock(ctx context.Context, txnID []byte, committedTimestamp timestamp.Timestamp) error
+	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
+	// the txn was committed.
+	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
 	// Close close the lock service.
 	Close() error
 }
@@ -107,8 +107,8 @@ type lockTable interface {
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) (pb.Result, error)
-	// Unlock release a set of locks, if txn was committed, committed is not empty
-	unlock(txn *activeTxn, ls *cowSlice, committedTimestamp timestamp.Timestamp)
+	// Unlock release a set of locks, if txn was committed, commitTS is not empty
+	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
 	// getLock get a lock
 	getLock(txnID, key []byte, fn func(Lock))
 	// getBind returns lock table binding

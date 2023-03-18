@@ -20,6 +20,7 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -55,12 +56,17 @@ func TestClose(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
-	assert.NoError(t, tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{}))
-	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
+
+	_, err := tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{})
+	assert.NoError(t, err)
+
+	_, err = tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{})
+	assert.NoError(t, err)
 
 	txn.close(
 		"s1",
 		txn.txnID,
+		timestamp.Timestamp{},
 		func(table uint64) (lockTable, error) {
 			return tables[table], nil
 		})
