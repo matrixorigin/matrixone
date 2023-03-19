@@ -173,6 +173,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
+	sess.SetConnectContext(ctx)
 
 	// Set AutoIncrCache for this session.
 	sess.SetAutoIncrCaches(ie.autoIncrCaches)
@@ -223,7 +224,7 @@ func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
 	return nil
 }
 
-func (ip *internalProtocol) GetConciseProfile() string {
+func (ip *internalProtocol) GetDebugString() string {
 	return "internal protocol"
 }
 
@@ -232,14 +233,6 @@ func (ip *internalProtocol) GetSequenceId() uint8 {
 }
 
 func (ip *internalProtocol) SetSequenceID(value uint8) {
-}
-
-func (ip *internalProtocol) makeProfile(profileTyp profileType) {
-
-}
-
-func (ip *internalProtocol) getProfile(profileTyp profileType) string {
-	return ""
 }
 
 func (ip *internalProtocol) IsEstablished() bool {
@@ -266,7 +259,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 }
 
 // Peer gets the address [Host:Port] of the client
-func (ip *internalProtocol) Peer() (string, string, string, string) {
+func (ip *internalProtocol) Peer() string {
 	panic("not impl")
 }
 
