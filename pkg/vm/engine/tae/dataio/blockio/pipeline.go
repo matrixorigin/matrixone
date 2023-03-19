@@ -212,10 +212,9 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		p := item.(proc)
 		processes = append(processes, p)
 	}
-	/*if !p.active.Load() {
-		job.DoneWithErr(errCancelJobOnStop)
-		continue
-	}*/
+	if !p.active.Load() {
+		return
+	}
 	merged := mergeBlock(processes)
 	for _, object := range merged {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
