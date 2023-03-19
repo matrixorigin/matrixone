@@ -97,7 +97,24 @@ func (s *Scanner) Scan() (int, string) {
 				return s.scanBitLiteral()
 			}
 		}
-		return s.scanIdentifier(false)
+		if ch == '$' {
+			typ, str := s.scanIdentifier(false)
+			if s.cur() != '$' {
+				return typ, str
+			} else {
+				// this is a dollar sign string
+				strTyp, strStr := s.scanString('$', STRING)
+				_, tagStr := s.scanIdentifier(false)
+				if tagStr != str {
+					return LEX_ERROR, string(byte(s.cur()))
+				}
+				s.inc()
+				return strTyp, strStr
+			}
+
+		} else {
+			return s.scanIdentifier(false)
+		}
 	case isDigit(ch):
 		return s.scanNumber()
 	case ch == ':':
@@ -237,11 +254,18 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 }
 
 func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
+	if delim == '$' {
+		s.inc() // advance the first '$'
+	}
 	ch := s.cur()
 	buf := new(strings.Builder)
 	for s.Pos < len(s.buf) {
 		if ch == delim {
-			s.inc()
+			if delim != '$' {
+				s.inc()
+			} else {
+				return typ, buf.String()
+			}
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
@@ -512,11 +536,18 @@ exit:
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	dollarFlag := false
+	if s.cur() == '$' {
+		dollarFlag = true
+	}
 	start := s.Pos
 	s.inc()
 
 	for {
 		ch := s.cur()
+		if ch == '$' && dollarFlag {
+			break
+		}
 		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
