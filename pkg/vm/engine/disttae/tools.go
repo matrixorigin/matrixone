@@ -650,10 +650,6 @@ func genWriteReqs(ctx context.Context, writes [][]Entry) ([]txn.TxnRequest, erro
 			if e.bat.Length() == 0 {
 				continue
 			}
-			//v := ctx.Value(defines.PkCheckByDN{})
-			//if v != nil {
-			//	e.pkChkByDN = v.(int8)
-			//}
 			if v != nil {
 				e.pkChkByDN = v.(int8)
 			}
