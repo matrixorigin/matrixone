@@ -34,6 +34,8 @@ var (
 	errCancelJobOnStop = moerr.NewInternalErrorNoCtx("cancel job on stop")
 )
 
+var Pipeline *IoPipeline
+
 type IOJobFactory func(context.Context, *objectio.ObjectFS, proc) *tasks.Job
 
 // type Pipeline interface {
@@ -59,6 +61,7 @@ func jobFactory(
 		ctx,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
+			res = &tasks.JobResult{}
 			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
 			if err != nil {
 				res.Err = err

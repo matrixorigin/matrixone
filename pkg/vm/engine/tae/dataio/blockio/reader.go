@@ -58,9 +58,10 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		return nil, err
 	}
 	return &BlockReader{
-		reader: reader,
-		name:   name,
-		meta:   meta,
+		reader:  reader,
+		name:    name,
+		meta:    meta,
+		manager: Pipeline,
 	}, nil
 }
 
@@ -102,14 +103,15 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 		return nil, err
 	}
 	return &BlockReader{
-		key:    key,
-		reader: reader,
-		name:   name,
-		meta:   locs[0],
+		key:     key,
+		reader:  reader,
+		name:    name,
+		meta:    locs[0],
+		manager: Pipeline,
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
 	if r.meta.End() == 0 {
@@ -129,7 +131,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	return bats, nil
 }
 
-func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
+func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
 	if r.meta.End() == 0 {

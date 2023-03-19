@@ -142,7 +142,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	db.Pipeline = blockio.NewIOPipeline(db.Fs)
+	blockio.Pipeline = blockio.NewIOPipeline(db.Fs)
+	blockio.Pipeline.Start()
 	db.Replay(dataFactory, checkpointed)
 	db.Catalog.ReplayTableRows()
 	logutil.Info("open-tae", common.OperationField("replay"),
