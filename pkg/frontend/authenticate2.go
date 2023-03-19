@@ -65,3 +65,16 @@ func verifyLightPrivilege(ses *Session,
 	}
 	return ok
 }
+
+// getDefaultAccount returns the internal account
+func getDefaultAccount() *TenantInfo {
+	return &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+		delimiter:     ':',
+	}
+}
