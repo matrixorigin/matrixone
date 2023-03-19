@@ -399,8 +399,8 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
 
-	sql := fmt.Sprintf("SELECT relname as `Sequences_in_%s`, seqtype as 'Data Type' FROM %s.mo_tables WHERE relkind = '%s' and reldatabase = '%s'",
-		dbName, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, dbName)
+	sql := fmt.Sprintf("select %s.mo_tables.relname as `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) as 'Data Type' from %s.mo_tables left join %s.mo_columns on %s.mo_tables.rel_id = %s.mo_columns.att_relname_id where %s.mo_tables.relkind = '%s' and %s.mo_tables.reldatabase = '%s' and %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
+		MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, MO_CATALOG_DB_NAME, dbName, MO_CATALOG_DB_NAME, Sequence_cols_name[0])
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

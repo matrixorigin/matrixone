@@ -288,8 +288,6 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 		} else {
 			colData.Append([]byte(""))
 		}
-	case pkgcatalog.SystemRelAttr_SeqType:
-		colData.Append([]byte(schema.SeqType))
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

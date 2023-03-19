@@ -20,12 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,11 +38,12 @@ import (
 // Return advanced last_seq_num.
 func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+
 	txn, err := NewTxn(e, proc, proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
-	// nextval is the implementation of nextval function.
+	// nextval is the real implementation of nextval function.
 	tblnames := vector.MustStrCol(vecs[0])
 	restrings := make([]string, len(tblnames))
 	isNulls := make([]bool, len(tblnames))
@@ -74,9 +73,10 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 
 	vector.AppendStringList(res, restrings, isNulls, proc.Mp())
 
+	// Set last val.
 	for i := len(restrings) - 1; i >= 0; i-- {
 		if restrings[i] != "" {
-			proc.SessionInfo.ValueSetter.SetSeqLastValue(restrings[i])
+			proc.SessionInfo.SeqLastValue[0] = restrings[i]
 			break
 		}
 	}
@@ -88,9 +88,8 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 }
 
 func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
-	var rds []engine.Reader
-
-	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
+	db := proc.SessionInfo.Database
+	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
 	}
@@ -108,133 +107,91 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
-	// Read blocks of the sequence table.
-	expr := &plan.Expr{}
-	ret, err := rel.Ranges(proc.Ctx, expr)
+	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from %s.%s", db, tblname))
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case len(ret) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return "", err
-		}
-	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return "", err
-		}
-	case len(ret[0]) == 0:
-		rds0, err := rel.NewReader(proc.Ctx, 1, expr, nil)
-		if err != nil {
-			return "", err
-		}
-		rds1, err := rel.NewReader(proc.Ctx, 1, expr, ret[1:])
-		if err != nil {
-			return "", err
-		}
-		rds = append(rds, rds0...)
-		rds = append(rds, rds1...)
-	default:
-		rds, _ = rel.NewReader(proc.Ctx, 1, expr, ret)
+	if values == nil {
+		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
 
-	for len(rds) > 0 {
-		bat, err := rds[0].Read(proc.Ctx, Sequence_cols_name, expr, proc.Mp())
-		defer func() {
-			if bat != nil {
-				bat.Clean(proc.Mp())
-			}
-		}()
-
-		if err != nil {
-			return "", moerr.NewInvalidInput(proc.Ctx, "Can not find the sequence")
+	switch values[0].(type) {
+	case int16:
+		// Get values store in sequence table.
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(int16), values[1].(int16), values[2].(int16),
+			values[3].(int16), values[4].(int64), values[5].(bool), values[6].(bool)
+		// When iscalled is not set, set it and do not advance sequence number.
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
 		}
-		if bat == nil {
-			rds[0].Close()
-			rds = rds[1:]
-			continue
+		// When incr is over the range of this datatype.
+		if incrv > math.MaxInt16 || incrv < math.MinInt16 {
+			if cycle {
+				return advanceSeq(lsn, minv, maxv, int16(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
+			} else {
+				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			}
 		}
-		if len(bat.Vecs) < 8 {
-			return "", moerr.NewInternalError(proc.Ctx, "Wrong sequence cols num")
+		// Tranforming incrv to this datatype and make it positive for generic use.
+		return advanceSeq(lsn, minv, maxv, makePosIncr[int16](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
+	case int32:
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(int32), values[1].(int32), values[2].(int32),
+			values[3].(int32), values[4].(int64), values[5].(bool), values[6].(bool)
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
 		}
-
-		attrs := make([]string, len(Sequence_cols_name))
-		for i := range attrs {
-			attrs[i] = Sequence_cols_name[i]
+		if incrv > math.MaxInt64 || incrv < math.MinInt64 {
+			if cycle {
+				return advanceSeq(lsn, minv, maxv, int32(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
+			} else {
+				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			}
 		}
-		bat.Attrs = attrs
-
-		switch bat.Vecs[0].GetType().Oid {
-		case types.T_int16:
-			// Get values store in sequence table.
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[int16](bat.Vecs)
-			// When iscalled is not set, set it and do not advance sequence number.
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			// When incr is over the range of this datatype.
-			if incrv > math.MaxInt64 || incrv < math.MinInt64 {
-				if cycle {
-					return advanceSeq(lastSeqNum, minv, maxv, int16(incrv), cycle, incrv < 0, setEdge, bat, rel, proc, tblname)
-				} else {
-					return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
-				}
-			}
-			// Tranforming incrv to this datatype and make it positive for generic use.
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[int16](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
-		case types.T_int32:
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[int32](bat.Vecs)
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			if incrv > math.MaxInt32 || incrv < math.MinInt32 {
-				if cycle {
-					return advanceSeq(lastSeqNum, minv, maxv, int32(incrv), cycle, incrv < 0, setEdge, bat, rel, proc, tblname)
-				} else {
-					return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
-				}
-			}
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[int32](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
-		case types.T_int64:
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[int64](bat.Vecs)
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[int64](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
-		case types.T_uint16:
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[uint16](bat.Vecs)
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			if incrv > math.MaxUint16 || -incrv > math.MaxUint16 {
-				if cycle {
-					return advanceSeq(lastSeqNum, minv, maxv, uint16(incrv), cycle, incrv < 0, setEdge, bat, rel, proc, tblname)
-				} else {
-					return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
-				}
-			}
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[uint16](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
-		case types.T_uint32:
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[uint32](bat.Vecs)
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			if incrv > math.MaxUint32 || -incrv > math.MaxUint32 {
-				if cycle {
-					return advanceSeq(lastSeqNum, minv, maxv, uint32(incrv), cycle, incrv < 0, setEdge, bat, rel, proc, tblname)
-				} else {
-					return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
-				}
-			}
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[uint32](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
-		case types.T_uint64:
-			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[uint64](bat.Vecs)
-			if !isCalled {
-				return setIsCalled(proc, bat, rel, lastSeqNum)
-			}
-			return advanceSeq(lastSeqNum, minv, maxv, makePosIncr[uint64](incrv), cycle, incrv < 0, !setEdge, bat, rel, proc, tblname)
+		return advanceSeq(lsn, minv, maxv, makePosIncr[int32](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
+	case int64:
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(int64), values[1].(int64), values[2].(int64),
+			values[3].(int64), values[4].(int64), values[5].(bool), values[6].(bool)
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
 		}
+		return advanceSeq(lsn, minv, maxv, makePosIncr[int64](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
+	case uint16:
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(uint16), values[1].(uint16), values[2].(uint16),
+			values[3].(uint16), values[4].(int64), values[5].(bool), values[6].(bool)
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
+		}
+		if incrv > math.MaxUint16 || -incrv > math.MaxUint16 {
+			if cycle {
+				return advanceSeq(lsn, minv, maxv, uint16(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
+			} else {
+				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			}
+		}
+		return advanceSeq(lsn, minv, maxv, makePosIncr[uint16](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
+	case uint32:
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(uint32), values[1].(uint32), values[2].(uint32),
+			values[3].(uint32), values[4].(int64), values[5].(bool), values[6].(bool)
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
+		}
+		if incrv > math.MaxUint32 || -incrv > math.MaxUint32 {
+			if cycle {
+				return advanceSeq(lsn, minv, maxv, uint32(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
+			} else {
+				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			}
+		}
+		return advanceSeq(lsn, minv, maxv, makePosIncr[uint32](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
+	case uint64:
+		lsn, minv, maxv, _, incrv, cycle, isCalled := values[0].(uint64), values[1].(uint64), values[2].(uint64),
+			values[3].(uint64), values[4].(int64), values[5].(bool), values[6].(bool)
+		if !isCalled {
+			return setIsCalled(proc, rel, lsn, db, tblname)
+		}
+		return advanceSeq(lsn, minv, maxv, makePosIncr[uint64](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
 	}
+
 	return "", moerr.NewInternalError(proc.Ctx, "Wrong types of sequence number or failed to read the sequence table")
 }
 
@@ -245,74 +202,70 @@ func makePosIncr[T constraints.Integer](incr int64) T {
 	return T(incr)
 }
 
-func advanceSeq[T constraints.Integer](lastsn, minv, maxv, incrv T,
-	cycle, minus, setEdge bool, bat *batch.Batch, rel engine.Relation, proc *process.Process, tblname string) (string, error) {
+func advanceSeq[T constraints.Integer](lsn, minv, maxv, incrv T,
+	cycle, minus, setEdge bool, rel engine.Relation, proc *process.Process, db, tblname string) (string, error) {
 	if setEdge {
 		// Set lastseqnum to maxv when this is a descending sequence.
 		if minus {
-			return setSeq(proc, maxv, bat, rel)
+			return setSeq(proc, maxv, rel, db, tblname)
 		}
 		// Set lastseqnum to minv
-		return setSeq(proc, minv, bat, rel)
+		return setSeq(proc, minv, rel, db, tblname)
 	}
 	var adseq T
 	if minus {
-		adseq = lastsn - incrv
+		adseq = lsn - incrv
 	} else {
-		adseq = lastsn + incrv
+		adseq = lsn + incrv
 	}
 
 	// check descending sequence and reach edge
-	if minus && (adseq < minv || adseq > lastsn) {
+	if minus && (adseq < minv || adseq > lsn) {
 		if !cycle {
 			return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 		}
-		return setSeq(proc, maxv, bat, rel)
+		return setSeq(proc, maxv, rel, db, tblname)
 	}
 
 	// checkout ascending sequence and reach edge
-	if !minus && (adseq > maxv || adseq < lastsn) {
+	if !minus && (adseq > maxv || adseq < lsn) {
 		if !cycle {
 			return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 		}
-		return setSeq(proc, minv, bat, rel)
+		return setSeq(proc, minv, rel, db, tblname)
 	}
 
 	// Otherwise set to adseq.
-	return setSeq(proc, adseq, bat, rel)
+	return setSeq(proc, adseq, rel, db, tblname)
 }
 
-func setSeq[T constraints.Integer](proc *process.Process, setv T, bat *batch.Batch, rel engine.Relation) (string, error) {
-	// Made the bat to update batch.
-	bat.Vecs[0].CleanOnlyData()
-	err := vector.AppendAny(bat.Vecs[0], setv, false, proc.Mp())
+func setSeq[T constraints.Integer](proc *process.Process, setv T, rel engine.Relation, db, tbl string) (string, error) {
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}
 
-	simpleUpdate(proc, bat, rel)
-
 	tblId := rel.GetTableID(proc.Ctx)
 	ress := fmt.Sprint(setv)
-	proc.SessionInfo.ValueSetter.SetSeqCurValues(tblId, ress)
+
+	// Set Curvalues here. Add new slot to proc's related field.
+	proc.SessionInfo.SeqAddValues[tblId] = ress
 
 	return ress, nil
 }
 
-func setIsCalled[T constraints.Integer](proc *process.Process, bat *batch.Batch, rel engine.Relation, lastSeqNum T) (string, error) {
-	// Here made the bat to update batch.
+func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relation, lsn T, db, tbl string) (string, error) {
 	// Set is called to true.
-	bat.Vecs[6].CleanOnlyData()
-	err := vector.AppendAny(bat.Vecs[6], true, false, proc.Mp())
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set is_called = true", db, tbl))
 	if err != nil {
 		return "", err
 	}
 
-	simpleUpdate(proc, bat, rel)
-
 	tblId := rel.GetTableID(proc.Ctx)
-	ress := fmt.Sprint(lastSeqNum)
-	proc.SessionInfo.ValueSetter.SetSeqCurValues(tblId, ress)
+	ress := fmt.Sprint(lsn)
+
+	// Set Curvalues here. Add new slot to proc's related field.
+	proc.SessionInfo.SeqAddValues[tblId] = ress
 
 	return ress, nil
 }

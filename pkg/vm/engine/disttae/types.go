@@ -191,7 +191,6 @@ type txnTable struct {
 	relKind      string
 	createSql    string
 	constraint   []byte
-	seqtype      string
 
 	updated bool
 	// use for skip rows

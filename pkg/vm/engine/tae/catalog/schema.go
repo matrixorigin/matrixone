@@ -115,7 +115,6 @@ type Schema struct {
 	UniqueIndex      string
 	SecondaryIndex   string
 	Constraint       []byte
-	SeqType          string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef

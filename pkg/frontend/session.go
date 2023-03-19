@@ -216,60 +216,54 @@ type Session struct {
 
 	seqCurValues map[uint64]string
 
-	seqLastValue []string
+	seqLastValue string
 
-	seqValueSetter *ValueSetter
+	sqlHelper *SqlHelper
 }
 
-type ValueSetter struct {
-	ses *Session
-}
-
-func (ses *Session) GetValueSetter() *ValueSetter {
+func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.seqValueSetter
+	ses.seqLastValue = proc.SessionInfo.SeqLastValue[0]
 }
 
-func (vs *ValueSetter) SetSeqLastValue(v string) {
-	vs.ses.SetSeqLastValue(v)
-}
-
-func (vs *ValueSetter) SetSeqCurValues(k uint64, v string) {
-	vs.ses.SetSeqCurValues(k, v)
-}
-
-func (vs *ValueSetter) GetSeqCurValues(k uint64) (string, bool) {
-	return vs.ses.GetSeqCurValues(k)
-}
-
-func (vs *ValueSetter) GetSeqLastValue() string {
-	return vs.ses.GetSeqLastValue()
-}
-
-func (ses *Session) GetSeqCurValues(k uint64) (string, bool) {
+func (ses *Session) DeleteSeqValues(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	v, isExists := ses.seqCurValues[k]
-	return v, isExists
+	for _, k := range proc.SessionInfo.SeqDeleteKeys {
+		if _, exist := ses.seqCurValues[k]; exist {
+			delete(ses.seqCurValues, k)
+		}
+	}
+}
+
+func (ses *Session) AddSeqValues(proc *process.Process) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for k, v := range proc.SessionInfo.SeqAddValues {
+		ses.seqCurValues[k] = v
+	}
 }
 
 func (ses *Session) GetSeqLastValue() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.seqLastValue[0]
+	return ses.seqLastValue
 }
 
-func (ses *Session) SetSeqLastValue(v string) {
+func (ses *Session) CopySeqToProc(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.seqLastValue[0] = v
+	for k, v := range ses.seqCurValues {
+		proc.SessionInfo.SeqCurValues[k] = v
+	}
+	proc.SessionInfo.SeqLastValue[0] = ses.seqLastValue
 }
 
-func (ses *Session) SetSeqCurValues(k uint64, v string) {
+func (ses *Session) GetSqlHelper() *SqlHelper {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.seqCurValues[k] = v
+	return ses.sqlHelper
 }
 
 // The update version. Four function.
@@ -302,6 +296,9 @@ func (ses *Session) Dispose() {
 		ses.SetMemPool(mp)
 	}
 	ses.cleanCache()
+
+	// Clean sequence record data.
+	ses.seqCurValues = nil
 }
 
 type errInfo struct {
@@ -368,10 +365,10 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.GetTxnHandler().SetSession(ses)
 
 	// For seq init values.
-	ses.seqValueSetter = &ValueSetter{ses}
 	ses.seqCurValues = make(map[uint64]string)
-	ses.seqLastValue = make([]string, 1)
-	ses.seqLastValue[0] = ""
+	ses.seqLastValue = ""
+
+	ses.sqlHelper = &SqlHelper{ses: ses}
 
 	var err error
 	if ses.mp == nil {
@@ -2598,6 +2595,11 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 		bh.ses.SetRequestContext(ctx)
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
+
+	// For determine this is a background sql.
+	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	bh.mce.GetSession().SetRequestContext(ctx)
+
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := bh.ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
@@ -2628,4 +2630,53 @@ func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
 
 func (bh *BackgroundHandler) ClearExecResultSet() {
 	bh.ses.ClearAllMysqlResultSet()
+}
+
+type SqlHelper struct {
+	ses *Session
+}
+
+// Made for sequence func. nextval, setval.
+func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
+	var err error
+	var erArray []ExecResult
+
+	ctx := sh.ses.GetRequestContext()
+	bh := sh.ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// Success.
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(erArray) == 0 {
+		return nil, nil
+	}
+
+	return erArray[0].(*MysqlResultSet).Data[0], nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
 }

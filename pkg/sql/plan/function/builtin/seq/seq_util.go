@@ -19,81 +19,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called", catalog.Row_ID}
 var setEdge = true
-
-func getValues[T constraints.Integer](vecs []*vector.Vector) (T, T, T, T, int64, bool, bool) {
-	return vector.MustFixedCol[T](vecs[0])[0], vector.MustFixedCol[T](vecs[1])[0], vector.MustFixedCol[T](vecs[2])[0],
-		vector.MustFixedCol[T](vecs[3])[0], vector.MustFixedCol[int64](vecs[4])[0], vector.MustFixedCol[bool](vecs[5])[0],
-		vector.MustFixedCol[bool](vecs[6])[0]
-}
-
-func simpleUpdate(proc *process.Process,
-	bat *batch.Batch, rel engine.Relation) error {
-	var delBatch, updateBatch *batch.Batch
-	var err error
-	defer func() {
-		if delBatch != nil {
-			delBatch.Clean(proc.Mp())
-		}
-		// Updatebatch here is just bat.
-		// It will be cleaned in other place.
-	}()
-
-	// attrs := getAttrsFromTableDefs(tableDefs)
-
-	// Make delBatch and updateBatch.
-	// The update batch is made based on the input param bat.
-	delBatch, updateBatch, err = makeDeleteAndUpdateBatch(proc, bat)
-	updateBatch.Cnt = 0
-	updateBatch.Ro = true
-
-	if err != nil {
-		return err
-	}
-
-	if delBatch.Length() > 0 {
-		// delete old rows
-		err = rel.Delete(proc.Ctx, delBatch, catalog.Row_ID)
-		if err != nil {
-			return err
-		}
-
-		// No check for new rows not null
-		// Because sequence table will never got nulls or something.
-
-		// write table
-		err = rel.Write(proc.Ctx, updateBatch)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func makeDeleteAndUpdateBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, *batch.Batch, error) {
-	// get delete batch
-	delVec := vector.NewConstFixed(types.T_Rowid.ToType(), vector.MustFixedCol[types.Rowid](bat.Vecs[7])[0], 1, proc.Mp())
-	delBatch := batch.New(true, []string{catalog.Row_ID})
-	delBatch.SetVector(0, delVec)
-	delBatch.SetZs(1, proc.Mp())
-
-	// get update batch
-	bat.Attrs = bat.Attrs[:7]
-	bat.Vecs = bat.Vecs[:7]
-
-	return delBatch, bat, nil
-}
 
 func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {
@@ -154,3 +87,99 @@ func RollbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) 
 	txn = nil
 	return err
 }
+
+// func makeBatch(values []interface{}, proc *process.Process) (*batch.Batch, error) {
+// 	var bat batch.Batch
+// 	var typ types.Type
+// 	bat.Ro = true
+// 	bat.Cnt = 0
+// 	bat.Zs = make([]int64, 1)
+// 	bat.Zs[0] = 1
+// 	attrs := make([]string, len(Sequence_cols_name))
+// 	for i := range attrs {
+// 		attrs[i] = Sequence_cols_name[i]
+// 	}
+// 	bat.Attrs = attrs
+// 	sequence_cols_num := 7
+// 	vecs := make([]*vector.Vector, sequence_cols_num)
+// 	switch values[0].(type) {
+// 	case int16:
+// 		typ = types.T_int16.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(int16), values[1].(int16), values[2].(int16), values[3].(int16), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	case int32:
+// 		typ = types.T_int32.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(int32), values[1].(int32), values[2].(int32), values[3].(int32), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	case int64:
+// 		typ = types.T_int64.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(int64), values[1].(int64), values[2].(int64), values[3].(int64), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	case uint16:
+// 		typ = types.T_uint16.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(uint16), values[1].(uint16), values[2].(uint16), values[3].(uint16), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	case uint32:
+// 		typ = types.T_uint32.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(uint32), values[1].(uint32), values[2].(uint32), values[3].(uint32), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	case uint64:
+// 		typ = types.T_uint64.ToType()
+// 		err := makeVecs(vecs, typ, proc, values[0].(uint64), values[1].(uint64), values[2].(uint64), values[3].(uint64), values[4].(int64), values[5].(bool), values[6].(bool))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	}
+// 	bat.Vecs = vecs
+// 	return &bat, nil
+// }
+//
+// func makeVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, seqN, minV, maxV, startN T, incr int64, cycle, iscalled bool) error {
+// 	for i := 0; i < 4; i++ {
+// 		vecs[i] = vector.NewVec(typ)
+// 	}
+// 	err := vector.AppendAny(vecs[0], seqN, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = vector.AppendAny(vecs[1], minV, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = vector.AppendAny(vecs[2], maxV, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = vector.AppendAny(vecs[3], startN, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	vecs[4] = vector.NewVec(types.T_int64.ToType())
+// 	for i := 5; i <= 6; i++ {
+// 		vecs[i] = vector.NewVec(types.T_bool.ToType())
+// 	}
+// 	err = vector.AppendAny(vecs[4], incr, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = vector.AppendAny(vecs[5], cycle, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = vector.AppendAny(vecs[6], iscalled, false, proc.Mp())
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }
+//

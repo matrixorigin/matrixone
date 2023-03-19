@@ -101,7 +101,11 @@ type SessionInfo struct {
 	ResultColTypes    []types.Type
 	AutoIncrCaches    defines.AutoIncrCaches
 	AutoIncrCacheSize uint64
-	ValueSetter       SeqValueSetter
+	SeqCurValues      map[uint64]string
+	SeqDeleteKeys     []uint64
+	SeqAddValues      map[uint64]string
+	SeqLastValue      []string
+	SqlHelper         sqlHelper
 }
 
 type SeqValueSetter interface {
@@ -182,11 +186,22 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 }
 
+type sqlHelper interface {
+	ExecSql(string) ([]interface{}, error)
+}
+
 type WrapCs struct {
 	MsgId  uint64
 	Uid    uuid.UUID
 	Cs     morpc.ClientSession
 	DoneCh chan struct{}
+}
+
+func (proc *Process) InitSeq() {
+	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.SessionInfo.SeqLastValue[0] = ""
+	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

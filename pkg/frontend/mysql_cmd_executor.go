@@ -2777,8 +2777,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:      ses.GetLastInsertID(),
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
-		ValueSetter:       ses.GetValueSetter(),
+		SqlHelper:         ses.GetSqlHelper(),
 	}
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3451,6 +3455,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			return txnErr
 		}
 		switch stmt.(type) {
+		case *tree.Select:
+			if len(proc.SessionInfo.SeqAddValues) != 0 {
+				ses.AddSeqValues(proc)
+			}
+			ses.SetSeqLastValue(proc)
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump, *tree.AlterTable,
@@ -3467,6 +3476,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if proc.GetLastInsertID() != 0 {
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
+			}
+			if proc.SessionInfo.SeqDeleteKeys != nil {
+				ses.DeleteSeqValues(proc)
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
@@ -3625,9 +3637,11 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		StorageEngine:     pu.StorageEngine,
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
-		ValueSetter:       ses.GetValueSetter(),
 	}
-
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()

@@ -27,7 +27,8 @@ import (
 // Will be set to the most recently returned nextval of any sequence in current session.
 // or is will be set to setval value when the third arg of it is true.
 func Lastval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lastv := proc.SessionInfo.ValueSetter.GetSeqLastValue()
+	// Get last value
+	lastv := proc.SessionInfo.SeqLastValue[0]
 	if lastv == "" {
 		return nil, moerr.NewInternalError(proc.Ctx, "Last value of current session is not initialized.")
 	}

@@ -94,7 +94,6 @@ const (
 	SystemRelAttr_Partition   = "partitioned"
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
-	SystemRelAttr_SeqType     = "seqtype"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -186,7 +185,6 @@ const (
 	MO_TABLES_PARTITIONED_IDX    = 12
 	MO_TABLES_VIEWDEF_IDX        = 13
 	MO_TABLES_CONSTRAINT_IDX     = 14
-	MO_TABLES_SEQTYPE_IDX        = 15
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -261,7 +259,6 @@ type CreateTable struct {
 	Partition    string
 	RelKind      string
 	Viewdef      string
-	SeqType      string
 	Constraint   []byte
 	Defs         []engine.TableDef
 }
@@ -310,7 +307,6 @@ var (
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
-		SystemRelAttr_SeqType,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,

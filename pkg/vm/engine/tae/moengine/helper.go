@@ -165,8 +165,6 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					return
 				}
 			}
-		case *engine.SeqTypDef:
-			schema.SeqType = defVal.SeqType
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
 				switch strings.ToLower(property.Key) {

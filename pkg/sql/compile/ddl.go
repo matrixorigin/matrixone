@@ -826,13 +826,19 @@ func (s *Scope) DropSequence(c *Compile) error {
 		}
 		return err
 	}
-
-	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
+	var rel engine.Relation
+	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
+
+	// Delete the stored session value.
+	if c.proc.SessionInfo.SeqDeleteKeys == nil {
+		c.proc.SessionInfo.SeqDeleteKeys = make([]uint64, 1)
+	}
+	c.proc.SessionInfo.SeqDeleteKeys = append(c.proc.SessionInfo.SeqDeleteKeys, rel.GetTableID(c.ctx))
 
 	return dbSource.Delete(c.ctx, tblName)
 }

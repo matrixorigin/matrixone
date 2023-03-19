@@ -19,12 +19,10 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -174,9 +172,8 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 }
 
 func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
-	var rds []engine.Reader
-
-	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
+	db := proc.SessionInfo.Database
+	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
 	}
@@ -185,159 +182,101 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		return "", err
 	}
 
-	// Read blocks of the sequence table.
-	expr := &plan.Expr{}
-	ret, err := rel.Ranges(proc.Ctx, expr)
+	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from %s.%s", db, tblname))
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case len(ret) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return "", err
-		}
-	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = rel.NewReader(proc.Ctx, 1, expr, nil); err != nil {
-			return "", err
-		}
-	case len(ret[0]) == 0:
-		rds0, err := rel.NewReader(proc.Ctx, 1, expr, nil)
-		if err != nil {
-			return "", err
-		}
-		rds1, err := rel.NewReader(proc.Ctx, 1, expr, ret[1:])
-		if err != nil {
-			return "", err
-		}
-		rds = append(rds, rds0...)
-		rds = append(rds, rds1...)
-	default:
-		rds, _ = rel.NewReader(proc.Ctx, 1, expr, ret)
+	if values == nil {
+		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
 
-	for len(rds) > 0 {
-		bat, err := rds[0].Read(proc.Ctx, Sequence_cols_name, expr, proc.Mp())
-		defer func() {
-			if bat != nil {
-				bat.Clean(proc.Mp())
-			}
-		}()
-
+	switch values[0].(type) {
+	case int16:
+		minv, maxv := values[1].(int16), values[2].(int16)
+		// Parse and compare.
+		setnum, err := strconv.ParseInt(setnum, 10, 64)
 		if err != nil {
-			return "", moerr.NewInvalidInput(proc.Ctx, "Can not find the sequence")
+			return "", err
 		}
-		if bat == nil {
-			rds[0].Close()
-			rds = rds[1:]
-			continue
+		snum := int16(setnum)
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-
-		if len(bat.Vecs) < 8 {
-			return "", moerr.NewInternalError(proc.Ctx, "Wrong sequence cols num")
+		return setVal(proc, snum, iscalled, rel, db, tblname)
+	case int32:
+		minv, maxv := values[1].(int32), values[2].(int32)
+		setnum, err := strconv.ParseInt(setnum, 10, 64)
+		if err != nil {
+			return "", err
 		}
-
-		attrs := make([]string, len(Sequence_cols_name))
-		for i := range attrs {
-			attrs[i] = Sequence_cols_name[i]
+		snum := int32(setnum)
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		bat.Attrs = attrs
-
-		switch bat.Vecs[0].GetType().Oid {
-		case types.T_int16:
-			_, minv, maxv, _, _, _, _ := getValues[int16](bat.Vecs)
-			// Parse and compare.
-			setnum, err := strconv.ParseInt(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := int16(setnum)
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
-		case types.T_int32:
-			_, minv, maxv, _, _, _, _ := getValues[int32](bat.Vecs)
-			setnum, err := strconv.ParseInt(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := int32(setnum)
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
-		case types.T_int64:
-			_, minv, maxv, _, _, _, _ := getValues[int64](bat.Vecs)
-			setnum, err := strconv.ParseInt(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := setnum
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
-		case types.T_uint16:
-			_, minv, maxv, _, _, _, _ := getValues[uint16](bat.Vecs)
-			setnum, err := strconv.ParseUint(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := uint16(setnum)
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
-		case types.T_uint32:
-			_, minv, maxv, _, _, _, _ := getValues[uint32](bat.Vecs)
-			setnum, err := strconv.ParseUint(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := uint32(setnum)
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
-		case types.T_uint64:
-			_, minv, maxv, _, _, _, _ := getValues[uint64](bat.Vecs)
-			setnum, err := strconv.ParseUint(setnum, 10, 64)
-			if err != nil {
-				return "", err
-			}
-			snum := uint64(setnum)
-			if snum < minv || snum > maxv {
-				return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-			}
-			return setVal(proc, snum, iscalled, bat, rel)
+		return setVal(proc, snum, iscalled, rel, db, tblname)
+	case int64:
+		minv, maxv := values[1].(int64), values[2].(int64)
+		setnum, err := strconv.ParseInt(setnum, 10, 64)
+		if err != nil {
+			return "", err
 		}
+		snum := setnum
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		return setVal(proc, snum, iscalled, rel, db, tblname)
+	case uint16:
+		minv, maxv := values[1].(uint16), values[2].(uint16)
+		setnum, err := strconv.ParseUint(setnum, 10, 64)
+		if err != nil {
+			return "", err
+		}
+		snum := uint16(setnum)
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		return setVal(proc, snum, iscalled, rel, db, tblname)
+	case uint32:
+		minv, maxv := values[1].(uint32), values[2].(uint32)
+		setnum, err := strconv.ParseUint(setnum, 10, 64)
+		if err != nil {
+			return "", err
+		}
+		snum := uint32(setnum)
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		return setVal(proc, snum, iscalled, rel, db, tblname)
+	case uint64:
+		minv, maxv := values[1].(uint64), values[2].(uint64)
+		setnum, err := strconv.ParseUint(setnum, 10, 64)
+		if err != nil {
+			return "", err
+		}
+		snum := uint64(setnum)
+		if snum < minv || snum > maxv {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		return setVal(proc, snum, iscalled, rel, db, tblname)
 	}
 	return "", moerr.NewInternalError(proc.Ctx, "Wrong types of sequence number or failed to read the sequence table")
 }
 
-func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, bat *batch.Batch, rel engine.Relation) (string, error) {
-	// Made the bat to update batch.
-	bat.Vecs[0].CleanOnlyData()
-	err := vector.AppendAny(bat.Vecs[0], setv, false, proc.Mp())
+func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}
-	bat.Vecs[6].CleanOnlyData()
-	err = vector.AppendAny(bat.Vecs[6], setisCalled, false, proc.Mp())
-	if err != nil {
-		return "", err
-	}
-
-	simpleUpdate(proc, bat, rel)
 
 	ress := fmt.Sprint(setv)
-
 	if setisCalled {
 		tblId := rel.GetTableID(proc.Ctx)
-		proc.SessionInfo.ValueSetter.SetSeqCurValues(tblId, ress)
+
+		proc.SessionInfo.SeqAddValues[tblId] = ress
+
 		// Only set lastvalue when it is already initialized.
-		if s := proc.SessionInfo.ValueSetter.GetSeqLastValue(); s != "" {
-			proc.SessionInfo.ValueSetter.SetSeqLastValue(ress)
+		if proc.SessionInfo.SeqLastValue[0] != "" {
+			proc.SessionInfo.SeqLastValue[0] = ress
 		}
 	}
 

@@ -28,13 +28,7 @@ func TestLastval(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	tvs := &TestValueSetter{}
-	tvs.seqCurValues = make(map[uint64]string)
-	tvs.seqLastValue = make([]string, 1)
-	tvs.SetSeqLastValue("999")
-
 	proc := testutil.NewProc()
-	proc.SessionInfo.ValueSetter = tvs
 
 	tests := []struct {
 		name    string
@@ -63,12 +57,7 @@ func TestLastvalNotCached(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	tvs := &TestValueSetter{}
-	tvs.seqCurValues = make(map[uint64]string)
-	tvs.seqLastValue = make([]string, 1)
-
 	proc := testutil.NewProc()
-	proc.SessionInfo.ValueSetter = tvs
 
 	tests := []struct {
 		name    string

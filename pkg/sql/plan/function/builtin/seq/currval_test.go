@@ -28,39 +28,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type TestValueSetter struct {
-	seqCurValues map[uint64]string
-	seqLastValue []string
-}
-
-func (tvs *TestValueSetter) SetSeqLastValue(s string) {
-	tvs.seqLastValue[0] = s
-}
-
-func (tvs *TestValueSetter) SetSeqCurValues(k uint64, v string) {
-	tvs.seqCurValues[k] = v
-}
-
-func (tvs *TestValueSetter) GetSeqLastValue() string {
-	return tvs.seqLastValue[0]
-}
-
-func (tvs *TestValueSetter) GetSeqCurValues(k uint64) (s string, isExists bool) {
-	s, isExists = tvs.seqCurValues[k]
-	return
-}
-
 func TestCurrvalSingle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	tvs := &TestValueSetter{}
-	tvs.seqCurValues = make(map[uint64]string)
-	tvs.seqLastValue = make([]string, 1)
-	tvs.SetSeqCurValues(10, "1000")
-
 	proc := testutil.NewProc()
-	proc.SessionInfo.ValueSetter = tvs
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -116,14 +88,7 @@ func TestCurrvalMulti(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	tvs := &TestValueSetter{}
-	tvs.seqCurValues = make(map[uint64]string)
-	tvs.seqLastValue = make([]string, 1)
-	tvs.SetSeqCurValues(10, "1000")
-	tvs.SetSeqCurValues(20, "876")
-
 	proc := testutil.NewProc()
-	proc.SessionInfo.ValueSetter = tvs
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

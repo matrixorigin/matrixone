@@ -11,5 +11,5 @@ last_seq_num    min_value    max_value    start_value    increment_value    cycl
 drop table s1;
 internal error: Should use 'drop sequence' to drop a sequence
 show sequences;
-Sequences_in_d1    Data Type
-s1    bigint unsigned
+Names    Data Type
+s1    BIGINT UNSIGNED

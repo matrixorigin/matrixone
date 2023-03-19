@@ -59,7 +59,8 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 			return nil, err
 		}
 		tblId := rel.GetTableID(proc.Ctx)
-		ss, exists := proc.SessionInfo.ValueSetter.GetSeqCurValues(tblId)
+		// Get cur values here.
+		ss, exists := proc.SessionInfo.SeqCurValues[tblId]
 		if !exists {
 			return nil, moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", tblnames[i])
 		}
