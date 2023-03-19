@@ -29,6 +29,8 @@ func TestLastval(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProc()
+	proc.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.SessionInfo.SeqLastValue[0] = "999"
 
 	tests := []struct {
 		name    string
@@ -58,6 +60,8 @@ func TestLastvalNotCached(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProc()
+	proc.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.SessionInfo.SeqLastValue[0] = ""
 
 	tests := []struct {
 		name    string

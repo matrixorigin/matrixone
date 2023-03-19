@@ -33,6 +33,8 @@ func TestCurrvalSingle(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProc()
+	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.SessionInfo.SeqCurValues[uint64(10)] = "1000"
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -89,6 +91,9 @@ func TestCurrvalMulti(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProc()
+	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.SessionInfo.SeqCurValues[uint64(10)] = "1000"
+	proc.SessionInfo.SeqCurValues[uint64(20)] = "876"
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

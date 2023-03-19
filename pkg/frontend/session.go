@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -187,9 +188,7 @@ func (ses *Session) DeleteSeqValues(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	for _, k := range proc.SessionInfo.SeqDeleteKeys {
-		if _, exist := ses.seqCurValues[k]; exist {
-			delete(ses.seqCurValues, k)
-		}
+		delete(ses.seqCurValues, k)
 	}
 }
 
