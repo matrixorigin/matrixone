@@ -101,7 +101,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
-
+	blockio.Pipeline = blockio.NewIOPipeline(db.Fs)
+	blockio.Pipeline.Start()
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -142,8 +143,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	blockio.Pipeline = blockio.NewIOPipeline(db.Fs)
-	blockio.Pipeline.Start()
 	db.Replay(dataFactory, checkpointed)
 	db.Catalog.ReplayTableRows()
 	logutil.Info("open-tae", common.OperationField("replay"),
