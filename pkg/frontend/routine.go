@@ -16,13 +16,13 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -159,7 +159,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	executor := rt.getCmdExecutor()
 	executor.SetCancelFunc(cancelRequestFunc)
 	ses = rt.getSession()
-	ses.MakeProfile()
+	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
 	tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
@@ -173,16 +173,16 @@ func (rt *Routine) handleRequest(req *Request) error {
 	})
 
 	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
-		logErrorf(ses.GetConciseProfile(), "rt execute request failed. error:%v \n", err)
+		logErrorf(ses.GetDebugString(), "rt execute request failed. error:%v \n", err)
 	}
 
 	if resp != nil {
 		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			logErrorf(ses.GetConciseProfile(), "rt send response failed %v. error:%v ", resp, err)
+			logErrorf(ses.GetDebugString(), "rt send response failed %v. error:%v ", resp, err)
 		}
 	}
 
-	logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
+	logDebugf(ses.GetDebugString(), "the time of handling the request %s", time.Since(reqBegin).String())
 
 	cancelRequestFunc()
 
@@ -201,10 +201,10 @@ func (rt *Routine) handleRequest(req *Request) error {
 		})
 
 		//ensure cleaning the transaction
-		logErrorf(ses.GetConciseProfile(), "rollback the txn.")
+		logErrorf(ses.GetDebugString(), "rollback the txn.")
 		err = ses.TxnRollback()
 		if err != nil {
-			logErrorf(ses.GetConciseProfile(), "rollback txn failed.error:%v", err)
+			logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
 		}
 
 		//close the network connection
