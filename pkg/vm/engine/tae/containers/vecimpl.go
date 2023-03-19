@@ -209,6 +209,10 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 	return impl.forEachWindowWithBias(offset, length, op, sels, 0, false)
 }
 
+func (impl *nullableVecImpl[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return impl.forEachWindowWithBias(offset, length, op, sels, 0, true)
+}
+
 func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 	if !impl.HasNull() {
 		return impl.vecBase.forEachWindowWithBias(offset, length, op, sels, bias, shallow)

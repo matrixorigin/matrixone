@@ -15,74 +15,26 @@
 package containers
 
 import (
-	"bytes"
 	"strconv"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
-
-func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
-	it := mask.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		vec.Update(int(row), vals[row])
-	}
-}
-
-func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
-	buffer.Reset()
-	size := bs.Size()
-	if buffer.Cap() < size {
-		buffer.Grow(size)
-	}
-	nbs := stl.NewBytesWithTypeSize(bs.TypeSize)
-	buf := buffer.Bytes()[:size]
-	copy(buf, bs.StorageBuf())
-	copy(buf[bs.StorageSize():], bs.HeaderBuf())
-
-	nbs.SetStorageBuf(buf[:bs.StorageSize()])
-	nbs.SetHeaderBuf(buf[bs.StorageSize():bs.Size()])
-	return nbs
-}
-
-func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := Options{}
-	// XXX what does the following test mean?
-	if len(allocator) > 0 {
-		opts.Allocator = common.DefaultAllocator
-	} else {
-		opts.Allocator = src.GetAllocator()
-	}
-	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
-	bs := src.Bytes()
-	var nulls *roaring64.Bitmap
-	if src.HasNull() {
-		nulls = src.NullMask().Clone()
-	}
-	nbs := FillBufferWithBytes(bs, buffer)
-	cloned.ResetWithData(nbs, nulls)
-	return
-}
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
 
 	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage)
 	if vec.HasNull() {
-		mov.GetNulls().Np = bitmap.New(vec.Length())
-		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
 	}
 	//mov.SetOriginal(true)
 
@@ -124,8 +76,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	}
 
 	if vec.HasNull() {
-		mov.GetNulls().Np = bitmap.New(vec.Length())
-		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
 		//mov.GetNulls().Np = vec.NullMask()
 	}
 
@@ -368,14 +319,14 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	case types.T_decimal64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal64(int64(i+offset), 64, 0)
+			d := types.Decimal64(int64(i + offset))
 			data = append(data, d)
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)
 	case types.T_decimal128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal128(int64(i+offset), 64, 0)
+			d := types.Decimal128{B0_63: uint64(i + offset), B64_127: 0}
 			data = append(data, d)
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)
@@ -717,8 +668,7 @@ func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
 func CopyToProtoVector(vec Vector) (*api.Vector, error) {
 	vecNsp := new(nulls.Nulls)
 	if vec.HasNull() {
-		vecNsp.Np = bitmap.New(vec.Length())
-		vecNsp.Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(vecNsp, vec.NullMask().ToArray()...)
 	}
 	nsp, err := vecNsp.Show()
 	if err != nil {

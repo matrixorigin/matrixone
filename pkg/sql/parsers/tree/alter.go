@@ -174,7 +174,7 @@ func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL
 // see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
 type AlterTable struct {
 	statementImpl
-	Table   TableName
+	Table   *TableName
 	Options AlterTableOptions
 }
 
@@ -189,6 +189,9 @@ func (node *AlterTable) Format(ctx *FmtCtx) {
 		prefix = ", "
 	}
 }
+
+func (node *AlterTable) GetStatementType() string { return "Alter Table" }
+func (node *AlterTable) GetQueryType() string     { return QueryTypeDDL }
 
 type AlterTableOptions = []AlterTableOption
 
@@ -243,5 +246,50 @@ func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
 	case AlterTableDropForeignKey:
 		ctx.WriteString("foreign key ")
 		node.Name.Format(ctx)
+	}
+}
+
+type AccountsSetOption struct {
+	All          bool
+	SetAccounts  IdentifierList
+	AddAccounts  IdentifierList
+	DropAccounts IdentifierList
+}
+
+type AlterPublication struct {
+	statementImpl
+	IfExists    bool
+	Name        Identifier
+	AccountsSet *AccountsSetOption
+	Comment     string
+}
+
+func (node *AlterPublication) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter publication ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" account ")
+	if node.AccountsSet != nil {
+		if node.AccountsSet.All {
+			ctx.WriteString("all")
+		} else {
+			if len(node.AccountsSet.SetAccounts) > 0 {
+				node.AccountsSet.SetAccounts.Format(ctx)
+			}
+			if len(node.AccountsSet.AddAccounts) > 0 {
+				ctx.WriteString("add ")
+				node.AccountsSet.AddAccounts.Format(ctx)
+			}
+			if len(node.AccountsSet.DropAccounts) > 0 {
+				ctx.WriteString("drop ")
+				node.AccountsSet.DropAccounts.Format(ctx)
+			}
+		}
+	}
+	if node.Comment != "" {
+		ctx.WriteString(" comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
 	}
 }

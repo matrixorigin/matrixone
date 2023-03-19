@@ -92,7 +92,7 @@ func (m *Decimal64Min) Eval(vs []types.Decimal64) []types.Decimal64 {
 
 func (m *Decimal64Min) Fill(_ int64, value types.Decimal64, ov types.Decimal64, _ int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
 	if !isNull {
-		if value.Lt(ov) || isEmpty {
+		if value.Compare(ov) < 0 || isEmpty {
 			return value, false
 		}
 	}
@@ -101,7 +101,7 @@ func (m *Decimal64Min) Fill(_ int64, value types.Decimal64, ov types.Decimal64, 
 }
 func (m *Decimal64Min) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
 	if !yEmpty {
-		if !xEmpty && x.Lt(y) {
+		if !xEmpty && x.Compare(y) < 0 {
 			return x, false
 		}
 		return y, false
@@ -130,7 +130,7 @@ func (m *Decimal128Min) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (m *Decimal128Min) Fill(_ int64, value types.Decimal128, ov types.Decimal128, _ int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
 	if !isNull {
-		if value.Lt(ov) || isEmpty {
+		if value.Compare(ov) < 0 || isEmpty {
 			return value, false
 		}
 	}
@@ -139,7 +139,7 @@ func (m *Decimal128Min) Fill(_ int64, value types.Decimal128, ov types.Decimal12
 }
 func (m *Decimal128Min) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool) {
 	if !yEmpty {
-		if !xEmpty && x.Lt(y) {
+		if !xEmpty && x.Compare(y) < 0 {
 			return x, false
 		}
 		return y, false

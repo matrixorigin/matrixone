@@ -110,6 +110,10 @@ func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
 }
 
+func (v *Vector) NeedDup() bool {
+	return v.cantFreeArea || v.cantFreeData
+}
+
 func GetFixedAt[T any](v *Vector, idx int) T {
 	if v.IsConst() {
 		idx = 0
@@ -131,6 +135,9 @@ func (v *Vector) CleanOnlyData() {
 	}
 	if v.area != nil {
 		v.area = v.area[:0]
+	}
+	if v.nsp != nil && v.nsp.Np != nil {
+		v.nsp.Np.Clear()
 	}
 }
 

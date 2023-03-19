@@ -733,13 +733,13 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		rows := vector.MustFixedCol[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_decimal128:
 		rows := vector.MustFixedCol[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:

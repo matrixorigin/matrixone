@@ -25,8 +25,9 @@ import (
 // TODO: add decimal128 distinct test
 func TestSum(t *testing.T) {
 	int8Typ := types.New(types.T_int8, 0, 0)
-	decimal64Typ := types.New(types.T_decimal128, 0, 0)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0)
+	decimal64Typ := types.New(types.T_decimal128, 18, 0)
+	decimal64Typ_12 := types.New(types.T_decimal128, 18, 12)
+	decimal128Typ := types.New(types.T_decimal128, 38, 0)
 
 	testCases := []testCase{
 		// int8 sum test
@@ -74,6 +75,18 @@ func TestSum(t *testing.T) {
 			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
 			mergeNsp:    nil,
 			mergeExpect: []int64{90},
+
+			testMarshal: true,
+		},
+		// decimal64 sum test
+		{
+			op:         agg.AggregateSum,
+			isDistinct: false,
+			inputTyp:   decimal64Typ_12,
+
+			input:    []int64{-5000000000010, -5000000000010},
+			inputNsp: nil,
+			expected: []int64{-10000000000020},
 
 			testMarshal: true,
 		},

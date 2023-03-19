@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -241,6 +239,7 @@ func Test_mce(t *testing.T) {
 		}
 		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, pu)
@@ -333,6 +332,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 		mce.SetSession(ses)
@@ -375,6 +375,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.SetSession(ses)
 
@@ -481,6 +482,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -558,6 +560,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -723,6 +726,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -769,6 +773,7 @@ func Test_handleShowVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -830,6 +835,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
@@ -927,6 +933,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}
@@ -987,99 +994,6 @@ func Test_convert_type(t *testing.T) {
 		convertEngineTypeToMysqlType(ctx, types.T_text, &MysqlColumn{})
 	})
 }
-
-func TestHandleDump(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("call handleDump func", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-
-		mce := NewMysqlCmdExecutor()
-		ses := &Session{
-			protocol: proto,
-		}
-		mce.ses = ses
-		dump := &tree.MoDump{
-			DumpDatabase: true,
-			OutFile:      "test",
-		}
-		err = mce.handleDump(ctx, dump)
-		convey.So(err, convey.ShouldNotBeNil)
-		dump.MaxFileSize = 1024
-		err = mce.handleDump(ctx, dump)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
-func TestDump2File(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("call dumpData2File func", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		reader := mock_frontend.NewMockReader(ctrl)
-		cnt := 0
-		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
-			cnt += 1
-			if cnt == 1 {
-				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				err := vector.AppendFixed(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
-				convey.So(err, convey.ShouldBeNil)
-			}
-			return nil, nil
-		}).AnyTimes()
-		rel := mock_frontend.NewMockRelation(ctrl)
-		rel.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
-		db := mock_frontend.NewMockDatabase(ctrl)
-		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-
-		mce := NewMysqlCmdExecutor()
-		ses := &Session{
-			protocol: proto,
-		}
-		mce.ses = ses
-		dump := &tree.MoDump{
-			OutFile: "test_dump_" + strconv.Itoa(int(time.Now().Unix())),
-		}
-		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)
-		convey.So(err, convey.ShouldBeNil)
-		os.RemoveAll(dump.OutFile)
-	})
-}
-
 func TestSerializePlanToJson(t *testing.T) {
 	sqls := []string{
 		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",

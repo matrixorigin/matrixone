@@ -372,25 +372,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			Ts: t.Ts,
-			// TargetTable:          t.TargetTable,
-			// TargetColDefs:        t.TargetColDefs,
-			Affected: t.Affected,
-			Engine:   t.Engine,
-			// DB:                   t.DB,
-			// TableID:              t.TableID,
-			// CPkeyColDef:          t.CPkeyColDef,
-			// DBName:               t.DBName,
-			// TableName:            t.TableName,
-			// UniqueIndexTables:    t.UniqueIndexTables,
-			// UniqueIndexDef:       t.UniqueIndexDef,
-			// SecondaryIndexTables: t.SecondaryIndexTables,
-			// SecondaryIndexDef:    t.SecondaryIndexDef,
-			// ClusterTable:         t.ClusterTable,
-			// ClusterByDef:         t.ClusterByDef,
+			Affected:  t.Affected,
+			Engine:    t.Engine,
 			IsRemote:  t.IsRemote,
 			InsertCtx: t.InsertCtx,
-			// HasAutoCol:           t.HasAutoCol,
 		}
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
@@ -969,9 +954,9 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 	return arg
 }
 
-// ShuffleJoinDispatch is a cross-cn dispath
-// and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+// This function do not setting funcId.
+// PLEASE SETTING FuncId AFTER YOU CALL IT.
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
 
 	scopeLen := len(ss)
@@ -1007,7 +992,13 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 			})
 		}
 	}
+	return hasRemote, arg
+}
 
+// ShuffleJoinDispatch is a cross-cn dispath
+// and it will send same batch to all register
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, proc)
 	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {

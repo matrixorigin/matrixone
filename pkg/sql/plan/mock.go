@@ -56,7 +56,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["int_var"] = 20
 	vars["bool_var"] = false
 	vars["float_var"] = 20.20
-	dec, _ := types.ParseStringToDecimal128("200.001", 2, 2, false)
+	dec, _ := types.ParseDecimal128("200.001", 38, 3)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
 
@@ -382,7 +382,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks: []int{0}, // primary key "empno"
 		fks: []*plan.ForeignKeyDef{
 			{
-				Name:        "",                          // string
+				Name:        "fk1",                       // string
 				Cols:        []uint64{7},                 // []uint64
 				ForeignTbl:  272450,                      // uint64
 				ForeignCols: []uint64{1},                 // []uint64

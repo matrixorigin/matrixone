@@ -43,6 +43,41 @@ type composedSegmentIt struct {
 	uncommitted *catalog.SegmentEntry
 }
 
+func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
+	it := &segmentIt{
+		linkIt: table.entry.MakeSegmentIt(true),
+		table:  table,
+	}
+	var err error
+	var ok bool
+	for it.linkIt.Valid() {
+		curr := it.linkIt.Get().GetPayload()
+		curr.RLock()
+		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			return it
+		}
+		if ok {
+			curr.RUnlock()
+			it.curr = curr
+			break
+		}
+		curr.RUnlock()
+		it.linkIt.Next()
+	}
+	//if table.localSegment != nil {
+	//	cit := &composedSegmentIt{
+	//		segmentIt:   it,
+	//		uncommitted: table.localSegment.entry,
+	//	}
+	//	return cit
+	//}
+	return it
+
+}
+
 func newSegmentIt(table *txnTable) handle.SegmentIt {
 	it := &segmentIt{
 		linkIt: table.entry.MakeSegmentIt(true),

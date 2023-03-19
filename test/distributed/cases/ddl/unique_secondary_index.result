@@ -453,7 +453,7 @@ null    3    0.01    null
 create table create_index_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
 create unique index decimal_index on create_index_09(col2);
 insert into create_index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23000000' for key '__mo_index_idx_col'
 insert into create_index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from create_index_09;
 col1    col2    col3
@@ -693,7 +693,7 @@ insert into create_secondary_01 values (1,'13456789872',20.23,'5678'),(2,'138734
 create index varchar_second_index on create_secondary_01(col4) comment 'create varchar index';
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT `create varchar index`\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT 'create varchar index'\n)
 insert into create_secondary_01 values (4,'13456789899',20.23,'5678'),(5,'13873458255',100.00,'23');
 select * from create_secondary_01;
 col1    col2    col3    col4

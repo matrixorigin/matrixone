@@ -21,6 +21,7 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/txn";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
 import "metadata.proto";
+import "lock.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
@@ -72,32 +73,38 @@ enum TxnStatus {
 message TxnMeta {
     // ID transaction id, generated at the CN node at the time of transaction creation, 
     // globally unique.
-    bytes               ID          = 1;
+    bytes                     ID        = 1;
     // Status transaction status
-    TxnStatus           Status      = 2;
+    TxnStatus                 Status    = 2;
     // SnapshotTS transaction read timestamp, generated at the CN node at the time of 
     // transaction creation. All data.TS < txn.SnapshotTS is visible for the current 
     // transaction.
-    timestamp.Timestamp SnapshotTS  = 3 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       SnapshotTS = 3 [(gogoproto.nullable) = false];
     // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-    timestamp.Timestamp PreparedTS  = 4 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       PreparedTS = 4 [(gogoproto.nullable) = false];
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-    timestamp.Timestamp CommitTS    = 5 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       CommitTS   = 5 [(gogoproto.nullable) = false];
     // DNShards all DNShards that have written data. The first DN is the coordinator of the 
     // transaction
-    repeated metadata.DNShard DNShards = 6 [(gogoproto.nullable) = false];
+    repeated metadata.DNShard DNShards   = 6 [(gogoproto.nullable) = false];
+    // LockTables For pessimistic transactions, LockTables record the bind metadata of the 
+    // LockTable corresponding to the successful locking of the current transaction. This data 
+    // is committed to the DN at Commit time, and the DN will check once if these bindings have 
+    // changed, and if they have, the transaction will be rolled back.
+    repeated lock.LockTable   LockTables = 7 [(gogoproto.nullable) = false];
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.
 message CNTxnSnapshot {
     // ID txn id
-    TxnMeta                   Txn      = 1 [(gogoproto.nullable) = false];
+    TxnMeta                   Txn              = 1 [(gogoproto.nullable) = false];
     // ReadyOnly txn options
-    bool ReadyOnly        = 2;
+    bool                      ReadyOnly        = 2;
     // EnableCacheWrite txn options
-    bool EnableCacheWrite = 3;
+    bool                      EnableCacheWrite = 3;
     // Disable1PCOpt txn options
-    bool Disable1PCOpt    = 4;
+    bool                      Disable1PCOpt    = 4;
+    repeated lock.LockTable   LockTables       = 5 [(gogoproto.nullable) = false];
 }
 
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 

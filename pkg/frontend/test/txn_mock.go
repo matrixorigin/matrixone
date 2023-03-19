@@ -9,6 +9,7 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
+	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -106,6 +107,20 @@ func NewMockTxnOperator(ctrl *gomock.Controller) *MockTxnOperator {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTxnOperator) EXPECT() *MockTxnOperatorMockRecorder {
 	return m.recorder
+}
+
+// AddLockTable mocks base method.
+func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddLockTable", locktable)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddLockTable indicates an expected call of AddLockTable.
+func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockTxnOperator)(nil).AddLockTable), locktable)
 }
 
 // ApplySnapshot mocks base method.
@@ -245,6 +260,20 @@ func NewMockDebugableTxnOperator(ctrl *gomock.Controller) *MockDebugableTxnOpera
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockDebugableTxnOperator) EXPECT() *MockDebugableTxnOperatorMockRecorder {
 	return m.recorder
+}
+
+// AddLockTable mocks base method.
+func (m *MockDebugableTxnOperator) AddLockTable(locktable lock.LockTable) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddLockTable", locktable)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddLockTable indicates an expected call of AddLockTable.
+func (mr *MockDebugableTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockDebugableTxnOperator)(nil).AddLockTable), locktable)
 }
 
 // ApplySnapshot mocks base method.

@@ -103,8 +103,10 @@ func TestS3FS(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				true,
 			)
 			assert.Nil(t, err)
+			fs.listMaxKeys = 5 // to test continuation
 
 			return fs
 		})
@@ -122,17 +124,18 @@ func TestS3FS(t *testing.T) {
 			-1,
 			cacheDir,
 			nil,
+			true,
 		)
 		assert.Nil(t, err)
 		ctx := context.Background()
-		var counter, counter2 perfcounter.Counter
-		ctx = perfcounter.WithCounter(ctx, &counter)
-		ctx = perfcounter.WithCounter(ctx, &counter2)
+		var counterSet, counterSet2 perfcounter.CounterSet
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet2)
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
-		assert.Equal(t, int64(1), counter.S3.List.Load())
-		assert.Equal(t, int64(1), counter2.S3.List.Load())
+		assert.True(t, counterSet.S3.List.Load() > 0)
+		assert.True(t, counterSet2.S3.List.Load() > 0)
 	})
 
 	t.Run("mem caching file service", func(t *testing.T) {
@@ -148,6 +151,7 @@ func TestS3FS(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -167,6 +171,7 @@ func TestS3FS(t *testing.T) {
 				128*1024,
 				cacheDir,
 				nil,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -421,6 +426,7 @@ func TestS3FSMinioServer(t *testing.T) {
 				-1,
 				cacheDir,
 				nil,
+				true,
 			)
 			assert.Nil(t, err)
 
@@ -457,6 +463,7 @@ func BenchmarkS3FS(b *testing.B) {
 			-1,
 			cacheDir,
 			nil,
+			true,
 		)
 		assert.Nil(b, err)
 		return fs

@@ -27,9 +27,9 @@ import (
 )
 
 func MockTxnFactory(catalog *Catalog) txnbase.TxnFactory {
-	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id []byte, ts types.TS, info []byte) txnif.AsyncTxn {
+	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id []byte, start, snapshot types.TS) txnif.AsyncTxn {
 		txn := new(mockTxn)
-		txn.Txn = txnbase.NewTxn(mgr, store, id, ts, info)
+		txn.Txn = txnbase.NewTxn(mgr, store, id, start, snapshot)
 		txn.catalog = catalog
 		return txn
 	}
@@ -195,6 +195,10 @@ func (h *mockDBHandle) GetRelationByID(id uint64) (rel handle.Relation, err erro
 }
 
 func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
+	return new(mockSegIt)
+}
+
+func (h *mockTableHandle) MakeSegmentItOnSnap() (it handle.SegmentIt) {
 	return new(mockSegIt)
 }
 
