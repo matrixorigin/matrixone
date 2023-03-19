@@ -2842,7 +2842,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
 			}
-			if proc.SessionInfo.SeqDeleteKeys != nil {
+			if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
 				ses.DeleteSeqValues(proc)
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {

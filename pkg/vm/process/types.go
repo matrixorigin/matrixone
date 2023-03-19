@@ -195,6 +195,7 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqLastValue = make([]string, 1)
 	proc.SessionInfo.SeqLastValue[0] = ""
 	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
+	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

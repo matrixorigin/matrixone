@@ -835,9 +835,6 @@ func (s *Scope) DropSequence(c *Compile) error {
 	}
 
 	// Delete the stored session value.
-	if c.proc.SessionInfo.SeqDeleteKeys == nil {
-		c.proc.SessionInfo.SeqDeleteKeys = make([]uint64, 1)
-	}
 	c.proc.SessionInfo.SeqDeleteKeys = append(c.proc.SessionInfo.SeqDeleteKeys, rel.GetTableID(c.ctx))
 
 	return dbSource.Delete(c.ctx, tblName)
