@@ -178,7 +178,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
@@ -420,7 +420,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
-		view, err := blk.GetColumnDataById(colIdx, nil)
+		view, err := blk.GetColumnDataById(colIdx)
 		if view == nil {
 			logutil.Warnf("blk %v", blk.String())
 			return

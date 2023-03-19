@@ -217,7 +217,9 @@ func TestDeadlockOnRemote(t *testing.T) {
 }
 
 func TestGetActiveTxnWithRemote(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID := []byte("txn1")
 	st := time.Now()
@@ -232,7 +234,9 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 }
 
 func TestGetTimeoutRemoveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
 	hold.getActiveTxn(txnID1, true, "s1")
@@ -262,7 +266,9 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 }
 
 func TestKeepRemoteActiveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
 	txnID2 := []byte("txn2")

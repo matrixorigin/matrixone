@@ -1063,8 +1063,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	logDebugf(mp.getProfile(profileTypeConcise), "server calculated %v", hash1)
-	logDebugf(mp.getProfile(profileTypeConcise), "client calculated %v", auth)
+	logDebugf(mp.getDebugStringUnsafe(), "server calculated %v", hash1)
+	logDebugf(mp.getDebugStringUnsafe(), "client calculated %v", auth)
 
 	return bytes.Equal(hash1, auth)
 }
@@ -1077,21 +1077,21 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
-		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 1")
+		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
-		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 2")
+		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
+			logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
 		}
 	} else {
-		logDebugf(mp.getProfile(profileTypeConcise), "skip authenticate user")
+		logDebugf(mp.getDebugStringUnsafe(), "skip authenticate user")
 		//Get tenant info
 		tenant, err = GetTenantInfo(ctx, mp.GetUserName())
 		if err != nil {
@@ -1103,7 +1103,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
+				logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -1125,7 +1125,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
-		logDebugf(mp.getProfile(profileTypeConcise), "analyse handshake response")
+		logDebugf(mp.getDebugStringUnsafe(), "analyse handshake response")
 		if ok2, resp41, err = mp.analyseHandshakeResponse41(ctx, payload); !ok2 {
 			return false, err
 		}
@@ -1172,7 +1172,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 		mp.database = resp320.database
 	}
 
-	logDebugf(mp.getProfile(profileTypeConcise), "authenticate user")
+	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	if err = mp.authenticateUser(ctx, authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
@@ -1186,7 +1186,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 		return false, err
 	}
 
-	logDebugf(mp.getProfile(profileTypeConcise), "handle handshake end")
+	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
 	err = mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return false, err
@@ -2623,8 +2623,6 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		},
 		SV: SV,
 	}
-
-	mysql.MakeProfile()
 
 	if SV.EnableTls {
 		mysql.capability = mysql.capability | CLIENT_SSL

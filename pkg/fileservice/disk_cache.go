@@ -61,6 +61,9 @@ func (d *DiskCache) Read(
 ) (
 	err error,
 ) {
+	if vector.NoCache {
+		return nil
+	}
 
 	var numHit, numRead int64
 	defer func() {
@@ -135,6 +138,9 @@ func (d *DiskCache) Update(
 ) (
 	err error,
 ) {
+	if vector.NoCache {
+		return nil
+	}
 
 	for _, entry := range vector.Entries {
 		if len(entry.Data) == 0 {
