@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"sync/atomic"
 	"time"
@@ -141,6 +142,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
+	db.Pipeline = blockio.NewIOPipeline(db.Fs)
 	db.Replay(dataFactory, checkpointed)
 	db.Catalog.ReplayTableRows()
 	logutil.Info("open-tae", common.OperationField("replay"),

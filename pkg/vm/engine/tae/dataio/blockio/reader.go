@@ -32,10 +32,20 @@ import (
 )
 
 type BlockReader struct {
-	reader objectio.Reader
-	key    string
+	reader  objectio.Reader
+	key     string
+	name    string
+	meta    objectio.Extent
+	manager *IoPipeline
+}
+
+type proc struct {
 	name   string
 	meta   objectio.Extent
+	idxes  []uint16
+	ids    []uint32
+	pool   *mpool.MPool
+	reader objectio.Reader
 }
 
 func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
@@ -51,6 +61,23 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		reader: reader,
 		name:   name,
 		meta:   meta,
+	}, nil
+}
+
+func NewObjectReader2(service fileservice.FileService, key string, manager *IoPipeline) (dataio.Reader, error) {
+	name, _, meta, _, err := DecodeLocation(key)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader:  reader,
+		name:    name,
+		meta:    meta,
+		manager: manager,
 	}, nil
 }
 
@@ -92,6 +119,35 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
+	for y := range ids {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
+
+func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
+	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
+	bats := make([]*batch.Batch, 0)
+	if r.meta.End() == 0 {
+		return bats, nil
+	}
+	proc := proc{
+		name:   r.name,
+		meta:   r.meta,
+		idxes:  idxs,
+		ids:    ids,
+		pool:   m,
+		reader: r.reader,
+	}
+	v, err := r.manager.Fetch(ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	ioVectors := v.(*fileservice.IOVector)
 	for y := range ids {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
