@@ -108,13 +108,6 @@ type SessionInfo struct {
 	SqlHelper         sqlHelper
 }
 
-type SeqValueSetter interface {
-	SetSeqLastValue(string)
-	SetSeqCurValues(uint64, string)
-	GetSeqLastValue() string
-	GetSeqCurValues(uint64) (string, bool)
-}
-
 // AnalyzeInfo  analyze information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
