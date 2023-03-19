@@ -2040,6 +2040,18 @@ var (
 		{
 			input: "show subscriptions",
 		},
+		{
+			input:  "insert into tbl values ($$this is a dollar-quoted string$$)",
+			output: "insert into tbl values (this is a dollar-quoted string)",
+		},
+		{
+			input:  "select $tag$this is a dollar-quoted string$tag$",
+			output: "select this is a dollar-quoted string",
+		},
+		{
+			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
+			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+		},
 	}
 )
 
