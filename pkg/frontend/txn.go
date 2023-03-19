@@ -229,6 +229,13 @@ func (th *TxnHandler) CommitTxn() error {
 		txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 	)
+	val, e := ses.GetSessionVar("mo_pk_check_by_dn")
+	if e != nil {
+		return e
+	}
+	if val != nil {
+		ctx2 = context.WithValue(ctx2, defines.PkCheckByDN{}, val.(int8))
+	}
 	defer cancel()
 	var err, err2 error
 	defer func() {
