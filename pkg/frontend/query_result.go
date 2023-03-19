@@ -640,7 +640,6 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		return nil, err
 	}
 	vec := bats[0].Vecs[0]
-	defer vec.Free(ses.GetMemPool())
 	def := vec.GetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {

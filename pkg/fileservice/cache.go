@@ -46,3 +46,10 @@ type Cache interface {
 	) error
 	Flush()
 }
+
+type ObjectCache interface {
+	Set(key any, value any, size int64, preloading bool)
+	Get(key any, preloading bool) (value any, size int64, ok bool)
+	Flush()
+	Size() int64
+}
