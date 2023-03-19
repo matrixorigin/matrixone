@@ -57,7 +57,11 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
-	return &plan.Stats{}
+	return plan.DefaultStats()
+}
+
+func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+	return nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {

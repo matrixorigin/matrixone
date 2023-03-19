@@ -76,7 +76,7 @@ func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, e
 	return cols, nil
 }
 
-func (rel *baseRelation) Stats(context.Context, *plan2.Expr) (*plan2.Stats, error) {
+func (rel *baseRelation) Stats(context.Context, *plan2.Expr, any) (*plan2.Stats, error) {
 	//for tae, it does not matter and will be deleted in the future
 	return plan2.DefaultStats(), nil
 }
