@@ -367,7 +367,6 @@ var (
 		types.New(types.T_blob, 0, 0),       // partition
 		types.New(types.T_blob, 0, 0),       // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
-		types.New(types.T_varchar, 5000, 0), // sequence_type
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),  // att_uniq_name
