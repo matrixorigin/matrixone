@@ -710,6 +710,7 @@ func genCreateTableTuple(
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
+
 	}
 	return bat, nil
 }
