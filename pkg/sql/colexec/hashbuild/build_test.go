@@ -49,13 +49,13 @@ var (
 
 func init() {
 	tcs = []buildTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
 			[]*plan.Expr{
-				newExpr(0, types.Type{Oid: types.T_int8}),
+				newExpr(0, types.T_int8.ToType()),
 			}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()},
 			[]*plan.Expr{
-				newExpr(0, types.Type{Oid: types.T_int8}),
+				newExpr(0, types.T_int8.ToType()),
 			}),
 	}
 }
@@ -91,9 +91,9 @@ func TestBuild(t *testing.T) {
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []buildTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
 				[]*plan.Expr{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.T_int8.ToType()),
 				}),
 		}
 		t := new(testing.T)
@@ -119,10 +119,9 @@ func BenchmarkBuild(b *testing.B) {
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Size:  typ.Size,
-			Scale: typ.Scale,
-			Width: typ.Width,
 			Id:    int32(typ.Oid),
+			Width: typ.Width,
+			Scale: typ.Scale,
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{

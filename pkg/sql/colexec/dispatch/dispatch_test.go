@@ -102,10 +102,8 @@ func newTestCase(all bool) dispatchTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
 	return dispatchTestCase{
-		proc: proc,
-		types: []types.Type{
-			{Oid: types.T_int8},
-		},
+		proc:  proc,
+		types: []types.Type{types.T_int8.ToType()},
 		arg: &Argument{
 			FuncId:    SendToAllLocalFunc,
 			LocalRegs: []*process.WaitRegister{reg},

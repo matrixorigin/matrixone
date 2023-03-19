@@ -320,7 +320,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				Typ: &plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: false,
-					Size:        1,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{

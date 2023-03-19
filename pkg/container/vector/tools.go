@@ -262,18 +262,12 @@ func TypeToProtoType(typ types.Type) *plan.Type {
 	return &plan.Type{
 		Id:    int32(typ.Oid),
 		Width: typ.Width,
-		Size:  typ.Size,
 		Scale: typ.Scale,
 	}
 }
 
 func ProtoTypeToType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:   types.T(typ.Id),
-		Size:  typ.Size,
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap
