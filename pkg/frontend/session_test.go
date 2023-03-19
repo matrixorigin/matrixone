@@ -565,7 +565,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
