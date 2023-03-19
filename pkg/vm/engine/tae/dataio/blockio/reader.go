@@ -188,6 +188,45 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	return bats, nil
 }
 
+func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
+	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	if blocks[0].GetExtent().End() == 0 {
+		return nil, nil
+	}
+	if len(idxs) == 0 {
+		idxs = make([]uint16, blocks[0].GetColumnCount())
+		for i := range idxs {
+			idxs[i] = uint16(i)
+		}
+	}
+	bats := make([]*batch.Batch, 0)
+	proc := proc{
+		name:   r.name,
+		meta:   r.meta,
+		idxes:  idxs,
+		ids:    nil,
+		pool:   m,
+		reader: r.reader,
+	}
+	v, err := r.manager.Fetch(ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	ioVectors := v.(*fileservice.IOVector)
+	for y := range blocks {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
+
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
 	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
