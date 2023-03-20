@@ -20,6 +20,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -772,4 +776,11 @@ func mustVectorToProto(v *vector.Vector) *api.Vector {
 		panic(err)
 	}
 	return ret
+}
+
+func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		infos = append(infos, txnMeta.DebugString())
+		logutil.Debugf(msg+" %s", infos...)
+	}
 }
