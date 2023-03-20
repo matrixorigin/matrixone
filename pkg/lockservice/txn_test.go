@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,17 +52,22 @@ func TestClose(t *testing.T) {
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 	tables := map[uint64]lockTable{
-		1: newLocalLockTable(pb.LockTable{Table: 1}, nil),
-		2: newLocalLockTable(pb.LockTable{Table: 2}, nil),
+		1: newLocalLockTable(pb.LockTable{Table: 1}, nil, runtime.DefaultRuntime().Clock()),
+		2: newLocalLockTable(pb.LockTable{Table: 2}, nil, runtime.DefaultRuntime().Clock()),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
-	assert.NoError(t, tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{}))
-	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
+
+	_, err := tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{})
+	assert.NoError(t, err)
+
+	_, err = tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{})
+	assert.NoError(t, err)
 
 	txn.close(
 		"s1",
 		txn.txnID,
+		timestamp.Timestamp{},
 		func(table uint64) (lockTable, error) {
 			return tables[table], nil
 		})

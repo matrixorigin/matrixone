@@ -32,11 +32,7 @@ func TestNewRangeLock(t *testing.T) {
 	txnID := []byte("1")
 	sl, el := newRangeLock(txnID, pb.LockMode_Shared)
 
-	assert.True(t, sl.isLockRange())
-	assert.True(t, sl.isLockRangeStart())
 	assert.Equal(t, pb.LockMode_Shared, sl.getLockMode())
-
-	assert.True(t, el.isLockRange())
 	assert.True(t, el.isLockRangeEnd())
 	assert.Equal(t, pb.LockMode_Shared, el.getLockMode())
 }

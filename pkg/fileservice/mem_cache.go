@@ -17,19 +17,18 @@ package fileservice
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
-	policy      memcachepolicy.Policy
+	objCache    ObjectCache
 	ch          chan func()
 	counterSets []*perfcounter.CounterSet
 }
 
-func NewMemCache(opts ...Options) *MemCache {
+func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	ch := make(chan func(), 65536)
 	go func() {
 		for fn := range ch {
@@ -37,45 +36,45 @@ func NewMemCache(opts ...Options) *MemCache {
 		}
 	}()
 
-	initOpts := defaultOptions()
+	initOpts := defaultMemCacheOptions()
 	for _, optFunc := range opts {
 		optFunc(&initOpts)
 	}
 
 	return &MemCache{
-		policy:      initOpts.policy,
+		objCache:    initOpts.objCache,
 		ch:          ch,
 		counterSets: initOpts.counterSets,
 	}
 }
 
-func WithLRU(capacity int64) Options {
-	return func(o *options) {
-		o.policy = lrupolicy.New(capacity)
+func WithLRU(capacity int64) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
+		o.objCache = lruobjcache.New(capacity)
 	}
 }
 
-func WithClock(capacity int64) Options {
-	return func(o *options) {
-		o.policy = clockpolicy.New(capacity)
+func WithClock(capacity int64) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
+		o.objCache = clockobjcache.New(capacity)
 	}
 }
 
-func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) Options {
-	return func(o *options) {
+func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
 		o.counterSets = append(o.counterSets, counterSets...)
 	}
 }
 
-type Options func(*options)
+type MemCacheOptionFunc func(*memCacheOptions)
 
-type options struct {
-	policy      memcachepolicy.Policy
+type memCacheOptions struct {
+	objCache    ObjectCache
 	counterSets []*perfcounter.CounterSet
 }
 
-func defaultOptions() options {
-	return options{}
+func defaultMemCacheOptions() memCacheOptions {
+	return memCacheOptions{}
 }
 
 var _ Cache = new(MemCache)
@@ -112,7 +111,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.policy.Get(key)
+		obj, size, ok := m.objCache.Get(key, vector.Preloading)
 		numRead++
 		if ok {
 			vector.Entries[i].Object = obj
@@ -151,15 +150,15 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.policy.Set(key, obj, objSize)
+				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			m.policy.Set(key, entry.Object, entry.ObjectSize)
+			m.objCache.Set(key, entry.Object, entry.ObjectSize, vector.Preloading)
 		}
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.policy.Flush()
+	m.objCache.Flush()
 }
