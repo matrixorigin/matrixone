@@ -312,7 +312,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	name := fmt.Sprintf("%s-0", task.toSegEntry.ID.ToString())
+	name := common.NewObjectName(&task.toSegEntry.ID, 0)
 	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
 	if err != nil {
 		return err

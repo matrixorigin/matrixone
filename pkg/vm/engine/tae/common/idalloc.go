@@ -28,6 +28,10 @@ func NewSegmentid() types.Uuid {
 	return types.Uuid(uuid.New())
 }
 
+func NewObjectName(seg *types.Uuid, filen uint16) string {
+	return fmt.Sprintf("%s-%d", seg.ToString(), filen)
+}
+
 func NewBlockid(segid *types.Uuid, fileOffset, blkOffset uint16) types.Blockid {
 	var id types.Blockid
 	size := types.UuidSize
