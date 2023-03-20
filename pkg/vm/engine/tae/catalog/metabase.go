@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
@@ -30,7 +29,6 @@ import (
 type MetaBaseEntry struct {
 	//chain of MetadataMVCCNode
 	*txnbase.MVCCChain
-	ID uint64
 }
 
 func NewReplayMetaBaseEntry() *MetaBaseEntry {
@@ -40,15 +38,14 @@ func NewReplayMetaBaseEntry() *MetaBaseEntry {
 	return be
 }
 
-func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
+func NewMetaBaseEntry() *MetaBaseEntry {
 	return &MetaBaseEntry{
-		ID:        id,
 		MVCCChain: txnbase.NewMVCCChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
 	}
 }
 
 func (be *MetaBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d]%s", be.ID, be.MVCCChain.StringLocked())
+	return be.MVCCChain.StringLocked()
 }
 
 func (be *MetaBaseEntry) String() string {
@@ -108,7 +105,7 @@ func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated b
 	}
 	return
 }
-func (be *MetaBaseEntry) GetID() uint64 { return be.ID }
+func (be *MetaBaseEntry) GetID() uint64 { panic("Get id from segmentEntry and blockEntry") }
 
 func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	node := &MetadataMVCCNode{
@@ -241,15 +238,6 @@ func (be *MetaBaseEntry) HasDropCommittedLocked() bool {
 	return un.(*MetadataMVCCNode).HasDropCommitted()
 }
 
-func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
-	oe := voe.(*MetaBaseEntry)
-	be.RLock()
-	defer be.RUnlock()
-	oe.RLock()
-	defer oe.RUnlock()
-	return CompareUint64(be.ID, oe.ID)
-}
-
 func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
 	visible, dropped := be.GetVisibilityLocked(ts)
 	if !visible {
@@ -310,7 +298,6 @@ func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 	}
 	return &MetaBaseEntry{
 		MVCCChain: chain,
-		ID:        be.ID,
 	}
 }
 
@@ -342,54 +329,17 @@ func (be *MetaBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 	return be.GetVisibilityLocked(ts)
 }
 func (be *MetaBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.WriteOneNodeTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
+	return be.MVCCChain.WriteOneNodeTo(w)
 }
+
 func (be *MetaBaseEntry) WriteAllTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.WriteAllTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
+	return be.MVCCChain.WriteAllTo(w)
 }
+
 func (be *MetaBaseEntry) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.ReadOneNodeFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
+	return be.MVCCChain.ReadOneNodeFrom(r)
 }
+
 func (be *MetaBaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.ReadAllFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
+	return be.MVCCChain.ReadAllFrom(r)
 }

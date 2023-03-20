@@ -16,7 +16,9 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"unsafe"
 
 	"github.com/google/uuid"
 )
@@ -47,14 +49,35 @@ func (r Rowid) GetBlockid() Blockid {
 	// return (Blockid)(r[:BlockidSize])
 }
 
+func (r Rowid) GetSegid() Uuid {
+	return *(*Uuid)(r[:UuidSize])
+	// return (Blockid)(r[:BlockidSize])
+}
+
+func (r *Rowid) Decode() (Blockid, uint32) {
+	b := *(*Blockid)(r[:BlockidSize])
+	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	return b, s
+}
+
+func (r *Rowid) GetBlockidUnsafe() *Blockid {
+	return (*Blockid)(unsafe.Pointer(&r[0]))
+}
+
 func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
 func (r Rowid) GetObjectString() string {
-	uuid := *(*uuid.UUID)(r[:16])
-	s := DecodeUint16(r[16:18])
+	uuid := (*uuid.UUID)(r[:UuidSize])
+	s := binary.BigEndian.Uint16(r[UuidSize:ObjectBytesSize])
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
+}
+
+func (r *Rowid) String() string {
+	b := (*Blockid)(unsafe.Pointer(&r[0]))
+	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	return fmt.Sprintf("%s-%d", b.String(), s)
 }
 
 func RandomRowid() Rowid {
@@ -62,4 +85,40 @@ func RandomRowid() Rowid {
 	u := uuid.New()
 	copy(r[:], u[:])
 	return r
+}
+
+func (b Blockid) Compare(other Blockid) int {
+	return bytes.Compare(b[:], other[:])
+}
+
+func (b *Blockid) IsEmpty() bool {
+	for _, v := range b[:] {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Blockid) String() string {
+	uuid := (*uuid.UUID)(b[:UuidSize])
+	filen, blkn := b.Offsets()
+	return fmt.Sprintf("%s-%d-%d", uuid.String(), filen, blkn)
+}
+
+func (b *Blockid) ShortString() string {
+	filen, blkn := b.Offsets()
+	return fmt.Sprintf("%d-%d", filen, blkn)
+}
+
+func (b *Blockid) Offsets() (uint16, uint16) {
+	filen := binary.BigEndian.Uint16(b[UuidSize:ObjectBytesSize])
+	blkn := binary.BigEndian.Uint16(b[ObjectBytesSize:BlockidSize])
+	return filen, blkn
+}
+
+func (b *Blockid) ObjectString() string {
+	uuid := (*uuid.UUID)(b[:UuidSize])
+	filen, _ := b.Offsets()
+	return fmt.Sprintf("%s-%d", uuid.String(), filen)
 }

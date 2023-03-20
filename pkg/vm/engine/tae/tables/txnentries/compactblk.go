@@ -50,7 +50,7 @@ func NewCompactBlockEntry(
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
-		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+		prefix := toId.BlockID[:]
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
 		if deletes != nil && !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()

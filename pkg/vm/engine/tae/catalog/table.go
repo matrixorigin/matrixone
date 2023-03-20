@@ -40,7 +40,7 @@ type TableEntry struct {
 	*TableBaseEntry
 	db      *DBEntry
 	schema  *Schema
-	entries map[uint64]*common.GenericDLNode[*SegmentEntry]
+	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
 	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
@@ -73,7 +73,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		db:             db,
 		schema:         schema,
 		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
@@ -88,10 +88,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		db:             db,
 		schema:         schema,
 		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	e.CreateWithTS(types.SystemDBTS)
-	var sid uint64
+	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
 	} else if schema.Name == SystemDBSchema.Name {
@@ -110,7 +110,7 @@ func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		TableBaseEntry: NewReplayTableBaseEntry(),
 		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
@@ -120,7 +120,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableBaseEntry: NewTableBaseEntry(id),
 		schema:         schema,
 		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 
@@ -145,7 +145,7 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {
+func (entry *TableEntry) GetSegmentByID(id types.Uuid) (seg *SegmentEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.entries[id]
@@ -161,10 +161,16 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
-func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) (created *SegmentEntry, err error) {
+func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory, opts *common.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	created = NewSegmentEntry(entry, txn, state, dataFactory)
+	var id types.Uuid
+	if opts != nil && opts.Id != nil {
+		id = *opts.Id
+	} else {
+		id = common.NewSegmentid()
+	}
+	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -184,15 +190,15 @@ func (entry *TableEntry) Is1PC() bool {
 }
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
-	entry.entries[segment.GetID()] = n
+	entry.entries[segment.ID] = n
 }
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
-	if n, ok := entry.entries[segment.GetID()]; !ok {
+	if n, ok := entry.entries[segment.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
-		delete(entry.entries, segment.GetID())
+		delete(entry.entries, segment.ID)
 	}
 	return nil
 }
@@ -331,7 +337,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
-func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
+func (entry *TableEntry) DropSegmentEntry(id types.Uuid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
 	seg, err := entry.GetSegmentByID(id)
 	if err != nil {
 		return

@@ -251,10 +251,9 @@ type TxnStore interface {
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
+	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlockWithMeta(dbId uint64, id *common.ID, metaLoc string, deltaLoc string) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
 	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
