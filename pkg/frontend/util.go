@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"runtime"
 	"strconv"
@@ -384,10 +385,10 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
-		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		logInfo(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
-		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		logError(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
@@ -485,3 +486,56 @@ func hideAccessKey(sql string) string {
 	}
 	return sql
 }
+
+// isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
+func isCmdFieldListSql(sql string) bool {
+	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+}
+
+// makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
+func makeCmdFieldListSql(query string) string {
+	return cmdFieldListSql + " " + query
+}
+
+// parseCmdFieldList parses the internal cmd field list
+func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, error) {
+	if !isCmdFieldListSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
+	}
+	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	//find null
+	nullIdx := strings.IndexRune(rest, rune(0))
+	var tableName string
+	if nullIdx < len(rest) {
+		tableName = rest[:nullIdx]
+		//neglect wildcard
+		//wildcard := payload[nullIdx+1:]
+		return &InternalCmdFieldList{tableName: tableName}, nil
+	} else {
+		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
+	}
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	var accountId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	return accountId
+}
+
+//func getAccount(ctx context.Context) (uint32, uint32, uint32) {
+//	var accountId, userId, roleId uint32
+//
+//	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+//		accountId = v.(uint32)
+//	}
+//	if v := ctx.Value(defines.UserIDKey{}); v != nil {
+//		userId = v.(uint32)
+//	}
+//	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
+//		roleId = v.(uint32)
+//	}
+//	return accountId, userId, roleId
+//}

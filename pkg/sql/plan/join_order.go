@@ -28,9 +28,10 @@ type joinEdge struct {
 }
 
 type joinVertex struct {
-	node      *plan.Node
-	pks       []int32
-	pkSelRate float64
+	node        *plan.Node
+	highNDVCols []int32
+	pks         []int32
+	pkSelRate   float64
 
 	children map[int32]any
 	parent   int32
@@ -400,6 +401,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
 			binding := builder.ctxByNode[node.NodeId].bindingByTag[node.BindingTags[0]]
+			vertices[i].highNDVCols = GetHighNDVColumns(builder.compCtx.GetStatsCache().GetStatsInfoMap(node.TableDef.TblId), binding)
 			pkDef := builder.compCtx.GetPrimaryKeyDef(node.ObjRef.SchemaName, node.ObjRef.ObjName)
 			pks := make([]int32, len(pkDef))
 			for i, pk := range pkDef {
@@ -457,16 +459,20 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			edge.rightCols = append(edge.rightCols, rightCol.ColPos)
 			edgeMap[[2]int32{leftId, rightId}] = edge
 
-			if vertices[leftId].parent == -1 && containsAllPKs(edge.leftCols, vertices[leftId].pks) {
-				if vertices[rightId].parent != leftId {
-					vertices[leftId].parent = rightId
-					vertices[rightId].children[leftId] = nil
+			if vertices[leftId].parent == -1 {
+				if containsAllPKs(edge.leftCols, vertices[leftId].pks) || containsHighNDVCol(edge.leftCols, vertices[leftId].highNDVCols) {
+					if vertices[rightId].parent != leftId {
+						vertices[leftId].parent = rightId
+						vertices[rightId].children[leftId] = nil
+					}
 				}
 			}
-			if vertices[rightId].parent == -1 && containsAllPKs(edge.rightCols, vertices[rightId].pks) {
-				if vertices[leftId].parent != rightId {
-					vertices[rightId].parent = leftId
-					vertices[leftId].children[rightId] = nil
+			if vertices[rightId].parent == -1 {
+				if containsAllPKs(edge.rightCols, vertices[rightId].pks) || containsHighNDVCol(edge.rightCols, vertices[rightId].highNDVCols) {
+					if vertices[leftId].parent != rightId {
+						vertices[rightId].parent = leftId
+						vertices[leftId].children[rightId] = nil
+					}
 				}
 			}
 		}
@@ -520,6 +526,17 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		vertex.node = builder.qry.Nodes[nodeId]
 		ReCalcNodeStats(nodeId, builder, false)
 	}
+}
+
+func containsHighNDVCol(cols, highNDVCols []int32) bool {
+	for _, i := range cols {
+		for _, j := range highNDVCols {
+			if i == j {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsAllPKs(cols, pks []int32) bool {
