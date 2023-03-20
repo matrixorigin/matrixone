@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
