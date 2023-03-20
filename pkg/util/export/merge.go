@@ -23,6 +23,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,8 @@ const LoggerNameContentReader = "ETLContentReader"
 //     2. call `Merge::doMergeFiles` with all files in `rootPath`,  do merge job
 //   - `Merge::doMergeFiles` handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
+	Task task.Task
+
 	Table       *table.Table            // WithTable
 	FS          fileservice.FileService // WithFileService
 	datetime    time.Time               // see Main
@@ -133,6 +136,22 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool, er
 	return m, false, err
 }
 
+var poolMux sync.Mutex
+var ETLMergeTaskPool *mpool.MPool
+
+func getMpool() (*mpool.MPool, error) {
+	poolMux.Lock()
+	defer poolMux.Unlock()
+	if ETLMergeTaskPool == nil {
+		mp, err := mpool.NewMPool("etl_merge_task", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		ETLMergeTaskPool = mp
+	}
+	return ETLMergeTaskPool, nil
+}
+
 func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
 	var err error
 	m := &Merge{
@@ -148,7 +167,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
 	for _, opt := range opts {
 		opt(m)
 	}
-	if m.mp, err = mpool.NewMPool("etl_merge_task", 0, mpool.NoFixed); err != nil {
+	if m.mp, err = getMpool(); err != nil {
 		return nil, err
 	}
 	m.valid(ctx)
@@ -259,6 +278,8 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileMeta, bufferSize int64) error {
 
 	var err error
+	ctx, span := trace.Start(ctx, "doMergeFiles")
+	defer span.End()
 
 	// Control task concurrency
 	m.runningJobs <- struct{}{}
@@ -310,6 +331,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	cacheFileData := newRowCache(m.Table)
 	row := m.Table.GetRow(ctx)
 	defer row.Free()
+	defer cacheFileData.Reset()
 	var reader ETLReader
 	for _, path := range files {
 		// open reader
@@ -329,6 +351,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 					logutil.PathField(path.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
+				reader.Close()
 				return err
 			}
 			cacheFileData.Put(row)
@@ -671,8 +694,10 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		args := task.Metadata.Context
 		ts := time.Now()
 		logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameETLMerge)
-		logger.Info(fmt.Sprintf("start merge '%s' at %v", args, ts))
-		defer logger.Info(fmt.Sprintf("done merge '%s'", args))
+		logger.Info(fmt.Sprintf("start merge '%s' at %v, ID: %d, CreateAt: %d, Metadata.ID: %s", args, ts,
+			task.ID, task.CreateAt, task.Metadata.ID))
+		defer logger.Info(fmt.Sprintf("done merge '%s', ID: %d, CreateAt: %d, Metadata.ID: %s", args,
+			task.ID, task.CreateAt, task.Metadata.ID))
 
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]
@@ -707,6 +732,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		if err != nil {
 			return err
 		}
+		merge.Task = task
 		if err = merge.Main(ctx, ts); err != nil {
 			logger.Error(fmt.Sprintf("merge metric failed: %v", err))
 			return err

@@ -28,16 +28,20 @@ import (
 type ObjectReader struct {
 	object *Object
 	name   string
+	ReaderOptions
 }
 
 const ExtentTypeSize = 4 * 3
 const ExtentsLength = 20
 const FooterSize = 8 + 4
 
-func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
+func NewObjectReader(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
 	reader := &ObjectReader{
 		name:   name,
 		object: NewObject(name, fs),
+	}
+	for _, f := range opts {
+		f(&reader.ReaderOptions)
 	}
 	return reader, nil
 }
@@ -52,6 +56,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 1, l),
+		NoCache:  r.noCache,
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{
@@ -130,6 +135,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
+		NoCache:  r.noCache,
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {
@@ -209,6 +215,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 				},
 			},
 		},
+		NoCache: r.noCache,
 	}
 	err := r.object.fs.Read(ctx, data)
 	if err != nil {
@@ -239,4 +246,17 @@ func newDecompressToObject(size int64) ToObjectFunc {
 		}
 		return decompressed, int64(len(decompressed)), nil
 	}
+}
+
+type ReaderOptions struct {
+	// noCache true means NOT cache IOVector in FileService's cache
+	noCache bool
+}
+
+type ReaderOptionFunc func(opt *ReaderOptions)
+
+func WithNoCacheReader(noCache bool) ReaderOptionFunc {
+	return ReaderOptionFunc(func(opt *ReaderOptions) {
+		opt.noCache = noCache
+	})
 }
