@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -31,7 +33,9 @@ var (
 	}
 )
 
-func acquireWaiter(serviceID string, txnID []byte) *waiter {
+func acquireWaiter(
+	serviceID string,
+	txnID []byte) *waiter {
 	w := waiterPool.Get().(*waiter)
 	logWaiterContactPool(serviceID, w, "get")
 	w.txnID = txnID
@@ -44,7 +48,7 @@ func acquireWaiter(serviceID string, txnID []byte) *waiter {
 
 func newWaiter() *waiter {
 	w := &waiter{
-		c:       make(chan error, 1),
+		c:       make(chan notifyValue, 1),
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
@@ -84,7 +88,7 @@ const (
 type waiter struct {
 	txnID    []byte
 	status   atomic.Int32
-	c        chan error
+	c        chan notifyValue
 	waiters  waiterQueue
 	refCount atomic.Int32
 
@@ -160,17 +164,19 @@ func (w *waiter) casStatus(
 
 func (w *waiter) mustRecvNotification(
 	ctx context.Context,
-	serviceID string) error {
+	serviceID string) notifyValue {
 	select {
-	case err := <-w.c:
-		logWaiterGetNotify(serviceID, w, err)
-		return err
+	case v := <-w.c:
+		logWaiterGetNotify(serviceID, w, v)
+		return v
 	case <-ctx.Done():
-		return ctx.Err()
+		return notifyValue{err: ctx.Err()}
 	}
 }
 
-func (w *waiter) mustSendNotification(serviceID string, value error) {
+func (w *waiter) mustSendNotification(
+	serviceID string,
+	value notifyValue) {
 	logWaiterNotified(serviceID, w, value)
 	select {
 	case w.c <- value:
@@ -189,7 +195,7 @@ func (w *waiter) resetWait(serviceID string) {
 
 func (w *waiter) wait(
 	ctx context.Context,
-	serviceID string) error {
+	serviceID string) notifyValue {
 	status := w.getStatus()
 	if status != waiting &&
 		status != notified {
@@ -199,10 +205,10 @@ func (w *waiter) wait(
 	w.beforeSwapStatusAdjustFunc()
 
 	select {
-	case err := <-w.c:
-		logWaiterGetNotify(serviceID, w, err)
+	case v := <-w.c:
+		logWaiterGetNotify(serviceID, w, v)
 		w.setStatus(serviceID, completed)
-		return err
+		return v
 	case <-ctx.Done():
 	}
 
@@ -210,7 +216,7 @@ func (w *waiter) wait(
 
 	// context is timeout, and status not changed, no concurrent happen
 	if w.casStatus(serviceID, status, completed) {
-		return ctx.Err()
+		return notifyValue{err: ctx.Err()}
 	}
 
 	// notify and timeout are concurrently issued, we use real result to replace
@@ -220,7 +226,7 @@ func (w *waiter) wait(
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
-func (w *waiter) notify(serviceID string, value error) bool {
+func (w *waiter) notify(serviceID string, value notifyValue) bool {
 	for {
 		status := w.getStatus()
 		// already notified, no wait on w
@@ -262,8 +268,8 @@ func (w *waiter) clearAllNotify(
 // into the next waiter.
 func (w *waiter) close(
 	serviceID string,
-	err error) *waiter {
-	nextWaiter := w.fetchNextWaiter(serviceID, err)
+	value notifyValue) *waiter {
+	nextWaiter := w.fetchNextWaiter(serviceID, value)
 	logWaiterClose(serviceID, w)
 	w.unref(serviceID)
 	return nextWaiter
@@ -271,7 +277,7 @@ func (w *waiter) close(
 
 func (w *waiter) fetchNextWaiter(
 	serviceID string,
-	err error) *waiter {
+	value notifyValue) *waiter {
 	if w.waiters.len() == 0 {
 		logWaiterFetchNextWaiter(serviceID, w, nil)
 		return nil
@@ -279,7 +285,7 @@ func (w *waiter) fetchNextWaiter(
 	next := w.awakeNextWaiter(serviceID)
 	logWaiterFetchNextWaiter(serviceID, w, next)
 	for {
-		if next.notify(serviceID, err) {
+		if next.notify(serviceID, value) {
 			next.unref(serviceID)
 			return next
 		}
@@ -307,4 +313,9 @@ func (w *waiter) reset(serviceID string) {
 	w.setStatus(serviceID, waiting)
 	w.waiters.reset()
 	waiterPool.Put(w)
+}
+
+type notifyValue struct {
+	err error
+	ts  timestamp.Timestamp
 }

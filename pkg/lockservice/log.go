@@ -495,26 +495,26 @@ func logWaitersAdded(
 func logWaiterGetNotify(
 	serviceID string,
 	w *waiter,
-	err error) {
+	v notifyValue) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter read notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", err))
+			zap.Any("notify", v))
 	}
 }
 
 func logWaiterNotified(
 	serviceID string,
 	w *waiter,
-	err error) {
+	v notifyValue) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter add notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", err))
+			zap.Any("notify", v))
 	}
 }
 
