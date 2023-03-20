@@ -500,9 +500,6 @@ func BlkColumnByMetaLoadJob(
 ) *tasks.Job {
 	exec := func(_ context.Context) (result *tasks.JobResult) {
 		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
-		if bat == nil {
-			logutil.Info("fsdfsdf")
-		}
 		return &tasks.JobResult{
 			Err: err,
 			Res: bat,
@@ -528,57 +525,21 @@ func (data *CheckpointData) ReadFrom(
 		defer scheduler.Stop()
 	}
 
-	jobs := make([]*tasks.Job, MaxIDX)
+	for idx, item := range checkpointDataRefer {
+		idxes := make([]uint16, len(item.attrs))
+		for i := range item.attrs {
+			idxes[i] = uint16(i)
+		}
+		blockio.Prefetch(idxes, reader, []uint32{metas[idx].GetID()}, metas[idx].GetExtent(), nil)
+	}
 
 	for idx, item := range checkpointDataRefer {
-		job := BlkColumnByMetaLoadJob(
-			ctx,
-			item.types,
-			item.attrs,
-			item.nullables,
-			metas[idx],
-			reader,
-		)
-		if err = scheduler.Schedule(job); err != nil {
-			break
+		var bat *containers.Batch
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, metas[idx], reader)
+		if err != nil {
+			return
 		}
-		jobs[idx] = job
-	}
-
-	cleanJobs := func() {
-		for _, job := range jobs {
-			if job == nil {
-				continue
-			}
-			result := job.WaitDone()
-			defer job.Close()
-			if result != nil && result.Res != nil {
-				result.Res.(*containers.Batch).Close()
-				result.Res = nil
-			}
-		}
-	}
-
-	if err != nil {
-		go cleanJobs()
-		return
-	}
-
-	for _, job := range jobs {
-		result := job.WaitDone()
-		if err = result.Err; err != nil {
-			break
-		}
-	}
-
-	if err != nil {
-		go cleanJobs()
-		return
-	}
-
-	for idx, job := range jobs {
-		result := job.GetResult()
-		data.bats[idx] = result.Res.(*containers.Batch)
+		data.bats[idx] = bat
 	}
 
 	return

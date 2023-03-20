@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -396,7 +397,7 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 	}
 }
 
-func Prefetch(name string, idxes []uint16, reader dataio.Reader,
+func Prefetch(idxes []uint16, reader dataio.Reader,
 	ids []uint32, meta objectio.Extent, m *mpool.MPool) error {
 	if meta.End() == 0 {
 		return nil
@@ -414,11 +415,12 @@ func Prefetch(name string, idxes []uint16, reader dataio.Reader,
 		}
 	}
 	prefetch := prefetchCtx{
-		name:   name,
+		name:   reader.(*BlockReader).name,
 		meta:   meta,
 		ids:    blocks,
 		pool:   m,
 		reader: reader.(*BlockReader).reader,
 	}
+	logutil.Infof("Prefetch %v", prefetch)
 	return Pipeline.Prefetch(prefetch)
 }
