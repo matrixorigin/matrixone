@@ -147,13 +147,13 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
+			rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 			p.inserts = p.inserts[1:]
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
 				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			}
-			rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 			for i, vec := range b.Vecs {
 				srcVec := bat.Vecs[i]
 				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
@@ -165,6 +165,12 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 						return nil, err
 					}
 				}
+			}
+			for j := 0; j < bat.Length(); j++ {
+				if _, ok := p.deletes[rowIds[j]]; ok {
+					continue
+				}
+				b.Zs = append(b.Zs, int64(j))
 			}
 			return b, nil
 		}
