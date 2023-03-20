@@ -63,7 +63,7 @@ func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMet
 	var init bool
 	for i := range *blocks {
 		for j := range (*blocks)[i] {
-			zonemapVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, (*blocks)[i][j], tableDef)
+			zonemapVal, blkTypes, err := getZonemapDataFromMeta(columns, (*blocks)[i][j], tableDef)
 			if err != nil {
 				return nil, err
 			}
