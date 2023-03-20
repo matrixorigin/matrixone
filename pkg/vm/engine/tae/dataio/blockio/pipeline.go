@@ -73,6 +73,26 @@ func jobFactory(
 	)
 }
 
+func prefetchJob(ctx context.Context,
+	fs *objectio.ObjectFS, pCtx prefetchCtx) *tasks.Job {
+	return tasks.NewJob(
+		makeName(pCtx.name),
+		JTLoad,
+		ctx,
+		func(_ context.Context) (res *tasks.JobResult) {
+			// TODO
+			res = &tasks.JobResult{}
+			ioVectors, err := pCtx.reader.ReadBlocks(ctx, pCtx.meta, pCtx.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+			if err != nil {
+				res.Err = err
+				return
+			}
+			res.Res = ioVectors
+			return
+		},
+	)
+}
+
 type IoPipeline struct {
 	options struct {
 		fetchParallism    int
@@ -190,8 +210,8 @@ func (p *IoPipeline) AsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(proc proc) (err error) {
-	if _, err = p.prefetch.queue.Enqueue(proc); err != nil {
+func (p *IoPipeline) Prefetch(ctx prefetchCtx) (err error) {
+	if _, err = p.prefetch.queue.Enqueue(ctx); err != nil {
 		return
 	}
 	return
@@ -210,19 +230,19 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if len(items) == 0 {
 		return
 	}
-	processes := make([]proc, 0)
+	processes := make([]prefetchCtx, 0)
 	for _, item := range items {
-		p := item.(proc)
+		p := item.(prefetchCtx)
 		processes = append(processes, p)
 	}
 	if !p.active.Load() {
 		return
 	}
-	merged := mergeBlock(processes)
+	merged := mergePrefetch(processes)
 	for _, object := range merged {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
-		job := p.jobFactory(
+		job := prefetchJob(
 			ctx,
 			p.fs,
 			object,

@@ -33,6 +33,11 @@ type WriteOptions struct {
 	Val  any
 }
 
+type ReadBlock struct {
+	Id    uint32
+	Idxes map[uint16]bool
+}
+
 // Writer is to virtualize batches into multiple blocks
 // and write them into filefservice at one time
 type Writer interface {
@@ -60,6 +65,13 @@ type Reader interface {
 	Read(ctx context.Context,
 		extent Extent, idxs []uint16,
 		ids []uint32,
+		m *mpool.MPool,
+		zoneMapFunc ZoneMapUnmarshalFunc,
+		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+
+	ReadBlocks(ctx context.Context,
+		extent Extent,
+		ids map[uint32]*ReadBlock,
 		m *mpool.MPool,
 		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)

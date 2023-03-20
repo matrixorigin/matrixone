@@ -131,7 +131,7 @@ func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
 	return bats, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
 	if r.meta.End() == 0 {
@@ -140,7 +140,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	proc := proc{
 		name:   r.name,
 		meta:   r.meta,
-		idxes:  idxs,
+		idxes:  idxes,
 		ids:    ids,
 		pool:   m,
 		reader: r.reader,
@@ -151,9 +151,9 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	}
 	ioVectors := v.(*fileservice.IOVector)
 	for y := range ids {
-		bat := batch.NewWithSize(len(idxs))
-		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		bat := batch.NewWithSize(len(idxes))
+		for i := range idxes {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxes)+i].Object.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}
@@ -188,6 +188,33 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 		bats = append(bats, bat)
 	}
 	return bats, nil
+}
+
+func (r *BlockReader) Prefetch(ctx context.Context, idxes []uint16,
+	ids []uint32, m *mpool.MPool) error {
+	if r.meta.End() == 0 {
+		return nil
+	}
+
+	blocks := make(map[uint32]*objectio.ReadBlock)
+	blockIdexes := make(map[uint16]bool)
+	for _, idx := range idxes {
+		blockIdexes[idx] = true
+	}
+	for _, id := range ids {
+		blocks[id] = &objectio.ReadBlock{
+			Id:    id,
+			Idxes: blockIdexes,
+		}
+	}
+	prefetch := prefetchCtx{
+		name:   r.name,
+		meta:   r.meta,
+		ids:    blocks,
+		pool:   m,
+		reader: r.reader,
+	}
+	return r.manager.Prefetch(prefetch)
 }
 
 func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
