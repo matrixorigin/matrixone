@@ -122,6 +122,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
+	logDebugf(op.Txn(), "Engine.Database %s", name)
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
@@ -346,6 +347,7 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
+	logDebugf(op.Txn(), "Engine.New")
 	proc := process.New(
 		ctx,
 		e.mp,
@@ -417,6 +419,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
+	logDebugf(op.Txn(), "Engine.Commit")
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
@@ -440,6 +443,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
+	logDebugf(op.Txn(), "Engine.Rollback")
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return nil // compatible with existing logic
