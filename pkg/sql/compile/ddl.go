@@ -57,7 +57,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
-	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Drop the old view, and create the new view.
@@ -490,11 +501,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
-	err = colexec.DeleteOneIndexMetadata(c.e, c.ctx, r, qry.GetIndexName(), c.proc)
-	if err != nil {
-		return err
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
+			return err
+		}
 	}
-
 	return nil
 }
 
@@ -845,9 +858,12 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := colexec.DeleteIndexMetadata(c.e, c.ctx, rel, c.proc)
-			if err != nil {
-				return err
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
@@ -860,13 +876,19 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := colexec.DeleteIndexMetadata(c.e, c.ctx, rel, c.proc)
-			if err != nil {
-				return err
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
 			}
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		return nil
 	}
 }
 

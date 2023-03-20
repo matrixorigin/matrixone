@@ -684,6 +684,10 @@ func (m *MockCompilerContext) DatabaseExists(name string) bool {
 	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
 }
 
+func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	return 0, nil
+}
+
 func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
 }

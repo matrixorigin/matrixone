@@ -24,12 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 )
 
 const (
 	// 'mo_indexes' table
 	MO_INDEX_ID               = "id"
 	MO_INDEX_TABLE_ID         = "table_id"
+	MO_INDEX_DATABASE_ID      = "database_id"
 	MO_INDEX_NAME             = "name"
 	MO_INDEX_TYPE             = "type"
 	MO_INDEX_IS_VISIBLE       = "is_visible"
@@ -45,6 +47,7 @@ const (
 var MO_INDEX_COLTYPE = map[string]types.T{
 	MO_INDEX_ID:               types.T_uint64,
 	MO_INDEX_TABLE_ID:         types.T_uint64,
+	MO_INDEX_DATABASE_ID:      types.T_uint64,
 	MO_INDEX_NAME:             types.T_varchar,
 	MO_INDEX_TYPE:             types.T_varchar,
 	MO_INDEX_IS_VISIBLE:       types.T_int8,
@@ -64,6 +67,11 @@ const (
 
 // InsertIndexMetadata :Synchronize the index metadata information of the table to the index metadata table
 func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string) error {
+	databaseId, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+	if err != nil {
+		return moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number")
+	}
+
 	relation, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -110,7 +118,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return err
 	}
 
-	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, ct, eg, proc)
+	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, databaseId, ct, eg, proc)
 	if err != nil {
 		return err
 	}
@@ -129,6 +137,10 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 
 // InsertOneIndexMetadata :Synchronize the single index metadata information into the index metadata table
 func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string, idxdef *plan.IndexDef) error {
+	databaseId, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+	if err != nil {
+		return moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number")
+	}
 	relation, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -151,7 +163,7 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 		},
 	}
 
-	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, ct, eg, proc)
+	indexMetaBatch, err := buildInsertIndexMetaBatch(tableId, databaseId, ct, eg, proc)
 	if err != nil {
 		return err
 	}
@@ -263,23 +275,24 @@ func DeleteOneIndexMetadata(eg engine.Engine, ctx context.Context, relation engi
 	return nil
 }
 
-func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
+func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 11),
-		Vecs:  make([]*vector.Vector, 11),
+		Attrs: make([]string, 12),
+		Vecs:  make([]*vector.Vector, 12),
 		Cnt:   1,
 	}
 	bat.Attrs[0] = MO_INDEX_ID
 	bat.Attrs[1] = MO_INDEX_TABLE_ID
-	bat.Attrs[2] = MO_INDEX_NAME
-	bat.Attrs[3] = MO_INDEX_TYPE
-	bat.Attrs[4] = MO_INDEX_IS_VISIBLE
-	bat.Attrs[5] = MO_INDEX_HIDDEN
-	bat.Attrs[6] = MO_INDEX_COMMENT
-	bat.Attrs[7] = MO_INDEX_COLUMN_NAME
-	bat.Attrs[8] = MO_INDEX_ORDINAL_POSITION
-	bat.Attrs[9] = MO_INDEX_OPTIONS
-	bat.Attrs[10] = MO_INDEX_TABLE_NAME
+	bat.Attrs[2] = MO_INDEX_DATABASE_ID
+	bat.Attrs[3] = MO_INDEX_NAME
+	bat.Attrs[4] = MO_INDEX_TYPE
+	bat.Attrs[5] = MO_INDEX_IS_VISIBLE
+	bat.Attrs[6] = MO_INDEX_HIDDEN
+	bat.Attrs[7] = MO_INDEX_COMMENT
+	bat.Attrs[8] = MO_INDEX_COLUMN_NAME
+	bat.Attrs[9] = MO_INDEX_ORDINAL_POSITION
+	bat.Attrs[10] = MO_INDEX_OPTIONS
+	bat.Attrs[11] = MO_INDEX_TABLE_NAME
 
 	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
@@ -287,32 +300,35 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 	vec_table_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType())
 	bat.Vecs[1] = vec_table_id
 
+	vec_database_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_DATABASE_ID].ToType())
+	bat.Vecs[2] = vec_database_id
+
 	vec_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType())
-	bat.Vecs[2] = vec_name
+	bat.Vecs[3] = vec_name
 
 	vec_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
-	bat.Vecs[3] = vec_type
+	bat.Vecs[4] = vec_type
 
 	vec_visible := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
-	bat.Vecs[4] = vec_visible
+	bat.Vecs[5] = vec_visible
 
 	vec_hidden := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
-	bat.Vecs[5] = vec_hidden
+	bat.Vecs[6] = vec_hidden
 
 	vec_comment := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
-	bat.Vecs[6] = vec_comment
+	bat.Vecs[7] = vec_comment
 
 	vec_column_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
-	bat.Vecs[7] = vec_column_name
+	bat.Vecs[8] = vec_column_name
 
 	vec_ordinal_position := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
-	bat.Vecs[8] = vec_ordinal_position
+	bat.Vecs[9] = vec_ordinal_position
 
 	vec_options := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
-	bat.Vecs[9] = vec_options
+	bat.Vecs[10] = vec_options
 
 	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
-	bat.Vecs[10] = vec_index_table
+	bat.Vecs[11] = vec_index_table
 
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
@@ -329,6 +345,10 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 						return nil, err
 					}
 					err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_database_id, databaseId, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -389,6 +409,10 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 					return nil, err
 				}
 				err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				err = vector.AppendFixed(vec_database_id, databaseId, false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}

@@ -728,10 +728,12 @@ var (
 		"mo_indexes":                 0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
-	// mo_indexes is a data dictionary table, which must be created first
+	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
+	// mo_indexes table does not have primary keys and index constraints, nor does it have self increasing columns,
 	createMoIndexesSql = `create table mo_indexes(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
+				database_id bigint unsigned not null,
 				name 		varchar(64) not null,
 				type        varchar(11) not null,
 				is_visible  tinyint not null,
@@ -838,9 +840,10 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
-		`drop table if exists mo_catalog.mo_indexes;`,
 		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
+
+	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
 		account_name,
@@ -2559,6 +2562,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 			if err != nil {
 				goto handleFailed
 			}
+		}
+
+		//step 10: drop mo_catalog.mo_indexes under general tenant
+		err = bh.Exec(deleteCtx, dropMoIndexes)
+		if err != nil {
+			goto handleFailed
 		}
 	}
 

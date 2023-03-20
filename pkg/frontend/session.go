@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1742,6 +1743,7 @@ const (
 	TXN_DEFAULT QueryType = iota
 	TXN_DELETE
 	TXN_UPDATE
+	TXN_DROP
 )
 
 type TxnCompilerContext struct {
@@ -1849,6 +1851,27 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	}
 
 	return true
+}
+
+func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
+		return 0, err
+	}
+	txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return 0, err
+	}
+	ses := tcc.GetSession()
+	database, err := tcc.GetTxnHandler().GetStorage().Database(ses.GetRequestContext(), dbName, txn)
+	if err != nil {
+		return 0, err
+	}
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ses.GetRequestContext()), 10, 64)
+	if err != nil {
+		return 0, moerr.NewInternalError(ses.GetRequestContext(), "The databaseid of '%s' is not a valid number", dbName)
+	}
+	return databaseId, nil
 }
 
 // getRelation returns the context (maybe updated) and the relation
