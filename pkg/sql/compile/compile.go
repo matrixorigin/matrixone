@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -1651,10 +1652,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 	if c.isTemporaryScan {
 		c.isTemporaryScan = false
-		for i := 0; i < len(c.cnList); i++ {
-			c.cnList[i].Addr = ""
-		}
+		c.cnList = c.cnList[0:1]
 	}
+
 	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
 	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
@@ -1672,6 +1672,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
+
+	// In fact, the first element of Ranges is always a memory table.
 	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
@@ -1687,9 +1689,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
 		ranges = ranges[1:]
 	}
-	if len(ranges) == 0 {
+
+	// If the number of elements in the cn list is only 1,
+	// this indicates that the current query is small or for temporary table.
+	// and only needs to be executed on the current cn.
+	if len(c.cnList) == 1 {
 		return nodes, nil
 	}
+
+	// determines which blocks should be read by each cn node.
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
@@ -1790,8 +1798,12 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
+	// just a defensive judgment. In fact, we shouldn't have received such data.
+	if len(addr) == 0 {
+		logutil.Warnf("receive an empty cn address")
+		return true
+	}
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-	//return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
