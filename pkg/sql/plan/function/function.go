@@ -418,11 +418,16 @@ func rewriteTypesIfNecessary(targets []types.Type, name string, sources []types.
 		for i := range targets {
 			if !hasSet[i] && targets[i].Oid != ScalarNull {
 				setDefaultScale(&targets[i], sources[i])
-			} else if types.IsDecimal(targets[i].Oid) && targets[i].Width == 0 {
-				if targets[i].Oid == types.T_decimal64 {
-					targets[i].Width = 18
-				} else {
-					targets[i].Width = 38
+			} else if types.IsDecimal(targets[i].Oid) {
+				if targets[i].Width == 0 {
+					if targets[i].Oid == types.T_decimal64 {
+						targets[i].Width = 18
+					} else {
+						targets[i].Width = 38
+					}
+				}
+				if targets[i].Scale < 0 {
+					targets[i].Scale = 0
 				}
 			}
 		}
