@@ -225,8 +225,8 @@ func (w *S3Writer) Put(bat *batch.Batch, idx int) int {
 }
 
 func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int) (cols [][]T) {
+	cols = make([][]T, 0, len(bats))
 	for i := range bats {
-
 		cols = append(cols, vector.MustFixedCol[T](bats[i].Vecs[idx]))
 	}
 	if stopIdx != -1 {
@@ -236,6 +236,7 @@ func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int)
 }
 
 func getStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
+	cols = make([][]string, 0, len(bats))
 	for i := range bats {
 		cols = append(cols, vector.MustStrCol(bats[i].Vecs[idx]))
 	}
