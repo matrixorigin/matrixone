@@ -217,3 +217,6 @@ func (node *DropPublication) Format(ctx *FmtCtx) {
 	ctx.WriteByte(' ')
 	node.Name.Format(ctx)
 }
+
+func (node *DropPublication) GetStatementType() string { return "Drop Publication" }
+func (node *DropPublication) GetQueryType() string     { return QueryTypeDCL }

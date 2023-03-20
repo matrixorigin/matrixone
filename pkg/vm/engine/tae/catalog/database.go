@@ -74,6 +74,7 @@ type DBEntry struct {
 	createSql string
 	fullName  string
 	isSys     bool
+	datType   string
 
 	entries   map[uint64]*common.GenericDLNode[*TableEntry]
 	nameNodes map[string]*nodeList[*TableEntry]
@@ -184,6 +185,7 @@ func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
 func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
 func (e *DBEntry) GetName() string              { return e.name }
 func (e *DBEntry) GetCreateSql() string         { return e.createSql }
+func (e *DBEntry) GetDatType() string           { return e.datType }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
 		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
