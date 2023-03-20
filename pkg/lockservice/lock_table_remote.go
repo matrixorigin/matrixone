@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -58,7 +59,7 @@ func (l *remoteLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
-	opts LockOptions) error {
+	opts LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()
@@ -80,7 +81,7 @@ func (l *remoteLockTable) lock(
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
 			logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
-			return err
+			return pb.Result{}, err
 		}
 
 		// we use mutex lock here to avoid the deadlock detection
@@ -89,7 +90,7 @@ func (l *remoteLockTable) lock(
 		defer txn.Unlock()
 		txn.lockAdded(l.serviceID, l.bind.Table, rows, true)
 		logRemoteLockAdded(l.serviceID, txn, rows, opts, l.bind)
-		return nil
+		return resp.Lock.Result, nil
 	}
 
 	logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
@@ -97,18 +98,19 @@ func (l *remoteLockTable) lock(
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	_ = l.handleError(txn.txnID, err)
-	return err
+	return pb.Result{}, err
 }
 
 func (l *remoteLockTable) unlock(
 	txn *activeTxn,
-	ls *cowSlice) {
+	ls *cowSlice,
+	commitTS timestamp.Timestamp) {
 	logUnlockTableOnRemote(
 		l.serviceID,
 		txn,
 		l.bind)
 	for {
-		err := l.doUnlock(txn)
+		err := l.doUnlock(txn, commitTS)
 		if err == nil {
 			return
 		}
@@ -138,7 +140,7 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 				fn(lock)
 				w := lock.waiter
 				for {
-					w = w.close(l.serviceID, nil)
+					w = w.close(l.serviceID, notifyValue{})
 					if w == nil {
 						break
 					}
@@ -154,7 +156,9 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 	}
 }
 
-func (l *remoteLockTable) doUnlock(txn *activeTxn) error {
+func (l *remoteLockTable) doUnlock(
+	txn *activeTxn,
+	commitTS timestamp.Timestamp) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -164,6 +168,7 @@ func (l *remoteLockTable) doUnlock(txn *activeTxn) error {
 	req.Method = pb.Method_Unlock
 	req.LockTable = l.bind
 	req.Unlock.TxnID = txn.txnID
+	req.Unlock.CommitTS = commitTS
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
