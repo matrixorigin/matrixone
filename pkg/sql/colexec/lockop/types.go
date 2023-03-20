@@ -24,7 +24,9 @@ import (
 type fetchRowsFunc func(
 	vec *vector.Vector,
 	parker *types.Packer,
-	max int) ([][]byte, lock.Granularity)
+	tp types.Type,
+	max int,
+	lockTabel bool) ([][]byte, lock.Granularity)
 
 type Argument struct {
 	tableID    uint64
@@ -32,6 +34,7 @@ type Argument struct {
 	pkIdx      int32
 	pkType     types.Type
 	mode       lock.LockMode
+	lockTable  bool
 	fetcher    fetchRowsFunc
 	packer     *types.Packer
 }

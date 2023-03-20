@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -95,8 +96,16 @@ func Call(
 	}
 
 	arg := v.(*Argument)
-	vec := bat.GetVector(arg.pkIdx)
-	rows, g := arg.fetcher(vec, arg.packer, 0)
+	var vec *vector.Vector
+	if !arg.lockTable {
+		vec = bat.GetVector(arg.pkIdx)
+	}
+	rows, g := arg.fetcher(
+		vec,
+		arg.packer,
+		arg.pkType,
+		0,
+		arg.lockTable)
 	txnOp := proc.TxnOperator
 	bind, err := proc.LockService.Lock(
 		proc.Ctx,

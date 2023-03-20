@@ -350,10 +350,13 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
+		lockArgs := constructLockForDelete(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		rs.Instructions = append(rs.Instructions, getLockInstructions(lockArgs)...)
+		rs.Instructions = append(rs.Instructions,
+			vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: scp,
+			})
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
@@ -363,11 +366,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 
-		lockArg, err := constructLockWithInsert(insertNode, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-
+		lockArgs := constructLockForInsert(insertNode, c.e, c.proc)
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -411,12 +410,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Op:  vm.PreInsert,
 				Arg: preArg,
 			})
-			if lockArg != nil {
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.LockOp,
-					Arg: lockArg,
-				})
-			}
+			rs.Instructions = append(rs.Instructions, getLockInstructions(lockArgs)...)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -431,6 +425,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Update
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		rs.Instructions = append(rs.Instructions,
+			getLockInstructions(constructLockForUpdate(
+				qry.Nodes[qry.Steps[0]],
+				c.e,
+				c.proc))...)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Update,
 			Arg: scp,

@@ -19,22 +19,55 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func constructLockWithInsert(
+func constructLockForInsert(
 	n *plan.Node,
 	eg engine.Engine,
-	proc *process.Process) (*lockop.Argument, error) {
+	proc *process.Process) []*lockop.Argument {
 	ctx := n.InsertCtx
 	tableDef := ctx.TableDef
-	if tableDef == nil {
-		panic("missing table def")
+	if op := constructLock(tableDef); op != nil {
+		return []*lockop.Argument{op}
 	}
+	return nil
+}
+
+func constructLockForUpdate(
+	n *plan.Node,
+	eg engine.Engine,
+	proc *process.Process) []*lockop.Argument {
+	ctx := n.UpdateCtx
+	var args []*lockop.Argument
+	for _, def := range ctx.OnSetDef {
+		if arg := constructLock(def); arg != nil {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
+func constructLockForDelete(
+	n *plan.Node,
+	eg engine.Engine,
+	proc *process.Process) []*lockop.Argument {
+	ctx := n.DeleteCtx
+	var args []*lockop.Argument
+	for _, def := range ctx.OnSetDef {
+		if arg := constructLock(def); arg != nil {
+			args = append(args, arg)
+		}
+	}
+	return args[:0]
+}
+
+func constructLock(tableDef *plan.TableDef) *lockop.Argument {
 	// no primary key, no lock needed
 	if tableDef.Pkey == nil {
-		return nil, nil
+		return nil
 	}
 
 	pkIdx := -1
@@ -68,5 +101,16 @@ func constructLockWithInsert(
 		int32(pkIdx),
 		pkType,
 		lock.LockMode_Exclusive,
-	), nil
+	)
+}
+
+func getLockInstructions(values []*lockop.Argument) vm.Instructions {
+	var instructions vm.Instructions
+	for _, v := range values {
+		instructions = append(instructions, vm.Instruction{
+			Op:  vm.LockOp,
+			Arg: v,
+		})
+	}
+	return instructions
 }
