@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -274,7 +275,7 @@ func (s *service) initEngine(
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
+	blockio.Start()
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
@@ -316,6 +317,7 @@ func (s *service) runMoServer() error {
 }
 
 func (s *service) serverShutdown(isgraceful bool) error {
+	blockio.Stop()
 	return s.mo.Stop()
 }
 

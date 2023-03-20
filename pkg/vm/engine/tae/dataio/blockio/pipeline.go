@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -45,6 +44,17 @@ type IOJobFactory func(context.Context, *objectio.ObjectFS, proc) *tasks.Job
 // 	Fetch(ctx context.Context, location string) (any, error)
 // 	AsyncFetch(ctx context.Context, location string) (tasks.Job, error)
 // }
+
+func Start() {
+	if Pipeline == nil {
+		Pipeline = NewIOPipeline(nil)
+	}
+	Pipeline.Start()
+}
+
+func Stop() {
+	Pipeline.Stop()
+}
 
 func makeName(location string) string {
 	return fmt.Sprintf("%s-%d", location, time.Now().UTC().Nanosecond())
@@ -230,6 +240,7 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if len(items) == 0 {
 		return
 	}
+	logutil.Infof("items is %d", len(items))
 	processes := make([]prefetchCtx, 0)
 	for _, item := range items {
 		p := item.(prefetchCtx)
@@ -240,18 +251,20 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	}
 	merged := mergePrefetch(processes)
 	for _, object := range merged {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-		defer cancel()
+		/*ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()*/
 		job := prefetchJob(
-			ctx,
+			context.Background(),
 			p.fs,
 			object,
 		)
 		if err := p.prefetch.scheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
+			logutil.Infof("err is %v", err.Error())
 		} else {
 			if _, err := p.waitQ.Enqueue(job); err != nil {
 				job.DoneWithErr(err)
+				logutil.Infof("err is %v", err.Error())
 			}
 		}
 	}
@@ -264,7 +277,6 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
-		bat := res.Res.(*containers.Batch)
-		bat.Close()
+		//bat := res.Res.(*fileservice.IOVector)
 	}
 }
