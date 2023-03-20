@@ -75,6 +75,7 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
+	logDebugf(db.txn.meta, "txnDatabase.Relation table %s", name)
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
