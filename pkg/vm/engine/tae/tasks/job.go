@@ -31,6 +31,8 @@ type JobType = uint16
 const (
 	JTAny             JobType = iota
 	JTCustomizedStart         = 100
+
+	JTInvalid = 10000
 )
 
 var jobTypeNames = map[JobType]string{
@@ -102,7 +104,7 @@ func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
 type Job struct {
 	id      string
 	typ     JobType
-	wg      *sync.WaitGroup
+	wg      sync.WaitGroup
 	ctx     context.Context
 	exec    JobExecutor
 	result  *JobResult
@@ -116,7 +118,7 @@ func NewJob(id string, typ JobType, ctx context.Context, exec JobExecutor) *Job 
 		typ:  typ,
 		ctx:  ctx,
 		exec: exec,
-		wg:   new(sync.WaitGroup),
+		wg:   sync.WaitGroup{},
 	}
 	e.wg.Add(1)
 	return e
@@ -166,4 +168,25 @@ func (job *Job) DoneWithErr(err error) {
 
 func (job *Job) Close() {
 	job.result = nil
+}
+
+func (job *Job) Reset() {
+	job.result = nil
+	job.typ = JTInvalid
+	job.id = ""
+	job.ctx = nil
+	job.wg = sync.WaitGroup{}
+	job.exec = nil
+}
+
+func (job *Job) Init(
+	ctx context.Context,
+	id string,
+	typ JobType,
+	exec JobExecutor) {
+	job.id = id
+	job.ctx = ctx
+	job.exec = exec
+	job.typ = typ
+	job.wg.Add(1)
 }

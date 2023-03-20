@@ -35,10 +35,7 @@ func (p *prefetchCtx) mergeIds(ids2 map[uint32]*objectio.ReadBlock) {
 			continue
 		}
 		for index := range block.Idxes {
-			if p.ids[id].Idxes[index] == false {
-				p.ids[id].Idxes[index] = true
-			}
+			p.ids[id].Idxes[index] = true
 		}
 	}
-	return
 }

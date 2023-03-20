@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -30,8 +29,27 @@ import (
 )
 
 var (
-	errCancelJobOnStop = moerr.NewInternalErrorNoCtx("cancel job on stop")
+	_jobPool = sync.Pool{
+		New: func() any {
+			return new(tasks.Job)
+		},
+	}
 )
+
+func getJob(
+	ctx context.Context,
+	id string,
+	typ tasks.JobType,
+	exec tasks.JobExecutor) *tasks.Job {
+	job := _jobPool.Get().(*tasks.Job)
+	job.Init(ctx, id, typ, exec)
+	return job
+}
+
+func putJob(job *tasks.Job) {
+	job.Reset()
+	_jobPool.Put(job)
+}
 
 var Pipeline *IoPipeline
 
@@ -65,10 +83,10 @@ func jobFactory(
 	fs *objectio.ObjectFS,
 	proc proc,
 ) *tasks.Job {
-	return tasks.NewJob(
+	return getJob(
+		ctx,
 		makeName(proc.name),
 		JTLoad,
-		ctx,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
@@ -85,10 +103,10 @@ func jobFactory(
 
 func prefetchJob(ctx context.Context,
 	fs *objectio.ObjectFS, pCtx prefetchCtx) *tasks.Job {
-	return tasks.NewJob(
+	return getJob(
+		ctx,
 		makeName(pCtx.name),
 		JTLoad,
-		ctx,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
@@ -216,6 +234,8 @@ func (p *IoPipeline) AsyncFetch(
 	)
 	if _, err = p.fetch.queue.Enqueue(job); err != nil {
 		job.DoneWithErr(err)
+		putJob(job)
+		job = nil
 	}
 	return
 }
@@ -261,10 +281,12 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		if err := p.prefetch.scheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
 			logutil.Infof("err is %v", err.Error())
+			putJob(job)
 		} else {
 			if _, err := p.waitQ.Enqueue(job); err != nil {
 				job.DoneWithErr(err)
 				logutil.Infof("err is %v", err.Error())
+				putJob(job)
 			}
 		}
 	}
@@ -277,6 +299,7 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
+		putJob(job)
 		//bat := res.Res.(*fileservice.IOVector)
 	}
 }
