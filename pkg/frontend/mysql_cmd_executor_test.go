@@ -239,6 +239,7 @@ func Test_mce(t *testing.T) {
 		}
 		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, pu)
@@ -331,6 +332,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 		mce.SetSession(ses)
@@ -373,6 +375,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.SetSession(ses)
 
@@ -479,6 +482,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -556,6 +560,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -721,6 +726,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -767,6 +773,7 @@ func Test_handleShowVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -828,6 +835,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
@@ -925,6 +933,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}

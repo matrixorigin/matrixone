@@ -19,6 +19,7 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func (s *service) initRemote() {
@@ -70,12 +71,17 @@ func (s *service) handleRemoteLock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale
+		// lock table binding.
 		return err
 	}
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
-	return l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+	result, err := l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+	if err != nil {
+		return err
+	}
+	resp.Lock.Result = result
+	return nil
 }
 
 func (s *service) handleRemoteUnlock(
@@ -85,11 +91,11 @@ func (s *service) handleRemoteUnlock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale lock
+		// table binding.
 		return err
 	}
-	return s.Unlock(ctx, req.Unlock.TxnID)
+	return s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
 }
 
 func (s *service) handleRemoteGetLock(
@@ -99,8 +105,8 @@ func (s *service) handleRemoteGetLock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale lock
+		// table binding.
 		return err
 	}
 	l.getLock(
@@ -125,14 +131,19 @@ func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response) error {
-	txn := s.activeTxnHolder.getActiveTxn(req.GetWaitingList.TxnID, false, "")
+	txn := s.activeTxnHolder.getActiveTxn(
+		req.GetWaitingList.Txn.TxnID,
+		false,
+		"")
 	if txn == nil {
 		return nil
 	}
 	txn.fetchWhoWaitingMe(
-		req.GetWaitingList.TxnID,
-		func(v []byte) bool {
-			resp.GetWaitingList.WaitingList = append(resp.GetWaitingList.WaitingList, v)
+		s.cfg.ServiceID,
+		req.GetWaitingList.Txn.TxnID,
+		s.activeTxnHolder,
+		func(w pb.WaitTxn) bool {
+			resp.GetWaitingList.WaitingList = append(resp.GetWaitingList.WaitingList, w)
 			return true
 		},
 		s.getLockTable)
@@ -173,7 +184,7 @@ func (s *service) getLocalLockTable(
 
 func (s *service) getTxnWaitingList(
 	txnID []byte,
-	remoteService string) ([][]byte, error) {
+	createdOn string) ([]pb.WaitTxn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -181,8 +192,8 @@ func (s *service) getTxnWaitingList(
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_GetWaitingList
-	req.GetWaitingList.TxnID = txnID
-	req.GetWaitingList.ServiceID = remoteService
+	req.GetWaitingList.Txn.TxnID = txnID
+	req.GetWaitingList.Txn.CreatedOn = createdOn
 
 	resp, err := s.remote.client.Send(ctx, req)
 	if err != nil {
@@ -211,7 +222,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				s.cfg.RemoteLockTimeout.Duration)
 			if len(timeoutTxns) > 0 {
 				for _, txnID := range timeoutTxns {
-					s.Unlock(ctx, txnID)
+					s.Unlock(ctx, txnID, timestamp.Timestamp{})
 				}
 			}
 

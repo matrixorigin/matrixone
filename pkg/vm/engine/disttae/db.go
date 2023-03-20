@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -323,6 +322,7 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	logDebugf(op.Txn(), "UpdateOfPull")
 	e.Lock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table

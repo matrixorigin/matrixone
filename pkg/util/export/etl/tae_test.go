@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -55,24 +55,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	configs := []fileservice.Config{{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK",
-		DataDir: t.TempDir(),
-	},
-	}
-	var services = make([]fileservice.FileService, 0, 1)
-	for _, config := range configs {
-		service, err := fileservice.NewFileService(config, nil)
-		require.Nil(t, err)
-		services = append(services, service)
-	}
-	// create FileServices
-	fs, err := fileservice.NewFileServices(
-		defines.LocalFileServiceName,
-		services...,
-	)
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 
 	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
@@ -91,7 +74,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// Done. write
 
 	folder := path.Dir(filepath)
-	files, err := fs.List(ctx, defines.ETLFileServiceName+fileservice.ServiceNameSeparator+folder)
+	files, err := fs.List(ctx, folder)
 	require.Nil(t, err)
 	require.Equal(t, 1, len(files))
 
@@ -163,24 +146,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	configs := []fileservice.Config{{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK-ETL",
-		DataDir: t.TempDir(),
-	},
-	}
-	var services = make([]fileservice.FileService, 0, 1)
-	for _, config := range configs {
-		service, err := fileservice.NewFileService(config, nil)
-		require.Nil(t, err)
-		services = append(services, service)
-	}
-	// create FileServices
-	fs, err := fileservice.NewFileServices(
-		defines.LocalFileServiceName,
-		services...,
-	)
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 
 	type fields struct {
 		ctx context.Context
@@ -288,7 +254,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 			writer.FlushAndClose()
 
 			folder := path.Dir(filePath)
-			entrys, err := fs.List(ctx, defines.ETLFileServiceName+fileservice.ServiceNameSeparator+folder)
+			entrys, err := fs.List(ctx, folder)
 			require.Nil(t, err)
 			require.NotEqual(t, 0, len(entrys))
 			for _, e := range entrys {
@@ -305,24 +271,7 @@ func TestTaeReadFile(t *testing.T) {
 	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	configs := []fileservice.Config{{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK-ETL",
-		DataDir: "mo-data/etl",
-	},
-	}
-	var services = make([]fileservice.FileService, 0, 1)
-	for _, config := range configs {
-		service, err := fileservice.NewFileService(config, nil)
-		require.Nil(t, err)
-		services = append(services, service)
-	}
-	// create FileServices
-	fs, err := fileservice.NewFileServices(
-		defines.LocalFileServiceName,
-		services...,
-	)
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 
 	entrys, err := fs.List(context.TODO(), "etl:/")
 	require.Nil(t, err)
@@ -377,24 +326,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	configs := []fileservice.Config{{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK-ETL",
-		DataDir: "mo-data/etl",
-	},
-	}
-	var services = make([]fileservice.FileService, 0, 1)
-	for _, config := range configs {
-		service, err := fileservice.NewFileService(config, nil)
-		require.Nil(t, err)
-		services = append(services, service)
-	}
-	// create FileServices
-	fs, err := fileservice.NewFileServices(
-		defines.LocalFileServiceName,
-		services...,
-	)
-	require.Nil(t, err)
+	fs := testutil.NewFS()
 
 	folder := "/sys/logs/2023/01/11/rawlog"
 	entrys, err := fs.List(context.TODO(), "etl:"+folder)
