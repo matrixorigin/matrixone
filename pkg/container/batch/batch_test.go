@@ -39,7 +39,7 @@ var (
 
 func init() {
 	tcs = []batchTestCase{
-		newTestCase([]types.Type{{Oid: types.T_int8}}),
+		newTestCase([]types.Type{types.T_int8.ToType()}),
 	}
 }
 

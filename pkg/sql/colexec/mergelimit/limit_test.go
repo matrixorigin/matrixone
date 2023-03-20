@@ -155,7 +155,7 @@ func newTestCase(limit uint64) limitTestCase {
 	return limitTestCase{
 		proc: proc,
 		types: []types.Type{
-			{Oid: types.T_int8},
+			types.T_int8.ToType(),
 		},
 		arg: &Argument{
 			Limit: limit,
