@@ -356,13 +356,19 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		return
 	}
 
-	// The downstream vector, ie CN vector needs isNull as argument.
-	// So, we can't directly call cn_vector.Append() without parsing the data.
-	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	// it into the current CnVectorAdapter via this function.
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(src.Get(i))
+	sels := make([]int64, srcLen)
+	for j := 0; j < srcLen; j++ {
+		sels[j] = int64(j) + int64(srcOff)
 	}
+	_ = vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
+
+	//// The downstream vector, ie CN vector needs isNull as argument.
+	//// So, we can't directly call cn_vector.Append() without parsing the data.
+	//// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	//// it into the current CnVectorAdapter via this function.
+	//for i := srcOff; i < srcOff+srcLen; i++ {
+	//	vec.Append(src.Get(i))
+	//}
 }
 
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
