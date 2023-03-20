@@ -100,11 +100,11 @@ func (w *S3Writer) AddSortIdx(sortIdx int) {
 	w.sortIndex = append(w.sortIndex, sortIdx)
 }
 
-func NewWriteS3Container(tableDef *plan.TableDef) *S3Writer {
-	unique_nums := 0
+func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
+	uniqueNums := 0
 	for _, idx := range tableDef.Indexes {
 		if idx.Unique {
-			unique_nums++
+			uniqueNums++
 		}
 	}
 
@@ -112,9 +112,9 @@ func NewWriteS3Container(tableDef *plan.TableDef) *S3Writer {
 		sortIndex: make([]int, 0, 1),
 		pk:        make(map[string]struct{}),
 		// main table and unique tables
-		buffers:         make([]*batch.Batch, unique_nums+1),
-		tableBatches:    make([][]*batch.Batch, unique_nums+1),
-		tableBatchSizes: make([]uint64, unique_nums+1),
+		buffers:         make([]*batch.Batch, uniqueNums+1),
+		tableBatches:    make([][]*batch.Batch, uniqueNums+1),
+		tableBatchSizes: make([]uint64, uniqueNums+1),
 		sels:            make([]int64, options.DefaultBlockMaxRows),
 	}
 
@@ -168,9 +168,8 @@ func (w *S3Writer) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.NewVec(types.Type{Oid: types.T(types.T_int16)})
-	metaLocBat.Vecs[1] = vector.NewVec(types.New(types.T_text,
-		0, 0))
+	metaLocBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	metaLocBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	w.metaLocBat = metaLocBat
 }
 
@@ -191,7 +190,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		} else if w.tableBatchSizes[i] < TagS3Size && w.tableBatchSizes[i] > 0 {
 			for j := 0; j < len(w.tableBatches[i]); j++ {
 				// use negative value to show it's a normal batch
-				vector.AppendFixed[int16](w.metaLocBat.Vecs[0], int16(-i-1), false, proc.GetMPool())
+				vector.AppendFixed(w.metaLocBat.Vecs[0], int16(-i-1), false, proc.GetMPool())
 				bytes, err := w.tableBatches[i][j].MarshalBinary()
 				if err != nil {
 					return err
@@ -225,7 +224,7 @@ func (w *S3Writer) Put(bat *batch.Batch, idx int) int {
 	return -1
 }
 
-func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int) (cols [][]T) {
+func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int) (cols [][]T) {
 	for i := range bats {
 
 		cols = append(cols, vector.MustFixedCol[T](bats[i].Vecs[idx]))
@@ -236,7 +235,7 @@ func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int)
 	return
 }
 
-func GetStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
+func getStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
 	for i := range bats {
 		cols = append(cols, vector.MustStrCol(bats[i].Vecs[idx]))
 	}
@@ -333,43 +332,43 @@ func (w *S3Writer) MergeBlock(idx int, length int, proc *process.Process, cacheO
 		pos := w.sortIndex[0]
 		switch bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
-			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewBoolLess(), getFixedCols[bool](bats, pos, stopIdx), nulls)
 		case types.T_int8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](bats, pos, stopIdx), nulls)
 		case types.T_int16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), getFixedCols[int16](bats, pos, stopIdx), nulls)
 		case types.T_int32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), getFixedCols[int32](bats, pos, stopIdx), nulls)
 		case types.T_int64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), getFixedCols[int64](bats, pos, stopIdx), nulls)
 		case types.T_uint8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), getFixedCols[uint8](bats, pos, stopIdx), nulls)
 		case types.T_uint16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), getFixedCols[uint16](bats, pos, stopIdx), nulls)
 		case types.T_uint32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), getFixedCols[uint32](bats, pos, stopIdx), nulls)
 		case types.T_uint64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](bats, pos, stopIdx), nulls)
 		case types.T_float32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), getFixedCols[float32](bats, pos, stopIdx), nulls)
 		case types.T_float64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), getFixedCols[float64](bats, pos, stopIdx), nulls)
 		case types.T_date:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), getFixedCols[types.Date](bats, pos, stopIdx), nulls)
 		case types.T_datetime:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), getFixedCols[types.Datetime](bats, pos, stopIdx), nulls)
 		case types.T_time:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](bats, pos, stopIdx), nulls)
 		case types.T_timestamp:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](bats, pos, stopIdx), nulls)
 		case types.T_decimal64:
-			merge = NewMerge(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](bats, pos, stopIdx), nulls)
 		case types.T_decimal128:
-			merge = NewMerge(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewDecimal128Less(), getFixedCols[types.Decimal128](bats, pos, stopIdx), nulls)
 		case types.T_uuid:
-			merge = NewMerge(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](bats, pos, stopIdx), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos, stopIdx), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), getStrCols(bats, pos, stopIdx), nulls)
 		}
 		if err := w.generateWriter(proc); err != nil {
 			return err

@@ -32,7 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
-		ap.s3Writer = colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
+		ap.s3Writer = colexec.NewS3Writer(ap.InsertCtx.TableDef)
 	}
 	return nil
 }
