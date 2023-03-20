@@ -395,3 +395,30 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 		return vec, int64(len(decompressed)), nil
 	}
 }
+
+func Prefetch(name string, idxes []uint16, reader dataio.Reader,
+	ids []uint32, meta objectio.Extent, m *mpool.MPool) error {
+	if meta.End() == 0 {
+		return nil
+	}
+
+	blocks := make(map[uint32]*objectio.ReadBlock)
+	blockIdexes := make(map[uint16]bool)
+	for _, idx := range idxes {
+		blockIdexes[idx] = true
+	}
+	for _, id := range ids {
+		blocks[id] = &objectio.ReadBlock{
+			Id:    id,
+			Idxes: blockIdexes,
+		}
+	}
+	prefetch := prefetchCtx{
+		name:   name,
+		meta:   meta,
+		ids:    blocks,
+		pool:   m,
+		reader: reader.(*BlockReader).reader,
+	}
+	return Pipeline.Prefetch(prefetch)
+}
