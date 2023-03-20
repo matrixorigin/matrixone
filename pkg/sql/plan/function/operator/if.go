@@ -26,95 +26,95 @@ import (
 //	If(<boolean operator>, <value operator>, <value operator>)
 var (
 	IfBool = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[bool](vs, proc, types.Type{Oid: types.T_bool})
+		return ifGeneral[bool](vs, proc, types.T_bool.ToType())
 	}
 
 	IfUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[uint8](vs, proc, types.Type{Oid: types.T_uint8})
+		return ifGeneral[uint8](vs, proc, types.T_uint8.ToType())
 	}
 
 	IfUint16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[uint16](vs, proc, types.Type{Oid: types.T_uint16})
+		return ifGeneral[uint16](vs, proc, types.T_uint16.ToType())
 	}
 
 	IfUint32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[uint32](vs, proc, types.Type{Oid: types.T_uint32})
+		return ifGeneral[uint32](vs, proc, types.T_uint32.ToType())
 	}
 
 	IfUint64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[uint64](vs, proc, types.Type{Oid: types.T_uint64})
+		return ifGeneral[uint64](vs, proc, types.T_uint64.ToType())
 	}
 
 	IfInt8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[int8](vs, proc, types.Type{Oid: types.T_int8})
+		return ifGeneral[int8](vs, proc, types.T_int8.ToType())
 	}
 
 	IfInt16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[int16](vs, proc, types.Type{Oid: types.T_int16})
+		return ifGeneral[int16](vs, proc, types.T_int16.ToType())
 	}
 
 	IfInt32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[int32](vs, proc, types.Type{Oid: types.T_int32})
+		return ifGeneral[int32](vs, proc, types.T_int32.ToType())
 	}
 
 	IfInt64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[int64](vs, proc, types.Type{Oid: types.T_int64})
+		return ifGeneral[int64](vs, proc, types.T_int64.ToType())
 	}
 
 	IfFloat32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[float32](vs, proc, types.Type{Oid: types.T_float32})
+		return ifGeneral[float32](vs, proc, types.T_float32.ToType())
 	}
 
 	IfFloat64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[float64](vs, proc, types.Type{Oid: types.T_float64})
+		return ifGeneral[float64](vs, proc, types.T_float64.ToType())
 	}
 
 	IfDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Decimal64](vs, proc, types.Type{Oid: types.T_decimal64})
+		return ifGeneral[types.Decimal64](vs, proc, types.T_decimal64.ToType())
 	}
 
 	IfDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
+		return ifGeneral[types.Decimal128](vs, proc, types.T_decimal128.ToType())
 	}
 
 	IfDate = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
+		return ifGeneral[types.Date](vs, proc, types.T_date.ToType())
 	}
 
 	IfTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+		return ifGeneral[types.Time](vs, proc, types.T_time.ToType())
 	}
 
 	IfDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
+		return ifGeneral[types.Datetime](vs, proc, types.T_datetime.ToType())
 	}
 
 	IfVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+		return ifForString(vs, proc, types.T_varchar.ToType())
 	}
 
 	IfChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_char})
+		return ifForString(vs, proc, types.T_char.ToType())
 	}
 
 	IfTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+		return ifGeneral[types.Timestamp](vs, proc, types.T_timestamp.ToType())
 	}
 
 	IfBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_blob})
+		return ifForString(vs, proc, types.T_blob.ToType())
 	}
 
 	IfText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_text})
+		return ifForString(vs, proc, types.T_text.ToType())
 	}
 
 	IfJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_json})
+		return ifForString(vs, proc, types.T_json.ToType())
 	}
 
 	IfUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return ifForString(vs, proc, types.Type{Oid: types.T_uuid})
+		return ifForString(vs, proc, types.T_uuid.ToType())
 	}
 )
 
