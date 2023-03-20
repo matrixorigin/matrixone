@@ -155,7 +155,7 @@ func (bat *Batch) Shrink(sels []int64) {
 			continue
 		}
 		mp[vec]++
-		vec.Shrink(sels)
+		vec.Shrink(sels, false)
 	}
 	vs := bat.Zs
 	for i, sel := range sels {
@@ -296,7 +296,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		flags[i]++
 	}
 	for i := range bat.Vecs {
-		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, b.Vecs[i].Length(), flags[:b.Vecs[i].Length()], mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), flags[:b.Vecs[i].Length()], mh); err != nil {
 			return bat, err
 		}
 	}
