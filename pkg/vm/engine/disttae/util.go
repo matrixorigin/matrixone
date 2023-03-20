@@ -16,7 +16,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"math"
 	"sort"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -551,6 +549,7 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 	}
 }
 
+/*
 func getHashValue(buf []byte) uint64 {
 	buf = append([]byte{0}, buf...)
 	var states [3]uint64
@@ -598,6 +597,7 @@ func getListByItems[T DNStore](list []T, items []int64) []int {
 	}
 	return dnList
 }
+*/
 
 // func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 // 	fullList := func() []int {

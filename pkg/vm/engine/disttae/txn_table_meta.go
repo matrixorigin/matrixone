@@ -18,23 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (tbl *txnTable) updateMeta(ctx context.Context, expr *plan.Expr) error {
-	primaryKeys := make([]*engine.Attribute, 0, 1)
-	if tbl.primaryIdx >= 0 {
-		for _, def := range tbl.defs {
-			attr, ok := def.(*engine.AttributeDef)
-			if !ok {
-				continue
-			}
-			if !attr.Attr.Primary {
-				continue
-			}
-			primaryKeys = append(primaryKeys, &attr.Attr)
-		}
-	}
 	tbl.dnList = []int{0}
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
