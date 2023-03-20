@@ -76,6 +76,8 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return int64(a.(types.Decimal64).Compare(b.(types.Decimal64)))
 	case types.T_decimal128:
 		return int64(a.(types.Decimal128).Compare(b.(types.Decimal128)))
+	case types.T_decimal256:
+		return int64(a.(types.Decimal256).Compare(b.(types.Decimal256)))
 	case types.T_float32:
 		return CompareOrdered[float32](a, b)
 	case types.T_float64:
