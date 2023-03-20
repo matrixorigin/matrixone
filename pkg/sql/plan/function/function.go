@@ -325,7 +325,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 			}
 		}
 	} else {
-		rewriteTypesIfNecessary(targetTypes, args)
+		rewriteTypesIfNecessary(targetTypes, name, args)
 	}
 
 	var finalTypes []types.Type
@@ -368,7 +368,7 @@ func ensureBinaryOperatorWithSameScale(targets []types.Type, hasSet []bool) {
 	}
 }
 
-func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
+func rewriteTypesIfNecessary(targets []types.Type, name string, sources []types.Type) {
 	if len(targets) != 0 {
 		hasSet := make([]bool, len(sources))
 
@@ -381,23 +381,25 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 				}
 			}
 		}
-		for i := range sources {
-			if targets[i].Oid == types.T_decimal64 || targets[i].Oid == types.T_decimal128 {
-				if sources[i].Scale < maxScale {
-					if targets[i].Oid == types.T_decimal64 {
-						if sources[i].Width+maxScale-sources[i].Scale > 18 {
-							sources[i].Width = 18
+		if name != "*" {
+			for i := range sources {
+				if targets[i].Oid == types.T_decimal64 || targets[i].Oid == types.T_decimal128 {
+					if sources[i].Scale < maxScale {
+						if targets[i].Oid == types.T_decimal64 {
+							if sources[i].Width+maxScale-sources[i].Scale > 18 {
+								sources[i].Width = 18
+							} else {
+								sources[i].Width += maxScale - sources[i].Scale
+							}
 						} else {
-							sources[i].Width += maxScale - sources[i].Scale
+							if sources[i].Width+maxScale-sources[i].Scale > 38 {
+								sources[i].Width = 38
+							} else {
+								sources[i].Width += maxScale - sources[i].Scale
+							}
 						}
-					} else {
-						if sources[i].Width+maxScale-sources[i].Scale > 38 {
-							sources[i].Width = 38
-						} else {
-							sources[i].Width += maxScale - sources[i].Scale
-						}
+						sources[i].Scale = maxScale
 					}
-					sources[i].Scale = maxScale
 				}
 			}
 		}
@@ -416,6 +418,17 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 		for i := range targets {
 			if !hasSet[i] && targets[i].Oid != ScalarNull {
 				setDefaultScale(&targets[i], sources[i])
+			} else if types.IsDecimal(targets[i].Oid) {
+				if targets[i].Width == 0 {
+					if targets[i].Oid == types.T_decimal64 {
+						targets[i].Width = 18
+					} else {
+						targets[i].Width = 38
+					}
+				}
+				if targets[i].Scale < 0 {
+					targets[i].Scale = 0
+				}
 			}
 		}
 	}
