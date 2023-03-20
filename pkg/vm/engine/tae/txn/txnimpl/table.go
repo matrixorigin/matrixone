@@ -1049,8 +1049,9 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
-	loaded := false
 	segIt := tbl.entry.MakeSegmentIt(false)
+	var pks containers.Vector
+	//loaded := false
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
 		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
@@ -1076,8 +1077,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 		segData := seg.GetSegmentData()
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
-		var pks containers.Vector
-		if !loaded {
+		if pks == nil {
 			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx())
 			if err != nil {
 				return err
@@ -1085,7 +1085,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 			colV.ApplyDeletes()
 			pks = colV.Orphan()
 			defer pks.Close()
-			loaded = true
 		}
 		// TODO: Add a new batch dedup method later
 		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
