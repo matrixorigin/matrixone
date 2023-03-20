@@ -283,7 +283,7 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 
 func (c *Compile) cnListStrategy() {
 	if len(c.cnList) == 0 {
-		c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		c.cnList = append(c.cnList, engine.Node{Addr: c.addr, Mcpu: c.NumCPU()})
 	} else if len(c.cnList) > c.info.CnNumbers {
 		c.cnList = c.cnList[:c.info.CnNumbers]
 	}
@@ -312,20 +312,34 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
 			} else {
 				c.cnListStrategy()
 			}
 		} else {
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
 			} else {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+				c.cnList = engine.Nodes{engine.Node{
+					Addr: c.addr,
+					Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+				}
 			}
 		}
 	default:
 		if blkNum < MinBlockNum {
-			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			c.cnList = engine.Nodes{engine.Node{
+				Addr: c.addr,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+			}
 		} else {
 			c.cnListStrategy()
 		}
@@ -1644,15 +1658,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			return nil, err
 		}
 
+		// if temporary table, just scan at local cn.
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
 			return nil, err
 		}
-		c.isTemporaryScan = true
-	}
-	if c.isTemporaryScan {
-		c.isTemporaryScan = false
-		c.cnList = c.cnList[0:1]
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: 1,
+			},
+		}
 	}
 
 	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
@@ -1677,11 +1694,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
 				Rel:  rel,
 				Mcpu: 1,
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
 				Rel:  rel,
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
@@ -1799,11 +1818,12 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	if len(addr) == 0 {
-		logutil.Warnf("receive an empty cn address")
+	parts := strings.Split(addr, ":")
+	if len(parts) != 2 {
+		logutil.Warnf("compileScope received a wrong cn address %s", addr)
 		return true
 	}
-	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	return parts[0] == strings.Split(currentCNAddr, ":")[0]
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
