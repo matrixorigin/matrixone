@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -91,6 +92,7 @@ func (txn *activeTxn) lockAdded(
 func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
+	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint64) (lockTable, error)) error {
 	txn.Lock()
 	defer txn.Unlock()
@@ -115,7 +117,7 @@ func (txn *activeTxn) close(
 			serviceID,
 			txn,
 			table)
-		l.unlock(txn, cs)
+		l.unlock(txn, cs, commitTS)
 		logTxnUnlockTableCompleted(
 			serviceID,
 			txn,
@@ -144,7 +146,7 @@ func (txn *activeTxn) abort(serviceID string, txnID []byte) {
 	if txn.blockedWaiter == nil {
 		return
 	}
-	txn.blockedWaiter.notify(serviceID, ErrDeadLockDetected)
+	txn.blockedWaiter.notify(serviceID, notifyValue{err: ErrDeadLockDetected})
 }
 
 func (txn *activeTxn) fetchWhoWaitingMe(

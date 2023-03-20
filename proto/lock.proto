@@ -19,6 +19,7 @@ package lock;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/lock";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
@@ -123,7 +124,7 @@ message LockRequest {
 
 // LockResponse lock response
 message LockResponse {
-
+  Result Result = 1 [(gogoproto.nullable) = false];
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 
@@ -157,7 +158,10 @@ message WaitTxn {
 
 // UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {
-  bytes TxnID     = 1;
+  bytes               TxnID     = 1;
+  // CommitTS is the commit timestamp of the current txn. Empty if txn is
+  // roll backed
+  timestamp.Timestamp CommitTS  = 2 [(gogoproto.nullable) = false];
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
@@ -196,4 +200,12 @@ message KeepRemoteLockResponse {
   bool OK = 1;
 }
 
-
+// Result result is used to tell the caller the result of the lock operation.
+message Result {
+  // LockedOn lock is locked on which locktable
+  LockTable           LockedOn  = 1 [(gogoproto.nullable) = false];
+  // Timestamp The timestamp is used to help determine which version of RC 
+  // should be queried under the RC isolation level, this timestamp ensures that
+  // the latest data is always read.
+  timestamp.Timestamp Timestamp = 2 [(gogoproto.nullable) = false];
+}
