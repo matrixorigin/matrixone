@@ -67,14 +67,6 @@ func (l Lock) isLockRow() bool {
 	return l.value&flagLockRow != 0
 }
 
-func (l Lock) isLockRange() bool {
-	return !l.isLockRow()
-}
-
-func (l Lock) isLockRangeStart() bool {
-	return l.value&flagLockRangeStart != 0
-}
-
 func (l Lock) isLockRangeEnd() bool {
 	return l.value&flagLockRangeEnd != 0
 }

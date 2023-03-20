@@ -69,10 +69,10 @@ type IOVector struct {
 	// implementations may or may not delete the file after this time
 	// zero value means no expire
 	ExpireAt time.Time
-	// Preload indicates whether the I/O is for preloading
-	Preload bool
 	// NoCache true, means the data NOT read/update FileService cache.
 	NoCache bool
+	// Preloading indicates whether the I/O is for preloading
+	Preloading bool
 }
 
 type IOEntry struct {
