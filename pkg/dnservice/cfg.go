@@ -137,10 +137,10 @@ type Config struct {
 
 	LockService struct {
 		// LockListenAddress listening address for receiving external lock table allocator requests.
-		LockListenAddress string `toml:"lock-listen-address"`
+		LockListenAddress string `toml:"listen-address"`
 		// LockServiceAddress service address for communication, if this address is not set, use
 		// LockListenAddress as the communication address.
-		LockServiceAddress string `toml:"lock-service-address"`
+		LockServiceAddress string `toml:"service-address"`
 		// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will continuously
 		// hold the bind, and if no hold request is received after the configured time, then all bindings for
 		// the service will fail.
