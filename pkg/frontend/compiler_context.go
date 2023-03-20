@@ -46,6 +46,12 @@ type TxnCompilerContext struct {
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
+func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.statsCache
+}
+
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
@@ -663,7 +669,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	stats, _ = table.Stats(ctx, e)
+	stats, _ = table.Stats(ctx, e, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 	return stats
 }
 
