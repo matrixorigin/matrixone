@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rpc
+package perfcounter
 
 import (
+	"bytes"
+	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/stretchr/testify/assert"
 )
 
-func TestAdjustConfig(t *testing.T) {
-	c := Config{}
-	c.adjust()
-	assert.Equal(t, defaultMaxConnections, c.MaxConnections)
-	assert.Equal(t, defaultSendQueueSize, c.SendQueueSize)
-	assert.Equal(t, defaultMaxIdleDuration, c.MaxIdleDuration.Duration)
-	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.WriteBufferSize)
-	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.ReadBufferSize)
+func TestFormat(t *testing.T) {
+	c := &CounterSet{
+		FileServices: make(map[string]*CounterSet),
+	}
+	buf := new(bytes.Buffer)
+	format(buf, reflect.ValueOf(c), reflect.TypeOf(c))
 }

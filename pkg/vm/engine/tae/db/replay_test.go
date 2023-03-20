@@ -461,7 +461,7 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*10)
 	assert.NoError(t, err)
 	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)

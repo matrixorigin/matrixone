@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
@@ -358,9 +357,9 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	return
 }
 
-func (blk *txnSysBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataById(colIdx, buffer)
+		return blk.txnBlock.GetColumnDataById(colIdx)
 	}
 	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
 		return blk.getDBTableData(colIdx)
@@ -373,14 +372,14 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (vie
 	}
 }
 
-func (blk *txnSysBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataByName(attr string) (view *model.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(colIdx, buffer)
+	return blk.GetColumnDataById(colIdx)
 }
 
-func (blk *txnSysBlock) GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataByNames(attrs, buffers)
+		return blk.txnBlock.GetColumnDataByNames(attrs)
 	}
 	view = model.NewBlockView(blk.Txn.GetStartTS())
 	ts := blk.Txn.GetStartTS()

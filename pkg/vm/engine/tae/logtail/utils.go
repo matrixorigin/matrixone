@@ -500,6 +500,9 @@ func BlkColumnByMetaLoadJob(
 ) *tasks.Job {
 	exec := func(_ context.Context) (result *tasks.JobResult) {
 		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
+		if bat == nil {
+			logutil.Info("fsdfsdf")
+		}
 		return &tasks.JobResult{
 			Err: err,
 			Res: bat,

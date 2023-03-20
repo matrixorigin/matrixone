@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"time"
 
 	"sync/atomic"
@@ -121,48 +120,45 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 func (blk *ablock) GetColumnDataByNames(
 	txn txnif.AsyncTxn,
 	attrs []string,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	colIdxes := make([]int, len(attrs))
 	for i, attr := range attrs {
 		colIdxes[i] = blk.meta.GetSchema().GetColIdx(attr)
 	}
-	return blk.GetColumnDataByIds(txn, colIdxes, buffers)
+	return blk.GetColumnDataByIds(txn, colIdxes)
 }
 
 func (blk *ablock) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx, buffer)
+	return blk.GetColumnDataById(txn, colIdx)
 }
 
 func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		txn.GetStartTS(),
 		colIdxes,
-		buffers,
 		false)
 }
 
 func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	return blk.resolveColumnData(
 		txn.GetStartTS(),
 		colIdx,
-		buffer,
 		false)
 }
 
 func (blk *ablock) resolveColumnDatas(
 	ts types.TS,
 	colIdxes []int,
-	buffers []*bytes.Buffer,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -172,14 +168,12 @@ func (blk *ablock) resolveColumnDatas(
 			node.MustMNode(),
 			ts,
 			colIdxes,
-			buffers,
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
 			node.MustPNode(),
 			ts,
 			colIdxes,
-			buffers,
 			skipDeletes,
 		)
 	}
@@ -188,7 +182,6 @@ func (blk *ablock) resolveColumnDatas(
 func (blk *ablock) resolveColumnData(
 	ts types.TS,
 	colIdx int,
-	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -198,14 +191,12 @@ func (blk *ablock) resolveColumnData(
 			node.MustMNode(),
 			ts,
 			colIdx,
-			buffer,
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
 			node.MustPNode(),
 			ts,
 			colIdx,
-			buffer,
 			skipDeletes,
 		)
 	}
@@ -216,7 +207,6 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	mnode *memoryNode,
 	ts types.TS,
 	colIdxes []int,
-	buffers []*bytes.Buffer,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -259,7 +249,6 @@ func (blk *ablock) resolveInMemoryColumnData(
 	mnode *memoryNode,
 	ts types.TS,
 	colIdx int,
-	buffer *bytes.Buffer,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -274,8 +263,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 	data, err = mnode.GetColumnDataWindow(
 		0,
 		maxRow,
-		colIdx,
-		buffer)
+		colIdx)
 	if err != nil {
 		// blk.RUnlock()
 		return
@@ -335,7 +323,7 @@ func (blk *ablock) getInMemoryValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view, err := blk.resolveInMemoryColumnData(mnode, ts, col, nil, true)
+	view, err := blk.resolveInMemoryColumnData(mnode, ts, col, true)
 	if err != nil {
 		return
 	}
@@ -378,9 +366,7 @@ func (blk *ablock) getPersistedRowByFilter(
 		return
 	}
 	sortKey, err := blk.LoadPersistedColumnData(
-		blk.meta.GetSchema().GetSingleSortKeyIdx(),
-		nil,
-	)
+		blk.meta.GetSchema().GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}

@@ -15,17 +15,17 @@
 package db
 
 import (
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"io"
-	"runtime"
 	"sync/atomic"
+
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -69,6 +69,7 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
+	Pipeline    *blockio.IoPipeline
 
 	Fs *objectio.ObjectFS
 
@@ -133,19 +134,6 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
 	}
 }
 
-func (db *DB) PrintStats() {
-	pc, _, _, _ := runtime.Caller(1)
-	caller := runtime.FuncForPC(pc).Name()
-	stats := db.CollectStats()
-	logutil.Infof("[PrintStats][Caller=%s]:%s", caller, stats.ToString(""))
-}
-
-func (db *DB) CollectStats() *Stats {
-	stats := NewStats(db)
-	stats.Collect()
-	return stats
-}
-
 func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
@@ -159,6 +147,8 @@ func (db *DB) Close() error {
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	db.DiskCleaner.Stop()
+	blockio.Pipeline.Stop()
+	blockio.Pipeline = nil
 	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }

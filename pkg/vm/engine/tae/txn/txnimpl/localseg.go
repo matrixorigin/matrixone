@@ -15,8 +15,8 @@
 package txnimpl
 
 import (
-	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
@@ -310,7 +310,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 		seg.registerNode(metaLoc, "", nil)
 		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
-		if pkVecs != nil && skip == txnif.PKDedupSkipNone {
+		if len(pkVecs) != 0 && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
 				seg.table.schema.GetSingleSortKey().Name,
 				pkVecs[i],
@@ -455,19 +455,19 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	return n.GetColumnDataByIds(colIdxes, buffers)
+	return n.GetColumnDataByIds(colIdxes)
 }
 
 func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	return n.GetColumnDataById(colIdx, buffer)
+	return n.GetColumnDataById(colIdx)
 }
 
 func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {

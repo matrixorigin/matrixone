@@ -62,7 +62,7 @@ func (task *flushBlkTask) Execute() error {
 	if err != nil {
 		return err
 	}
-	if task.meta.GetSchema().HasSortKey() {
+	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 	_, err = writer.WriteBlock(task.data)

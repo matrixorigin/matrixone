@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memcachepolicy
+package morpc
 
-type Releasable interface {
-	Release()
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestAdjustConfig(t *testing.T) {
+	c := Config{}
+	c.Adjust()
+	assert.Equal(t, defaultMaxConnections, c.MaxConnections)
+	assert.Equal(t, defaultSendQueueSize, c.SendQueueSize)
+	assert.Equal(t, defaultMaxIdleDuration, c.MaxIdleDuration.Duration)
+	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.WriteBufferSize)
+	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.ReadBufferSize)
 }
-
-type ReleasableValue[T any] struct {
-	Value       T
-	releaseFunc func()
-}
-
-func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
-	return ReleasableValue[T]{
-		Value:       v,
-		releaseFunc: releaseFunc,
-	}
-}
-
-func (r ReleasableValue[T]) Release() {
-	r.releaseFunc()
-}
-
-var _ Releasable = NewReleasableValue(42, func() {})

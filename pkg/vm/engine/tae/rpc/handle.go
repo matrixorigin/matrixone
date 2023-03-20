@@ -99,6 +99,12 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
+	logutil.Infof("HandleCommit start : %X\n",
+		string(meta.GetID()))
+	defer func() {
+		logutil.Infof("HandleCommit end : %X\n",
+			string(meta.GetID()))
+	}()
 	//Handle precommit-write command for 1PC
 	var txn moengine.Txn
 	if ok {

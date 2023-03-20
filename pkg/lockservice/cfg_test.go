@@ -12,33 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package clockpolicy
+package lockservice
 
-// TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
+import (
+	"testing"
 
-type Clock struct {
-}
+	"github.com/stretchr/testify/assert"
+)
 
-func New(capacity int64) *Clock {
-	return &Clock{}
-}
-
-func (c *Clock) Set(key any, value any, size int64) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Clock) Get(key any) (value any, size int64, ok bool) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Clock) Flush() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Clock) Size() int64 {
-	//TODO implement me
-	panic("implement me")
+func TestAdjustConfig(t *testing.T) {
+	c := Config{ServiceID: "s1", ServiceAddress: "address"}
+	c.adjust()
+	assert.NotEmpty(t, c.KeepBindDuration)
+	assert.NotEmpty(t, c.KeepRemoteLockDuration)
+	assert.NotEmpty(t, c.MaxFixedSliceSize)
 }

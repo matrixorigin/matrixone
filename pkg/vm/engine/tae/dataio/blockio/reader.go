@@ -32,10 +32,20 @@ import (
 )
 
 type BlockReader struct {
-	reader objectio.Reader
-	key    string
+	reader  objectio.Reader
+	key     string
+	name    string
+	meta    objectio.Extent
+	manager *IoPipeline
+}
+
+type proc struct {
 	name   string
 	meta   objectio.Extent
+	idxes  []uint16
+	ids    []uint32
+	pool   *mpool.MPool
+	reader objectio.Reader
 }
 
 func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
@@ -48,9 +58,27 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		return nil, err
 	}
 	return &BlockReader{
-		reader: reader,
-		name:   name,
-		meta:   meta,
+		reader:  reader,
+		name:    name,
+		meta:    meta,
+		manager: Pipeline,
+	}, nil
+}
+
+func NewObjectReader2(service fileservice.FileService, key string, manager *IoPipeline) (dataio.Reader, error) {
+	name, _, meta, _, err := DecodeLocation(key)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader:  reader,
+		name:    name,
+		meta:    meta,
+		manager: manager,
 	}, nil
 }
 
@@ -75,14 +103,15 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 		return nil, err
 	}
 	return &BlockReader{
-		key:    key,
-		reader: reader,
-		name:   name,
-		meta:   locs[0],
+		key:     key,
+		reader:  reader,
+		name:    name,
+		meta:    locs[0],
+		manager: Pipeline,
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
 	if r.meta.End() == 0 {
@@ -92,6 +121,35 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
+	for y := range ids {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
+
+func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
+	bats := make([]*batch.Batch, 0)
+	if r.meta.End() == 0 {
+		return bats, nil
+	}
+	proc := proc{
+		name:   r.name,
+		meta:   r.meta,
+		idxes:  idxs,
+		ids:    ids,
+		pool:   m,
+		reader: r.reader,
+	}
+	v, err := r.manager.Fetch(ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	ioVectors := v.(*fileservice.IOVector)
 	for y := range ids {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
@@ -132,6 +190,45 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	return bats, nil
 }
 
+func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
+	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	if blocks[0].GetExtent().End() == 0 {
+		return nil, nil
+	}
+	if len(idxs) == 0 {
+		idxs = make([]uint16, blocks[0].GetColumnCount())
+		for i := range idxs {
+			idxs[i] = uint16(i)
+		}
+	}
+	bats := make([]*batch.Batch, 0)
+	proc := proc{
+		name:   r.name,
+		meta:   r.meta,
+		idxes:  idxs,
+		ids:    nil,
+		pool:   m,
+		reader: r.reader,
+	}
+	v, err := r.manager.Fetch(ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	ioVectors := v.(*fileservice.IOVector)
+	for y := range blocks {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
+
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
 	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
@@ -161,7 +258,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 	if err != nil {
 		return nil, err
 	}
-	if r.meta.End() == 0 {
+	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
 	return blocks, nil

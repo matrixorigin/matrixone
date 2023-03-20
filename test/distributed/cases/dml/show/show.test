@@ -242,3 +242,9 @@ show columns from t3;
 drop table t3;
 
 drop database test;
+
+drop database if exists test;
+create database test;
+use test;
+SHOW CREATE TABLE information_schema.columns;
+drop database test;

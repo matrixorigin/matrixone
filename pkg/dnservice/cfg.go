@@ -32,6 +32,8 @@ var (
 	defaultServiceAddress        = "127.0.0.1:22000"
 	defaultLogtailListenAddress  = "0.0.0.0:22001"
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
+	defaultLockListenAddress     = "0.0.0.0:22002"
+	defaultLockServiceAddress    = "127.0.0.1:22002"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -50,6 +52,8 @@ var (
 	defaultLogtailCollectInterval     = 50 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 	defaultMaxLogtailFetchFailure     = 5
+
+	defaultKeepBindTimeout = time.Second * 10
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -130,6 +134,18 @@ type Config struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
+
+	LockService struct {
+		// LockListenAddress listening address for receiving external lock table allocator requests.
+		LockListenAddress string `toml:"lock-listen-address"`
+		// LockServiceAddress service address for communication, if this address is not set, use
+		// LockListenAddress as the communication address.
+		LockServiceAddress string `toml:"lock-service-address"`
+		// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will continuously
+		// hold the bind, and if no hold request is received after the configured time, then all bindings for
+		// the service will fail.
+		KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+	} `toml:"lockservice"`
 }
 
 func (c *Config) Validate() error {
@@ -142,10 +158,18 @@ func (c *Config) Validate() error {
 	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
-		c.ServiceAddress = defaultServiceAddress
 	}
 	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
+		c.ServiceAddress = defaultServiceAddress
+	}
+	if c.LockService.LockListenAddress == "" {
+		c.LockService.LockListenAddress = defaultLockListenAddress
+	}
+	if c.LockService.LockServiceAddress == "" {
+		c.LockService.LockServiceAddress = defaultLockServiceAddress
+	}
+	if c.LockService.KeepBindTimeout.Duration == 0 {
+		c.LockService.KeepBindTimeout.Duration = defaultKeepBindTimeout
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
@@ -188,10 +212,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
-		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
 	}
 	if c.LogtailServer.ServiceAddress == "" {
-		c.LogtailServer.ServiceAddress = c.LogtailServer.ListenAddress
+		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)

@@ -659,14 +659,14 @@ func UintToBytes[T constraints.Integer](xs []T, rs []string) ([]string, error) {
 
 func Decimal64ToBytes(xs []types.Decimal64, rs []string, scale int32) ([]string, error) {
 	for i, x := range xs {
-		rs[i] = x.ToStringWithScale(scale)
+		rs[i] = x.Format(scale)
 	}
 	return rs, nil
 }
 
 func Decimal128ToBytes(xs []types.Decimal128, rs []string, scale int32) ([]string, error) {
 	for i, x := range xs {
-		rs[i] = x.ToStringWithScale(scale)
+		rs[i] = x.Format(scale)
 	}
 	return rs, nil
 }
@@ -715,41 +715,29 @@ func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 }
 
 func decimal64ToDecimal128Pure(ctx context.Context, xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
-	var err error
 	for i, x := range xs {
-		if rs[i], err = types.Decimal128_FromDecimal64WithScale(x, width, scale); err != nil {
-			return nil, err
-		}
+		rs[i] = types.Decimal128{B0_63: uint64(x), B64_127: 0}
 	}
 	return rs, nil
 }
 
 func IntToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
-	var err error
 	for i, x := range xs {
-		if rs[i], err = types.InitDecimal128(int64(x), width, scale); err != nil {
-			return nil, err
-		}
+		rs[i] = types.Decimal128{B0_63: uint64(x), B64_127: 0}
 	}
 	return rs, nil
 }
 
 func IntToDecimal64[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
-	var err error
 	for i, x := range xs {
-		if rs[i], err = types.InitDecimal64(int64(x), width, scale); err != nil {
-			return nil, err
-		}
+		rs[i] = types.Decimal64(x)
 	}
 	return rs, nil
 }
 
 func UintToDecimal128[T constraints.Integer](ctx context.Context, xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
-	var err error
 	for i, x := range xs {
-		if rs[i], err = types.InitDecimal128UsingUint(uint64(x), width, scale); err != nil {
-			return nil, err
-		}
+		rs[i] = types.Decimal128{B0_63: uint64(x), B64_127: 0}
 	}
 	return rs, nil
 }
@@ -845,10 +833,10 @@ func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []type
 	return rs, nil
 }
 
-func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time, scale int32) ([]types.Time, error) {
+func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time, scale1, scale2 int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = types.ParseDecimal64lToTime(x, scale)
+		rs[i], err = types.ParseDecimal64ToTime(x, scale1, scale2)
 		if err != nil {
 			return rs, err
 		}
@@ -856,10 +844,10 @@ func Decimal64ToTime(ctx context.Context, xs []types.Decimal64, rs []types.Time,
 	return rs, nil
 }
 
-func Decimal128ToTime(ctx context.Context, xs []types.Decimal128, rs []types.Time, scale int32) ([]types.Time, error) {
+func Decimal128ToTime(ctx context.Context, xs []types.Decimal128, rs []types.Time, scale1, scale2 int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = types.ParseDecimal128lToTime(x, scale)
+		rs[i], err = types.ParseDecimal128ToTime(x, scale1, scale2)
 		if err != nil {
 			return rs, err
 		}
@@ -914,22 +902,27 @@ func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]
 
 func Decimal64ToTimestamp(xs []types.Decimal64, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
-		ts := x.ToInt64()
+		ts := int64(uint64(x) / types.Pow10[scale])
 		rs[i] = types.Timestamp(ts)
 	}
 	return rs, nil
 }
 
 func Decimal128ToTimestamp(xs []types.Decimal128, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	err := error(nil)
 	for i, x := range xs {
-		rs[i] = types.Timestamp(x.ToInt64())
+		x, err = x.Scale(-scale)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = types.Timestamp(int64(x.B64_127))
 	}
 	return rs, nil
 }
 
 func Decimal64ToFloat32(ctx context.Context, xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
-		xStr := string(x.ToStringWithScale(scale))
+		xStr := string(x.Format(scale))
 		result, err := strconv.ParseFloat(xStr, 32)
 		if err != nil {
 			return []float32{}, moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
@@ -941,7 +934,7 @@ func Decimal64ToFloat32(ctx context.Context, xs []types.Decimal64, scale int32, 
 
 func Decimal128ToFloat32(ctx context.Context, xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float32{}, moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
@@ -953,7 +946,7 @@ func Decimal128ToFloat32(ctx context.Context, xs []types.Decimal128, scale int32
 
 func Decimal64ToFloat64(ctx context.Context, xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float64{}, moerr.NewOutOfRange(ctx, "float64", "value '%v'", xStr)
@@ -965,7 +958,7 @@ func Decimal64ToFloat64(ctx context.Context, xs []types.Decimal64, scale int32, 
 
 func Decimal128ToFloat64(ctx context.Context, xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []float64{}, moerr.NewOutOfRange(ctx, "float64", "value '%v'", xStr)
@@ -977,7 +970,7 @@ func Decimal128ToFloat64(ctx context.Context, xs []types.Decimal128, scale int32
 
 func Decimal64ToInt64(ctx context.Context, xs []types.Decimal64, scale int32, rs []int64) ([]int64, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
 			return []int64{}, moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
@@ -996,7 +989,7 @@ func Decimal64ToInt64(ctx context.Context, xs []types.Decimal64, scale int32, rs
 func Decimal128ToInt64(ctx context.Context, xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
 	var err error
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(0)
+		xStr := x.Format(0)
 		rs[i], err = strconv.ParseInt(xStr, 10, 64)
 		if err != nil {
 			return []int64{}, moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
@@ -1007,7 +1000,7 @@ func Decimal128ToInt64(ctx context.Context, xs []types.Decimal128, scale int32, 
 
 func Decimal128ToInt32(ctx context.Context, xs []types.Decimal128, scale int32, rs []int32) ([]int32, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(0)
+		xStr := x.Format(0)
 		ret, err := strconv.ParseInt(xStr, 10, 32)
 		if err != nil {
 			return []int32{}, moerr.NewOutOfRange(ctx, "int32", "value '%v'", xStr)
@@ -1019,7 +1012,7 @@ func Decimal128ToInt32(ctx context.Context, xs []types.Decimal128, scale int32, 
 
 func Decimal64ToUint64(ctx context.Context, xs []types.Decimal64, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
@@ -1032,7 +1025,7 @@ func Decimal64ToUint64(ctx context.Context, xs []types.Decimal64, scale int32, r
 
 func Decimal128ToUint64(ctx context.Context, xs []types.Decimal128, scale int32, rs []uint64) ([]uint64, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
+		xStr := x.Format(scale)
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
@@ -1046,12 +1039,11 @@ func Decimal128ToUint64(ctx context.Context, xs []types.Decimal128, scale int32,
 // the scale of decimal128 is guaranteed to be less than 18
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func Decimal128ToDecimal64(ctx context.Context, xs []types.Decimal128, width, scale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
-	var err error
 	for i, x := range xs {
-		rs[i], err = x.ToDecimal64(width, scale)
-		if err != nil {
+		if x.B64_127 != 0 || x.B0_63>>63 != 0 {
 			return []types.Decimal64{}, moerr.NewOutOfRange(ctx, "dec64", "value '%v'", x)
 		}
+		rs[i] = types.Decimal64(x.B0_63)
 	}
 	return rs, nil
 }
@@ -1059,8 +1051,8 @@ func Decimal128ToDecimal64(ctx context.Context, xs []types.Decimal128, width, sc
 func Decimal128ToDecimal128(ctx context.Context, xs []types.Decimal128, width, scale int32, rs []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
-		rs[i], err = types.Decimal128_FromString(xStr)
+		xStr := x.Format(scale)
+		rs[i], _, err = types.Parse128(xStr)
 		if err != nil {
 			return []types.Decimal128{}, moerr.NewOutOfRange(ctx, "dec128", "value '%v'", x)
 		}
@@ -1071,7 +1063,7 @@ func Decimal128ToDecimal128(ctx context.Context, xs []types.Decimal128, width, s
 func BinaryByteToDecimal128(ctx context.Context, xs []string, rs []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
-		rs[i], err = types.Decimal128_FromString(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&x))))
+		rs[i], _, err = types.Parse128(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&x))))
 		if err != nil {
 			return []types.Decimal128{}, moerr.NewOutOfRange(ctx, "dec128", "value '%v'", x)
 		}

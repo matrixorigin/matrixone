@@ -34,7 +34,9 @@ var (
 	errCancelJobOnStop = moerr.NewInternalErrorNoCtx("cancel job on stop")
 )
 
-type IOJobFactory func(context.Context, *objectio.ObjectFS, string) *tasks.Job
+var Pipeline *IoPipeline
+
+type IOJobFactory func(context.Context, *objectio.ObjectFS, proc) *tasks.Job
 
 // type Pipeline interface {
 // 	Start()
@@ -51,20 +53,27 @@ func makeName(location string) string {
 func jobFactory(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-	location string,
+	proc proc,
 ) *tasks.Job {
 	return tasks.NewJob(
-		makeName(location),
+		makeName(proc.name),
 		JTLoad,
 		ctx,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
+			res = &tasks.JobResult{}
+			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+			if err != nil {
+				res.Err = err
+				return
+			}
+			res.Res = ioVectors
 			return
 		},
 	)
 }
 
-type ioPipeline struct {
+type IoPipeline struct {
 	options struct {
 		fetchParallism    int
 		prefetchParallism int
@@ -91,8 +100,8 @@ type ioPipeline struct {
 func NewIOPipeline(
 	fs *objectio.ObjectFS,
 	opts ...Option,
-) *ioPipeline {
-	p := new(ioPipeline)
+) *IoPipeline {
+	p := new(IoPipeline)
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -118,7 +127,7 @@ func NewIOPipeline(
 	return p
 }
 
-func (p *ioPipeline) fillDefaults() {
+func (p *IoPipeline) fillDefaults() {
 	if p.options.fetchParallism <= 0 {
 		p.options.fetchParallism = runtime.NumCPU() * 4
 	}
@@ -130,7 +139,7 @@ func (p *ioPipeline) fillDefaults() {
 	}
 }
 
-func (p *ioPipeline) Start() {
+func (p *IoPipeline) Start() {
 	p.onceStart.Do(func() {
 		p.active.Store(true)
 		p.waitQ.Start()
@@ -139,7 +148,7 @@ func (p *ioPipeline) Start() {
 	})
 }
 
-func (p *ioPipeline) Stop() {
+func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
 		p.active.Store(false)
 
@@ -153,11 +162,11 @@ func (p *ioPipeline) Stop() {
 	})
 }
 
-func (p *ioPipeline) Fetch(
+func (p *IoPipeline) Fetch(
 	ctx context.Context,
-	location string,
+	proc proc,
 ) (res any, err error) {
-	job, err := p.AsyncFetch(ctx, location)
+	job, err := p.AsyncFetch(ctx, proc)
 	if err != nil {
 		return
 	}
@@ -166,14 +175,14 @@ func (p *ioPipeline) Fetch(
 	return
 }
 
-func (p *ioPipeline) AsyncFetch(
+func (p *IoPipeline) AsyncFetch(
 	ctx context.Context,
-	location string,
+	proc proc,
 ) (job *tasks.Job, err error) {
 	job = p.jobFactory(
 		ctx,
 		p.fs,
-		location,
+		proc,
 	)
 	if _, err = p.fetch.queue.Enqueue(job); err != nil {
 		job.DoneWithErr(err)
@@ -181,21 +190,14 @@ func (p *ioPipeline) AsyncFetch(
 	return
 }
 
-func (p *ioPipeline) Prefetch(location string) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	job := p.jobFactory(
-		ctx,
-		p.fs,
-		location,
-	)
-	if _, err = p.prefetch.queue.Enqueue(job); err != nil {
-		job.DoneWithErr(err)
+func (p *IoPipeline) Prefetch(proc proc) (err error) {
+	if _, err = p.prefetch.queue.Enqueue(proc); err != nil {
+		return
 	}
 	return
 }
 
-func (p *ioPipeline) onFetch(jobs ...any) {
+func (p *IoPipeline) onFetch(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		if err := p.fetch.scheduler.Schedule(job); err != nil {
@@ -204,13 +206,27 @@ func (p *ioPipeline) onFetch(jobs ...any) {
 	}
 }
 
-func (p *ioPipeline) onPrefetch(jobs ...any) {
-	for _, j := range jobs {
-		job := j.(*tasks.Job)
-		if !p.active.Load() {
-			job.DoneWithErr(errCancelJobOnStop)
-			continue
-		}
+func (p *IoPipeline) onPrefetch(items ...any) {
+	if len(items) == 0 {
+		return
+	}
+	processes := make([]proc, 0)
+	for _, item := range items {
+		p := item.(proc)
+		processes = append(processes, p)
+	}
+	if !p.active.Load() {
+		return
+	}
+	merged := mergeBlock(processes)
+	for _, object := range merged {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		job := p.jobFactory(
+			ctx,
+			p.fs,
+			object,
+		)
 		if err := p.prefetch.scheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
 		} else {
@@ -221,7 +237,7 @@ func (p *ioPipeline) onPrefetch(jobs ...any) {
 	}
 }
 
-func (p *ioPipeline) onWait(jobs ...any) {
+func (p *IoPipeline) onWait(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		res := job.WaitDone()

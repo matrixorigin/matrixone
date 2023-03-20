@@ -477,8 +477,7 @@ from (select 11.1234 as a
 UNION select 11.1234
 UNION select 11.1234
 ) t;
-cast(a as decimal(3, 2))
-11.12
+invalid input: Can't convert string To Decimal64: 11.1234(3,2)
 drop table if exists t14;
 CREATE TABLE t14 (
 `pseudo` char(35) NOT NULL default '',

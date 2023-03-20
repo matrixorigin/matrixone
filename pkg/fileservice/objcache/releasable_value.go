@@ -12,22 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lockservice
+package objcache
 
-// WithGranularity set rows granularity, the default granularity is Row.
-func (opts LockOptions) WithGranularity(granularity Granularity) LockOptions {
-	opts.granularity = granularity
-	return opts
+type Releasable interface {
+	Release()
 }
 
-// WithMode set lock mode, the default mode is Exclusive.
-func (opts LockOptions) WithMode(mode LockMode) LockOptions {
-	opts.mode = mode
-	return opts
+type ReleasableValue[T any] struct {
+	Value       T
+	releaseFunc func()
 }
 
-// WithWaitPolicy set wait policy, the default policy is Wait.
-func (opts LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
-	opts.policy = policy
-	return opts
+func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
+	return ReleasableValue[T]{
+		Value:       v,
+		releaseFunc: releaseFunc,
+	}
 }
+
+func (r ReleasableValue[T]) Release() {
+	r.releaseFunc()
+}
+
+var _ Releasable = NewReleasableValue(42, func() {})

@@ -12,26 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package perfcounter
+package stats
 
 import "sync/atomic"
 
+// Counter represents a combination of global & current_window counter.
 type Counter struct {
-	S3 struct {
-		List        atomic.Int64
-		Head        atomic.Int64
-		Put         atomic.Int64
-		Get         atomic.Int64
-		Delete      atomic.Int64
-		DeleteMulti atomic.Int64
-	}
+	window atomic.Int64
+	global atomic.Int64
+}
 
-	Cache struct {
-		Read     atomic.Int64
-		Hit      atomic.Int64
-		MemRead  atomic.Int64
-		MemHit   atomic.Int64
-		DiskRead atomic.Int64
-		DiskHit  atomic.Int64
-	}
+// Add adds to global and window counter
+func (c *Counter) Add(delta int64) (new int64) {
+	c.window.Add(delta)
+	return c.global.Add(delta)
+}
+
+// Load return the global counter value
+func (c *Counter) Load() int64 {
+	return c.global.Load()
+}
+
+// SwapW swaps current window counter with new
+func (c *Counter) SwapW(new int64) int64 {
+	return c.window.Swap(new)
 }
