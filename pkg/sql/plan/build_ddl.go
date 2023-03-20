@@ -519,7 +519,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
@@ -577,7 +576,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				ClusterBy: true,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
@@ -686,7 +684,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
 					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
@@ -707,7 +704,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{

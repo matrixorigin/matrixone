@@ -379,7 +379,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.Typ = &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
-			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -537,7 +536,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				rightArg.Typ = &plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
-					Size:        1,
 				}
 
 				return rightArg, nil
@@ -579,7 +577,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				rightArg.Typ = &plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
-					Size:        1,
 				}
 
 				return rightArg, nil
@@ -635,7 +632,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			expr.Typ = &plan.Type{
 				Id:          int32(types.T_bool),
 				NotNullable: expr.Typ.NotNullable && child.Typ.NotNullable,
-				Size:        1,
 			}
 
 			return expr, nil
@@ -1396,8 +1392,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}
 
 	intervalTypeInFunction := &plan.Type{
-		Id:   int32(types.T_int64),
-		Size: 8,
+		Id: int32(types.T_int64),
 	}
 
 	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
@@ -1414,8 +1409,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 			default:
 				dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, &plan.Type{
-					Id:   int32(types.T_datetime),
-					Size: 8,
+					Id: int32(types.T_datetime),
 				})
 
 				if err != nil {
@@ -1437,8 +1431,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
 			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, &plan.Type{
-				Id:   int32(types.T_datetime),
-				Size: 8,
+				Id: int32(types.T_datetime),
 			})
 
 			if err != nil {
@@ -1469,8 +1462,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 	}
 	list.List[0] = intervalExpr
 	strType := &plan.Type{
-		Id:   int32(types.T_char),
-		Size: 4,
+		Id: int32(types.T_char),
 	}
 	strExpr := &Expr{
 		Expr: &plan.Expr_C{

@@ -35,95 +35,95 @@ import (
 // format `case A when a1 then ... when a2 then ...` should be converted to required format.
 var (
 	CaseWhenUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[uint8](vs, proc, types.Type{Oid: types.T_uint8})
+		return cwGeneral[uint8](vs, proc, types.T_uint8.ToType())
 	}
 
 	CaseWhenUint16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[uint16](vs, proc, types.Type{Oid: types.T_uint16})
+		return cwGeneral[uint16](vs, proc, types.T_uint16.ToType())
 	}
 
 	CaseWhenUint32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[uint32](vs, proc, types.Type{Oid: types.T_uint32})
+		return cwGeneral[uint32](vs, proc, types.T_uint32.ToType())
 	}
 
 	CaseWhenUint64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[uint64](vs, proc, types.Type{Oid: types.T_uint64})
+		return cwGeneral[uint64](vs, proc, types.T_uint64.ToType())
 	}
 
 	CaseWhenInt8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[int8](vs, proc, types.Type{Oid: types.T_int8})
+		return cwGeneral[int8](vs, proc, types.T_int8.ToType())
 	}
 
 	CaseWhenInt16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[int16](vs, proc, types.Type{Oid: types.T_int16})
+		return cwGeneral[int16](vs, proc, types.T_int16.ToType())
 	}
 
 	CaseWhenInt32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[int32](vs, proc, types.Type{Oid: types.T_int32})
+		return cwGeneral[int32](vs, proc, types.T_int32.ToType())
 	}
 
 	CaseWhenInt64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[int64](vs, proc, types.Type{Oid: types.T_int64})
+		return cwGeneral[int64](vs, proc, types.T_int64.ToType())
 	}
 
 	CaseWhenFloat32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[float32](vs, proc, types.Type{Oid: types.T_float32})
+		return cwGeneral[float32](vs, proc, types.T_float32.ToType())
 	}
 
 	CaseWhenFloat64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[float64](vs, proc, types.Type{Oid: types.T_float64})
+		return cwGeneral[float64](vs, proc, types.T_float64.ToType())
 	}
 
 	CaseWhenBool = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[bool](vs, proc, types.Type{Oid: types.T_bool})
+		return cwGeneral[bool](vs, proc, types.T_bool.ToType())
 	}
 
 	CaseWhenDate = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
+		return cwGeneral[types.Date](vs, proc, types.T_date.ToType())
 	}
 
 	CaseWhenTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+		return cwGeneral[types.Time](vs, proc, types.T_time.ToType())
 	}
 
 	CaseWhenDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
+		return cwGeneral[types.Datetime](vs, proc, types.T_datetime.ToType())
 	}
 
 	CaseWhenVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+		return cwString(vs, proc, types.T_varchar.ToType())
 	}
 
 	CaseWhenChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_char})
+		return cwString(vs, proc, types.T_char.ToType())
 	}
 
 	CaseWhenDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Decimal64](vs, proc, types.Type{Oid: types.T_decimal64})
+		return cwGeneral[types.Decimal64](vs, proc, types.T_decimal64.ToType())
 	}
 
 	CaseWhenDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
+		return cwGeneral[types.Decimal128](vs, proc, types.T_decimal128.ToType())
 	}
 
 	CaseWhenTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+		return cwGeneral[types.Timestamp](vs, proc, types.T_timestamp.ToType())
 	}
 
 	CaseWhenUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
+		return cwGeneral[types.Uuid](vs, proc, types.T_uuid.ToType())
 	}
 
 	CaseWhenBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_blob})
+		return cwString(vs, proc, types.T_blob.ToType())
 	}
 
 	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_text})
+		return cwString(vs, proc, types.T_text.ToType())
 	}
 
 	CaseWhenJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return cwString(vs, proc, types.Type{Oid: types.T_json})
+		return cwString(vs, proc, types.T_json.ToType())
 	}
 )
 

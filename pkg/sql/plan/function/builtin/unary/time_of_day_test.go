@@ -392,7 +392,7 @@ var (
 
 func init() {
 	tcs = []benchmarkTestCase{
-		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_datetime}}),
+		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{types.T_datetime.ToType()}),
 	}
 }
 

@@ -114,7 +114,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 				Id:          e.Typ.Id,
 				NotNullable: e.Typ.NotNullable,
 				Width:       e.Typ.Width,
-				Size:        e.Typ.Size,
 				Scale:       e.Typ.Scale,
 				AutoIncr:    e.Typ.AutoIncr,
 				Table:       e.Typ.Table,
@@ -151,7 +150,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 					Id:          e.Typ.Id,
 					NotNullable: e.Typ.NotNullable,
 					Width:       e.Typ.Width,
-					Size:        e.Typ.Size,
 					Scale:       e.Typ.Scale,
 					AutoIncr:    e.Typ.AutoIncr,
 					Table:       e.Typ.Table,
@@ -164,7 +162,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
-	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width, Size: vec.GetType().Size}
+	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	e.Expr = ec
 	return e
 }

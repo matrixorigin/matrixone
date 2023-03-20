@@ -22,7 +22,7 @@ import (
 
 func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	rtyp := types.T_int64.ToType()
 	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -44,7 +44,7 @@ func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func DatetimeToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	rtyp := types.T_int64.ToType()
 	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
