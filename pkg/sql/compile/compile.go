@@ -1709,10 +1709,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		ranges = ranges[1:]
 	}
 
-	// If the number of elements in the cn list is only 1,
-	// this indicates that the current query is small or for temporary table.
-	// and only needs to be executed on the current cn.
-	if len(c.cnList) == 1 {
+	// 1. If the length of cn list is 1, query is small or for temporary table.
+	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
+	// Both these queries only needs to be executed on the current cn.
+	if len(ranges) == 0 || len(c.cnList) == 1 {
 		return nodes, nil
 	}
 
