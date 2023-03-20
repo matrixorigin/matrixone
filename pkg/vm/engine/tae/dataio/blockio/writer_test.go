@@ -39,14 +39,14 @@ const (
 func newBatch() *batch.Batch {
 	mp := mpool.MustNewZero()
 	types := []types.Type{
-		{Oid: types.T_int32},
-		{Oid: types.T_int16},
-		{Oid: types.T_int32},
-		{Oid: types.T_int64},
-		{Oid: types.T_uint16},
-		{Oid: types.T_uint32},
-		{Oid: types.T_uint8},
-		{Oid: types.T_uint64},
+		types.T_int32.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint64.ToType(),
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
 }

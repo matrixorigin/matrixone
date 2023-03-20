@@ -121,11 +121,11 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[2] = 3
 	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, []uint32{blocks[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
-	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
+	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 := newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
+	vector2 := newVector(types.T_int32.ToType(), vec.Entries[1].Object.([]byte))
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
+	vector3 := newVector(types.T_int64.ToType(), vec.Entries[2].Object.([]byte))
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
@@ -156,11 +156,11 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[2] = 3
 	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, []uint32{bs[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
-	vector1 = newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
+	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 = newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
+	vector2 = newVector(types.T_int32.ToType(), vec.Entries[1].Object.([]byte))
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 = newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
+	vector3 = newVector(types.T_int64.ToType(), vec.Entries[2].Object.([]byte))
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
@@ -178,14 +178,14 @@ func TestNewObjectWriter(t *testing.T) {
 
 func newBatch(mp *mpool.MPool) *batch.Batch {
 	types := []types.Type{
-		{Oid: types.T_int8},
-		{Oid: types.T_int16},
-		{Oid: types.T_int32},
-		{Oid: types.T_int64},
-		{Oid: types.T_uint16},
-		{Oid: types.T_uint32},
-		{Oid: types.T_uint8},
-		{Oid: types.T_uint64},
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint64.ToType(),
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
 }

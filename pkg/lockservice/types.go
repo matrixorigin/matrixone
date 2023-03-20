@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -80,9 +81,10 @@ type LockService interface {
 	//
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
-	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.LockTable, error)
-	// Unlock release all locks associated with the transaction.
-	Unlock(ctx context.Context, txnID []byte) error
+	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.Result, error)
+	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
+	// the txn was committed.
+	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
 	// Close close the lock service.
 	Close() error
 }
@@ -104,9 +106,9 @@ type lockTable interface {
 	// 1. ErrDeadlockDetectorClosed, indicates that the current transaction has triggered a deadlock.
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
-	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
-	// Unlock release a set of locks
-	unlock(txn *activeTxn, ls *cowSlice)
+	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) (pb.Result, error)
+	// Unlock release a set of locks, if txn was committed, commitTS is not empty
+	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
 	// getLock get a lock
 	getLock(txnID, key []byte, fn func(Lock))
 	// getBind returns lock table binding

@@ -22,6 +22,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -42,9 +43,10 @@ func TestLockRemote(t *testing.T) {
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			assert.NoError(t, l.lock(ctx, txn, [][]byte{{1}}, pb.LockOptions{}))
+			_, err := l.lock(ctx, txn, [][]byte{{1}}, pb.LockOptions{})
+			assert.NoError(t, err)
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -67,7 +69,7 @@ func TestUnlockRemote(t *testing.T) {
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			l.unlock(txn, nil)
+			l.unlock(txn, nil, timestamp.Timestamp{})
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -109,7 +111,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			l.unlock(txn, nil)
+			l.unlock(txn, nil, timestamp.Timestamp{})
 			<-c
 		},
 		func(lt pb.LockTable) {},
@@ -164,11 +166,11 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			assert.Error(t, ErrLockTableBindChanged,
-				l.lock(ctx, txn, [][]byte{{1}}, pb.LockOptions{}))
+			_, err := l.lock(ctx, txn, [][]byte{{1}}, pb.LockOptions{})
+			assert.Error(t, ErrLockTableBindChanged, err)
 			assert.Equal(t, newBind, <-c)
 
-			l.unlock(txn, nil)
+			l.unlock(txn, nil, timestamp.Timestamp{})
 			assert.Equal(t, newBind, <-c)
 
 			l.getLock(txnID, []byte{1}, nil)

@@ -132,7 +132,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(col.Typ.Id)}
+		typ := types.T(col.Typ.Id).ToType()
 		typeStr := typ.String()
 		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)

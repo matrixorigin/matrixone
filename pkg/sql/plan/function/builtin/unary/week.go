@@ -44,7 +44,7 @@ func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func DatetimeToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
+	rtyp := types.T_uint8.ToType()
 	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
