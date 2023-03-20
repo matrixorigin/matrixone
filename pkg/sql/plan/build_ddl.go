@@ -165,7 +165,6 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		Typ: &plan.Type{
 			Id:    int32(types.T_int64),
 			Width: 0,
-			Size:  1,
 			Scale: 0,
 		},
 		Default: &plan.Default{
@@ -181,7 +180,6 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			Typ: &plan.Type{
 				Id:    int32(types.T_bool),
 				Width: 0,
-				Size:  1,
 				Scale: 0,
 			},
 			Default: &plan.Default{
