@@ -282,7 +282,10 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 
 func (c *Compile) cnListStrategy() {
 	if len(c.cnList) == 0 {
-		c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		c.cnList = append(c.cnList, engine.Node{
+			Addr: c.addr,
+			Mcpu: c.NumCPU(),
+		})
 	} else if len(c.cnList) > c.info.CnNumbers {
 		c.cnList = c.cnList[:c.info.CnNumbers]
 	}
