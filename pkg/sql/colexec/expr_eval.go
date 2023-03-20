@@ -28,32 +28,30 @@ import (
 )
 
 var (
-	constBType        = types.Type{Oid: types.T_bool}
-	constI8Type       = types.Type{Oid: types.T_int8}
-	constI16Type      = types.Type{Oid: types.T_int16}
-	constI32Type      = types.Type{Oid: types.T_int32}
-	constI64Type      = types.Type{Oid: types.T_int64}
-	constU8Type       = types.Type{Oid: types.T_uint8}
-	constU16Type      = types.Type{Oid: types.T_uint16}
-	constU32Type      = types.Type{Oid: types.T_uint32}
-	constU64Type      = types.Type{Oid: types.T_uint64}
-	constFType        = types.Type{Oid: types.T_float32}
-	constDType        = types.Type{Oid: types.T_float64}
-	constSType        = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
-	constBinType      = types.Type{Oid: types.T_blob}
-	constDateType     = types.Type{Oid: types.T_date}
-	constTimeType     = types.Type{Oid: types.T_time}
-	constDatetimeType = types.Type{Oid: types.T_datetime}
-	// constDecimal64Type  = types.Type{Oid: types.T_decimal64}
-	// constDecimal128Type = types.Type{Oid: types.T_decimal128}
+	constBType          = types.T_bool.ToType()
+	constI8Type         = types.T_int8.ToType()
+	constI16Type        = types.T_int16.ToType()
+	constI32Type        = types.T_int32.ToType()
+	constI64Type        = types.T_int64.ToType()
+	constU8Type         = types.T_uint8.ToType()
+	constU16Type        = types.T_uint16.ToType()
+	constU32Type        = types.T_uint32.ToType()
+	constU64Type        = types.T_uint64.ToType()
+	constFType          = types.T_float32.ToType()
+	constDType          = types.T_float64.ToType()
+	constSType          = types.T_varchar.ToType()
+	constBinType        = types.T_blob.ToType()
+	constDateType       = types.T_date.ToType()
+	constTimeType       = types.T_time.ToType()
+	constDatetimeType   = types.T_datetime.ToType()
 	constTimestampTypes = []types.Type{
-		{Oid: types.T_timestamp},
-		{Oid: types.T_timestamp, Scale: 1},
-		{Oid: types.T_timestamp, Scale: 2},
-		{Oid: types.T_timestamp, Scale: 3},
-		{Oid: types.T_timestamp, Scale: 4},
-		{Oid: types.T_timestamp, Scale: 5},
-		{Oid: types.T_timestamp, Scale: 6},
+		types.New(types.T_timestamp, 0, 0),
+		types.New(types.T_timestamp, 0, 1),
+		types.New(types.T_timestamp, 0, 2),
+		types.New(types.T_timestamp, 0, 3),
+		types.New(types.T_timestamp, 0, 4),
+		types.New(types.T_timestamp, 0, 5),
+		types.New(types.T_timestamp, 0, 6),
 	}
 )
 
@@ -234,11 +232,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.Type{
-			Oid:   types.T(t.T.Typ.GetId()),
-			Width: t.T.Typ.GetWidth(),
-			Scale: t.T.Typ.GetScale(),
-		}, length, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
@@ -288,11 +282,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.Type{
-			Oid:   types.T(t.T.Typ.GetId()),
-			Width: t.T.Typ.GetWidth(),
-			Scale: t.T.Typ.GetScale(),
-		}, length, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, length, proc.Mp()), nil
@@ -345,11 +335,7 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 		return getConstVec(ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.Type{
-			Oid:   types.T(t.T.Typ.GetId()),
-			Width: t.T.Typ.GetWidth(),
-			Scale: t.T.Typ.GetScale(),
-		}, length, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
@@ -454,11 +440,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.Type{
-			Oid:   types.T(t.T.Typ.GetId()),
-			Width: t.T.Typ.GetWidth(),
-			Scale: t.T.Typ.GetScale(),
-		}, 1, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), 1, proc.Mp()), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, 1, proc.Mp()), nil

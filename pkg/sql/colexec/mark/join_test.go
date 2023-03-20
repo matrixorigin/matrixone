@@ -52,22 +52,22 @@ var (
 
 func init() {
 	tcs = []markTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int32{0},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.T_int8.ToType()),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.T_int8.ToType()),
 				},
 			}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []int32{0},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.T_int8.ToType()),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.T_int8.ToType()),
 				},
 			}),
 	}
@@ -136,22 +136,22 @@ func TestHandleResultType(t *testing.T) {
 func BenchmarkMark(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []markTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int32{0},
 				[][]*plan.Expr{
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, types.T_int8.ToType()),
 					},
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, types.T_int8.ToType()),
 					},
 				}),
-			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []int32{0},
 				[][]*plan.Expr{
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, types.T_int8.ToType()),
 					},
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, types.T_int8.ToType()),
 					},
 				}),
 		}
@@ -180,7 +180,6 @@ func BenchmarkMark(b *testing.B) {
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Size:  typ.Size,
 			Scale: typ.Scale,
 			Width: typ.Width,
 			Id:    int32(typ.Oid),
@@ -209,8 +208,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -221,8 +219,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	})
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -233,8 +230,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
-			Size: 1,
-			Id:   int32(types.T_bool),
+			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

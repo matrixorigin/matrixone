@@ -47,7 +47,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				types.T_int8.ToType(),
 			},
 			arg: &Argument{
 				Seen:  0,
@@ -57,7 +57,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				types.T_int8.ToType(),
 			},
 			arg: &Argument{
 				Seen:  0,
@@ -67,7 +67,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				types.T_int8.ToType(),
 			},
 			arg: &Argument{
 				Seen:  0,
@@ -120,7 +120,7 @@ func BenchmarkLimit(b *testing.B) {
 			{
 				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 				types: []types.Type{
-					{Oid: types.T_int8},
+					types.T_int8.ToType(),
 				},
 				arg: &Argument{
 					Seen:  0,

@@ -858,7 +858,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 		return expr, nil
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
+	if t1.Eq(t2) {
 		return expr, nil
 	}
 

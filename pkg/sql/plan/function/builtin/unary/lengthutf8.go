@@ -23,7 +23,7 @@ import (
 
 func LengthUTF8(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_uint64, Size: 8}
+	rtyp := types.T_uint64.ToType()
 	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {

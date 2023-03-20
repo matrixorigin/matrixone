@@ -278,7 +278,6 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
-						Size:     attr.Attr.Type.Size,
 						Scale:    attr.Attr.Type.Scale,
 						AutoIncr: attr.Attr.AutoIncrement,
 					},

@@ -84,7 +84,6 @@ func _dupType(typ *plan.Type) *plan.Type {
 	return &plan.Type{
 		Id:          typ.Id,
 		NotNullable: typ.NotNullable,
-		Size:        typ.Size,
 		Width:       typ.Width,
 		Scale:       typ.Scale,
 	}
