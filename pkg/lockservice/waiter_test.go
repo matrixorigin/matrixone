@@ -25,7 +25,7 @@ import (
 
 func TestAcquireWaiter(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
-	defer w.close("s1", nil)
+	defer w.close("s1", notifyValue{})
 
 	assert.Equal(t, 0, len(w.c))
 	assert.Equal(t, int32(1), w.refCount.Load())
@@ -38,14 +38,14 @@ func TestAddNewWaiter(t *testing.T) {
 	defer func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		assert.NoError(t, w1.wait(ctx, "s1"))
-		w1.close("s1", nil)
+		assert.NoError(t, w1.wait(ctx, "s1").err)
+		w1.close("s1", notifyValue{})
 	}()
 
 	w.add("s1", w1)
 	assert.Equal(t, 1, w.waiters.len())
 	assert.Equal(t, int32(2), w1.refCount.Load())
-	w.close("s1", nil)
+	w.close("s1", notifyValue{})
 }
 
 func TestCloseWaiter(t *testing.T) {
@@ -56,92 +56,92 @@ func TestCloseWaiter(t *testing.T) {
 	w.add("s1", w1)
 	w.add("s1", w2)
 
-	v := w.close("s1", nil)
+	v := w.close("s1", notifyValue{})
 	assert.NotNil(t, v)
 	assert.Equal(t, 1, v.waiters.len())
 	assert.Equal(t, w1, v)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	assert.NoError(t, w1.wait(ctx, "s1"))
+	assert.NoError(t, w1.wait(ctx, "s1").err)
 
-	v = w1.close("s1", nil)
+	v = w1.close("s1", notifyValue{})
 	assert.NotNil(t, v)
 	assert.Equal(t, 0, v.waiters.len())
 	assert.Equal(t, w2, v)
 
-	assert.NoError(t, w2.wait(ctx, "s1"))
-	assert.Nil(t, w2.close("s1", nil))
+	assert.NoError(t, w2.wait(ctx, "s1").err)
+	assert.Nil(t, w2.close("s1", notifyValue{}))
 }
 
 func TestWait(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
 	w1 := acquireWaiter("s1", []byte("w1"))
-	defer w1.close("s1", nil)
+	defer w1.close("s1", notifyValue{})
 
 	w.add("s1", w1)
 	go func() {
 		time.Sleep(time.Millisecond * 10)
-		w.close("s1", nil)
+		w.close("s1", notifyValue{})
 	}()
 
-	assert.NoError(t, w1.wait(context.Background(), "s1"))
+	assert.NoError(t, w1.wait(context.Background(), "s1").err)
 }
 
 func TestWaitWithTimeout(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
-	defer w.close("s1", nil)
+	defer w.close("s1", notifyValue{})
 	w1 := acquireWaiter("s1", []byte("w1"))
-	defer w1.close("s1", nil)
+	defer w1.close("s1", notifyValue{})
 
 	w.add("s1", w1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
-	assert.Error(t, w1.wait(ctx, "s1"))
+	assert.Error(t, w1.wait(ctx, "s1").err)
 }
 
 func TestWaitAndNotifyConcurrent(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
-	defer w.close("s1", nil)
+	defer w.close("s1", notifyValue{})
 
 	w.beforeSwapStatusAdjustFunc = func() {
 		w.setStatus("s1", notified)
-		w.c <- nil
+		w.c <- notifyValue{}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
 	defer cancel()
-	assert.NoError(t, w.wait(ctx, "s1"))
+	assert.NoError(t, w.wait(ctx, "s1").err)
 }
 
 func TestWaitMultiTimes(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
 	w1 := acquireWaiter("s1", []byte("w1"))
 	w2 := acquireWaiter("s1", []byte("w2"))
-	defer w2.close("s1", nil)
+	defer w2.close("s1", notifyValue{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
 
 	w.add("s1", w2)
-	w.close("s1", nil)
-	assert.NoError(t, w2.wait(ctx, "s1"))
+	w.close("s1", notifyValue{})
+	assert.NoError(t, w2.wait(ctx, "s1").err)
 	w2.resetWait("s1")
 
 	w1.add("s1", w2)
-	w1.close("s1", nil)
-	assert.NoError(t, w2.wait(ctx, "s1"))
+	w1.close("s1", notifyValue{})
+	assert.NoError(t, w2.wait(ctx, "s1").err)
 
 }
 
 func TestSkipCompletedWaiters(t *testing.T) {
 	w := acquireWaiter("s1", []byte("w"))
 	w1 := acquireWaiter("s1", []byte("w1"))
-	defer w1.close("s1", nil)
+	defer w1.close("s1", notifyValue{})
 	w2 := acquireWaiter("s1", []byte("w2"))
 	w3 := acquireWaiter("s1", []byte("w3"))
-	defer w3.close("s1", nil)
+	defer w3.close("s1", notifyValue{})
 
 	w.add("s1", w1)
 	w.add("s1", w2)
@@ -150,35 +150,35 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	// make w1 completed
 	w1.setStatus("s1", completed)
 
-	v := w.close("s1", nil)
+	v := w.close("s1", notifyValue{})
 	assert.Equal(t, w2, v)
 
-	v = w2.close("s1", nil)
+	v = w2.close("s1", notifyValue{})
 	assert.Equal(t, w3, v)
 }
 
 func TestNotifyAfterCompleted(t *testing.T) {
 	w := acquireWaiter("s1", nil)
 	require.Equal(t, 0, len(w.c))
-	defer w.close("s1", nil)
+	defer w.close("s1", notifyValue{})
 	w.setStatus("s1", completed)
-	assert.False(t, w.notify("s1", nil))
+	assert.False(t, w.notify("s1", notifyValue{}))
 }
 
 func TestNotifyAfterAlreadyNotified(t *testing.T) {
 	w := acquireWaiter("s1", nil)
-	defer w.close("s1", nil)
-	assert.True(t, w.notify("s1", nil))
-	assert.NoError(t, w.wait(context.Background(), "s1"))
-	assert.False(t, w.notify("s1", nil))
+	defer w.close("s1", notifyValue{})
+	assert.True(t, w.notify("s1", notifyValue{}))
+	assert.NoError(t, w.wait(context.Background(), "s1").err)
+	assert.False(t, w.notify("s1", notifyValue{}))
 }
 
 func TestNotifyWithStatusChanged(t *testing.T) {
 	w := acquireWaiter("s1", nil)
-	defer w.close("s1", nil)
+	defer w.close("s1", notifyValue{})
 
 	w.beforeSwapStatusAdjustFunc = func() {
 		w.setStatus("s1", completed)
 	}
-	assert.False(t, w.notify("s1", nil))
+	assert.False(t, w.notify("s1", notifyValue{}))
 }

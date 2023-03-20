@@ -16,11 +16,8 @@ package frontend
 
 import (
 	"context"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -105,35 +102,6 @@ const (
 	cloudNoUserTag  = "cloud_nonuser"
 )
 
-// isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
-func isCmdFieldListSql(sql string) bool {
-	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
-}
-
-// makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
-func makeCmdFieldListSql(query string) string {
-	return cmdFieldListSql + " " + query
-}
-
-// parseCmdFieldList parses the internal cmd field list
-func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, error) {
-	if !isCmdFieldListSql(sql) {
-		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
-	}
-	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
-	//find null
-	nullIdx := strings.IndexRune(rest, rune(0))
-	var tableName string
-	if nullIdx < len(rest) {
-		tableName = rest[:nullIdx]
-		//neglect wildcard
-		//wildcard := payload[nullIdx+1:]
-		return &InternalCmdFieldList{tableName: tableName}, nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
-	}
-}
-
 var _ tree.Statement = &InternalCmdFieldList{}
 
 // InternalCmdFieldList the CMD_FIELD_LIST statement
@@ -177,11 +145,35 @@ type BackgroundExec interface {
 
 var _ BackgroundExec = &BackgroundHandler{}
 
-// profile makes the debug info
-type profile interface {
-	makeProfile(profileTyp profileType)
-
-	getProfile(profileTyp profileType) string
+type unknownStatementType struct {
+	tree.StatementType
 }
 
-var _ profile = &Session{}
+func (unknownStatementType) GetStatementType() string { return "Unknown" }
+func (unknownStatementType) GetQueryType() string     { return tree.QueryTypeOth }
+
+func getStatementType(stmt tree.Statement) tree.StatementType {
+	switch stmt.(type) {
+	case tree.StatementType:
+		return stmt
+	default:
+		return unknownStatementType{}
+	}
+}
+
+// TableInfoCache tableInfos of a database
+type TableInfoCache struct {
+	db         string
+	tableInfos map[string][]ColumnInfo
+}
+
+// outputPool outputs the data
+type outputPool interface {
+	resetLineStr()
+
+	reset()
+
+	getEmptyRow() ([]interface{}, error)
+
+	flush() error
+}
