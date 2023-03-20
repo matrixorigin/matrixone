@@ -260,7 +260,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
-	mgr.OpTxnChan <- op
+	_, err = mgr.PreparingSM.EnqueueRecevied(op)
 	return
 }
 
