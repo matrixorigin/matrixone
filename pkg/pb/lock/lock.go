@@ -39,8 +39,10 @@ func (m *Request) DebugString() string {
 	buffer.WriteString(fmt.Sprintf("%d: ", m.RequestID))
 	buffer.WriteString(m.Method.String())
 	buffer.WriteString("/")
-	buffer.WriteString(m.LockTable.DebugString())
-	buffer.WriteString("/")
+	if m.LockTable.Table > 0 {
+		buffer.WriteString(m.LockTable.DebugString())
+		buffer.WriteString("/")
+	}
 	switch m.Method {
 	case Method_Lock:
 		buffer.WriteString(m.Lock.DebugString())
@@ -190,17 +192,17 @@ func (m *GetTxnLockRequest) DebugString() string {
 }
 
 func (m *GetTxnLockResponse) DebugString() string {
-	return fmt.Sprintf("%d-%s", m.Value, bytesArrayString(m.WaitingList))
+	return fmt.Sprintf("%d-%s",
+		m.Value,
+		bytesArrayString(m.WaitingList))
 }
 
 func (m *GetWaitingListRequest) DebugString() string {
-	return fmt.Sprintf("%s-%s",
-		hex.EncodeToString(m.TxnID),
-		m.ServiceID)
+	return m.Txn.DebugString()
 }
 
 func (m *GetWaitingListResponse) DebugString() string {
-	return bytesArrayString(m.WaitingList)
+	return waitTxnArrayString(m.WaitingList)
 }
 
 func (m *KeepLockTableBindRequest) DebugString() string {
@@ -234,4 +236,21 @@ func bytesArrayString(values [][]byte) string {
 		}
 	}
 	return buffer.String()
+}
+
+func waitTxnArrayString(values []WaitTxn) string {
+	var buffer bytes.Buffer
+	for idx, v := range values {
+		buffer.WriteString(v.String())
+		if idx != len(values)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
+}
+
+func (m *WaitTxn) DebugString() string {
+	return fmt.Sprintf("%s(%s)",
+		hex.EncodeToString(m.TxnID),
+		m.CreatedOn)
 }

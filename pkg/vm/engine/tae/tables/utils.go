@@ -15,8 +15,8 @@
 package tables
 
 import (
-	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -44,7 +44,7 @@ func LoadPersistedColumnData(
 	id *common.ID,
 	def *catalog.ColDef,
 	location string,
-	buffer *bytes.Buffer) (vec containers.Vector, err error) {
+) (vec containers.Vector, err error) {
 	_, _, meta, rows, err := blockio.DecodeLocation(location)
 	if err != nil {
 		return nil, err

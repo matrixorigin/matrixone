@@ -97,7 +97,7 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
+		view, err = task.compacted.GetColumnDataById(def.Idx)
 		if err != nil {
 			return
 		}
