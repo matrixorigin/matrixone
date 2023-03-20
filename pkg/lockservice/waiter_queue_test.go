@@ -22,16 +22,16 @@ import (
 
 func TestPut(t *testing.T) {
 	q := newWaiterQueue()
-	w := acquireWaiter([]byte("w"))
+	w := acquireWaiter("s1", []byte("w"))
 	q.put(w)
 	assert.Equal(t, 1, len(q.waiters))
 }
 
 func TestLen(t *testing.T) {
 	q := newWaiterQueue()
-	q.put(acquireWaiter([]byte("w")))
-	q.put(acquireWaiter([]byte("w1")))
-	q.put(acquireWaiter([]byte("w2")))
+	q.put(acquireWaiter("s1", []byte("w")))
+	q.put(acquireWaiter("s1", []byte("w1")))
+	q.put(acquireWaiter("s1", []byte("w2")))
 	assert.Equal(t, 3, q.len())
 
 	v, remain := q.pop()
@@ -50,9 +50,9 @@ func TestLen(t *testing.T) {
 
 func TestReset(t *testing.T) {
 	q := newWaiterQueue()
-	q.put(acquireWaiter([]byte("w")))
-	q.put(acquireWaiter([]byte("w1")))
-	q.put(acquireWaiter([]byte("w2")))
+	q.put(acquireWaiter("s1", []byte("w")))
+	q.put(acquireWaiter("s1", []byte("w1")))
+	q.put(acquireWaiter("s1", []byte("w2")))
 	q.pop()
 
 	q.reset()
@@ -61,9 +61,9 @@ func TestReset(t *testing.T) {
 
 func TestIterTxns(t *testing.T) {
 	q := newWaiterQueue()
-	q.put(acquireWaiter([]byte("w")))
-	q.put(acquireWaiter([]byte("w1")))
-	q.put(acquireWaiter([]byte("w2")))
+	q.put(acquireWaiter("s1", []byte("w")))
+	q.put(acquireWaiter("s1", []byte("w1")))
+	q.put(acquireWaiter("s1", []byte("w2")))
 
 	var values [][]byte
 	v := 0

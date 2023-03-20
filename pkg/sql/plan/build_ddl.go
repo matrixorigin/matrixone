@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -1306,17 +1305,6 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 	lockTables := make([]*plan.TableLockInfo, 0, len(stmt.TableLocks))
 	uniqueTableName := make(map[string]bool)
 
-	//get session id
-	var sessionIDbytes []byte
-	if ctx.GetProcess() != nil {
-		sessionID := ctx.GetProcess().Id
-		sessionIDbytes = []byte(sessionID)
-	}
-
-	//get rows from 0 to ^uint64(0)
-	rangeMax := make([]byte, 8)
-	binary.BigEndian.PutUint64(rangeMax, ^uint64(0))
-
 	//Check table locks
 	for _, tableLock := range stmt.TableLocks {
 		tb := tableLock.Table
@@ -1346,10 +1334,8 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		uniqueTableName[tblName] = true
 
 		tableLockInfo := &plan.TableLockInfo{
-			LockType:  plan.TableLockType(tableLock.LockType),
-			TableID:   tableDef.TblId,
-			SessionID: sessionIDbytes,
-			Rows:      [][]byte{[]byte("0"), rangeMax},
+			LockType: plan.TableLockType(tableLock.LockType),
+			TableDef: tableDef,
 		}
 		lockTables = append(lockTables, tableLockInfo)
 	}

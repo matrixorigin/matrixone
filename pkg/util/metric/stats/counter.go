@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memcachepolicy
+package stats
 
-type Releasable interface {
-	Release()
+import "sync/atomic"
+
+// Counter represents a combination of global & current_window counter.
+type Counter struct {
+	window atomic.Int64
+	global atomic.Int64
 }
 
-type ReleasableValue[T any] struct {
-	Value       T
-	releaseFunc func()
+// Add adds to global and window counter
+func (c *Counter) Add(delta int64) (new int64) {
+	c.window.Add(delta)
+	return c.global.Add(delta)
 }
 
-func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
-	return ReleasableValue[T]{
-		Value:       v,
-		releaseFunc: releaseFunc,
-	}
+// Load return the global counter value
+func (c *Counter) Load() int64 {
+	return c.global.Load()
 }
 
-func (r ReleasableValue[T]) Release() {
-	r.releaseFunc()
+// SwapW swaps current window counter with new
+func (c *Counter) SwapW(new int64) int64 {
+	return c.window.Swap(new)
 }
-
-var _ Releasable = NewReleasableValue(42, func() {})
