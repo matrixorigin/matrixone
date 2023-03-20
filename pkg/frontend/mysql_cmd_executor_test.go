@@ -424,7 +424,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.tableInfos = make(map[string][]ColumnInfo)
 		mce.tableInfos["A"] = []ColumnInfo{&engineColumnInfo{
 			name: "a",
-			typ:  types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
+			typ:  types.T_varchar.ToType(),
 		}}
 
 		err = mce.handleCmdFieldList(ctx, cflStmt)
@@ -497,22 +497,22 @@ func Test_getDataFromPipeline(t *testing.T) {
 					"m", "n",
 				},
 				[]types.Type{
-					{Oid: types.T_int8},
-					{Oid: types.T_uint8},
-					{Oid: types.T_int16},
-					{Oid: types.T_uint16},
-					{Oid: types.T_int32},
-					{Oid: types.T_uint32},
-					{Oid: types.T_int64},
-					{Oid: types.T_uint64},
-					{Oid: types.T_float32},
-					{Oid: types.T_float64},
-					{Oid: types.T_char},
-					{Oid: types.T_varchar},
-					{Oid: types.T_date},
-					{Oid: types.T_time},
-					{Oid: types.T_datetime},
-					{Oid: types.T_json},
+					types.T_int8.ToType(),
+					types.T_uint8.ToType(),
+					types.T_int16.ToType(),
+					types.T_uint16.ToType(),
+					types.T_int32.ToType(),
+					types.T_uint32.ToType(),
+					types.T_int64.ToType(),
+					types.T_uint64.ToType(),
+					types.T_float32.ToType(),
+					types.T_float64.ToType(),
+					types.T_char.ToType(),
+					types.T_varchar.ToType(),
+					types.T_date.ToType(),
+					types.T_time.ToType(),
+					types.T_datetime.ToType(),
+					types.T_json.ToType(),
 				},
 				3)
 		}
@@ -574,22 +574,22 @@ func Test_getDataFromPipeline(t *testing.T) {
 					"m", "n",
 				},
 				[]types.Type{
-					{Oid: types.T_int8},
-					{Oid: types.T_uint8},
-					{Oid: types.T_int16},
-					{Oid: types.T_uint16},
-					{Oid: types.T_int32},
-					{Oid: types.T_uint32},
-					{Oid: types.T_int64},
-					{Oid: types.T_uint64},
-					{Oid: types.T_float32},
-					{Oid: types.T_float64},
-					{Oid: types.T_char},
-					{Oid: types.T_varchar},
-					{Oid: types.T_date},
-					{Oid: types.T_time},
-					{Oid: types.T_datetime},
-					{Oid: types.T_json},
+					types.T_int8.ToType(),
+					types.T_uint8.ToType(),
+					types.T_int16.ToType(),
+					types.T_uint16.ToType(),
+					types.T_int32.ToType(),
+					types.T_uint32.ToType(),
+					types.T_int64.ToType(),
+					types.T_uint64.ToType(),
+					types.T_float32.ToType(),
+					types.T_float64.ToType(),
+					types.T_char.ToType(),
+					types.T_varchar.ToType(),
+					types.T_date.ToType(),
+					types.T_time.ToType(),
+					types.T_datetime.ToType(),
+					types.T_json.ToType(),
 				},
 				3)
 		}
@@ -607,7 +607,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.Type{Oid: 88}))
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 

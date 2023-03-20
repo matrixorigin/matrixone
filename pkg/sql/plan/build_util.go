@@ -46,28 +46,28 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1, Scale: -1}, nil
+				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Size: 1, Scale: -1}, nil
+			return &plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_SHORT:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Size: 2, Scale: -1}, nil
+				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Size: 2, Scale: -1}, nil
+			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Size: 4, Scale: -1}, nil
+				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Size: 4, Scale: -1}, nil
+			return &plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONGLONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Size: 8, Scale: -1}, nil
+				return &plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Size: 8, Scale: -1}, nil
+			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_FLOAT:
-			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Size: 4, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
-			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Size: 8, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,
@@ -88,9 +88,9 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if fstr == "char" { // type char
-				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
+				return &plan.Type{Id: int32(types.T_char), Width: width}, nil
 			}
-			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
+			return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,
@@ -118,44 +118,44 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			}
 			switch fstr {
 			case "char":
-				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
+				return &plan.Type{Id: int32(types.T_char), Width: width}, nil
 			case "binary":
-				return &plan.Type{Id: int32(types.T_binary), Size: 24, Width: width}, nil
+				return &plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
-				return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
+				return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
 			}
 			// varbinary
-			return &plan.Type{Id: int32(types.T_varbinary), Size: 24, Width: width}, nil
+			return &plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
-			return &plan.Type{Id: int32(types.T_date), Size: 4}, nil
+			return &plan.Type{Id: int32(types.T_date)}, nil
 		case defines.MYSQL_TYPE_TIME:
-			return &plan.Type{Id: int32(types.T_time), Size: 8, Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
-			return &plan.Type{Id: int32(types.T_datetime), Size: 8, Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: int32(types.T_timestamp), Size: 8, Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 16 {
-				return &plan.Type{Id: int32(types.T_decimal128), Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+				return &plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}
-			return &plan.Type{Id: int32(types.T_decimal64), Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_decimal64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_BOOL:
-			return &plan.Type{Id: int32(types.T_bool), Size: 1}, nil
+			return &plan.Type{Id: int32(types.T_bool)}, nil
 		case defines.MYSQL_TYPE_BLOB:
-			return &plan.Type{Id: int32(types.T_blob), Size: 24}, nil
+			return &plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_TEXT:
-			return &plan.Type{Id: int32(types.T_text), Size: 24}, nil
+			return &plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
-			return &plan.Type{Id: int32(types.T_json), Size: types.VarlenaSize}, nil
+			return &plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_UUID:
-			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
+			return &plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
-			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+			return &plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_MEDIUM_BLOB:
-			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+			return &plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_LONG_BLOB:
-			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+			return &plan.Type{Id: int32(types.T_blob)}, nil
 		default:
 			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
