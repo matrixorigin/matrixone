@@ -161,20 +161,20 @@ func (txn *Transaction) DumpBatch(force bool) error {
 			txn.writes[i] = txn.writes[i][:idx+1]
 		}
 		for key := range mp {
-			container, tbl, err := txn.getContainer(key)
+			s3Writer, tbl, err := txn.getS3Writer(key)
 			if err != nil {
 				return err
 			}
-			container.InitBuffers(mp[key][0], 0)
+			s3Writer.InitBuffers(mp[key][0], 0)
 			for i := 0; i < len(mp[key]); i++ {
-				container.Put(mp[key][i], 0)
+				s3Writer.Put(mp[key][i], 0)
 			}
-			err = container.MergeBlock(0, len(mp[key]), txn.proc, false)
+			err = s3Writer.MergeBlock(0, len(mp[key]), txn.proc, false)
 
 			if err != nil {
 				return err
 			}
-			metaLoc := container.GetMetaLocBat()
+			metaLoc := s3Writer.GetMetaLocBat()
 
 			lenVecs := len(metaLoc.Attrs)
 			// only remain the metaLoc col
@@ -191,18 +191,18 @@ func (txn *Transaction) DumpBatch(force bool) error {
 	return nil
 }
 
-func (txn *Transaction) getContainer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
+func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
 	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
 	if err != nil {
 		return nil, nil, err
 	}
-	container := &colexec.S3Writer{}
-	container.Init(1)
-	container.SetMp(attrs)
+	s3Writer := &colexec.S3Writer{}
+	s3Writer.Init(1)
+	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
-		container.AddSortIdx(sortIdx)
+		s3Writer.AddSortIdx(sortIdx)
 	}
-	return container, tbl, nil
+	return s3Writer, tbl, nil
 }
 
 func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, engine.Relation, error) {

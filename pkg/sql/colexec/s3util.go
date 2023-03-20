@@ -69,14 +69,14 @@ const (
 	TagS3Size uint64 = 10 * mpool.MB
 )
 
-func (container *S3Writer) GetMetaLocBat() *batch.Batch {
-	return container.metaLocBat
+func (w *S3Writer) GetMetaLocBat() *batch.Batch {
+	return w.metaLocBat
 }
 
-func (container *S3Writer) SetMp(attrs []*engine.Attribute) {
+func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].Primary {
-			container.pk[attrs[i].Name] = struct{}{}
+			w.pk[attrs[i].Name] = struct{}{}
 		}
 		if attrs[i].Default == nil {
 			continue
@@ -538,7 +538,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process, idx int) error {
 			return err
 		}
 
-		vector.AppendFixed[int16](w.metaLocBat.Vecs[0], int16(idx), false, proc.GetMPool())
+		vector.AppendFixed(w.metaLocBat.Vecs[0], int16(idx), false, proc.GetMPool())
 		vector.AppendBytes(w.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
 	}
 	return nil
