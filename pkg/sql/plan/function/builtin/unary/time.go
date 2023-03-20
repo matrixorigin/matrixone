@@ -72,7 +72,7 @@ func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	rtyp := types.T_time.ToType()
 	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
@@ -95,7 +95,7 @@ func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 
 func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	rtyp := types.T_time.ToType()
 	ivals := vector.MustFixedCol[int64](inputVector)
 
 	if inputVector.IsConst() {

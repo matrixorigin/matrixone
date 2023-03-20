@@ -34,7 +34,6 @@ var (
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
-			Size:        1,
 		},
 	}
 )
@@ -236,7 +235,6 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: notNull,
-			Size:        1,
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{

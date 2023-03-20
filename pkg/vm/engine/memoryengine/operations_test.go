@@ -25,9 +25,7 @@ import (
 )
 
 func TestVectorGobEncoding(t *testing.T) {
-	//vec := vector.New(types.Type{
-	//	Oid: types.T_char,
-	//})
+	//vec := vector.New(types.T_char.ToType())
 	//vec.Col = &types.Bytes{}
 
 	vec := vector.NewVec(types.T_int16.ToType())
