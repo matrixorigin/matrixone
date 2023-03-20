@@ -353,7 +353,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 	// make the real return type of function overload.
 	rt := getRealReturnType(fid, fs.Overloads[index], finalTypes)
 
-	return EncodeOverloadID(fid, index), rt, targetTypes, nil
+	return EncodeOverloadID(fid, index), rt, finalTypes, nil
 }
 
 func ensureBinaryOperatorWithSameScale(targets []types.Type, hasSet []bool) {
@@ -458,7 +458,9 @@ func setDefaultScale(typ *types.Type, typ2 types.Type) {
 			typ.Scale = typ2.Scale
 		}
 	}
-	typ.Size = int32(typ.Oid.TypeLen())
+	//if typ.Size != int32(typ.Oid.TypeLen()) {
+	//	panic(typ.DescString())
+	//}
 }
 
 func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type {

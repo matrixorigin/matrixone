@@ -355,6 +355,7 @@ func genCreateDatabaseTuple(
 	roleId uint32,
 	name string,
 	id uint64,
+	typ string,
 	m *mpool.MPool,
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
@@ -398,6 +399,11 @@ func genCreateDatabaseTuple(
 		idx = catalog.MO_DATABASE_ACCOUNT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // account_id
 		if err := vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_DATABASE_DAT_TYPE_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_type
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(typ), false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -547,6 +553,7 @@ func makeCreateDatabaseEntries(
 		ac.roleId,
 		name,
 		id,
+		"",
 		m,
 	)
 	if err != nil {

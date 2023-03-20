@@ -17,9 +17,10 @@ package indexwrapper
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -54,7 +55,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	assert.Nil(t, err)
 
 	cType := common.Plain
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.T_int32.ToType()
 	colIdx := uint16(0)
 	interIdx := uint16(0)
 

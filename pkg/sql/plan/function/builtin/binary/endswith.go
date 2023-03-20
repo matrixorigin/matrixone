@@ -25,7 +25,7 @@ import (
 func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	// XXX Why result type is uint8, not bool?
-	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
+	rtyp := types.T_uint8.ToType()
 	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
