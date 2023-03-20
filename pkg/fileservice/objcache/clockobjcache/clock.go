@@ -12,11 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memcachepolicy
+package clockobjcache
 
-type Policy interface {
-	Set(key any, value any, size int64)
-	Get(key any) (value any, size int64, ok bool)
-	Flush()
-	Size() int64
+// TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
+
+type Clock struct {
+}
+
+func New(capacity int64) *Clock {
+	return &Clock{}
+}
+
+func (c *Clock) Set(key any, value any, size int64, preloading bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Get(key any, preloading bool) (value any, size int64, ok bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Flush() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Size() int64 {
+	//TODO implement me
+	panic("implement me")
 }
