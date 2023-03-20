@@ -260,7 +260,6 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if len(items) == 0 {
 		return
 	}
-	logutil.Infof("items is %d", len(items))
 	processes := make([]prefetchCtx, 0)
 	for _, item := range items {
 		p := item.(prefetchCtx)
@@ -270,6 +269,7 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 	merged := mergePrefetch(processes)
+	logutil.Infof("items is %d, merged is %d", len(items), len(merged))
 	for _, object := range merged {
 		/*ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()*/

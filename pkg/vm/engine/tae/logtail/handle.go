@@ -70,6 +70,8 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -83,7 +85,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
@@ -598,59 +599,40 @@ func LoadCheckpointEntries(
 
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
-	jobs := make([]*tasks.Job, len(locations))
-	defer func() {
-		for idx, data := range datas {
-			if jobs[idx] != nil {
-				jobs[idx].WaitDone()
-			}
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
-	// TODO: using a global job scheduler
-	jobScheduler := tasks.NewParallelJobScheduler(200)
-	defer jobScheduler.Stop()
-
-	makeJob := func(i int) (job *tasks.Job) {
-		location := locations[i]
-		exec := func(ctx context.Context) (result *tasks.JobResult) {
-			result = &tasks.JobResult{}
-			reader, err := blockio.NewCheckPointReader(fs, location)
-			if err != nil {
-				result.Err = err
-				return
-			}
-			data := NewCheckpointData()
-			if err = data.ReadFrom(ctx, reader, nil, common.DefaultAllocator); err != nil {
-				result.Err = err
-				return
-			}
-			datas[i] = data
+	readers := make([]dataio.Reader, len(locations))
+	readerMetas := make([][]objectio.BlockObject, len(locations))
+	for i, key := range locations {
+		readers[i], err = blockio.NewCheckPointReader(fs, key)
+		if err != nil {
 			return
 		}
-		job = tasks.NewJob(
-			fmt.Sprintf("load-%s", location),
-			blockio.JTLoad,
-			context.Background(),
-			exec)
-		return
+		readerMetas[i], err = readers[i].LoadBlocksMeta(ctx, common.DefaultAllocator)
+		if err != nil {
+			return
+		}
+
+		for idx, item := range checkpointDataRefer {
+			idxes := make([]uint16, len(item.attrs))
+			for i := range item.attrs {
+				idxes[i] = uint16(i)
+			}
+			blockio.Prefetch(idxes, readers[i], []uint32{readerMetas[i][idx].GetID()}, readerMetas[i][idx].GetExtent(), nil)
+		}
+
 	}
 
 	for i := range locations {
-		jobs[i] = makeJob(i)
-		if err = jobScheduler.Schedule(jobs[i]); err != nil {
-			return
+		data := NewCheckpointData()
+		for idx, item := range checkpointDataRefer {
+			var bat *containers.Batch
+			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, readerMetas[i][idx], readers[i])
+			if err != nil {
+				return
+			}
+			data.bats[idx] = bat
 		}
-	}
-
-	for _, job := range jobs {
-		result := job.WaitDone()
-		if err = result.Err; err != nil {
-			return
-		}
+		datas[i] = data
 	}
 
 	entries = make([]*api.Entry, 0)

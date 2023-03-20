@@ -17,7 +17,6 @@ package logtail
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -490,24 +489,6 @@ func LoadBlkColumnsByMeta(
 	return bat, nil
 }
 
-func BlkColumnByMetaLoadJob(
-	cxt context.Context,
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	reader dataio.Reader,
-) *tasks.Job {
-	exec := func(_ context.Context) (result *tasks.JobResult) {
-		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
-		return &tasks.JobResult{
-			Err: err,
-			Res: bat,
-		}
-	}
-	return tasks.NewJob(uuid.NewString(), blockio.JTLoad, cxt, exec)
-}
-
 // TODO:
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
@@ -518,11 +499,6 @@ func (data *CheckpointData) ReadFrom(
 	metas, err := reader.LoadBlocksMeta(ctx, m)
 	if err != nil {
 		return
-	}
-
-	if scheduler == nil {
-		scheduler = tasks.NewParallelJobScheduler(100)
-		defer scheduler.Stop()
 	}
 
 	for idx, item := range checkpointDataRefer {
