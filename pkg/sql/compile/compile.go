@@ -1712,7 +1712,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// 1. If the length of cn list is 1, query is small or for temporary table.
 	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
 	// Both these queries only needs to be executed on the current cn.
-	if len(ranges) == 0 || len(c.cnList) == 1 {
+	if len(ranges) == 0 {
+		return nodes, nil
+	}
+	if len(c.cnList) == 1 {
+		if len(nodes) == 0 {
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+			})
+		}
+		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
 	}
 
@@ -1724,6 +1735,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if isSameCN(c.addr, c.cnList[j].Addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
+						Addr: c.addr,
 						Rel:  rel,
 						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 					})
@@ -1820,7 +1832,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts := strings.Split(addr, ":")
 	if len(parts) != 2 {
-		logutil.Warnf("compileScope received a wrong cn address %s", addr)
+		logutil.Warnf("compileScope received a malformed cn address %s, need 'ip:port'", addr)
 		return true
 	}
 	return parts[0] == strings.Split(currentCNAddr, ":")[0]
