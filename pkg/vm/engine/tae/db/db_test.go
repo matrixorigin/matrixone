@@ -3979,7 +3979,6 @@ func TestDirtyWatchRace(t *testing.T) {
 }
 
 func TestBlockRead(t *testing.T) {
-	t.Skip("MUST TODO")
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4017,11 +4016,11 @@ func TestBlockRead(t *testing.T) {
 	assert.NotEmpty(t, metaloc)
 	assert.NotEmpty(t, deltaloc)
 
-	// bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
+	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
 
 	info := &pkgcatalog.BlockInfo{
-		// BlockID:    bid,
-		// SegmentID:  sid,
+		BlockID:    bid,
+		SegmentID:  sid,
 		EntryState: true,
 		MetaLoc:    metaloc,
 		DeltaLoc:   deltaloc,

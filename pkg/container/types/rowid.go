@@ -54,7 +54,7 @@ func (r Rowid) GetSegid() Uuid {
 	// return (Blockid)(r[:BlockidSize])
 }
 
-func (r *Rowid) Decode() (Blockid, uint32) {
+func (r Rowid) Decode() (Blockid, uint32) {
 	b := *(*Blockid)(r[:BlockidSize])
 	s := binary.BigEndian.Uint32(r[BlockidSize:])
 	return b, s

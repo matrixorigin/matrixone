@@ -195,7 +195,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
-	tbl.skipBlocks = make(map[uint64]uint8)
+	tbl.skipBlocks = make(map[types.Blockid]uint8)
 	if tbl.meta == nil {
 		return ranges, nil
 	}
@@ -206,10 +206,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	for _, i := range tbl.dnList {
 		blocks := tbl.meta.blocks[i]
 		blks := make([]BlockMeta, 0, len(blocks))
-		deletes := make(map[uint64][]int)
+		deletes := make(map[types.Blockid][]int)
 		if len(blocks) > 0 {
 			ts := tbl.db.txn.meta.SnapshotTS
-			ids := make([]uint64, len(blocks))
+			ids := make([]types.Blockid, len(blocks))
 			for i := range blocks {
 				// if cn can see a appendable block, this block must contain all updates
 				// in cache, no need to do merge read, BlockRead will filter out
@@ -226,7 +226,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				iter := tbl.parts[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
-					id, offset := catalog.DecodeRowid(entry.RowID)
+					id, offset := entry.RowID.Decode()
 					deletes[id] = append(deletes[id], int(offset))
 				}
 				iter.Close()
@@ -236,7 +236,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				if entry.typ == DELETE {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
-						id, offset := catalog.DecodeRowid(v)
+						id, offset := v.Decode()
 						deletes[id] = append(deletes[id], int(offset))
 					}
 				}

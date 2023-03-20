@@ -228,13 +228,13 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID    uint64
+	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
 	MetaLoc    string
 	DeltaLoc   string
 	CommitTs   types.TS
-	SegmentID  uint64
+	SegmentID  types.Uuid
 }
 
 // used for memengine and tae

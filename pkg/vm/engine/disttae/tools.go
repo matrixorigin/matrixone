@@ -1047,7 +1047,7 @@ func genBlockMetas(
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
 	{
-		mp := make(map[uint64]catalog.BlockInfo) // block list
+		mp := make(map[types.Blockid]catalog.BlockInfo) // block list
 		for i := range blockInfos {
 			if blk, ok := mp[blockInfos[i].BlockID]; ok {
 				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
@@ -1087,17 +1087,17 @@ func genBlockMetas(
 	return metas, nil
 }
 
-func inBlockMap(blk BlockMeta, blockMap map[uint64]bool) bool {
+func inBlockMap(blk BlockMeta, blockMap map[types.Blockid]bool) bool {
 	_, ok := blockMap[blk.Info.BlockID]
 	return ok
 }
 
-func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
+func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 
 	lenblks := len(modfs)
-	blockMap := make(map[uint64]bool, lenblks)
+	blockMap := make(map[types.Blockid]bool, lenblks)
 	for i := 0; i < lenblks; i++ {
 		blockMap[modfs[i].Info.BlockID] = true
 	}
@@ -1161,7 +1161,7 @@ func inPartition(v types.Rowid, part *PartitionState,
 	if len(blocks) == 0 {
 		return false
 	}
-	blkId := rowIDToBlockID(RowID(v))
+	blkId := v.GetBlockid()
 	for _, blk := range blocks {
 		if blk.Info.BlockID == blkId {
 			return true
