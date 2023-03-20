@@ -19,6 +19,7 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func (s *service) initRemote() {
@@ -70,12 +71,17 @@ func (s *service) handleRemoteLock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale
+		// lock table binding.
 		return err
 	}
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
-	return l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+	result, err := l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+	if err != nil {
+		return err
+	}
+	resp.Lock.Result = result
+	return nil
 }
 
 func (s *service) handleRemoteUnlock(
@@ -85,11 +91,11 @@ func (s *service) handleRemoteUnlock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale lock
+		// table binding.
 		return err
 	}
-	return s.Unlock(ctx, req.Unlock.TxnID)
+	return s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
 }
 
 func (s *service) handleRemoteGetLock(
@@ -99,8 +105,8 @@ func (s *service) handleRemoteGetLock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock table binding.
-		// current service
+		// means that the lockservice sending the lock request holds a stale lock
+		// table binding.
 		return err
 	}
 	l.getLock(
@@ -216,7 +222,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				s.cfg.RemoteLockTimeout.Duration)
 			if len(timeoutTxns) > 0 {
 				for _, txnID := range timeoutTxns {
-					s.Unlock(ctx, txnID)
+					s.Unlock(ctx, txnID, timestamp.Timestamp{})
 				}
 			}
 
