@@ -15,7 +15,6 @@
 package handle
 
 import (
-	"bytes"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -57,10 +56,10 @@ type BlockReader interface {
 	String() string
 	IsUncommitted() bool
 	GetByFilter(filter *Filter) (uint32, error)
-	GetColumnDataByNames(attrs []string, buffers []*bytes.Buffer) (*model.BlockView, error)
-	GetColumnDataByIds(colIdxes []int, buffers []*bytes.Buffer) (*model.BlockView, error)
-	GetColumnDataByName(string, *bytes.Buffer) (*model.ColumnView, error)
-	GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error)
+	GetColumnDataByNames(attrs []string) (*model.BlockView, error)
+	GetColumnDataByIds(colIdxes []int) (*model.BlockView, error)
+	GetColumnDataByName(string) (*model.ColumnView, error)
+	GetColumnDataById(int) (*model.ColumnView, error)
 	GetMeta() any
 	GetMetaLoc() string
 	GetDeltaLoc() string

@@ -328,14 +328,14 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
+		//tenant := &TenantInfo{
+		//	Tenant:        sysAccountName,
+		//	User:          rootName,
+		//	DefaultRole:   moAdminRoleName,
+		//	TenantID:      sysAccountID,
+		//	UserID:        rootID,
+		//	DefaultRoleID: moAdminRoleID,
+		//}
 
 		ca := &tree.CreateAccount{
 			Name:        "test",
@@ -346,53 +346,10 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, _, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func Test_checkUserExistsOrNot(t *testing.T) {
-	convey.Convey("checkUserExistsOrNot", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-		mrs1 := mock_frontend.NewMockExecResult(ctrl)
-		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		exists, err := checkUserExistsOrNot(ctx, pu, "test")
-		convey.So(exists, convey.ShouldBeTrue)
-		convey.So(err, convey.ShouldBeNil)
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-
-		ses := &Session{}
-
-		err = InitUser(ctx, ses, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

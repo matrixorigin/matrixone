@@ -20,8 +20,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -32,6 +35,7 @@ type service struct {
 	activeTxnHolder  activeTxnHolder
 	fsp              *fixedSlicePool
 	deadlockDetector *detector
+	clock            clock.Clock
 	stopper          *stopper.Stopper
 	stopOnce         sync.Once
 
@@ -51,10 +55,12 @@ func NewLockService(cfg Config) LockService {
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
-	s.activeTxnHolder = newMapBasedTxnHandler(s.fsp)
+	s.activeTxnHolder = newMapBasedTxnHandler(s.cfg.ServiceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
+		s.cfg.ServiceID,
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
+	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	return s
 }
@@ -64,7 +70,7 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) error {
+	options LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
@@ -72,16 +78,15 @@ func (s *service) Lock(
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
 	if err != nil {
-		return err
+		return pb.Result{}, err
 	}
-
-	if err := l.lock(ctx, txn, rows, options); err != nil {
-		return err
-	}
-	return nil
+	return l.lock(ctx, txn, rows, options)
 }
 
-func (s *service) Unlock(ctx context.Context, txnID []byte) error {
+func (s *service) Unlock(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp) error {
 	// FIXME(fagongzi): too many mem alloc in trace
 	_, span := trace.Debug(ctx, "lockservice.unlock")
 	defer span.End()
@@ -90,8 +95,8 @@ func (s *service) Unlock(ctx context.Context, txnID []byte) error {
 	if txn == nil {
 		return nil
 	}
-	defer logUnlockTxn(txn)()
-	txn.close(txnID, s.getLockTable)
+	defer logUnlockTxn(s.cfg.ServiceID, txn)()
+	txn.close(s.cfg.ServiceID, txnID, commitTS, s.getLockTable)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -125,35 +130,43 @@ func (s *service) Close() error {
 	return err
 }
 
-func (s *service) fetchTxnWaitingList(txnID []byte, waiters *waiters) (bool, error) {
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
-	// the active txn closed
-	if txn == nil {
-		return true, nil
+func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, error) {
+	if txn.CreatedOn == s.cfg.ServiceID {
+		txn := s.activeTxnHolder.getActiveTxn(txn.TxnID, false, "")
+		// the active txn closed
+		if txn == nil {
+			return true, nil
+		}
+		return txn.fetchWhoWaitingMe(
+			s.cfg.ServiceID,
+			txn.txnID,
+			s.activeTxnHolder,
+			waiters.add,
+			s.getLockTable), nil
 	}
 
-	if service := txn.getRemoteService(); service != "" {
-		waitingList, err := s.getTxnWaitingList(txnID, service)
-		if err != nil {
-			return false, err
-		}
-		for _, v := range waitingList {
-			if !waiters.add(v) {
-				return false, nil
-			}
-		}
-		return true, nil
+	waitingList, err := s.getTxnWaitingList(txn.TxnID, txn.CreatedOn)
+	if err != nil {
+		return false, err
 	}
-	return txn.fetchWhoWaitingMe(txnID, waiters.add, s.getLockTable), nil
+	for _, v := range waitingList {
+		if !waiters.add(v) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
-func (s *service) abortDeadlockTxn(txnID []byte) {
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
+	// this wait txn must be hold by current service, because
+	// all transactions found to be deadlocked by the deadlock
+	// detector must be held by the current service
+	txn := s.activeTxnHolder.getActiveTxn(wait.TxnID, false, "")
 	// the active txn closed
 	if txn == nil {
 		return
 	}
-	txn.abort(txnID)
+	txn.abort(s.cfg.ServiceID, wait.TxnID)
 }
 
 func (s *service) getLockTable(tableID uint64) (lockTable, error) {
@@ -193,18 +206,21 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	s.tables.Store(
 		newBind.Table,
 		s.createLockTableByBind(newBind))
-	logRemoteBindChanged(old.(lockTable).getBind(), newBind)
+	logRemoteBindChanged(s.cfg.ServiceID, old.(lockTable).getBind(), newBind)
 	old.(lockTable).close()
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
-	defer logLockTableCreated(bind,
+	defer logLockTableCreated(
+		s.cfg.ServiceID,
+		bind,
 		bind.ServiceID != s.cfg.ServiceID)
 
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,
-			s.deadlockDetector)
+			s.deadlockDetector,
+			s.clock)
 	} else {
 		return newRemoteLockTable(
 			s.cfg.ServiceID,
@@ -225,8 +241,9 @@ type activeTxnHolder interface {
 }
 
 type mapBasedTxnHolder struct {
-	fsp *fixedSlicePool
-	mu  struct {
+	serviceID string
+	fsp       *fixedSlicePool
+	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
@@ -236,9 +253,12 @@ type mapBasedTxnHolder struct {
 	}
 }
 
-func newMapBasedTxnHandler(fsp *fixedSlicePool) activeTxnHolder {
+func newMapBasedTxnHandler(
+	serviceID string,
+	fsp *fixedSlicePool) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
+	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.remoteServices = make(map[string]*list.Element[remote])
 	h.mu.dequeue = list.New[remote]()
@@ -274,6 +294,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 		}
 	}
+	logTxnCreated(h.serviceID, txn)
 	return txn
 }
 

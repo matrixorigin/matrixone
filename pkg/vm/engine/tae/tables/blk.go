@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -82,34 +81,33 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 func (blk *block) GetColumnDataByNames(
 	txn txnif.AsyncTxn,
 	attrs []string,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	colIdxes := make([]int, len(attrs))
 	schema := blk.meta.GetSchema()
 	for i, attr := range attrs {
 		colIdxes[i] = schema.GetColIdx(attr)
 	}
-	return blk.GetColumnDataByIds(txn, colIdxes, buffers)
+	return blk.GetColumnDataByIds(txn, colIdxes)
 }
 
 func (blk *block) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx, buffer)
+	return blk.GetColumnDataById(txn, colIdx)
 }
 
 func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	colIdxes []int,
-	buffers []*bytes.Buffer) (view *model.BlockView, err error) {
+) (view *model.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.ResolvePersistedColumnDatas(
 		node.MustPNode(),
 		txn.GetStartTS(),
 		colIdxes,
-		buffers,
 		false)
 }
 
@@ -119,14 +117,13 @@ func (blk *block) GetColumnDataByIds(
 func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
-	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+) (view *model.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.ResolvePersistedColumnData(
 		node.MustPNode(),
 		txn.GetStartTS(),
 		colIdx,
-		buffer,
 		false)
 }
 
@@ -247,7 +244,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	if sortKey, err = blk.LoadPersistedColumnData(
 		blk.meta.GetSchema().GetSingleSortKeyIdx(),
-		nil); err != nil {
+	); err != nil {
 		return
 	}
 	defer sortKey.Close()

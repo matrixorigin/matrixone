@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -106,9 +107,9 @@ func (WaitPolicy) EnumDescriptor() ([]byte, []int) {
 type Method int32
 
 const (
-	// Lock lock
+	// Lock lock rows on remote lock table
 	Method_Lock Method = 0
-	// Write transaction write
+	// Write unlock rows from remote lock table
 	Method_Unlock Method = 1
 	// GetTxnLock get lock data on a special lock
 	Method_GetTxnLock Method = 2
@@ -619,6 +620,7 @@ func (m *LockRequest) GetOptions() LockOptions {
 
 // LockResponse lock response
 type LockResponse struct {
+	Result               Result   `protobuf:"bytes,1,opt,name=Result,proto3" json:"Result"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -656,6 +658,13 @@ func (m *LockResponse) XXX_DiscardUnknown() {
 }
 
 var xxx_messageInfo_LockResponse proto.InternalMessageInfo
+
+func (m *LockResponse) GetResult() Result {
+	if m != nil {
+		return m.Result
+	}
+	return Result{}
+}
 
 // GetTxnLockRequest get a waiting txn list on a special lock
 // request, used to dead lock detect
@@ -772,8 +781,7 @@ func (m *GetTxnLockResponse) GetWaitingList() [][]byte {
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
 type GetWaitingListRequest struct {
-	TxnID                []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
-	ServiceID            string   `protobuf:"bytes,2,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
+	Txn                  WaitTxn  `protobuf:"bytes,1,opt,name=Txn,proto3" json:"Txn"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -812,26 +820,19 @@ func (m *GetWaitingListRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_GetWaitingListRequest proto.InternalMessageInfo
 
-func (m *GetWaitingListRequest) GetTxnID() []byte {
+func (m *GetWaitingListRequest) GetTxn() WaitTxn {
 	if m != nil {
-		return m.TxnID
+		return m.Txn
 	}
-	return nil
-}
-
-func (m *GetWaitingListRequest) GetServiceID() string {
-	if m != nil {
-		return m.ServiceID
-	}
-	return ""
+	return WaitTxn{}
 }
 
 // GetWaitingListResponse get a waiting txn list on a specical txn response. CN -> CN
 type GetWaitingListResponse struct {
-	WaitingList          [][]byte `protobuf:"bytes,2,rep,name=WaitingList,proto3" json:"WaitingList,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	WaitingList          []WaitTxn `protobuf:"bytes,1,rep,name=WaitingList,proto3" json:"WaitingList"`
+	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
+	XXX_unrecognized     []byte    `json:"-"`
+	XXX_sizecache        int32     `json:"-"`
 }
 
 func (m *GetWaitingListResponse) Reset()         { *m = GetWaitingListResponse{} }
@@ -867,26 +868,85 @@ func (m *GetWaitingListResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_GetWaitingListResponse proto.InternalMessageInfo
 
-func (m *GetWaitingListResponse) GetWaitingList() [][]byte {
+func (m *GetWaitingListResponse) GetWaitingList() []WaitTxn {
 	if m != nil {
 		return m.WaitingList
 	}
 	return nil
 }
 
-// UnlockRequest unlock lock on remote lock service request. CN -> CN
-type UnlockRequest struct {
+// WaitTxn wait txn include txn created on
+type WaitTxn struct {
 	TxnID                []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
+	CreatedOn            string   `protobuf:"bytes,2,opt,name=CreatedOn,proto3" json:"CreatedOn,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *WaitTxn) Reset()         { *m = WaitTxn{} }
+func (m *WaitTxn) String() string { return proto.CompactTextString(m) }
+func (*WaitTxn) ProtoMessage()    {}
+func (*WaitTxn) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{10}
+}
+func (m *WaitTxn) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *WaitTxn) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_WaitTxn.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *WaitTxn) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_WaitTxn.Merge(m, src)
+}
+func (m *WaitTxn) XXX_Size() int {
+	return m.Size()
+}
+func (m *WaitTxn) XXX_DiscardUnknown() {
+	xxx_messageInfo_WaitTxn.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_WaitTxn proto.InternalMessageInfo
+
+func (m *WaitTxn) GetTxnID() []byte {
+	if m != nil {
+		return m.TxnID
+	}
+	return nil
+}
+
+func (m *WaitTxn) GetCreatedOn() string {
+	if m != nil {
+		return m.CreatedOn
+	}
+	return ""
+}
+
+// UnlockRequest unlock lock on remote lock service request. CN -> CN
+type UnlockRequest struct {
+	TxnID []byte `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
+	// CommitTS is the commit timestamp of the current txn. Empty if txn is
+	// roll backed
+	CommitTS             timestamp.Timestamp `protobuf:"bytes,2,opt,name=CommitTS,proto3" json:"CommitTS"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
 }
 
 func (m *UnlockRequest) Reset()         { *m = UnlockRequest{} }
 func (m *UnlockRequest) String() string { return proto.CompactTextString(m) }
 func (*UnlockRequest) ProtoMessage()    {}
 func (*UnlockRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{10}
+	return fileDescriptor_164ad2988c7acaf1, []int{11}
 }
 func (m *UnlockRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -922,6 +982,13 @@ func (m *UnlockRequest) GetTxnID() []byte {
 	return nil
 }
 
+func (m *UnlockRequest) GetCommitTS() timestamp.Timestamp {
+	if m != nil {
+		return m.CommitTS
+	}
+	return timestamp.Timestamp{}
+}
+
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
 type UnlockResponse struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -933,7 +1000,7 @@ func (m *UnlockResponse) Reset()         { *m = UnlockResponse{} }
 func (m *UnlockResponse) String() string { return proto.CompactTextString(m) }
 func (*UnlockResponse) ProtoMessage()    {}
 func (*UnlockResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{11}
+	return fileDescriptor_164ad2988c7acaf1, []int{12}
 }
 func (m *UnlockResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -975,7 +1042,7 @@ func (m *GetBindRequest) Reset()         { *m = GetBindRequest{} }
 func (m *GetBindRequest) String() string { return proto.CompactTextString(m) }
 func (*GetBindRequest) ProtoMessage()    {}
 func (*GetBindRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{12}
+	return fileDescriptor_164ad2988c7acaf1, []int{13}
 }
 func (m *GetBindRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1030,7 +1097,7 @@ func (m *GetBindResponse) Reset()         { *m = GetBindResponse{} }
 func (m *GetBindResponse) String() string { return proto.CompactTextString(m) }
 func (*GetBindResponse) ProtoMessage()    {}
 func (*GetBindResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{13}
+	return fileDescriptor_164ad2988c7acaf1, []int{14}
 }
 func (m *GetBindResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1078,7 +1145,7 @@ func (m *KeepLockTableBindRequest) Reset()         { *m = KeepLockTableBindReque
 func (m *KeepLockTableBindRequest) String() string { return proto.CompactTextString(m) }
 func (*KeepLockTableBindRequest) ProtoMessage()    {}
 func (*KeepLockTableBindRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{14}
+	return fileDescriptor_164ad2988c7acaf1, []int{15}
 }
 func (m *KeepLockTableBindRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1126,7 +1193,7 @@ func (m *KeepLockTableBindResponse) Reset()         { *m = KeepLockTableBindResp
 func (m *KeepLockTableBindResponse) String() string { return proto.CompactTextString(m) }
 func (*KeepLockTableBindResponse) ProtoMessage()    {}
 func (*KeepLockTableBindResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{15}
+	return fileDescriptor_164ad2988c7acaf1, []int{16}
 }
 func (m *KeepLockTableBindResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1174,7 +1241,7 @@ func (m *KeepRemoteLockRequest) Reset()         { *m = KeepRemoteLockRequest{} }
 func (m *KeepRemoteLockRequest) String() string { return proto.CompactTextString(m) }
 func (*KeepRemoteLockRequest) ProtoMessage()    {}
 func (*KeepRemoteLockRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{16}
+	return fileDescriptor_164ad2988c7acaf1, []int{17}
 }
 func (m *KeepRemoteLockRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1222,7 +1289,7 @@ func (m *KeepRemoteLockResponse) Reset()         { *m = KeepRemoteLockResponse{}
 func (m *KeepRemoteLockResponse) String() string { return proto.CompactTextString(m) }
 func (*KeepRemoteLockResponse) ProtoMessage()    {}
 func (*KeepRemoteLockResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{17}
+	return fileDescriptor_164ad2988c7acaf1, []int{18}
 }
 func (m *KeepRemoteLockResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1258,6 +1325,66 @@ func (m *KeepRemoteLockResponse) GetOK() bool {
 	return false
 }
 
+// Result result is used to tell the caller the result of the lock operation.
+type Result struct {
+	// LockedOn lock is locked on which locktable
+	LockedOn LockTable `protobuf:"bytes,1,opt,name=LockedOn,proto3" json:"LockedOn"`
+	// Timestamp The timestamp is used to help determine which version of RC
+	// should be queried under the RC isolation level, this timestamp ensures that
+	// the latest data is always read.
+	Timestamp            timestamp.Timestamp `protobuf:"bytes,2,opt,name=Timestamp,proto3" json:"Timestamp"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
+}
+
+func (m *Result) Reset()         { *m = Result{} }
+func (m *Result) String() string { return proto.CompactTextString(m) }
+func (*Result) ProtoMessage()    {}
+func (*Result) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{19}
+}
+func (m *Result) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Result) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Result.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Result) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Result.Merge(m, src)
+}
+func (m *Result) XXX_Size() int {
+	return m.Size()
+}
+func (m *Result) XXX_DiscardUnknown() {
+	xxx_messageInfo_Result.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Result proto.InternalMessageInfo
+
+func (m *Result) GetLockedOn() LockTable {
+	if m != nil {
+		return m.LockedOn
+	}
+	return LockTable{}
+}
+
+func (m *Result) GetTimestamp() timestamp.Timestamp {
+	if m != nil {
+		return m.Timestamp
+	}
+	return timestamp.Timestamp{}
+}
+
 func init() {
 	proto.RegisterEnum("lock.Granularity", Granularity_name, Granularity_value)
 	proto.RegisterEnum("lock.LockMode", LockMode_name, LockMode_value)
@@ -1273,6 +1400,7 @@ func init() {
 	proto.RegisterType((*GetTxnLockResponse)(nil), "lock.GetTxnLockResponse")
 	proto.RegisterType((*GetWaitingListRequest)(nil), "lock.GetWaitingListRequest")
 	proto.RegisterType((*GetWaitingListResponse)(nil), "lock.GetWaitingListResponse")
+	proto.RegisterType((*WaitTxn)(nil), "lock.WaitTxn")
 	proto.RegisterType((*UnlockRequest)(nil), "lock.UnlockRequest")
 	proto.RegisterType((*UnlockResponse)(nil), "lock.UnlockResponse")
 	proto.RegisterType((*GetBindRequest)(nil), "lock.GetBindRequest")
@@ -1281,71 +1409,80 @@ func init() {
 	proto.RegisterType((*KeepLockTableBindResponse)(nil), "lock.KeepLockTableBindResponse")
 	proto.RegisterType((*KeepRemoteLockRequest)(nil), "lock.KeepRemoteLockRequest")
 	proto.RegisterType((*KeepRemoteLockResponse)(nil), "lock.KeepRemoteLockResponse")
+	proto.RegisterType((*Result)(nil), "lock.Result")
 }
 
 func init() { proto.RegisterFile("lock.proto", fileDescriptor_164ad2988c7acaf1) }
 
 var fileDescriptor_164ad2988c7acaf1 = []byte{
-	// 943 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x96, 0x4f, 0x6f, 0x1b, 0x45,
-	0x14, 0xc0, 0xb3, 0xf6, 0xfa, 0xdf, 0xb3, 0xeb, 0x6e, 0x1e, 0x49, 0x59, 0xa0, 0x72, 0xc3, 0xaa,
-	0x95, 0x4c, 0x0a, 0xb1, 0x9a, 0x50, 0x09, 0x81, 0x00, 0x29, 0x4a, 0x13, 0xa5, 0x49, 0x09, 0x9a,
-	0x94, 0x22, 0x71, 0x5b, 0xdb, 0x83, 0xb3, 0x8a, 0xb3, 0x63, 0x76, 0xd7, 0x4d, 0xca, 0x27, 0xe0,
-	0xc8, 0x57, 0xe2, 0xd6, 0x63, 0x2f, 0x5c, 0x11, 0xe4, 0x93, 0xa0, 0x79, 0xb3, 0x6b, 0xcf, 0xac,
-	0xd7, 0x4d, 0xd5, 0xdb, 0xbc, 0xbf, 0xf3, 0xde, 0xcc, 0x6f, 0xdf, 0x0e, 0xc0, 0x58, 0x0c, 0xce,
-	0xb7, 0x26, 0x91, 0x48, 0x04, 0xda, 0x72, 0xfd, 0xf1, 0x17, 0xa3, 0x20, 0x39, 0x9b, 0xf6, 0xb7,
-	0x06, 0xe2, 0xa2, 0x37, 0x12, 0x23, 0xd1, 0x23, 0x63, 0x7f, 0xfa, 0x2b, 0x49, 0x24, 0xd0, 0x4a,
-	0x05, 0x79, 0x7f, 0x5a, 0xd0, 0x3c, 0x16, 0x83, 0xf3, 0x93, 0x49, 0x12, 0x88, 0x30, 0xc6, 0x1d,
-	0x68, 0x1e, 0x44, 0x7e, 0x38, 0x1d, 0xfb, 0x51, 0x90, 0xbc, 0x72, 0xad, 0x0d, 0xab, 0xdb, 0xde,
-	0x5e, 0xdd, 0xa2, 0x6d, 0x34, 0x03, 0xd3, 0xbd, 0xd0, 0x03, 0xfb, 0x99, 0x18, 0x72, 0xb7, 0x44,
-	0xde, 0x6d, 0xe5, 0x2d, 0xb3, 0x4a, 0x2d, 0x23, 0x1b, 0x76, 0xa1, 0x3a, 0x11, 0xe3, 0x60, 0xf0,
-	0xca, 0x2d, 0x93, 0x97, 0xa3, 0xbc, 0x7e, 0xf6, 0x83, 0xe4, 0x47, 0xd2, 0xb3, 0xd4, 0xee, 0x09,
-	0x68, 0xc8, 0xd8, 0xe7, 0x7e, 0x7f, 0xcc, 0x71, 0x0d, 0x2a, 0xb4, 0xa0, 0x4a, 0x6c, 0xa6, 0x04,
-	0xbc, 0x0b, 0x8d, 0x53, 0x1e, 0xbd, 0x0c, 0x06, 0xfc, 0x70, 0x8f, 0x76, 0x6d, 0xb0, 0xb9, 0x02,
-	0x5d, 0xa8, 0xbd, 0xe0, 0x51, 0x1c, 0x88, 0x90, 0xf6, 0xb2, 0x59, 0x26, 0xca, 0x6c, 0x2f, 0xfc,
-	0x71, 0x30, 0x74, 0xed, 0x0d, 0xab, 0x5b, 0x67, 0x4a, 0xf0, 0xfe, 0xb2, 0xa1, 0xc6, 0xf8, 0x6f,
-	0x53, 0x1e, 0x27, 0x32, 0x73, 0xba, 0x3c, 0xdc, 0x4b, 0xf7, 0x9c, 0x2b, 0x70, 0x47, 0x2b, 0x8d,
-	0xf6, 0x6d, 0x6e, 0xdf, 0x9e, 0x77, 0x4b, 0xea, 0x5d, 0xfb, 0xf5, 0x3f, 0xf7, 0x56, 0x98, 0xd6,
-	0xc2, 0x7d, 0xa8, 0x3e, 0xe3, 0xc9, 0x99, 0x18, 0xa6, 0x9d, 0xb7, 0x54, 0x84, 0xd2, 0xb1, 0xd4,
-	0x86, 0x0f, 0xc1, 0x96, 0x21, 0x54, 0x59, 0x33, 0x3b, 0x71, 0xa9, 0x49, 0x77, 0x4f, 0xf3, 0x92,
-	0x13, 0x3e, 0x82, 0xea, 0x4f, 0xa1, 0xf4, 0x70, 0x2b, 0xe4, 0xfe, 0x81, 0x72, 0x57, 0x3a, 0x33,
-	0x20, 0x75, 0xc4, 0x6f, 0x01, 0x0e, 0x78, 0xf2, 0xfc, 0x2a, 0xa4, 0x5d, 0xaa, 0x14, 0xf6, 0x61,
-	0x7a, 0xaf, 0x33, 0xbd, 0x19, 0xaa, 0x05, 0xe0, 0x21, 0xb4, 0x0f, 0x78, 0x22, 0x6f, 0x2b, 0x08,
-	0x47, 0xc7, 0x41, 0x9c, 0xb8, 0x35, 0x4a, 0xf1, 0xc9, 0x2c, 0x85, 0x66, 0x33, 0xd3, 0xe4, 0x02,
-	0xf1, 0x4b, 0xa8, 0x1d, 0xf0, 0x64, 0x37, 0x08, 0x87, 0x6e, 0x9d, 0x72, 0xac, 0xcd, 0x72, 0x48,
-	0xa5, 0x19, 0x9c, 0xb9, 0x22, 0x83, 0xd5, 0x23, 0xce, 0x27, 0xf3, 0x73, 0x96, 0xf1, 0x0d, 0x8a,
-	0xef, 0xa8, 0xf8, 0x05, 0xb3, 0x99, 0x69, 0x31, 0x5c, 0x36, 0x25, 0x95, 0x8c, 0x5f, 0x88, 0x84,
-	0xd3, 0xb9, 0x80, 0xde, 0x94, 0x69, 0xcb, 0x35, 0x65, 0x1a, 0xbd, 0xbf, 0x6d, 0xa8, 0x33, 0x1e,
-	0x4f, 0x44, 0x18, 0xf3, 0x1b, 0x20, 0x9a, 0xf3, 0x50, 0x7a, 0x0b, 0x0f, 0x6b, 0x50, 0x79, 0x12,
-	0x45, 0x22, 0x22, 0x68, 0x5a, 0x4c, 0x09, 0xf8, 0x19, 0xd4, 0x7e, 0xe0, 0x97, 0xd4, 0xbb, 0x5d,
-	0x88, 0x1f, 0xcb, 0xec, 0xf8, 0x79, 0x0a, 0x94, 0x22, 0x04, 0x75, 0xa0, 0x54, 0x99, 0x06, 0x51,
-	0xdb, 0x33, 0xa2, 0xaa, 0xfa, 0x9d, 0x64, 0x44, 0x19, 0x11, 0x19, 0x52, 0xdf, 0x19, 0x48, 0x29,
-	0x1e, 0xdc, 0x45, 0xa4, 0x8c, 0x58, 0x9d, 0xa9, 0xa7, 0x0b, 0x4c, 0x29, 0x1e, 0xee, 0x16, 0x33,
-	0x65, 0xe4, 0xc9, 0x43, 0xf5, 0x78, 0x0e, 0x95, 0x82, 0x62, 0x3d, 0x07, 0x95, 0x11, 0x3d, 0xa3,
-	0xea, 0xb4, 0x88, 0x2a, 0x05, 0xc1, 0xbd, 0xa5, 0x54, 0x19, 0xa9, 0x0a, 0xb0, 0x7a, 0xba, 0x80,
-	0x55, 0x53, 0xef, 0x2b, 0x8f, 0x95, 0xd9, 0x57, 0x8e, 0xab, 0x3f, 0xd2, 0xf9, 0x9c, 0xcd, 0x27,
-	0x39, 0x0f, 0xaf, 0xc2, 0x14, 0xab, 0x16, 0x53, 0xc2, 0x0d, 0xf3, 0x10, 0xc1, 0x66, 0xe2, 0x32,
-	0x76, 0xcb, 0x1b, 0xe5, 0x6e, 0x8b, 0xd1, 0x1a, 0x1f, 0x41, 0x2d, 0x1d, 0xf9, 0x8b, 0x13, 0x27,
-	0x35, 0x64, 0x67, 0x95, 0x8a, 0x5e, 0x1b, 0x5a, 0x7a, 0xc1, 0xde, 0x37, 0xb0, 0xba, 0x30, 0x39,
-	0x96, 0xd4, 0xe7, 0x40, 0x99, 0x89, 0x4b, 0xaa, 0xac, 0xc5, 0xe4, 0xd2, 0x3b, 0x06, 0x5c, 0x64,
-	0x24, 0x9d, 0xcf, 0x53, 0x35, 0xed, 0x2b, 0x4c, 0x09, 0xb8, 0x01, 0x4d, 0x1d, 0x92, 0x12, 0xb5,
-	0xa1, 0xab, 0xbc, 0x23, 0x58, 0x2f, 0x9c, 0x40, 0xef, 0x73, 0x5c, 0xde, 0xd7, 0x70, 0xa7, 0x18,
-	0xbd, 0x77, 0x28, 0xe4, 0x01, 0xdc, 0x32, 0x86, 0x70, 0x71, 0x01, 0x9e, 0x03, 0x6d, 0xf3, 0xcb,
-	0xf2, 0xf6, 0xe8, 0x5b, 0xd0, 0xa6, 0x96, 0x59, 0xa4, 0x95, 0xbf, 0xd3, 0xd9, 0x7f, 0xb1, 0xa4,
-	0xfd, 0x17, 0xbd, 0x7d, 0xb8, 0x9d, 0x03, 0xfe, 0xbd, 0x7e, 0x59, 0xde, 0x57, 0xe0, 0x2e, 0x9b,
-	0xa6, 0x6f, 0xaf, 0xcb, 0x7b, 0x08, 0x1f, 0x2d, 0xfd, 0x62, 0xb0, 0x0d, 0xa5, 0x93, 0x23, 0x8a,
-	0xa9, 0xb3, 0xd2, 0xc9, 0x91, 0xf7, 0x18, 0xd6, 0x0b, 0x67, 0xec, 0x0d, 0x7b, 0x74, 0xe1, 0x4e,
-	0xf1, 0x37, 0x94, 0xdf, 0x60, 0xf3, 0x53, 0xe3, 0x35, 0x83, 0x35, 0xc2, 0xd0, 0x59, 0xc1, 0x06,
-	0x54, 0x98, 0x1f, 0x8e, 0xb8, 0x63, 0x6d, 0x3e, 0x80, 0x7a, 0xf6, 0x52, 0xc1, 0x5b, 0xd0, 0x78,
-	0x72, 0x35, 0x18, 0x4f, 0xe3, 0xe0, 0x25, 0x77, 0x56, 0x10, 0xa0, 0x7a, 0x7a, 0xe6, 0x47, 0x7c,
-	0xe8, 0x58, 0x9b, 0xf7, 0x01, 0xe6, 0x4f, 0x15, 0xac, 0x83, 0x2d, 0x25, 0x67, 0x05, 0x5b, 0x50,
-	0xdf, 0xf7, 0xe3, 0x64, 0xdf, 0x0f, 0xc6, 0x8e, 0xb5, 0xf9, 0x7b, 0x36, 0xda, 0xa5, 0x87, 0x4c,
-	0xab, 0xb2, 0xa8, 0xbb, 0x76, 0x2c, 0x6c, 0xeb, 0x13, 0xd3, 0x29, 0x21, 0xe6, 0x27, 0xa0, 0x53,
-	0x96, 0x3a, 0xb3, 0x3b, 0xc7, 0xc6, 0xe6, 0x6c, 0xba, 0x39, 0x15, 0x5c, 0x2f, 0x98, 0x59, 0x4e,
-	0x75, 0xf7, 0xfb, 0x37, 0xff, 0x75, 0xac, 0xd7, 0xd7, 0x1d, 0xeb, 0xcd, 0x75, 0xc7, 0xfa, 0xf7,
-	0xba, 0x63, 0xfd, 0xa2, 0x3f, 0x05, 0x2f, 0xfc, 0x24, 0x0a, 0xae, 0x44, 0x14, 0x8c, 0x82, 0x30,
-	0x13, 0x42, 0xde, 0x9b, 0x9c, 0x8f, 0x7a, 0x93, 0x7e, 0x4f, 0x96, 0xd7, 0xaf, 0xd2, 0x8b, 0x70,
-	0xe7, 0xff, 0x00, 0x00, 0x00, 0xff, 0xff, 0x24, 0x90, 0x01, 0x1b, 0x54, 0x0a, 0x00, 0x00,
+	// 1061 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x96, 0x5b, 0x6f, 0x1b, 0x45,
+	0x14, 0x80, 0xb3, 0xf6, 0xfa, 0x76, 0xec, 0x3a, 0x9b, 0x21, 0x29, 0x4b, 0xa9, 0x5c, 0xb3, 0x6a,
+	0x25, 0xe3, 0x42, 0xac, 0x24, 0x04, 0x55, 0xa0, 0x16, 0x29, 0x4d, 0x13, 0xa5, 0x49, 0x31, 0x9a,
+	0x98, 0x22, 0x21, 0xf1, 0xb0, 0xb6, 0x07, 0x67, 0x15, 0x7b, 0xc7, 0xec, 0x8e, 0x1b, 0x97, 0x5f,
+	0xc0, 0x23, 0x7f, 0x89, 0xb7, 0x3e, 0xf6, 0x85, 0x57, 0x04, 0xf9, 0x25, 0x68, 0x2e, 0x7b, 0x19,
+	0x7b, 0x9d, 0x20, 0xde, 0xe6, 0x5c, 0x67, 0xce, 0xcc, 0x37, 0x67, 0x06, 0x60, 0x4c, 0x07, 0x97,
+	0xdb, 0xd3, 0x80, 0x32, 0x8a, 0x4c, 0x3e, 0xbe, 0xf7, 0xf9, 0xc8, 0x63, 0x17, 0xb3, 0xfe, 0xf6,
+	0x80, 0x4e, 0x3a, 0x23, 0x3a, 0xa2, 0x1d, 0x61, 0xec, 0xcf, 0x7e, 0x16, 0x92, 0x10, 0xc4, 0x48,
+	0x06, 0xdd, 0x5b, 0x67, 0xde, 0x84, 0x84, 0xcc, 0x9d, 0x4c, 0xa5, 0xc2, 0xf9, 0xdd, 0x80, 0xea,
+	0x19, 0x1d, 0x5c, 0x76, 0xa7, 0xcc, 0xa3, 0x7e, 0x88, 0xf6, 0xa0, 0x7a, 0x1c, 0xb8, 0xfe, 0x6c,
+	0xec, 0x06, 0x1e, 0x7b, 0x6b, 0x1b, 0x4d, 0xa3, 0x55, 0xdf, 0xdd, 0xd8, 0x16, 0xf3, 0xa6, 0x0c,
+	0x38, 0xed, 0x85, 0x1c, 0x30, 0x5f, 0xd1, 0x21, 0xb1, 0x73, 0xc2, 0xbb, 0x2e, 0xbd, 0x79, 0x56,
+	0xae, 0xc5, 0xc2, 0x86, 0x5a, 0x50, 0x9c, 0xd2, 0xb1, 0x37, 0x78, 0x6b, 0xe7, 0x85, 0x97, 0x25,
+	0xbd, 0x7e, 0x70, 0x3d, 0xf6, 0x9d, 0xd0, 0x63, 0x65, 0x77, 0x28, 0x54, 0x78, 0x6c, 0xcf, 0xed,
+	0x8f, 0x09, 0xda, 0x84, 0x82, 0x18, 0x88, 0x95, 0x98, 0x58, 0x0a, 0xe8, 0x3e, 0x54, 0xce, 0x49,
+	0xf0, 0xc6, 0x1b, 0x90, 0x93, 0x43, 0x31, 0x6b, 0x05, 0x27, 0x0a, 0x64, 0x43, 0xe9, 0x35, 0x09,
+	0x42, 0x8f, 0xfa, 0x62, 0x2e, 0x13, 0x47, 0x22, 0xcf, 0xf6, 0xda, 0x1d, 0x7b, 0x43, 0xdb, 0x6c,
+	0x1a, 0xad, 0x32, 0x96, 0x82, 0xf3, 0x87, 0x09, 0x25, 0x4c, 0x7e, 0x99, 0x91, 0x90, 0xf1, 0xcc,
+	0x6a, 0x78, 0x72, 0xa8, 0xe6, 0x4c, 0x14, 0x68, 0x2f, 0xb5, 0x34, 0x31, 0x6f, 0x75, 0x77, 0x3d,
+	0xa9, 0x56, 0xa8, 0x0f, 0xcc, 0x77, 0x7f, 0x3d, 0x58, 0xc3, 0xa9, 0x12, 0x1e, 0x42, 0xf1, 0x15,
+	0x61, 0x17, 0x74, 0xa8, 0x2a, 0xaf, 0xc9, 0x08, 0xa9, 0xc3, 0xca, 0x86, 0x1e, 0x83, 0xc9, 0x43,
+	0xc4, 0xca, 0xaa, 0xd1, 0x8e, 0x73, 0x8d, 0x9a, 0x5d, 0xe5, 0x15, 0x4e, 0x68, 0x07, 0x8a, 0xdf,
+	0xfb, 0xdc, 0xc3, 0x2e, 0x08, 0xf7, 0x0f, 0xa4, 0xbb, 0xd4, 0xe9, 0x01, 0xca, 0x11, 0x3d, 0x05,
+	0x38, 0x26, 0xac, 0x37, 0xf7, 0xc5, 0x2c, 0x45, 0x11, 0xf6, 0xa1, 0x3a, 0xd7, 0x58, 0xaf, 0x87,
+	0xa6, 0x02, 0xd0, 0x09, 0xd4, 0x8f, 0x09, 0xe3, 0xa7, 0xe5, 0xf9, 0xa3, 0x33, 0x2f, 0x64, 0x76,
+	0x49, 0xa4, 0xf8, 0x38, 0x4e, 0x91, 0xb2, 0xe9, 0x69, 0x16, 0x02, 0xd1, 0x17, 0x50, 0x3a, 0x26,
+	0xec, 0xc0, 0xf3, 0x87, 0x76, 0x59, 0xe4, 0xd8, 0x8c, 0x73, 0x70, 0xa5, 0x1e, 0x1c, 0xb9, 0x22,
+	0x0c, 0x1b, 0xa7, 0x84, 0x4c, 0x93, 0x7d, 0xe6, 0xf1, 0x15, 0x11, 0xdf, 0x90, 0xf1, 0x4b, 0x66,
+	0x3d, 0xd3, 0x72, 0x38, 0x2f, 0x8a, 0x2b, 0x31, 0x99, 0x50, 0x46, 0xc4, 0xbe, 0x40, 0xba, 0x28,
+	0xdd, 0xb6, 0x50, 0x94, 0x6e, 0x74, 0xfe, 0x34, 0xa1, 0x8c, 0x49, 0x38, 0xa5, 0x7e, 0x48, 0x6e,
+	0x81, 0x28, 0xe1, 0x21, 0x77, 0x03, 0x0f, 0x9b, 0x50, 0x78, 0x11, 0x04, 0x34, 0x10, 0xd0, 0xd4,
+	0xb0, 0x14, 0xd0, 0xa7, 0x50, 0xfa, 0x96, 0x5c, 0x89, 0xda, 0xcd, 0x4c, 0xfc, 0x70, 0x64, 0x47,
+	0x9f, 0x29, 0xa0, 0x24, 0x21, 0x28, 0x0d, 0x94, 0x5c, 0xa6, 0x46, 0xd4, 0x6e, 0x4c, 0x54, 0x31,
+	0x7d, 0x26, 0x11, 0x51, 0x5a, 0x44, 0x84, 0xd4, 0x33, 0x0d, 0x29, 0xc9, 0x83, 0xbd, 0x8c, 0x94,
+	0x16, 0x9b, 0x66, 0xea, 0xe5, 0x12, 0x53, 0x92, 0x87, 0xfb, 0xd9, 0x4c, 0x69, 0x79, 0x16, 0xa1,
+	0xda, 0x4f, 0xa0, 0x92, 0x50, 0x6c, 0x2d, 0x40, 0xa5, 0x45, 0xc7, 0x54, 0x9d, 0x67, 0x51, 0x25,
+	0x21, 0x78, 0xb0, 0x92, 0x2a, 0x2d, 0x55, 0x06, 0x56, 0x2f, 0x97, 0xb0, 0xaa, 0xa6, 0xeb, 0x5a,
+	0xc4, 0x4a, 0xaf, 0x6b, 0x81, 0xab, 0xdf, 0x54, 0x7f, 0x8e, 0xfa, 0x13, 0xef, 0x87, 0x73, 0x5f,
+	0x61, 0x55, 0xc3, 0x52, 0xb8, 0xa5, 0x1f, 0x22, 0x30, 0x31, 0xbd, 0x0a, 0xed, 0x7c, 0x33, 0xdf,
+	0xaa, 0x61, 0x31, 0x46, 0x3b, 0x50, 0x52, 0x2d, 0x7f, 0xb9, 0xe3, 0x28, 0x43, 0xb4, 0x57, 0x4a,
+	0x74, 0xbe, 0x82, 0x5a, 0x7a, 0xc1, 0xa8, 0x0d, 0x45, 0x4c, 0xc2, 0xd9, 0x98, 0x89, 0xb5, 0x54,
+	0x23, 0x8e, 0xa5, 0x2e, 0x42, 0x45, 0x4a, 0xce, 0xd7, 0xb0, 0xb1, 0xd4, 0x65, 0x56, 0xd4, 0x62,
+	0x41, 0x1e, 0xd3, 0x2b, 0x51, 0x45, 0x0d, 0xf3, 0xa1, 0x73, 0x06, 0x68, 0x99, 0x27, 0xd5, 0xcb,
+	0x67, 0xf2, 0x65, 0x28, 0x60, 0x29, 0xa0, 0x26, 0x54, 0xd3, 0x40, 0xe5, 0x44, 0xc9, 0x69, 0x95,
+	0xf3, 0x0c, 0xb6, 0x32, 0xbb, 0x15, 0x7a, 0x04, 0xf9, 0xde, 0xdc, 0x57, 0xc5, 0xdc, 0x49, 0x9e,
+	0xa7, 0xde, 0xdc, 0x57, 0xd5, 0x70, 0xbb, 0xd3, 0x85, 0xbb, 0xd9, 0x64, 0xa2, 0x7d, 0x7d, 0x6e,
+	0xa3, 0x99, 0x5f, 0x95, 0x48, 0x5b, 0xd0, 0x53, 0x28, 0x29, 0xeb, 0xea, 0xd3, 0x7d, 0x1e, 0x10,
+	0x97, 0x91, 0x61, 0xd7, 0x8f, 0x4e, 0x37, 0x56, 0x38, 0x3f, 0xc1, 0x1d, 0xad, 0xef, 0xaf, 0x48,
+	0xf2, 0x25, 0x94, 0x9f, 0xd3, 0xc9, 0xc4, 0x63, 0xbd, 0x73, 0xf5, 0x72, 0x6d, 0x6e, 0x27, 0x9f,
+	0x81, 0x5e, 0x34, 0x52, 0x0b, 0x8c, 0x7d, 0x1d, 0x0b, 0xea, 0x7a, 0x13, 0x70, 0x0e, 0xc5, 0xb5,
+	0x4d, 0x35, 0x58, 0x1d, 0x3f, 0x63, 0x11, 0xbf, 0xf8, 0x09, 0xcf, 0xa5, 0x9e, 0x70, 0xe7, 0x08,
+	0xd6, 0x17, 0xee, 0xe6, 0xff, 0x7a, 0x5d, 0x9d, 0x27, 0x60, 0xaf, 0x6a, 0xfc, 0x37, 0xaf, 0xcb,
+	0x79, 0x0c, 0x1f, 0xad, 0xbc, 0xdc, 0xa8, 0x0e, 0xb9, 0xee, 0xa9, 0x88, 0x29, 0xe3, 0x5c, 0xf7,
+	0xd4, 0xd9, 0x87, 0xad, 0xcc, 0xe7, 0xe0, 0x96, 0x39, 0x5a, 0x70, 0x37, 0xfb, 0xba, 0x2f, 0x4d,
+	0x30, 0x8b, 0x6e, 0x13, 0xda, 0x81, 0x32, 0xf7, 0x14, 0xa7, 0x6d, 0xdc, 0xb4, 0x0b, 0xb1, 0x1b,
+	0x7a, 0x02, 0x95, 0xf8, 0x04, 0xff, 0xc3, 0xe9, 0x26, 0xce, 0xed, 0x4f, 0xb4, 0xff, 0x1e, 0x2a,
+	0x89, 0xcb, 0x67, 0xad, 0xa1, 0x0a, 0x14, 0xb0, 0xeb, 0x8f, 0x88, 0x65, 0xb4, 0x1f, 0xc9, 0xf5,
+	0x88, 0x5f, 0xdc, 0x1d, 0xa8, 0xbc, 0x98, 0x0f, 0xc6, 0xb3, 0xd0, 0x7b, 0x43, 0xac, 0x35, 0x04,
+	0x50, 0x3c, 0xbf, 0x70, 0x03, 0x32, 0xb4, 0x8c, 0xf6, 0x43, 0x80, 0xe4, 0x33, 0x87, 0xca, 0x60,
+	0x72, 0xc9, 0x5a, 0x43, 0x35, 0x28, 0x1f, 0xb9, 0x21, 0x3b, 0x72, 0xbd, 0xb1, 0x65, 0xb4, 0x7f,
+	0x8d, 0x1e, 0x3f, 0xee, 0xc1, 0xd3, 0xca, 0x2c, 0x12, 0x31, 0xcb, 0x40, 0xf5, 0xf4, 0x9b, 0x62,
+	0xe5, 0x10, 0x5a, 0x7c, 0x23, 0xac, 0x3c, 0xd7, 0xe9, 0x9b, 0x6a, 0x99, 0xa8, 0x1a, 0xf7, 0x7f,
+	0xab, 0x80, 0xb6, 0x32, 0xba, 0xba, 0x55, 0x3c, 0xf8, 0xe6, 0xfd, 0x3f, 0x0d, 0xe3, 0xdd, 0x75,
+	0xc3, 0x78, 0x7f, 0xdd, 0x30, 0xfe, 0xbe, 0x6e, 0x18, 0x3f, 0xa6, 0x7f, 0xcf, 0x13, 0x97, 0x05,
+	0xde, 0x9c, 0x06, 0xde, 0xc8, 0xf3, 0x23, 0xc1, 0x27, 0x9d, 0xe9, 0xe5, 0xa8, 0x33, 0xed, 0x77,
+	0xf8, 0xf2, 0xfa, 0x45, 0xf1, 0x67, 0xde, 0xfb, 0x37, 0x00, 0x00, 0xff, 0xff, 0x38, 0x20, 0xf9,
+	0x58, 0x87, 0x0b, 0x00, 0x00,
 }
 
 func (m *LockOptions) Marshal() (dAtA []byte, err error) {
@@ -1771,6 +1908,16 @@ func (m *LockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	{
+		size, err := m.Result.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
 	return len(dAtA) - i, nil
 }
 
@@ -1880,20 +2027,16 @@ func (m *GetWaitingListRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if len(m.ServiceID) > 0 {
-		i -= len(m.ServiceID)
-		copy(dAtA[i:], m.ServiceID)
-		i = encodeVarintLock(dAtA, i, uint64(len(m.ServiceID)))
-		i--
-		dAtA[i] = 0x12
+	{
+		size, err := m.Txn.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
 	}
-	if len(m.TxnID) > 0 {
-		i -= len(m.TxnID)
-		copy(dAtA[i:], m.TxnID)
-		i = encodeVarintLock(dAtA, i, uint64(len(m.TxnID)))
-		i--
-		dAtA[i] = 0xa
-	}
+	i--
+	dAtA[i] = 0xa
 	return len(dAtA) - i, nil
 }
 
@@ -1923,12 +2066,58 @@ func (m *GetWaitingListResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	}
 	if len(m.WaitingList) > 0 {
 		for iNdEx := len(m.WaitingList) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.WaitingList[iNdEx])
-			copy(dAtA[i:], m.WaitingList[iNdEx])
-			i = encodeVarintLock(dAtA, i, uint64(len(m.WaitingList[iNdEx])))
+			{
+				size, err := m.WaitingList[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLock(dAtA, i, uint64(size))
+			}
 			i--
-			dAtA[i] = 0x12
+			dAtA[i] = 0xa
 		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *WaitTxn) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *WaitTxn) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *WaitTxn) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.CreatedOn) > 0 {
+		i -= len(m.CreatedOn)
+		copy(dAtA[i:], m.CreatedOn)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.CreatedOn)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.TxnID) > 0 {
+		i -= len(m.TxnID)
+		copy(dAtA[i:], m.TxnID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.TxnID)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -1957,6 +2146,16 @@ func (m *UnlockRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	{
+		size, err := m.CommitTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
 	if len(m.TxnID) > 0 {
 		i -= len(m.TxnID)
 		copy(dAtA[i:], m.TxnID)
@@ -2212,6 +2411,53 @@ func (m *KeepRemoteLockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	return len(dAtA) - i, nil
 }
 
+func (m *Result) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Result) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Result) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.Timestamp.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	{
+		size, err := m.LockedOn.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintLock(dAtA []byte, offset int, v uint64) int {
 	offset -= sovLock(v)
 	base := offset
@@ -2377,6 +2623,8 @@ func (m *LockResponse) Size() (n int) {
 	}
 	var l int
 	_ = l
+	l = m.Result.Size()
+	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2430,14 +2678,8 @@ func (m *GetWaitingListRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = len(m.TxnID)
-	if l > 0 {
-		n += 1 + l + sovLock(uint64(l))
-	}
-	l = len(m.ServiceID)
-	if l > 0 {
-		n += 1 + l + sovLock(uint64(l))
-	}
+	l = m.Txn.Size()
+	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2451,10 +2693,30 @@ func (m *GetWaitingListResponse) Size() (n int) {
 	var l int
 	_ = l
 	if len(m.WaitingList) > 0 {
-		for _, b := range m.WaitingList {
-			l = len(b)
+		for _, e := range m.WaitingList {
+			l = e.Size()
 			n += 1 + l + sovLock(uint64(l))
 		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *WaitTxn) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TxnID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	l = len(m.CreatedOn)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -2472,6 +2734,8 @@ func (m *UnlockRequest) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovLock(uint64(l))
 	}
+	l = m.CommitTS.Size()
+	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2579,6 +2843,22 @@ func (m *KeepRemoteLockResponse) Size() (n int) {
 	if m.OK {
 		n += 2
 	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *Result) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.LockedOn.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.Timestamp.Size()
+	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -3794,6 +4074,39 @@ func (m *LockResponse) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: LockResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Result", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.Result.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLock(dAtA[iNdEx:])
@@ -4068,9 +4381,9 @@ func (m *GetWaitingListRequest) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TxnID", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Txn", wireType)
 			}
-			var byteLen int
+			var msglen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowLock
@@ -4080,57 +4393,24 @@ func (m *GetWaitingListRequest) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				byteLen |= int(b&0x7F) << shift
+				msglen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			if byteLen < 0 {
+			if msglen < 0 {
 				return ErrInvalidLengthLock
 			}
-			postIndex := iNdEx + byteLen
+			postIndex := iNdEx + msglen
 			if postIndex < 0 {
 				return ErrInvalidLengthLock
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.TxnID = append(m.TxnID[:0], dAtA[iNdEx:postIndex]...)
-			if m.TxnID == nil {
-				m.TxnID = []byte{}
+			if err := m.Txn.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
-			iNdEx = postIndex
-		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ServiceID", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowLock
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthLock
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthLock
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.ServiceID = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -4183,9 +4463,94 @@ func (m *GetWaitingListResponse) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: GetWaitingListResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
-		case 2:
+		case 1:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field WaitingList", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.WaitingList = append(m.WaitingList, WaitTxn{})
+			if err := m.WaitingList[len(m.WaitingList)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *WaitTxn) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: WaitTxn: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: WaitTxn: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TxnID", wireType)
 			}
 			var byteLen int
 			for shift := uint(0); ; shift += 7 {
@@ -4212,8 +4577,42 @@ func (m *GetWaitingListResponse) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.WaitingList = append(m.WaitingList, make([]byte, postIndex-iNdEx))
-			copy(m.WaitingList[len(m.WaitingList)-1], dAtA[iNdEx:postIndex])
+			m.TxnID = append(m.TxnID[:0], dAtA[iNdEx:postIndex]...)
+			if m.TxnID == nil {
+				m.TxnID = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CreatedOn", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CreatedOn = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -4298,6 +4697,39 @@ func (m *UnlockRequest) Unmarshal(dAtA []byte) error {
 			m.TxnID = append(m.TxnID[:0], dAtA[iNdEx:postIndex]...)
 			if m.TxnID == nil {
 				m.TxnID = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CommitTS", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CommitTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		default:
@@ -4845,6 +5277,123 @@ func (m *KeepRemoteLockResponse) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.OK = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Result) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Result: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Result: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LockedOn", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.LockedOn.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Timestamp", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.Timestamp.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLock(dAtA[iNdEx:])

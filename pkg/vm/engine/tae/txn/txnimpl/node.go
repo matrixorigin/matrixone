@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"bytes"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -85,13 +84,12 @@ func (n *node) GetSpace() uint32 {
 
 func (n *node) FillBlockView(
 	view *model.BlockView,
-	buffers []*bytes.Buffer,
 	colIdxes []int) (err error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) FillColumnView(*model.ColumnView, *bytes.Buffer) error {
+func (n *node) FillColumnView(*model.ColumnView) error {
 	//TODO::
 	panic("not implemented yet ")
 }
@@ -136,14 +134,14 @@ func (n *node) MakeCommand(_ uint32) (txnif.TxnCmd, error) {
 	return nil, nil
 }
 
-func (n *node) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, error) {
+func (n *node) GetColumnDataByIds([]int) (*model.BlockView, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) GetColumnDataById(idx int, buf *bytes.Buffer) (view *model.ColumnView, err error) {
+func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(n.table.store.txn.GetStartTS(), idx)
-	vec, err := n.LoadPersistedColumnData(idx, buf)
+	vec, err := n.LoadPersistedColumnData(idx)
 	if err != nil {
 		return
 	}

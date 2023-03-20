@@ -274,7 +274,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	_, err = rel.Stats(ctx, nil)
+	_, err = rel.Stats(ctx, nil, nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

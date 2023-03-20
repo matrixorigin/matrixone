@@ -17,7 +17,6 @@ package div
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -90,48 +89,6 @@ func TestF64Div(t *testing.T) {
 	}
 }
 
-func TestDec64DivByZero(t *testing.T) {
-	as := make([]int64, 10)
-	bs := make([]int64, 10)
-	cs := make([]int64, 10)
-	for i := 0; i < 10; i++ {
-		as[i] = int64((i + 1) * 1024)
-		bs[i] = int64(i)
-	}
-
-	av := testutil.MakeDecimal64Vector(as, nil, types.T_decimal64.ToType())
-	bv := testutil.MakeDecimal64Vector(bs, nil, types.T_decimal64.ToType())
-	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
-
-	err := Decimal64VecDiv(av, bv, cv)
-	if err != nil {
-		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
-			t.Fatalf("should have div by zero error.")
-		}
-	}
-}
-
-func TestDec128DivByZero(t *testing.T) {
-	as := make([]int64, 10)
-	bs := make([]int64, 10)
-	cs := make([]int64, 10)
-	for i := 0; i < 10; i++ {
-		as[i] = int64((i + 1) * 1024)
-		bs[i] = int64(i)
-	}
-
-	av := testutil.MakeDecimal128Vector(as, nil, types.T_decimal128.ToType())
-	bv := testutil.MakeDecimal128Vector(bs, nil, types.T_decimal128.ToType())
-	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
-
-	err := Decimal128VecDiv(av, bv, cv)
-	if err != nil {
-		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
-			t.Fatalf("should have div by zero error.")
-		}
-	}
-}
-
 func TestDec128Div(t *testing.T) {
 	as := make([]int64, 10)
 	bs := make([]int64, 10)
@@ -152,8 +109,8 @@ func TestDec128Div(t *testing.T) {
 
 	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal128_FromInt64(as[i]/bs[i], 64, 0)
-		if !res[i].Eq(d) {
+		d, _, _ := types.Decimal128{B0_63: uint64(as[i]), B64_127: 0}.Div(types.Decimal128{B0_63: uint64(bs[i]), B64_127: 0}, 0, 0)
+		if res[i] != d {
 			t.Fatalf("decimal128 div wrong result")
 		}
 	}

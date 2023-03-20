@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -51,7 +52,12 @@ func NewService(
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	// get etl fs
+	etlFS, err := fileservice.Get[fileservice.FileService](fileService, defines.ETLFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +68,8 @@ func NewService(
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
 		cfg:         cfg,
-		metadataFS:  fs,
+		metadataFS:  metadataFS,
+		etlFS:       etlFS,
 		fileService: fileService,
 	}
 	for _, opt := range options {
@@ -194,6 +201,11 @@ func (s *service) stopRPCs() error {
 			return err
 		}
 	}
+	if s.lockService != nil {
+		if err := s.lockService.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -320,6 +332,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		}
 		s._hakeeperClient = client
 		s.initClusterService()
+		s.initLockService()
 	})
 	client = s._hakeeperClient
 	return
@@ -425,6 +438,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	})
 	c = s._txnClient
 	return
+}
+
+func (s *service) initLockService() {
+	cfg := s.cfg.getLockServiceConfig()
+	s.lockService = lockservice.NewLockService(cfg)
 }
 
 // put the waiting-next type msg into client session's cache and return directly

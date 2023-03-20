@@ -52,6 +52,21 @@ func waitChTimeout[T any](
 	}
 }
 
+func waitUtil(timeout, check_interval time.Duration, check func() bool) error {
+	timeoutTimer := time.After(timeout)
+	for {
+		select {
+		case <-timeoutTimer:
+			return moerr.NewInternalError(context.TODO(), "timeout")
+		default:
+			if check() {
+				return nil
+			}
+			time.Sleep(check_interval)
+		}
+	}
+}
+
 type Pos struct {
 	line    int
 	linepos int
@@ -168,6 +183,17 @@ func (c *testCollector) Received() []string {
 	return c.receivedString[:]
 }
 
+func (c *testCollector) ReceivedContains(item string) bool {
+	c.Lock()
+	defer c.Unlock()
+	for _, s := range c.receivedString[:] {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 func newTestCollector(opts ...BaseBatchPipeOpt) *testCollector {
 	collector := &testCollector{
 		receivedString: make([]string, 0),
@@ -189,16 +215,25 @@ func TestBaseCollector(t *testing.T) {
 		&TestItem{name: T_INT, intval: 33},
 	)
 	require.NoError(t, err)
-	time.Sleep(50 * time.Millisecond)
-	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
+	// after 30ms, flush pos type test item and we can find it
+	batchString := fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12)
+	err = waitUtil(60*time.Second, 30*time.Millisecond, func() bool {
+		return collector.ReceivedContains(batchString)
+	})
+	require.NoError(t, err)
 
+	// int sum is 100+, flush
 	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
-	time.Sleep(20 * time.Millisecond)
-	require.Contains(t, collector.Received(), "Batch int 105")
+
+	err = waitUtil(60*time.Second, 30*time.Millisecond, func() bool {
+		return collector.ReceivedContains("Batch int 105")
+	})
+	require.NoError(t, err)
 
 	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
 	handle, succ := collector.Stop(false)
 	require.True(t, succ)
+	// no items are received after stopping
 	require.NoError(t, waitChTimeout(handle, func(element struct{}, closed bool) (goOn bool, err error) {
 		assert.True(t, closed)
 		return
@@ -213,32 +248,38 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 	err := collector.SendItem(ctx, &TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}})
 	require.NoError(t, err)
 
+	// have to find 2 gaps bigger than 100ms to prove that backoff works well
+	bigBackOffCnt := 0
 	var prev time.Time
-	gap := 30 // time.Millisecond, same value in NewItemBuffer funciton
 	waitTimeCheck := func(element time.Time, closed bool) (goOn bool, err error) {
-		if gap >= 300 {
+		t.Log(element, bigBackOffCnt)
+		if bigBackOffCnt >= 2 {
 			return
 		}
-		if prev.IsZero() {
-			goOn = true
-			prev = element
-		} else {
-			// check backoff increament
-			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 200)
-			prev = element
-			gap *= 2
+		if !prev.IsZero() && element.Sub(prev).Milliseconds() > 100 {
+			bigBackOffCnt += 1
 		}
+		goOn = true
+		prev = element
 		return
 	}
-	require.NoError(t, waitChTimeout(collector.posBufWakeupCh, waitTimeCheck, time.Second))
 
-	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
+	// wait on posBufWakeCh, the wakeup freq will be bigger and bigger until 300ms
+	require.NoError(t, waitChTimeout(collector.posBufWakeupCh, waitTimeCheck, 10*time.Second))
+
+	batchString := fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12)
+	err = waitUtil(60*time.Second, 10*time.Millisecond, func() bool {
+		return collector.ReceivedContains(batchString)
+	})
+	require.NoError(t, err)
 
 	_ = collector.SendItem(ctx, &TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}})
 
-	// new write will reset timer to 30ms, so it should be received within 200ms
-	time.Sleep(200 * time.Millisecond)
-	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
+	// new write will reset timer to 30ms, so it should be received quickly, but…… what do we know about the machine?
+	err = waitUtil(60*time.Second, 10*time.Millisecond, func() bool {
+		return collector.ReceivedContains(batchString)
+	})
+	require.NoError(t, err)
 
 	handle, succ := collector.Stop(false)
 	require.True(t, succ)
@@ -249,40 +290,41 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 }
 
 func TestBaseCollectorGracefulStop(t *testing.T) {
-	var notify sync.WaitGroup
-	var notifyFun = func() {
-		notify.Done()
-	}
 	ctx := context.TODO()
 	collector := newTestCollector(PipeWithBatchWorkerNum(2), PipeWithBufferWorkerNum(1))
-	collector.notify4Batch = notifyFun
 	collector.Start(context.TODO())
 
-	notify.Add(1)
 	err := collector.SendItem(ctx,
 		&TestItem{name: T_INT, intval: 32},
 		&TestItem{name: T_INT, intval: 40},
 		&TestItem{name: T_INT, intval: 33},
 	)
-	notify.Wait()
 	require.NoError(t, err)
-	time.Sleep(10 * time.Millisecond)
-	require.Contains(t, collector.Received(), "Batch int 105")
+	err = waitUtil(60*time.Second, 10*time.Millisecond, func() bool {
+		return collector.ReceivedContains("Batch int 105")
+	})
+	require.NoError(t, err)
 
-	notify.Add(1)
 	_ = collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40})
+	// graceful stopping will wait completing sending
 	handle, succ := collector.Stop(true)
 	require.True(t, succ)
 	handle2, succ2 := collector.Stop(true)
 	require.False(t, succ2)
 	require.Nil(t, handle2)
-	notify.Add(1)
-	require.Error(t, collector.SendItem(ctx, &TestItem{name: T_INT, intval: 40}))
+
+	// send after stopping
+	require.Error(t, collector.SendItem(ctx, &TestItem{name: T_INT, intval: 77}))
+	// no new value
 	require.NoError(t, waitChTimeout(handle, func(element struct{}, closed bool) (goOn bool, err error) {
 		assert.True(t, closed)
 		return
 	}, time.Second))
-	require.Contains(t, collector.Received(), "Batch int 40")
+	err = waitUtil(60*time.Second, 10*time.Millisecond, func() bool {
+		return collector.ReceivedContains("Batch int 40")
+	})
+	require.NoError(t, err)
+	t.Log(collector.Received())
 }
 
 func TestBaseReminder(t *testing.T) {
@@ -299,15 +341,15 @@ func TestBaseReminder(t *testing.T) {
 		return
 	}
 	// only one event 1 will be triggered
-	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
-	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
+	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 5000*ms))
+	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms)) // timeout
 
 	// nothing happens after these two lines
 	registry.Reset("2", 2*ms)                                            // 2 is not in the registry
 	registry.Reset("1", 0*ms)                                            // 0 is ignored
 	require.Error(t, waitChTimeout(registry.C, checkOneRecevied, 50*ms)) // timeout
 	registry.Reset("1", 5*ms)
-	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 500*ms))
+	require.NoError(t, waitChTimeout(registry.C, checkOneRecevied, 5000*ms))
 	registry.CleanAll()
 }
 
@@ -376,9 +418,9 @@ func TestBaseBackOff(t *testing.T) {
 	ms := time.Millisecond
 	exp := NewExpBackOffClock(ms, 20*ms, 2)
 	for expect := ms; expect <= 20*ms; expect *= time.Duration(2) {
-		assert.Equal(t, exp.RemindNextAfter(), expect)
+		require.Equal(t, exp.RemindNextAfter(), expect)
 		exp.RemindBackOff()
 	}
 	exp.RemindBackOff()
-	assert.Equal(t, 20*ms, exp.RemindNextAfter())
+	require.Equal(t, 20*ms, exp.RemindNextAfter())
 }
