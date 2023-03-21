@@ -34,6 +34,7 @@ func NewPartitionBinder(builder *QueryBuilder, ctx *BindContext) *PartitionBinde
 var supportedFunctionsInPartitionExpr = map[string]int{
 	"abs":            0,
 	"ceiling":        0, //TODO: double check
+	"ceil":           0, //TODO: double check
 	"datediff":       0,
 	"day":            0,
 	"dayofmonth":     0,
