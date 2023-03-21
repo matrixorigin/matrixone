@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointEntry struct {
@@ -139,7 +138,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(ctx, reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -150,7 +149,6 @@ func (e *CheckpointEntry) Replay(
 }
 func (e *CheckpointEntry) Read(
 	ctx context.Context,
-	scheduler tasks.JobScheduler,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
 	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
@@ -162,7 +160,6 @@ func (e *CheckpointEntry) Read(
 	if err = data.ReadFrom(
 		ctx,
 		reader,
-		scheduler,
 		common.DefaultAllocator,
 	); err != nil {
 		return
@@ -176,7 +173,7 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(context.Background(), reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(context.Background(), reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)

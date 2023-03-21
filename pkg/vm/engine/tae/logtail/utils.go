@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -494,7 +493,6 @@ func LoadBlkColumnsByMeta(
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	reader dataio.Reader,
-	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
 	metas, err := reader.LoadBlocksMeta(ctx, m)
 	if err != nil {
