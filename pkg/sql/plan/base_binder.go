@@ -806,6 +806,8 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	return retExpr, err
 }
 
+var BindFuncExprImplByPlanExpr = bindFuncExprImplByPlanExpr
+
 func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -1347,6 +1349,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
 // --- util functions ----
+var AppendCastBeforeExpr = appendCastBeforeExpr
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin ...bool) (*Expr, error) {
 	if expr.Typ.Id == int32(types.T_any) {

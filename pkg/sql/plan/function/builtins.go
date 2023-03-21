@@ -16,13 +16,11 @@ package function
 
 import (
 	"context"
-
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func initBuiltIns() {
@@ -2835,6 +2834,42 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              inside.InternalAutoIncrement,
+			},
+		},
+	},
+	INTERNAL_ASSERT_COUNT_EQ_1: {
+		Id:     INTERNAL_ASSERT_COUNT_EQ_1,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Volatile:        false,
+				Args:            []types.T{types.T_int64, types.T_varchar, types.T_varchar},
+				UseNewFramework: true,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					p0 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+					p1 := vector.GenerateFunctionStrParameter(parameters[1])
+					p2 := vector.GenerateFunctionStrParameter(parameters[2])
+					colName, _ := p2.GetStrValue(0)
+
+					for i := 0; i < length; i++ {
+						v0, null0 := p0.GetValue(uint64(i))
+
+						if null0 {
+							continue
+						}
+
+						if v0 != 1 {
+							val, _ := p1.GetStrValue(uint64(i))
+							return moerr.NewDuplicateEntry(context.Background(), string(val), string(colName))
+						}
+					}
+					return nil
+				},
 			},
 		},
 	},

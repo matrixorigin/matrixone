@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/stretchr/testify/require"
 )
@@ -85,5 +86,34 @@ func TestToPrintCastTable(t *testing.T) {
 				println(str)
 			}
 		}
+	}
+}
+
+func TestAssertEqual(t *testing.T) {
+	cases := []struct {
+		inputs []testutil.FunctionTestInput
+		wanted testutil.FunctionTestResult
+	}{
+		{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+			},
+			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil),
+		},
+		{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 1}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+			},
+			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), true, []bool{true}, nil),
+		},
+	}
+
+	for _, c := range cases {
+		proc := testutil.NewProcess()
+		tc := testutil.NewFunctionTestCase(proc, c.inputs, c.wanted, builtins[INTERNAL_ASSERT_COUNT_EQ_1].Overloads[0].NewFn)
+		s, info := tc.Run()
+		require.True(t, s, info)
 	}
 }

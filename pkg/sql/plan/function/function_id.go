@@ -302,6 +302,7 @@ const (
 	INTERNAL_DATETIME_SCALE
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
+	INTERNAL_ASSERT_COUNT_EQ_1
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -526,6 +527,7 @@ var functionIdRegister = map[string]int32{
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
+	"internal_assert_count_eq_1":     INTERNAL_ASSERT_COUNT_EQ_1,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
