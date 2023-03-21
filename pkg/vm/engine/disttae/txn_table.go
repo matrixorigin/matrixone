@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
@@ -135,7 +134,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	var init bool
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
-			blkVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
+			blkVal, blkTypes, err := getZonemapDataFromMeta(columns, blk, tbl.getTableDef())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -526,7 +525,6 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
-	var index memorytable.Tuple
 	var encodedPrimaryKey []byte
 	if tbl.primaryIdx >= 0 && expr != nil {
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
@@ -535,10 +533,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			packer, put := tbl.db.txn.engine.packerPool.Get()
 			defer put()
 			encodedPrimaryKey = encodePrimaryKey(v, packer)
-			index = memorytable.Tuple{
-				index_PrimaryKey,
-				memorytable.ToOrdered(v),
-			}
 		}
 	}
 
@@ -566,7 +560,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			ctx,
 			i,
 			num,
-			index,
 			encodedPrimaryKey,
 			blks,
 			writes,
@@ -644,7 +637,6 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	partitionIndex int,
 	readerNumber int,
-	index memorytable.Tuple,
 	encodedPrimaryKey []byte,
 	blks []ModifyBlockMeta,
 	entries []Entry,
