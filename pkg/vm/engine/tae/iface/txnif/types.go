@@ -271,15 +271,22 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
-	GetLogtails(
-		onDatabase func(db any),
-		onTable func(tbl any),
-		onRotateTable func(dbName, tblName string, dbid, tid uint64),
-		onMetadata func(block any),
-		onAppend func(bat any),
-		onDelete func(deletes []uint32, prefix []byte))
-	IsHeartbeat() bool
+	ObserveTxn(
+		visitDatabase func(db any),
+		visitTable func(tbl any),
+		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		visitMetadata func(block any),
+		visitAppend func(bat any),
+		visitDelete func(deletes []uint32, prefix []byte))
+	GetTransactionType() TxnType
 }
+
+type TxnType int8
+
+const (
+	TxnType_Normal = iota
+	TxnType_Heartbeat
+)
 
 type TxnEntryType int16
 

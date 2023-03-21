@@ -14,7 +14,7 @@
 
 package txnbase
 
-// import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 type heartbeatStore struct {
 	NoopTxnStore
@@ -24,16 +24,6 @@ func (store *heartbeatStore) IsReadonly() bool {
 	return false
 }
 
-func (store *heartbeatStore) IsHeartbeat() bool {
-	return true
+func (store *heartbeatStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Heartbeat
 }
-
-// type heartbeatTxn struct{
-// 	*Txn
-// }
-
-// func newHeartbeatTxn(txn txnif.AsyncTxn) *heartbeatTxn{
-// 	return &heartbeatTxn{
-// 		Txn: txn.(*Txn),
-// 	}
-// }

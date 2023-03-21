@@ -358,46 +358,46 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
-func (store *txnStore) GetLogtails(
-	onDatabase func(db any),
-	onTable func(tbl any),
-	onRotateTable func(dbName, tblName string, dbid, tid uint64),
-	onMetadata func(block any),
-	onAppend func(bat any),
-	onDelete func(deletes []uint32, prefix []byte)) {
+func (store *txnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)) {
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
-			onDatabase(db.entry)
+			visitDatabase(db.entry)
 		}
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
 			tblName := tbl.entry.GetSchema().Name
 			tid := tbl.entry.ID
-			onRotateTable(dbName, tblName, dbid, tid)
+			rotateTable(dbName, tblName, dbid, tid)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {
-				onTable(tbl.entry)
+				visitTable(tbl.entry)
 			}
 			for _, iTxnEntry := range tbl.txnEntries.entries {
 				switch txnEntry := iTxnEntry.(type) {
 				case *catalog.BlockEntry:
-					onMetadata(txnEntry)
+					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					deletes := txnEntry.DeletedRows()
 					prefix := txnEntry.GetPrefix()
-					onDelete(deletes, prefix)
+					visitDelete(deletes, prefix)
 				case *catalog.TableEntry:
 					if tbl.createEntry != nil || tbl.dropEntry != nil {
 						continue
 					}
-					onTable(txnEntry)
+					visitTable(txnEntry)
 				}
 			}
 			if tbl.localSegment != nil {
 				for _, node := range tbl.localSegment.nodes {
 					anode, ok := node.(*anode)
 					if ok {
-						onAppend(anode.storage.mnode.data)
+						visitAppend(anode.storage.mnode.data)
 					}
 				}
 			}

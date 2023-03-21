@@ -55,6 +55,16 @@ func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) e
 	return nil
 }
 
+type callback struct {
+	cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error
+}
+
+func (cb *callback) call(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error {
+	// for debug
+	// MockCallback(from,to,tails...)
+	return cb.cb(from, to, tails...)
+}
+
 // Logtail manager holds sorted txn handles. Its main jobs:
 //
 // - Insert new txn handle
@@ -67,7 +77,7 @@ type Manager struct {
 	now       func() types.TS // now is from TxnManager
 
 	previousSaveTS      types.TS
-	logtailCallback     atomic.Value
+	logtailCallback     atomic.Pointer[callback]
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 }
@@ -128,20 +138,19 @@ func (mgr *Manager) Start() {
 }
 
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
-	icallback := mgr.logtailCallback.Load()
-	if icallback != nil {
-		callback := icallback.(func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
+	callback := mgr.logtailCallback.Load()
+	if callback != nil {
 		to := txn.txn.GetPrepareTS()
 		from := mgr.previousSaveTS
 		mgr.previousSaveTS = to
-		callback(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
+		callback.call(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
 	}
 }
 
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
 // add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
-	if txn.GetStore().IsHeartbeat() {
+	if txn.GetStore().GetTransactionType() == txnif.TxnType_Heartbeat {
 		return
 	}
 	mgr.table.AddTxn(txn)
@@ -188,6 +197,9 @@ func (mgr *Manager) GetTableOperator(
 }
 
 func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) error {
-	mgr.logtailCallback.Store(cb)
+	callbackFn := &callback{
+		cb: cb,
+	}
+	mgr.logtailCallback.Store(callbackFn)
 	return nil
 }

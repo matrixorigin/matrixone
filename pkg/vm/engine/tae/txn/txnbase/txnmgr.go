@@ -86,7 +86,6 @@ type TxnManager struct {
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
-	OpTxnChan       chan *OpTxn
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
@@ -104,7 +103,6 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
-		OpTxnChan:       make(chan *OpTxn, 20000),
 		wg:              sync.WaitGroup{},
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
@@ -222,11 +220,6 @@ func (mgr *TxnManager) heartbeat() {
 		select {
 		case <-mgr.ctx.Done():
 			return
-		case op := <-mgr.OpTxnChan:
-			_, err := mgr.PreparingSM.EnqueueRecevied(op)
-			if err != nil {
-				panic(err)
-			}
 		case <-heartbeatTicker.C:
 			op := mgr.newHeartbeatOpTxn()
 			op.Txn.(*Txn).Add(1)
@@ -252,7 +245,6 @@ func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
 	store := &heartbeatStore{}
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	// mgr.IDMap[string(txnId)] = txn
 	return &OpTxn{
 		Txn: txn,
 		Op:  OpCommit,

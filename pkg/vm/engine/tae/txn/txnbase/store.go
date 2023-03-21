@@ -147,15 +147,14 @@ func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { retu
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }
 
-func (store *NoopTxnStore) GetLogtails(
-	onDatabase func(db any),
-	onTable func(tbl any),
-	onRotateTable func(dbName, tblName string, dbid, tid uint64),
-	onMetadata func(block any),
-	onAppend func(bat any),
-	onDelete func(deletes []uint32, prefix []byte)) {
-}
+func (store *NoopTxnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)){}
 
-func (store *NoopTxnStore) IsHeartbeat() bool {
-	return false
+func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Normal
 }

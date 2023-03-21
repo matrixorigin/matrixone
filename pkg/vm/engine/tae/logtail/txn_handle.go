@@ -63,13 +63,13 @@ func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
 
 func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.TableLogtail {
 	b.txn = txn
-	txn.GetStore().GetLogtails(
-		b.onDatabase,
-		b.onTable,
-		b.onRotateTable,
-		b.onMetadata,
-		b.onAppend,
-		b.onDelete)
+	txn.GetStore().ObserveTxn(
+		b.visitDatabase,
+		b.visitTable,
+		b.rotateTable,
+		b.visitMetadata,
+		b.visitAppend,
+		b.visitDelete)
 	b.BuildResp()
 	logtails := b.logtails
 	newlogtails := make([]logtail.TableLogtail, 0)
@@ -77,7 +77,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.Ta
 	return logtails
 }
 
-func (b *TxnLogtailRespBuilder) onMetadata(iblk any) {
+func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	blk := iblk.(*catalog.BlockEntry)
 	node := blk.GetLatestNodeLocked().(*catalog.MetadataMVCCNode)
 	if node.MetaLoc == "" {
@@ -101,7 +101,7 @@ func (b *TxnLogtailRespBuilder) onMetadata(iblk any) {
 	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch], node.DeletedAt.Equal(txnif.UncommitTS), commitTS, createAt, deleteAt)
 }
 
-func (b *TxnLogtailRespBuilder) onAppend(ibat any) {
+func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	bat := ibat.(*containers.Batch)
 	mybat := containers.NewBatch()
 	mybat.AddVector(catalog.AttrRowID, bat.GetVectorByName(catalog.AttrRowID).CloneWindow(0, bat.Length()))
@@ -123,7 +123,7 @@ func (b *TxnLogtailRespBuilder) onAppend(ibat any) {
 	}
 }
 
-func (b *TxnLogtailRespBuilder) onDelete(deletes []uint32, prefix []byte) {
+func (b *TxnLogtailRespBuilder) visitDelete(deletes []uint32, prefix []byte) {
 	if b.batches[dataDelBatch] == nil {
 		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
@@ -134,7 +134,7 @@ func (b *TxnLogtailRespBuilder) onDelete(deletes []uint32, prefix []byte) {
 	}
 }
 
-func (b *TxnLogtailRespBuilder) onTable(itbl any) {
+func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 	tbl := itbl.(*catalog.TableEntry)
 	node := tbl.GetLatestNodeLocked().(*catalog.TableMVCCNode)
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
@@ -166,6 +166,7 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		}
 		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
+	// update table constraint
 	if !node.CreatedAt.Equal(txnif.UncommitTS) && !node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnInsBatch] == nil {
 			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
@@ -183,7 +184,7 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
 }
-func (b *TxnLogtailRespBuilder) onDatabase(idb any) {
+func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	db := idb.(*catalog.DBEntry)
 	node := db.GetLatestNodeLocked().(*catalog.DBMVCCNode)
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
@@ -236,7 +237,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	*b.logtails = append(*b.logtails, tail)
 }
 
-func (b *TxnLogtailRespBuilder) onRotateTable(dbName, tableName string, dbid, tid uint64) {
+func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid uint64) {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.batches[blkMetaInsBatch] = nil
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
