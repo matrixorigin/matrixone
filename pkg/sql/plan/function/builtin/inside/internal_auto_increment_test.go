@@ -258,7 +258,6 @@ func makePlan2Type(typ types.Type) plan.Type {
 	return plan.Type{
 		Id:    int32(typ.Oid),
 		Width: typ.Width,
-		Size:  typ.Size,
 		Scale: typ.Scale,
 	}
 }
@@ -269,14 +268,9 @@ func buildTableDefs(columnNames []string, columnTypes []plan.Type) []engine.Tabl
 	for i, colTyp := range columnTypes {
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name: columnNames[i],
-				Alg:  compress.None,
-				Type: types.Type{
-					Oid:   types.T(colTyp.GetId()),
-					Width: colTyp.GetWidth(),
-					Scale: colTyp.GetScale(),
-					Size:  colTyp.GetSize(),
-				},
+				Name:          columnNames[i],
+				Alg:           compress.None,
+				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       nil,
 				OnUpdate:      nil,
 				Primary:       i == 0,

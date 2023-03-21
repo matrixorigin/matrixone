@@ -136,11 +136,11 @@ type Config struct {
 	}
 
 	LockService struct {
-		// LockListenAddress listening address for receiving external lock table allocator requests.
-		LockListenAddress string `toml:"lock-listen-address"`
-		// LockServiceAddress service address for communication, if this address is not set, use
+		// ListenAddress listening address for receiving external lock table allocator requests.
+		ListenAddress string `toml:"listen-address"`
+		// ServiceAddress service address for communication, if this address is not set, use
 		// LockListenAddress as the communication address.
-		LockServiceAddress string `toml:"lock-service-address"`
+		ServiceAddress string `toml:"service-address"`
 		// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will continuously
 		// hold the bind, and if no hold request is received after the configured time, then all bindings for
 		// the service will fail.
@@ -162,11 +162,11 @@ func (c *Config) Validate() error {
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = defaultServiceAddress
 	}
-	if c.LockService.LockListenAddress == "" {
-		c.LockService.LockListenAddress = defaultLockListenAddress
+	if c.LockService.ListenAddress == "" {
+		c.LockService.ListenAddress = defaultLockListenAddress
 	}
-	if c.LockService.LockServiceAddress == "" {
-		c.LockService.LockServiceAddress = defaultLockServiceAddress
+	if c.LockService.ServiceAddress == "" {
+		c.LockService.ServiceAddress = defaultLockServiceAddress
 	}
 	if c.LockService.KeepBindTimeout.Duration == 0 {
 		c.LockService.KeepBindTimeout.Duration = defaultKeepBindTimeout

@@ -212,7 +212,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 				}
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
-						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
+						if err := outputBat.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 							bat.Clean(proc.Mp())
 							return false, err
 						}

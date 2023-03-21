@@ -50,7 +50,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				types.T_int8.ToType(),
 			},
 			arg: &Argument{
 				Data: nil,

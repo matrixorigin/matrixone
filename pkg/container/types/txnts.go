@@ -274,113 +274,46 @@ func MockColTypes(colCnt int) (ct []Type) {
 		var typ Type
 		switch i {
 		case 0:
-			typ = Type{
-				Oid:   T_int8,
-				Size:  1,
-				Width: 8,
-			}
+			typ = T_int8.ToType()
 		case 1:
-			typ = Type{
-				Oid:   T_int16,
-				Size:  2,
-				Width: 16,
-			}
+			typ = T_int16.ToType()
 		case 2:
-			typ = Type{
-				Oid:   T_int32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = T_int32.ToType()
 		case 3:
-			typ = Type{
-				Oid:   T_int64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = T_int64.ToType()
 		case 4:
-			typ = Type{
-				Oid:   T_uint8,
-				Size:  1,
-				Width: 8,
-			}
+			typ = T_uint8.ToType()
 		case 5:
-			typ = Type{
-				Oid:   T_uint16,
-				Size:  2,
-				Width: 16,
-			}
+			typ = T_uint16.ToType()
 		case 6:
-			typ = Type{
-				Oid:   T_uint32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = T_uint32.ToType()
 		case 7:
-			typ = Type{
-				Oid:   T_uint64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = T_uint64.ToType()
 		case 8:
-			typ = Type{
-				Oid:   T_float32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = T_float32.ToType()
 		case 9:
-			typ = Type{
-				Oid:   T_float64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = T_float64.ToType()
 		case 10:
-			typ = Type{
-				Oid:   T_date,
-				Size:  4,
-				Width: 32,
-			}
+			typ = T_date.ToType()
 		case 11:
-			typ = Type{
-				Oid:   T_datetime,
-				Size:  8,
-				Width: 64,
-			}
+			typ = T_datetime.ToType()
 		case 12:
-			typ = Type{
-				Oid:   T_varchar,
-				Size:  24,
-				Width: 100,
-			}
+			typ = T_varchar.ToType()
 		case 13:
-			typ = Type{
-				Oid:   T_char,
-				Size:  24,
-				Width: 100,
-			}
+			typ = T_char.ToType()
 		case 14:
 			typ = T_bool.ToType()
 			typ.Width = 8
 		case 15:
 			typ = T_timestamp.ToType()
-			typ.Width = 64
 		case 16:
 			typ = T_decimal64.ToType()
-			typ.Width = 64
 		case 17:
 			typ = T_decimal128.ToType()
-			typ.Width = 128
 		case 18:
-			typ = Type{
-				Oid:   T_binary,
-				Size:  24,
-				Width: 100,
-			}
+			typ = T_binary.ToType()
 		case 19:
-			typ = Type{
-				Oid:   T_varbinary,
-				Size:  24,
-				Width: 100,
-			}
+			typ = T_varbinary.ToType()
 		}
 		ct = append(ct, typ)
 	}

@@ -41,7 +41,7 @@ import (
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
-	name string, databaseId uint64, m *mpool.MPool) (*batch.Batch, error) {
+	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	bat.SetZs(1, m)
@@ -84,6 +84,11 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 		idx = catalog.MO_DATABASE_ACCOUNT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // account_id
 		if err := vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_DATABASE_DAT_TYPE_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx])                      // dat_type
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(typ), false, m); err != nil { // TODO
 			return nil, err
 		}
 	}
@@ -906,6 +911,12 @@ func genColumns(accountId uint32, tableName, databaseName string,
 
 func getSql(ctx context.Context) string {
 	if v := ctx.Value(defines.SqlKey{}); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+func getTyp(ctx context.Context) string {
+	if v := ctx.Value(defines.DatTypKey{}); v != nil {
 		return v.(string)
 	}
 	return ""
