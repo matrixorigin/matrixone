@@ -1238,6 +1238,23 @@ func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tre
 	return err
 }
 
+func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tree.ShowSubscriptions, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowSubscriptions(ctx, ses, ss)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, sp *tree.ShowCreatePublications, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
@@ -2473,6 +2490,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowCreatePublications:
 			selfHandle = true
 			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowSubscriptions:
+			selfHandle = true
+			if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.CreateAccount:
