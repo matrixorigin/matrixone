@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -404,29 +405,15 @@ func (h *Handle) startLoadJobs(
 	var locations []string
 	var isNull []bool
 	var jobIds []string
-	var columnIdx int
-	if req.Type == db.EntryInsert {
-		//for loading ZM index of primary key
-		locations = append(locations, req.MetaLocs...)
-		columnIdx = req.Schema.GetSingleSortKeyIdx()
-		isNull = append(isNull, false)
-		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
-		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-		for i := range req.MetaLocs {
-			jobIds = append(jobIds,
-				fmt.Sprintf("load-zm-%s", req.MetaLocs[i]))
-		}
-	} else {
-		//for loading deleted rowid.
-		locations = append(locations, req.DeltaLocs...)
-		columnIdx = 0
-		isNull = append(isNull, false)
-		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
-		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-		for i := range req.DeltaLocs {
-			jobIds = append(jobIds,
-				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
-		}
+	//for loading deleted rowid.
+	locations = append(locations, req.DeltaLocs...)
+	columnIdx := 0
+	isNull = append(isNull, false)
+	req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
+	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
+	for i := range req.DeltaLocs {
+		jobIds = append(jobIds,
+			fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
 	}
 	//start loading jobs asynchronously,should create a new root context.
 	nctx := context.Background()
@@ -445,8 +432,6 @@ func (h *Handle) startLoadJobs(
 				if !ok {
 					panic(moerr.NewInternalErrorNoCtx("Miss Location"))
 				}
-				//reader, err := blockio.NewReader(ctx,
-				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
 				_, id, _, _, err := blockio.DecodeLocation(loc)
 				if err != nil {
 					jobR.Err = err
@@ -458,21 +443,7 @@ func (h *Handle) startLoadJobs(
 					jobR.Err = err
 					return
 				}
-				if req.Type == db.EntryDelete {
-					bat, err := reader.LoadColumns(
-						ctx,
-						[]uint16{uint16(columnIdx)},
-						[]uint32{id},
-						nil,
-					)
-					if err != nil {
-						jobR.Err = err
-						return
-					}
-					jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
-					return
-				}
-				zmIndex, err := reader.LoadZoneMaps(
+				bat, err := reader.LoadColumns(
 					ctx,
 					[]uint16{uint16(columnIdx)},
 					[]uint32{id},
@@ -482,7 +453,7 @@ func (h *Handle) startLoadJobs(
 					jobR.Err = err
 					return
 				}
-				jobR.Res = zmIndex[0][columnIdx]
+				jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
 				return
 			},
 		)
