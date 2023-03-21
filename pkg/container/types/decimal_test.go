@@ -143,6 +143,15 @@ func TestDecimal128MulDiv(t *testing.T) {
 	}
 }
 
+func TestDecimal128OverDiv(t *testing.T) {
+	x, _, _ := Parse128("99999999999999999999999999999999999999")
+	y, _, _ := Parse128("10000000000")
+	z, _, err := x.Div(y, 0, 0)
+	if err != nil || z.Format(0) != "10000000000000000000000000000000000" {
+		panic("wrong")
+	}
+}
+
 func TestDecimal256MulDiv(t *testing.T) {
 	x := Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), 0}
 	z := x
