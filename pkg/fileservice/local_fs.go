@@ -257,6 +257,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
+func (l *LocalFS) Preload(ctx context.Context, filePath string) error {
+	//TODO load to memory
+	return nil
+}
+
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil

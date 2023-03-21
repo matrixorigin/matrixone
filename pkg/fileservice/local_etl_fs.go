@@ -324,6 +324,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
+func (l *LocalETLFS) Preload(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():
