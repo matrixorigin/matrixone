@@ -95,20 +95,23 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
 	createSql := "todosql"
+	datType := ""
 	if ctx != nil {
 		createSql, _ = ctx.Value(defines.SqlKey{}).(string)
+		datType, _ = ctx.Value(defines.DatTypKey{}).(string)
 	}
-	_, err = txn.CreateDatabase(name, createSql)
+	_, err = txn.CreateDatabase(name, createSql, datType)
 	return
 }
 
-func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle Txn) (err error) {
+func (e *txnEngine) CreateDatabase(ctx context.Context, name, datTyp string, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name, "todosql")
+
+	_, err = txn.CreateDatabase(name, "todosql", datTyp)
 	return
 }
 

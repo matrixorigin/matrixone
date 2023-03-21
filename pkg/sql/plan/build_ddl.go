@@ -982,6 +982,13 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		Database:    string(stmt.Name),
 	}
 
+	if stmt.SubscriptionOption != nil {
+		createDB.SubscriptionOption = &plan.SubscriptionOption{
+			From:        string(stmt.SubscriptionOption.From),
+			Publication: string(stmt.SubscriptionOption.Publication),
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

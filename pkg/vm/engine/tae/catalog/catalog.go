@@ -1016,11 +1016,11 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 	return
 }
 
-func (catalog *Catalog) CreateDBEntry(name, createSql string, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntry(name, createSql,datTyp string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, createSql, txn)
+	entry := NewDBEntry(catalog, name, createSql,datTyp, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err

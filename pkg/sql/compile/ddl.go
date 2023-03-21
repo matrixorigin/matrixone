@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -41,10 +42,21 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
-	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
+	ctx := context.WithValue(c.ctx, defines.SqlKey{}, c.sql)
+	datType := ""
+	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+		datType = catalog.SystemDBTypeSubscription
+	}
+	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
+	err := c.e.Create(ctx,
 		dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+
+	// subscription database does not need to create auto increment table
+	if datType == catalog.SystemDBTypeSubscription {
+		return nil
 	}
 	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
 }

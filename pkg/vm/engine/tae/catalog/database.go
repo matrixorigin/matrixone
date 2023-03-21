@@ -109,13 +109,14 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64
 	return e
 }
 
-func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *DBEntry {
+func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		datType:     datTyp,
 		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),

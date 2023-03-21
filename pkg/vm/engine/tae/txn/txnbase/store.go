@@ -68,7 +68,7 @@ func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.R
 	return
 }
 
-func (store *NoopTxnStore) CreateDatabase(name, creatSql string) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabase(name, creatSql, datTyp string) (db handle.Database, err error) {
 	return
 }
 func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
