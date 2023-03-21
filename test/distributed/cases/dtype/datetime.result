@@ -335,3 +335,5 @@ drop table t1;
 create table t1(a datetime);
 insert into t1 values("9999-12-31 23:59:59.999999");
 invalid input: invalid datatime value 9999-12-31 23:59:59.999999
+set @@time_zone='+5:99';
+internal error: incorrect timezone +5:99

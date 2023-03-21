@@ -333,10 +333,7 @@ func (e *Engine) tryToGetTableLogTail(
 			return err
 		}
 		// poll until table was subscribed.
-		for {
-			if e.subscribed.getTableSubscribe(dbId, tblId) {
-				break
-			}
+		for !e.subscribed.getTableSubscribe(dbId, tblId) {
 			time.Sleep(periodToCheckTableSubscribeSucceed)
 		}
 	}
