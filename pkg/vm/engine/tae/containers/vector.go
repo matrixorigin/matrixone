@@ -437,14 +437,13 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	// TODO: Not doing tryPromoting(). Is it ok XuPeng?
-	var sels []int64
-	vecLen := uint32(vec.Length())
-	for i := uint32(0); i < vecLen; i++ {
-		if !deletes.Contains(i) {
-			sels = append(sels, int64(i))
-		}
+	//TODO: Do you have any other suggestion for converting []uint32 to []int64 using uns
+	var dels []int64
+	for i := range deletes.ToArray() {
+		dels = append(dels, int64(i))
 	}
-	vec.downstreamVector.Shrink(sels)
+
+	vec.downstreamVector.Shrink(dels, true)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
