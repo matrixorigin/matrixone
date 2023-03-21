@@ -41,7 +41,6 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 	if !ok {
 		return plan2.DefaultStats(), nil
 	}
-
 	if tbl.meta == nil || !tbl.updated {
 		err := tbl.updateMeta(ctx, expr)
 		if err != nil {
@@ -57,7 +56,6 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -250,7 +248,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				}
 			}
 		}
-
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {

@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math"
 	"strings"
 	"time"
 
@@ -32,7 +31,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -47,17 +45,14 @@ func (txn *Transaction) getTableMeta(
 ) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	name := genMetaTableName(tableId)
-
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
 	if needUpdated {
 		key := [2]uint64{databaseId, tableId}
 		states := txn.engine.partitions[key].Snapshot()
-
 		for i := range txn.dnStores {
 			if i >= len(states) {
 				continue
 			}
-
 			var blockInfos []catalog.BlockInfo
 			state := states[i]
 			iter := state.Blocks.Iter()
@@ -69,17 +64,14 @@ func (txn *Transaction) getTableMeta(
 				blockInfos = append(blockInfos, entry.BlockInfo)
 			}
 			iter.Release()
-
 			var err error
 			blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
 				txn.proc.GetMPool(), prefetch)
 			if err != nil {
 				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
 			}
-
 		}
 	}
-
 	return &tableMeta{
 		tableName: name,
 		blocks:    blocks,
@@ -377,6 +369,7 @@ func blockUnmarshal(data []byte) BlockMeta {
 	return meta
 }
 
+/* used by multi-dn
 func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
 	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
 	var pk *engine.Attribute
@@ -428,3 +421,4 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 	idx := hashVal % listLen
 	return []int{int(idx)}
 }
+*/

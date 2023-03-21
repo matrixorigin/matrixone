@@ -192,7 +192,7 @@ func TestFilter(t *testing.T) {
 		}
 		assert.Equal(t, 16, Length(n))
 		sels := []int64{1, 3, 5}
-		Filter(n, sels)
+		Filter(n, sels, false)
 		assert.Equal(t, 3, Length(n))
 	})
 }
