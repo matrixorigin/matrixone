@@ -1160,7 +1160,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("system_time_zone"),
-		Default:           "",
+		Default:           getSystemTimeZone(),
 	},
 	"transaction_isolation": {
 		Name:              "transaction_isolation",
@@ -1321,4 +1321,9 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 	}
 
 	return nil
+}
+
+func getSystemTimeZone() string {
+	tz, _ := time.Now().Zone()
+	return tz
 }
