@@ -103,7 +103,7 @@ func TestCoalesceGeneral(t *testing.T) {
 				require.True(t, b)
 			}
 
-			got, ergot := coalesceGeneral[int64](tc.vs, tc.proc, types.Type{Oid: types.T_int64})
+			got, ergot := coalesceGeneral[int64](tc.vs, tc.proc, types.T_int64.ToType())
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {

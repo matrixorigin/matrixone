@@ -151,7 +151,7 @@ var (
 
 func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := ivecs[0]
-	rtyp := types.Type{Oid: types.T_decimal128, Size: 16, Scale: 6}
+	rtyp := types.New(types.T_decimal128, 38, 6)
 	if inVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 	}

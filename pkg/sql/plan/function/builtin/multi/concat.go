@@ -22,7 +22,7 @@ import (
 )
 
 func Concat(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+	rtyp := types.T_varchar.ToType()
 	isAllConst := true
 
 	for i := range ivecs {

@@ -282,7 +282,10 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 
 func (c *Compile) cnListStrategy() {
 	if len(c.cnList) == 0 {
-		c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		c.cnList = append(c.cnList, engine.Node{
+			Addr: c.addr,
+			Mcpu: c.NumCPU(),
+		})
 	} else if len(c.cnList) > c.info.CnNumbers {
 		c.cnList = c.cnList[:c.info.CnNumbers]
 	}
@@ -829,7 +832,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
-						Size:     attr.Attr.Type.Size,
 						Scale:    attr.Attr.Type.Scale,
 						AutoIncr: attr.Attr.AutoIncrement,
 					},
@@ -1763,12 +1765,7 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:   types.T(typ.Id),
-		Size:  typ.Size,
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
 // Update the specific scopes's instruction to true
