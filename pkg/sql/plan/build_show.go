@@ -92,7 +92,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
 		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
+	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	}
+
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
