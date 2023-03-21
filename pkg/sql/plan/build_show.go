@@ -43,15 +43,15 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 
 	// get data from schema
 	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	// sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	// return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 
-	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
-	createSql := fmt.Sprintf("CREATE DATABASE `%s`", stmt.Name)
-	sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
-	// logutil.Info(sqlStr)
-
-	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
+	//sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	//createSql := fmt.Sprintf("CREATE DATABASE `%s`", stmt.Name)
+	//sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
+	//// logutil.Info(sqlStr)
+	//
+	//return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
