@@ -349,7 +349,7 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
-		s.cfg.LockService.LockListenAddress,
+		s.cfg.LockService.ListenAddress,
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
 	return nil

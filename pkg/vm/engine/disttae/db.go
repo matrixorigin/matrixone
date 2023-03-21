@@ -60,7 +60,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 
 	{ // mo_catalog
 		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
-		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, m)
+		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, "", m)
 		if err != nil {
 			return err
 		}

@@ -16,6 +16,7 @@ package compute
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -76,6 +77,8 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return int64(a.(types.Decimal64).Compare(b.(types.Decimal64)))
 	case types.T_decimal128:
 		return int64(a.(types.Decimal128).Compare(b.(types.Decimal128)))
+	case types.T_decimal256:
+		return int64(a.(types.Decimal256).Compare(b.(types.Decimal256)))
 	case types.T_float32:
 		return CompareOrdered[float32](a, b)
 	case types.T_float64:
@@ -88,12 +91,18 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return CompareOrdered[types.Time](a, b)
 	case types.T_datetime:
 		return CompareOrdered[types.Datetime](a, b)
+	case types.T_TS:
+		return int64(a.(types.TS).Compare(b.(types.TS)))
+	case types.T_Rowid:
+		return CompareBytes(a, b)
 	case types.T_uuid:
 		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		return CompareBytes(a, b)
+	case types.T_any:
+		return 0
 	default:
-		panic("unsupported type")
+		panic(fmt.Sprintf("unsupported type: %s", t.String()))
 	}
 }

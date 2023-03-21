@@ -2052,6 +2052,14 @@ var (
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
 			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
 		},
+		{
+			input:  "show table_size from test",
+			output: "show table size from test",
+		},
+		{
+			input:  "show table_size from mo_role from mo_catalog",
+			output: "show table size from mo_role from mo_catalog",
+		},
 	}
 )
 
