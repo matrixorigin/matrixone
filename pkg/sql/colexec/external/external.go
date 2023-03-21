@@ -665,9 +665,9 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 			rows = vecTmp.Length()
 		}
-		sels := make([]int64, vecTmp.Length())
+		sels := make([]int32, vecTmp.Length())
 		for j := 0; j < len(sels); j++ {
-			sels[j] = int64(j)
+			sels[j] = int32(j)
 		}
 		bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool())
 	}

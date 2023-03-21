@@ -1071,6 +1071,18 @@ func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) er
 	return doReset(ctx, mce.GetSession(), st)
 }
 
+func (mce *MysqlCmdExecutor) handleCreatePublication(ctx context.Context, cp *tree.CreatePublication) error {
+	return doCreatePublication(ctx, mce.GetSession(), cp)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tree.AlterPublication) error {
+	return doAlterPublication(ctx, mce.GetSession(), ap)
+}
+
+func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree.DropPublication) error {
+	return doDropPublication(ctx, mce.GetSession(), dp)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
@@ -1197,6 +1209,40 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err = doShowAccounts(ctx, ses, sa)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tree.ShowPublications, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowPublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, sp *tree.ShowCreatePublications, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowCreatePublications(ctx, ses, sp)
 	if err != nil {
 		return err
 	}
@@ -1644,6 +1690,30 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			u: st,
+		})
+	case *tree.CreatePublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CreatePublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cp: st,
+		})
+	case *tree.AlterPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&AlterPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ap: st,
+		})
+	case *tree.DropPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dp: st,
 		})
 	case *tree.CreateAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
@@ -2380,6 +2450,31 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreatePublication:
+			selfHandle = true
+			if err = mce.handleCreatePublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.AlterPublication:
+			selfHandle = true
+			if err = mce.handleAlterPublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropPublication:
+			selfHandle = true
+			if err = mce.handleDropPublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowPublications:
+			selfHandle = true
+			if err = mce.handleShowPublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowCreatePublications:
+			selfHandle = true
+			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateAccount:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -2801,7 +2896,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,

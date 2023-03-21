@@ -184,7 +184,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
-					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
+					if err := ctr.bat.Vecs[pos].UnionBatch(bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
 						bat.Clean(proc.Mp())
 						return false, err
 					}
