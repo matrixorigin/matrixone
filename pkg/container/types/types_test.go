@@ -24,13 +24,13 @@ import (
 )
 
 func TestType_String(t *testing.T) {
-	myType := Type{Oid: T_int64, Size: 8}
+	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())
 }
 
 func TestType_Eq(t *testing.T) {
-	myType := Type{Oid: T_int64, Size: 8}
-	myType1 := Type{Oid: T_int64, Size: 8}
+	myType := T_int64.ToType()
+	myType1 := T_int64.ToType()
 	require.True(t, myType.Eq(myType1))
 }
 

@@ -208,11 +208,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
-			typ := types.Type{
-				Oid:   types.T(node.TableDef.Cols[i].Typ.Id),
-				Width: node.TableDef.Cols[i].Typ.Width,
-				Scale: node.TableDef.Cols[i].Typ.Scale,
-			}
+			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
@@ -220,11 +216,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 			}
 			bat.Vecs[i] = vec
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
-			typ := types.Type{
-				Oid:   types.T_varchar,
-				Width: types.MaxVarcharLen,
-				Scale: 0,
-			}
+			typ := types.T_varchar.ToType()
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
@@ -673,9 +665,9 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 			rows = vecTmp.Length()
 		}
-		sels := make([]int64, vecTmp.Length())
+		sels := make([]int32, vecTmp.Length())
 		for j := 0; j < len(sels); j++ {
-			sels[j] = int64(j)
+			sels[j] = int32(j)
 		}
 		bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool())
 	}
