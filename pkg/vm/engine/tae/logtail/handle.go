@@ -475,7 +475,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 }
 
 func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
-	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
+	logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
 		createts.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
 	is_sorted := false
