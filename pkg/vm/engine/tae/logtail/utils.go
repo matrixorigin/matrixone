@@ -488,9 +488,7 @@ func LoadBlkColumnsByMeta(
 	return bat, nil
 }
 
-// TODO:
-// There need a global io pool
-func (data *CheckpointData) ReadFrom(
+func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	reader dataio.Reader,
 	m *mpool.MPool) (err error) {
@@ -505,6 +503,19 @@ func (data *CheckpointData) ReadFrom(
 			idxes[i] = uint16(i)
 		}
 		blockio.Prefetch(idxes, reader, []uint32{metas[idx].GetID()}, metas[idx].GetExtent(), nil)
+	}
+	return
+}
+
+// TODO:
+// There need a global io pool
+func (data *CheckpointData) ReadFrom(
+	ctx context.Context,
+	reader dataio.Reader,
+	m *mpool.MPool) (err error) {
+	metas, err := reader.LoadBlocksMeta(ctx, m)
+	if err != nil {
+		return
 	}
 
 	for idx, item := range checkpointDataRefer {

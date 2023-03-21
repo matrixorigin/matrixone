@@ -99,7 +99,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
-	readfn := func(i int) {
+	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -116,18 +116,27 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			entryType: typ,
 		}
 		var err2 error
-		if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
-			logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-			emptyFileMu.Lock()
-			emptyFile = append(emptyFile, checkpointEntry)
-			emptyFileMu.Unlock()
+		if prefetch {
+			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+			}
 		} else {
-			entries[i] = checkpointEntry
+			if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+				emptyFileMu.Lock()
+				emptyFile = append(emptyFile, checkpointEntry)
+				emptyFileMu.Unlock()
+			} else {
+				entries[i] = checkpointEntry
+			}
 		}
 	}
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i)
+		readfn(i, true)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, false)
 	}
 	readDuration += time.Since(t0)
 	if err != nil {
