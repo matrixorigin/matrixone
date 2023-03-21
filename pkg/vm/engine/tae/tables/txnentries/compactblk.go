@@ -15,12 +15,15 @@
 package txnentries
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -81,6 +84,28 @@ func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
+	var fs fileservice.FileService
+	var fromName, toName string
+
+	fromBlockEntry := entry.from.GetMeta().(*catalog.BlockEntry)
+	fs = fromBlockEntry.GetBlockData().GetFs().Service
+	fromName = fromBlockEntry.ID.ObjectString()
+
+	if entry.to != nil {
+		toBlockEntry := entry.to.GetMeta().(*catalog.BlockEntry)
+		toName = toBlockEntry.ID.ObjectString()
+	}
+
+	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
+		if fromName != "" {
+			_ = fs.Delete(context.TODO(), fromName)
+		}
+		if toName != "" {
+			_ = fs.Delete(context.TODO(), toName)
+		}
+		logutil.Infof("rollback unfinished compact file %q and %q", fromName, toName)
+		return nil
+	})
 	return
 }
 func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {

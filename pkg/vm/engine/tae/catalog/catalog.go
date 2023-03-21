@@ -58,10 +58,6 @@ type DataFactory interface {
 	MakeBlockFactory() BlockDataFactory
 }
 
-func rowIDToU64(rowID types.Rowid) uint64 {
-	return types.DecodeUint64(rowID[:8])
-}
-
 type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex

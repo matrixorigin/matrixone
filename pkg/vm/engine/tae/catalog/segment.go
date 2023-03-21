@@ -333,9 +333,15 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	var id types.Blockid
 	if opts != nil && opts.Id != nil {
 		id = common.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		if entry.nextObjectIdx <= opts.Id.Filen {
+			entry.nextObjectIdx = opts.Id.Filen + 1
+		}
 	} else {
 		id = common.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
 		entry.nextObjectIdx += 1
+	}
+	if _, ok := entry.entries[id]; ok {
+		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))
 	}
 	if opts != nil && opts.Loc != nil {
 		created = NewBlockEntryWithMeta(entry, id, txn, state, dataFactory, opts.Loc.Metaloc, opts.Loc.Deltaloc)

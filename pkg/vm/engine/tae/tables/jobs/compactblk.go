@@ -278,7 +278,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {
-		logutil.Infof("yyyy exec metaloc for %s %v", id.String(), err)
+		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
 	metaLoc, err := blockio.EncodeLocation(

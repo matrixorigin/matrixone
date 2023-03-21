@@ -171,10 +171,6 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	}
 }
 
-func rowIDToU64(rowID types.Rowid) uint64 {
-	return types.DecodeUint64(rowID[:8])
-}
-
 func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	files := make(map[string]bool)
 	for i := 0; i < bats[DeleteFile].Length(); i++ {
