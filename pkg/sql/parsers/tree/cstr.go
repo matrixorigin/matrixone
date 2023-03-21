@@ -37,6 +37,7 @@ func NewCStr(str string, lower int64) *CStr {
 func (cs *CStr) SetConfig(lower int64) {
 	if lower == 0 {
 		cs.c = cs.o
+		return
 	}
 	cs.c = strings.ToLower(cs.o)
 }

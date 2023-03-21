@@ -29,5 +29,5 @@ func Test_CStr(t *testing.T) {
 	c2.SetConfig(1)
 	assert.Equal(t, "hello", c2.Compare())
 	c2.SetConfig(0)
-	assert.Equal(t, "hello", c2.Compare())
+	assert.Equal(t, "Hello", c2.Compare())
 }
