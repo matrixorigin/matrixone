@@ -1042,7 +1042,7 @@ CREATE TABLE b (
 );
 INSERT INTO b VALUES (1,7,'f');
 
--- @bvt:issue#4139
+-- @bvt:issue#7559
 SELECT col_int_key
 FROM b granparent1
 WHERE (col_int_key, col_int_key) IN (

@@ -293,3 +293,6 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
 	}
 }
+
+func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
+func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }
