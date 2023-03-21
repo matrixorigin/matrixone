@@ -96,17 +96,19 @@ func TestAssertEqual(t *testing.T) {
 	}{
 		{
 			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 2}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "2", "3"}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil),
 			},
-			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil),
+			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil),
 		},
 		{
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 1}, nil),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "2", "3"}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil),
 			},
-			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), true, []bool{true}, nil),
+			wanted: testutil.NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil),
 		},
 	}
 
