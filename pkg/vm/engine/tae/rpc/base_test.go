@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
 
@@ -156,8 +155,7 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng:          moengine.NewEngine(tae),
-		jobScheduler: tasks.NewParallelJobScheduler(5),
+		eng: moengine.NewEngine(tae),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh

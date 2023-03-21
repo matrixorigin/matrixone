@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"os"
 	"sync"
 	"syscall"
@@ -46,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"go.uber.org/zap"
 )
@@ -59,7 +59,6 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
-	jobScheduler tasks.JobScheduler
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -87,8 +86,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	}
 
 	h := &Handle{
-		eng:          moengine.NewEngine(tae),
-		jobScheduler: tasks.NewParallelJobScheduler(100),
+		eng: moengine.NewEngine(tae),
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -310,13 +308,11 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	h.jobScheduler.Stop()
 	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	h.jobScheduler.Stop()
 	return h.eng.Destroy()
 }
 
@@ -397,71 +393,30 @@ func (h *Handle) HandleInspectDN(
 	return nil
 }
 
-func (h *Handle) startLoadJobs(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req *db.WriteReq,
-) (err error) {
-	var locations []string
-	var isNull []bool
-	var jobIds []string
+func (h *Handle) prefetch(ctx context.Context,
+	req *db.WriteReq) error {
+	if len(req.DeltaLocs) == 0 {
+		return nil
+	}
 	//for loading deleted rowid.
-	locations = append(locations, req.DeltaLocs...)
 	columnIdx := 0
-	isNull = append(isNull, false)
-	req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
-	req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-	for i := range req.DeltaLocs {
-		jobIds = append(jobIds,
-			fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
-	}
 	//start loading jobs asynchronously,should create a new root context.
-	nctx := context.Background()
-	if deadline, ok := ctx.Deadline(); ok {
-		nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+	name, _, extent, _, err := blockio.DecodeLocation(req.DeltaLocs[0])
+	reader, err := blockio.NewObjectReader(
+		h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	if err != nil {
+		return nil
 	}
-	for i, v := range locations {
-		nctx = context.WithValue(nctx, db.LocationKey{}, v)
-		req.Jobs[i] = tasks.NewJob(
-			jobIds[i],
-			blockio.JTLoad,
-			nctx,
-			func(ctx context.Context) (jobR *tasks.JobResult) {
-				jobR = &tasks.JobResult{}
-				loc, ok := ctx.Value(db.LocationKey{}).(string)
-				if !ok {
-					panic(moerr.NewInternalErrorNoCtx("Miss Location"))
-				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				reader, err := blockio.NewObjectReader(
-					h.eng.GetTAE(ctx).Fs.Service, loc)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				bat, err := reader.LoadColumns(
-					ctx,
-					[]uint16{uint16(columnIdx)},
-					[]uint32{id},
-					nil,
-				)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
-				return
-			},
-		)
-		if err = h.jobScheduler.Schedule(req.Jobs[i]); err != nil {
-			return err
+
+	pCtx := blockio.NewPrefetchCtx(name, extent, reader.(*blockio.BlockReader))
+	for _, key := range req.DeltaLocs {
+		_, id, _, _, err := blockio.DecodeLocation(key)
+		if err != nil {
+			return nil
 		}
+		pCtx.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
 	}
-	return
+	return blockio.PrefetchWithCtx(pCtx, nil)
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
@@ -477,7 +432,7 @@ func (h *Handle) EvaluateTxnRequest(
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
 					//start to load deleted row ids
-					err = h.startLoadJobs(ctx, meta, r)
+					err = h.prefetch(ctx, r)
 					if err != nil {
 						return
 					}
@@ -827,18 +782,38 @@ func (h *Handle) HandleWrite(
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
-		for i, job := range req.Jobs {
-			req.JobRes[i] = job.WaitDone()
-			if req.JobRes[i].Err != nil {
-				return req.JobRes[i].Err
-			}
-			rowidVec := req.JobRes[i].Res.(containers.Vector)
-			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(rowidVec))
+		nctx := context.Background()
+		if deadline, ok := ctx.Deadline(); ok {
+			nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+		}
+		columnIdx := 0
+		var reader dataio.Reader
+		reader, err = blockio.NewObjectReader(
+			h.eng.GetTAE(nctx).Fs.Service, req.DeltaLocs[0])
+		if err != nil {
+			return
+		}
+		for _, key := range req.DeltaLocs {
+			var id uint32
+			_, id, _, _, err = blockio.DecodeLocation(key)
+			var bats []*batch.Batch
+			bats, err = reader.LoadColumns(
+				ctx,
+				[]uint16{uint16(columnIdx)},
+				[]uint32{id},
+				nil,
+			)
 			if err != nil {
-				rowidVec.Close()
 				return
 			}
-			rowidVec.Close()
+			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+
+			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
+			if err != nil {
+				vec.Close()
+				return
+			}
+			vec.Close()
 		}
 		return
 	}
