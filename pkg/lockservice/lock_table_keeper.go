@@ -185,10 +185,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		return
 	}
 
-	// Keep bind receiving an explicit failure means that all the bings of the local
-	// locktable are invalid. We just need to remove it from the map, and the next
-	// time we access it, we will automatically get the latest bind from allocate.
-	logLocalBindsInvalid(k.serviceID)
+	n := 0
 	k.tables.Range(func(key, value any) bool {
 		lb := value.(lockTable)
 		bind := lb.getBind()
@@ -196,6 +193,13 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 			k.tables.Delete(key)
 			lb.close()
 		}
+		n++
 		return true
 	})
+	if n > 0 {
+		// Keep bind receiving an explicit failure means that all the bings of the local
+		// locktable are invalid. We just need to remove it from the map, and the next
+		// time we access it, we will automatically get the latest bind from allocate.
+		logLocalBindsInvalid(k.serviceID)
+	}
 }

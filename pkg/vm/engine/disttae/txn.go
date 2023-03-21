@@ -325,7 +325,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// get min max data from Meta
-	datas, dataTypes, err := getZonemapDataFromMeta(ctx, columns, blkInfo, tableDef)
+	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
 	if err != nil || datas == nil {
 		return true
 	}
