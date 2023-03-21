@@ -155,7 +155,7 @@ func isSameColumnType(t1 *Type, t2 *Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}
-	if t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
+	if t1.Width == t2.Width && t1.Scale == t2.Scale {
 		return true
 	}
 	return true

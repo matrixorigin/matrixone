@@ -902,10 +902,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	multiaggs = multiaggs[:lenMultiAggs]
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
-		typs[i].Oid = types.T(e.Typ.Id)
-		typs[i].Width = e.Typ.Width
-		typs[i].Size = e.Typ.Size
-		typs[i].Scale = e.Typ.Scale
+		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 	return &group.Argument{
 		Aggs:      aggs,

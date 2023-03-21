@@ -249,7 +249,7 @@ func makeVectorForTimeTest(str string, width int32, isConst bool, typ types.Type
 			vec[0] = vector.NewConstFixed(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 			vec[0].GetType().Scale = width
 		case types.T_char, types.T_varchar:
-			vec[0] = vector.NewConstBytes(types.Type{Oid: types.T_varchar, Size: 26}, []byte(str), 1, testutil.TestUtilMp)
+			vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(str), 1, testutil.TestUtilMp)
 		}
 	} else {
 		input := make([]string, 0)

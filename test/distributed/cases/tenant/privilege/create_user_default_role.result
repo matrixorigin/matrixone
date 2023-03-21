@@ -28,9 +28,10 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
-mo_columns
-mo_tables
+mo_pubs
 mo_database
+mo_tables
+mo_columns
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;
