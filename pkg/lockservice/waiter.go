@@ -86,11 +86,12 @@ const (
 // 16. s1.Unlock()
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
-	txnID    []byte
-	status   atomic.Int32
-	c        chan notifyValue
-	waiters  waiterQueue
-	refCount atomic.Int32
+	txnID          []byte
+	status         atomic.Int32
+	c              chan notifyValue
+	waiters        waiterQueue
+	refCount       atomic.Int32
+	latestCommitTS timestamp.Timestamp
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -178,6 +179,13 @@ func (w *waiter) mustSendNotification(
 	serviceID string,
 	value notifyValue) {
 	logWaiterNotified(serviceID, w, value)
+
+	// update latest max commit ts in waiter queue
+	if w.latestCommitTS.Less(value.ts) {
+		w.latestCommitTS = value.ts
+	} else {
+		value.ts = w.latestCommitTS
+	}
 	select {
 	case w.c <- value:
 		return
@@ -269,6 +277,9 @@ func (w *waiter) clearAllNotify(
 func (w *waiter) close(
 	serviceID string,
 	value notifyValue) *waiter {
+	if value.ts.Less(w.latestCommitTS) {
+		value.ts = w.latestCommitTS
+	}
 	nextWaiter := w.fetchNextWaiter(serviceID, value)
 	logWaiterClose(serviceID, w)
 	w.unref(serviceID)
@@ -310,6 +321,7 @@ func (w *waiter) reset(serviceID string) {
 
 	logWaiterContactPool(serviceID, w, "put")
 	w.txnID = nil
+	w.latestCommitTS = timestamp.Timestamp{}
 	w.setStatus(serviceID, waiting)
 	w.waiters.reset()
 	waiterPool.Put(w)
