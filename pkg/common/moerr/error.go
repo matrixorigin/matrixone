@@ -277,7 +277,6 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
 	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
-
 	// Group 5: rpc timeout
 	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
