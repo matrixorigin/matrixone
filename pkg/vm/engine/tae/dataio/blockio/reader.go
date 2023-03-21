@@ -430,3 +430,21 @@ func PrefetchWithCtx(ctx prefetchCtx, m *mpool.MPool) error {
 	ctx.pool = m
 	return Pipeline.Prefetch(ctx)
 }
+
+func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
+	_, meta, err := DecodeLocationToMetas(reader.(*BlockReader).key)
+	if err != nil {
+		return err
+	}
+	if meta[0].End() == 0 {
+		return nil
+	}
+	prefetch := prefetchCtx{
+		name:   reader.(*BlockReader).name,
+		meta:   meta[0],
+		pool:   m,
+		reader: reader.(*BlockReader).reader,
+	}
+	logutil.Infof("Prefetch %v", prefetch)
+	return Pipeline.Prefetch(prefetch)
+}

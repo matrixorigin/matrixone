@@ -121,6 +121,26 @@ func prefetchJob(ctx context.Context,
 	)
 }
 
+func prefetchMetaJob(ctx context.Context,
+	fs *objectio.ObjectFS, pCtx prefetchCtx) *tasks.Job {
+	return getJob(
+		ctx,
+		makeName(pCtx.name),
+		JTLoad,
+		func(_ context.Context) (res *tasks.JobResult) {
+			// TODO
+			res = &tasks.JobResult{}
+			ioVectors, err := pCtx.reader.ReadMeta(ctx, []objectio.Extent{pCtx.meta}, nil, LoadZoneMapFunc)
+			if err != nil {
+				res.Err = err
+				return
+			}
+			res.Res = ioVectors
+			return
+		},
+	)
+}
+
 type IoPipeline struct {
 	options struct {
 		fetchParallism    int
@@ -260,12 +280,34 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if len(items) == 0 {
 		return
 	}
+	if !p.active.Load() {
+		return
+	}
 	processes := make([]prefetchCtx, 0)
 	for _, item := range items {
-		p := item.(prefetchCtx)
-		processes = append(processes, p)
+		pCtx := item.(prefetchCtx)
+		if len(pCtx.ids) == 0 {
+			job := prefetchMetaJob(
+				context.Background(),
+				p.fs,
+				pCtx,
+			)
+			if err := p.prefetch.scheduler.Schedule(job); err != nil {
+				job.DoneWithErr(err)
+				logutil.Infof("err is %v", err.Error())
+				putJob(job)
+			} else {
+				if _, err := p.waitQ.Enqueue(job); err != nil {
+					job.DoneWithErr(err)
+					logutil.Infof("err is %v", err.Error())
+					putJob(job)
+				}
+			}
+			continue
+		}
+		processes = append(processes, pCtx)
 	}
-	if !p.active.Load() {
+	if len(processes) == 0 {
 		return
 	}
 	merged := mergePrefetch(processes)
