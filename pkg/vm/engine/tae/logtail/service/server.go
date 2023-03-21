@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	LogtailServiceRPCName = "logtail-push-rpc"
+	LogtailServiceRPCName = "logtail-push-service"
 
 	// FIXME: make this configurable
 	// duration to detect slow morpc stream
@@ -157,7 +157,8 @@ func NewLogtailServer(
 		opt(s)
 	}
 
-	s.logger = s.logger.With(zap.String("server-id", uuid.NewString()))
+	s.logger = s.logger.Named(LogtailServiceRPCName).
+		With(zap.String("server-id", uuid.NewString()))
 
 	s.pool.requests = NewLogtailRequestPool()
 	s.pool.responses = NewLogtailResponsePool()

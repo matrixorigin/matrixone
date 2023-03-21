@@ -381,7 +381,7 @@ func (ss *Session) Publish(
 	return err
 }
 
-// TransitionState marks table as subscribed.
+// AdvanceState marks table as subscribed.
 func (ss *Session) AdvanceState(id TableID) {
 	ss.logger.Debug("mark table as subscribed", zap.String("table-id", string(id)))
 
