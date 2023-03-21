@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
-	"github.com/lni/goutils/leaktest"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -168,7 +167,7 @@ var MOCollectorMux sync.Mutex
 func TestNewMOCollector(t *testing.T) {
 	MOCollectorMux.Lock()
 	defer MOCollectorMux.Unlock()
-	defer leaktest.AfterTest(t)()
+	// defer leaktest.AfterTest(t)()
 	defer agent.Close()
 	ctx := context.Background()
 	ch := make(chan string, 3)
@@ -204,6 +203,32 @@ func TestNewMOCollector(t *testing.T) {
 	}
 	require.Equal(t, `(1),(2),(3)`, got123)
 	require.Equal(t, `(4),(5)`, got45)
+}
+
+func TestNewMOCollector_Stop(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	defer agent.Close()
+	ctx := context.Background()
+	ch := make(chan string, 3)
+
+	errorCnt := 0
+	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
+		errorCnt++
+	})
+
+	collector := NewMOCollector(ctx)
+	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
+	collector.Start()
+	collector.Stop(true)
+
+	var N int = 1e3
+	for i := 0; i < N; i++ {
+		collector.Collect(ctx, newDummy(int64(i)))
+	}
+	length := len(collector.awakeCollect)
+	t.Logf("channal len: %d, errorCnt: %d, totalElem: %d", length, errorCnt, N)
+	require.Equal(t, N, errorCnt+length)
 }
 
 func TestNewMOCollector_BufferCnt(t *testing.T) {

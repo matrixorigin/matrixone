@@ -168,11 +168,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 					} else {
-						for _, sel := range sels {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
-								return err
-							}
+						if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
 						}
 					}
 				}
@@ -275,7 +273,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	}
 
 	vec := ctr.vecs[0]
-	encoded := vector.NewVector(types.Type{Oid: types.T_uint16})
+	encoded := vector.NewVector(types.T_uint16.ToType())
 	// case 1
 	// 1. the join columns of both left table and right table are indexed
 	// 2. left condition is not an expression

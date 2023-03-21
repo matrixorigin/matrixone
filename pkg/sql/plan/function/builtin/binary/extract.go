@@ -27,7 +27,7 @@ import (
 // when implicit cast from varchar to date is ready, get rid of this
 func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	rtyp := types.Type{Oid: types.T_uint32, Size: 4}
+	rtyp := types.T_uint32.ToType()
 	resultElementSize := int(rtyp.Size)
 	switch {
 	case left.IsConst() && right.IsConst():
@@ -100,7 +100,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+	rtyp := types.T_varchar.ToType()
 	leftValues, rightValues := vector.MustStrCol(left), vector.MustFixedCol[types.Datetime](right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():

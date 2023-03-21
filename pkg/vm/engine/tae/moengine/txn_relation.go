@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

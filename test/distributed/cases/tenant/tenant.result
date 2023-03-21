@@ -13,6 +13,7 @@ account_id    relname    relkind
 0    mo_columns    r
 0    mo_database    r
 0    mo_mysql_compatbility_mode    r
+0    mo_pubs    r
 0    mo_role    r
 0    mo_role_grant    r
 0    mo_role_privs    r

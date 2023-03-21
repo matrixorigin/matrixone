@@ -167,7 +167,7 @@ func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (
 func EstimateSize(bat *containers.Batch, offset, length uint32) uint64 {
 	size := uint64(0)
 	for _, vec := range bat.Vecs {
-		colSize := length * uint32(vec.GetType().Size)
+		colSize := length * uint32(vec.GetType().TypeSize())
 		size += uint64(colSize)
 	}
 	return size
