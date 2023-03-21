@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -181,4 +182,32 @@ func TestNotifyWithStatusChanged(t *testing.T) {
 		w.setStatus("s1", completed)
 	}
 	assert.False(t, w.notify("s1", notifyValue{}))
+}
+
+func TestCanGetCommitTSInWaitQueue(t *testing.T) {
+	w1 := acquireWaiter("s1", []byte("w1"))
+	w2 := acquireWaiter("s1", []byte("w2"))
+	w3 := acquireWaiter("s1", []byte("w3"))
+	w4 := acquireWaiter("s1", []byte("w4"))
+	w5 := acquireWaiter("s5", []byte("w5"))
+
+	w1.add("s1", w2, w3, w4, w5)
+
+	// w1 commit at 1
+	w1.close("s1", notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
+
+	// w2 abort
+	assert.Equal(t, int64(1), w2.wait(context.Background(), "s1").ts.PhysicalTime)
+	w2.close("s1", notifyValue{})
+
+	// w3 commit at 3
+	assert.Equal(t, int64(1), w3.wait(context.Background(), "s1").ts.PhysicalTime)
+	w3.close("s1", notifyValue{ts: timestamp.Timestamp{PhysicalTime: 3}})
+
+	// w4 commit at 2
+	assert.Equal(t, int64(3), w4.wait(context.Background(), "s1").ts.PhysicalTime)
+	w4.close("s1", notifyValue{ts: timestamp.Timestamp{PhysicalTime: 2}})
+
+	assert.Equal(t, int64(3), w5.wait(context.Background(), "s1").ts.PhysicalTime)
+	w5.close("s1", notifyValue{})
 }
