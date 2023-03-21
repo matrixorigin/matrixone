@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -725,6 +726,7 @@ var (
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
 		catalog.AutoIncrTableName:    0,
+		"mo_pubs":                    0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	//the sqls creating many tables for the tenant.
@@ -811,6 +813,19 @@ var (
 				configuration  json,
 				primary key(configuration_id)
 			);`,
+		`create table mo_pubs(
+    		pub_name varchar(64) primary key,
+    		database_name varchar(5000),
+    		database_id bigint unsigned,
+    		all_table bool,
+    		all_account bool,
+    		table_list text,
+    		account_list text,
+    		created_time timestamp,
+    		owner int unsigned,
+    		creator int unsigned,
+    		comment text
+    		);`,
 	}
 
 	//drop tables for the tenant
@@ -822,6 +837,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		`drop table if exists mo_catalog.mo_pubs;`,
 		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
 
@@ -1173,6 +1189,12 @@ const (
 	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+
+	getDbIdAndTypFormat    = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	insertIntoMoPubsFormat = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
+	getPubInfoFormat       = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
+	updatePubInfoFormat    = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
+	dropPubFormat          = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 )
 
 var (
@@ -1473,6 +1495,53 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
+}
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, dbName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
+}
+
+func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName, databaseName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, allAccount, tableList, accountList, owner, creator, comment), nil
+}
+func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(getPubInfoFormat, pubName), nil
+}
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountAll bool, accountList string, comment string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(updatePubInfoFormat, accountAll, accountList, comment, pubName), nil
+}
+
+func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
+	if checkNameValid {
+		err := inputNameIsInvalid(ctx, pubName)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf(dropPubFormat, pubName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -2065,6 +2134,27 @@ func nameIsInvalid(name string) bool {
 	}
 	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
+func accountNameIsInvalid(name string) bool {
+	s := strings.TrimSpace(name)
+	if len(s) == 0 {
+		return true
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+			continue
+		case c >= 'a' && c <= 'z':
+			continue
+		case c >= 'A' && c <= 'Z':
+			continue
+		case c == '_' || c == '-':
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
 
 // normalizeName normalizes and checks the name
 func normalizeName(ctx context.Context, name string) (string, error) {
@@ -2080,19 +2170,8 @@ func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
 	}
-	for _, c := range s {
-		switch {
-		case c >= '0' && c <= '9':
-			continue
-		case c >= 'a' && c <= 'z':
-			continue
-		case c >= 'A' && c <= 'Z':
-			continue
-		case c == '_' || c == '-':
-			continue
-		default:
-			return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
-		}
+	if accountNameIsInvalid(s) {
+		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	ca.Name = s
 	return nil
@@ -2416,6 +2495,280 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	return err
 }
 
+func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	const allTable = true
+	var (
+		err         error
+		sql         string
+		erArray     []ExecResult
+		datId       uint64
+		datType     string
+		allAccount  bool
+		tableList   string
+		accountList string
+		tenantInfo  *TenantInfo
+	)
+
+	allAccount = len(cp.Accounts) == 0
+	if !allAccount {
+		accts := make([]string, 0, len(cp.Accounts))
+		for _, acct := range cp.Accounts {
+			accName := string(acct)
+			if accountNameIsInvalid(accName) {
+				return moerr.NewInternalError(ctx, "invalid account name '%s'", accName)
+			}
+			accts = append(accts, accName)
+		}
+		sort.Strings(accts)
+		accountList = strings.Join(accts, ",")
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+
+	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database), true)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
+		goto handleFailed
+	}
+	datId, err = erArray[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+	datType, err = erArray[0].GetString(ctx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+	if datType != "" { //TODO: check the dat_type
+		err = moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	tenantInfo = ses.GetTenantInfo()
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	var (
+		allAccount     bool
+		allAccountStr  string
+		accountList    string
+		accountListSep []string
+		comment        string
+		sql            string
+		erArray        []ExecResult
+		err            error
+	)
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name), true)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
+		goto handleFailed
+	}
+	allAccountStr, err = erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+	allAccount = allAccountStr == "true"
+	accountList, err = erArray[0].GetString(ctx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+
+	comment, err = erArray[0].GetString(ctx, 0, 2)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if ap.AccountsSet != nil {
+		switch {
+		case ap.AccountsSet.All:
+			allAccount = true
+			accountList = ""
+		case len(ap.AccountsSet.SetAccounts) > 0:
+			/* do not check accountName if exists here */
+			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
+			for _, acct := range ap.AccountsSet.SetAccounts {
+				s := string(acct)
+				if accountNameIsInvalid(s) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", s)
+					goto handleFailed
+				}
+				accts = append(accts, s)
+			}
+			sort.Strings(accts)
+			accountList = strings.Join(accts, ",")
+			allAccount = false
+		case len(ap.AccountsSet.DropAccounts) > 0:
+			if allAccount {
+				err = moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
+				goto handleFailed
+			}
+			accountListSep = strings.Split(accountList, ",")
+			for _, acct := range ap.AccountsSet.DropAccounts {
+				if accountNameIsInvalid(string(acct)) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					goto handleFailed
+				}
+				idx := sort.SearchStrings(accountListSep, string(acct))
+				if idx < len(accountListSep) && accountListSep[idx] == string(acct) {
+					accountListSep = append(accountListSep[:idx], accountListSep[idx+1:]...)
+				}
+			}
+			accountList = strings.Join(accountListSep, ",")
+			allAccount = false
+		case len(ap.AccountsSet.AddAccounts) > 0:
+			if allAccount {
+				err = moerr.NewInternalError(ctx, "cannot add account from all account option")
+				goto handleFailed
+			}
+			accountListSep = strings.Split(accountList, ",")
+			for _, acct := range ap.AccountsSet.AddAccounts {
+				if accountNameIsInvalid(string(acct)) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					goto handleFailed
+				}
+				idx := sort.SearchStrings(accountListSep, string(acct))
+				if idx == len(accountListSep) || accountListSep[idx] != string(acct) {
+					accountListSep = append(accountListSep[:idx], append([]string{string(acct)}, accountListSep[idx:]...)...)
+				}
+			}
+			allAccount = false
+			accountList = strings.Join(accountListSep, ",")
+		}
+	}
+	if ap.Comment != "" {
+		comment = ap.Comment
+	}
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), allAccount, accountList, comment, false)
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	bh.ClearExecResultSet()
+	var (
+		err     error
+		sql     string
+		erArray []ExecResult
+	)
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	sql, err = getSqlForGetPubInfo(ctx, string(dp.Name), true)
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		goto handleFailed
+	}
+
+	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	bh := ses.GetBackgroundExec(ctx)
@@ -2487,6 +2840,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		//step 7 : drop table mo_user_defined_function
 		//step 8 : drop table mo_mysql_compatbility_mode
 		//step 9 : drop table %!%mo_increment_columns
+		//step 10 : drop table mo_pubs
 		for _, sql = range getSqlForDropAccount() {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
@@ -3864,7 +4218,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateTable:
@@ -3958,7 +4312,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ShowAccounts:
@@ -4004,6 +4358,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
