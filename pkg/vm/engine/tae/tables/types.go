@@ -15,8 +15,6 @@
 package tables
 
 import (
-	"bytes"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -39,7 +37,6 @@ type NodeT interface {
 		from uint32,
 		to uint32,
 		colIdx int,
-		buffer *bytes.Buffer,
 	) (vec containers.Vector, err error)
 
 	GetValueByRow(row, col int) (v any)

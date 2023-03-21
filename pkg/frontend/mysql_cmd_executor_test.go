@@ -239,6 +239,7 @@ func Test_mce(t *testing.T) {
 		}
 		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, pu)
@@ -331,6 +332,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 		mce.SetSession(ses)
@@ -373,6 +375,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.SetSession(ses)
 
@@ -421,7 +424,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.tableInfos = make(map[string][]ColumnInfo)
 		mce.tableInfos["A"] = []ColumnInfo{&engineColumnInfo{
 			name: "a",
-			typ:  types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen},
+			typ:  types.T_varchar.ToType(),
 		}}
 
 		err = mce.handleCmdFieldList(ctx, cflStmt)
@@ -479,6 +482,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -493,22 +497,22 @@ func Test_getDataFromPipeline(t *testing.T) {
 					"m", "n",
 				},
 				[]types.Type{
-					{Oid: types.T_int8},
-					{Oid: types.T_uint8},
-					{Oid: types.T_int16},
-					{Oid: types.T_uint16},
-					{Oid: types.T_int32},
-					{Oid: types.T_uint32},
-					{Oid: types.T_int64},
-					{Oid: types.T_uint64},
-					{Oid: types.T_float32},
-					{Oid: types.T_float64},
-					{Oid: types.T_char},
-					{Oid: types.T_varchar},
-					{Oid: types.T_date},
-					{Oid: types.T_time},
-					{Oid: types.T_datetime},
-					{Oid: types.T_json},
+					types.T_int8.ToType(),
+					types.T_uint8.ToType(),
+					types.T_int16.ToType(),
+					types.T_uint16.ToType(),
+					types.T_int32.ToType(),
+					types.T_uint32.ToType(),
+					types.T_int64.ToType(),
+					types.T_uint64.ToType(),
+					types.T_float32.ToType(),
+					types.T_float64.ToType(),
+					types.T_char.ToType(),
+					types.T_varchar.ToType(),
+					types.T_date.ToType(),
+					types.T_time.ToType(),
+					types.T_datetime.ToType(),
+					types.T_json.ToType(),
 				},
 				3)
 		}
@@ -556,6 +560,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 
@@ -569,22 +574,22 @@ func Test_getDataFromPipeline(t *testing.T) {
 					"m", "n",
 				},
 				[]types.Type{
-					{Oid: types.T_int8},
-					{Oid: types.T_uint8},
-					{Oid: types.T_int16},
-					{Oid: types.T_uint16},
-					{Oid: types.T_int32},
-					{Oid: types.T_uint32},
-					{Oid: types.T_int64},
-					{Oid: types.T_uint64},
-					{Oid: types.T_float32},
-					{Oid: types.T_float64},
-					{Oid: types.T_char},
-					{Oid: types.T_varchar},
-					{Oid: types.T_date},
-					{Oid: types.T_time},
-					{Oid: types.T_datetime},
-					{Oid: types.T_json},
+					types.T_int8.ToType(),
+					types.T_uint8.ToType(),
+					types.T_int16.ToType(),
+					types.T_uint16.ToType(),
+					types.T_int32.ToType(),
+					types.T_uint32.ToType(),
+					types.T_int64.ToType(),
+					types.T_uint64.ToType(),
+					types.T_float32.ToType(),
+					types.T_float64.ToType(),
+					types.T_char.ToType(),
+					types.T_varchar.ToType(),
+					types.T_date.ToType(),
+					types.T_time.ToType(),
+					types.T_datetime.ToType(),
+					types.T_json.ToType(),
 				},
 				3)
 		}
@@ -602,7 +607,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.Type{Oid: 88}))
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -721,6 +726,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -767,6 +773,7 @@ func Test_handleShowVariables(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 
@@ -828,6 +835,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, true)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
@@ -925,6 +933,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}
@@ -1141,6 +1150,8 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowColumnNumber{}, true},
 		{&tree.ShowTableValues{}, true},
 		{&tree.ShowAccounts{}, true},
+		{&tree.ShowPublications{}, true},
+		{&tree.ShowCreatePublications{}, true},
 	}
 
 	for _, a := range args {

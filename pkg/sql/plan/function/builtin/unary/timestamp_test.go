@@ -143,7 +143,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 }
 
 func makeDateStringToTimestampVectors(str string, isConst bool) []*vector.Vector {
-	typ := types.Type{Oid: types.T_varchar, Size: 26}
+	typ := types.T_varchar.ToType()
 	vec := make([]*vector.Vector, 1)
 	vec[0] = vector.NewConstBytes(typ, []byte(str), 1, testutil.TestUtilMp)
 	return vec

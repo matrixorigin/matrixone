@@ -26,10 +26,11 @@ import (
 
 var (
 	// full buffer approximately cost (56[Sample struct] + 8[pointer]) x 4096 = 256K
-	configRawHistBufLimit int32 = EnvOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
-	configGatherInterval  int64 = EnvOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
-	configExportToProm    int32 = EnvOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
-	configForceReinit     int32 = EnvOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
+	configRawHistBufLimit     int32 = EnvOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
+	configGatherInterval      int64 = EnvOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
+	configStatsGatherInterval int64 = EnvOrDefaultInt[int64]("MO_STATS_GATHER_INTERVAL", 15000)  // 15s
+	configExportToProm        int32 = EnvOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
+	configForceReinit         int32 = EnvOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
 
 func EnvOrDefaultBool(key string, defaultValue int32) int32 {
@@ -73,6 +74,10 @@ func GetForceInit() bool { return atomic.LoadInt32(&configForceReinit) != 0 }
 
 func GetGatherInterval() time.Duration {
 	return time.Duration(atomic.LoadInt64(&configGatherInterval)) * time.Millisecond
+}
+
+func GetStatsGatherInterval() time.Duration {
+	return time.Duration(atomic.LoadInt64(&configStatsGatherInterval)) * time.Millisecond
 }
 
 // for tests

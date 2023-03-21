@@ -289,7 +289,7 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 	case catalog.SystemColAttr_Num:
 		ret.Value = int32(a.Order)
 	case catalog.SystemColAttr_Length:
-		ret.Value = int32(a.Type.Size)
+		ret.Value = int32(a.Type.TypeSize())
 	case catalog.SystemColAttr_NullAbility:
 		ret.Value = boolToInt8(a.Nullable)
 	case catalog.SystemColAttr_HasExpr:

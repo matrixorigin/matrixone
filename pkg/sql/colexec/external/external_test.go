@@ -59,10 +59,8 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
-		proc: proc,
-		types: []types.Type{
-			{Oid: types.T_int8},
-		},
+		proc:  proc,
+		types: []types.Type{types.T_int8.ToType()},
 		arg: &Argument{
 			Es: &ExternalParam{
 				ExParamConst: ExParamConst{
@@ -693,8 +691,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	mologdateConst := func(idx int) *plan.Expr {
 		return &plan.Expr{
 			Typ: &plan.Type{
-				Size: 4,
-				Id:   int32(types.T_date),
+				Id: int32(types.T_date),
 			},
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -709,8 +706,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	mologdateFunc := func() *plan.Expr {
 		return &plan.Expr{
 			Typ: &plan.Type{
-				Size: 1,
-				Id:   int32(types.T_bool),
+				Id: int32(types.T_bool),
 			},
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -755,8 +751,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 			FilterList: []*plan.Expr{
 				{
 					Typ: &plan.Type{
-						Size: 1,
-						Id:   int32(types.T_bool),
+						Id: int32(types.T_bool),
 					},
 					Expr: expr,
 				},

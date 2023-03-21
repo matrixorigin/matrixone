@@ -25,7 +25,7 @@ import (
 
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
+	rtyp := types.T_decimal128.ToType()
 	ivals := vector.MustFixedCol[T](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -53,7 +53,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, pr
 
 func OctFloat[T constraints.Float](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
+	rtyp := types.T_decimal128.ToType()
 	ivals := vector.MustFixedCol[T](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {

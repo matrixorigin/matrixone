@@ -33,12 +33,14 @@ import (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
-	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+	if !plan2.NeedStats(tbl.getTableDef()) {
 		return plan2.DefaultStats(), nil
 	}
-
+	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
+	if !ok {
+		return plan2.DefaultStats(), nil
+	}
 	if tbl.meta == nil || !tbl.updated {
 		err := tbl.updateMeta(ctx, expr)
 		if err != nil {
@@ -46,7 +48,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 		}
 	}
 	if tbl.meta != nil {
-		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil
@@ -54,7 +56,6 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -247,7 +248,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				}
 			}
 		}
-
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
@@ -275,7 +275,6 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
-						Size:     attr.Attr.Type.Size,
 						Scale:    attr.Attr.Type.Scale,
 						AutoIncr: attr.Attr.AutoIncrement,
 					},

@@ -586,7 +586,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := agg.ReturnType(agg.AggregateBitAnd, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.AggregateBitAnd, inputs[0].ToType())
 				if err == nil {
 					return 0, nil
 				}
@@ -616,7 +616,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := agg.ReturnType(agg.AggregateBitOr, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.AggregateBitOr, inputs[0].ToType())
 				if err == nil {
 					return 0, nil
 				}
@@ -646,7 +646,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := agg.ReturnType(agg.AggregateBitXor, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.AggregateBitXor, inputs[0].ToType())
 				if err == nil {
 					return 0, nil
 				}
@@ -676,7 +676,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				t, err := agg.ReturnType(agg.AggregateVariance, types.Type{Oid: inputs[0]})
+				t, err := agg.ReturnType(agg.AggregateVariance, inputs[0].ToType())
 				if err != nil {
 					return wrongFunctionParameters, nil
 				}
@@ -712,7 +712,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				t, err := agg.ReturnType(agg.AggregateStdDevPop, types.Type{Oid: inputs[0]})
+				t, err := agg.ReturnType(agg.AggregateStdDevPop, inputs[0].ToType())
 				if err != nil {
 					return wrongFunctionParameters, nil
 				}
