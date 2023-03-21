@@ -69,9 +69,8 @@ func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
 }
 
 func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
-	a := cnVector.NewVec(win.ref.GetType())
-	cnVector.Window(win.ref.downstreamVector, win.offset, win.offset+win.length, a)
-	return a
+	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
+	return res
 }
 
 //func (win *vectorWindow[T]) Bytes() *Bytes {

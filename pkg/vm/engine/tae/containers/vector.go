@@ -335,14 +335,8 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-	op := func(v any, _ int) error {
-		cloned.Append(v)
-		return nil
-	}
-	err := vec.ForeachWindowShallow(offset, length, op, nil)
-	if err != nil {
-		return nil
-	}
+	cloned.downstreamVector, _ = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
+	cloned.isOwner = true
 
 	return cloned
 }
@@ -356,9 +350,9 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		return
 	}
 
-	sels := make([]int64, srcLen)
+	sels := make([]int32, srcLen)
 	for j := 0; j < srcLen; j++ {
-		sels[j] = int64(j) + int64(srcOff)
+		sels[j] = int32(j) + int32(srcOff)
 	}
 	_ = vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
 
