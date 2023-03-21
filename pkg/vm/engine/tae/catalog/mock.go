@@ -221,8 +221,8 @@ func (txn *mockTxn) CreateDatabase(name, createSql, datTyp string) (handle.Datab
 	return h, nil
 }
 
-func (txn *mockTxn) CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error) {
-	entry, err := txn.catalog.CreateDBEntryWithID(name, createSql, id, txn)
+func (txn *mockTxn) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 	if err != nil {
 		return nil, err
 	}

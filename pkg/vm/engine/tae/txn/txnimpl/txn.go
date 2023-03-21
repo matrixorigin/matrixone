@@ -46,11 +46,11 @@ func newTxnImpl(catalog *catalog.Catalog, mgr *txnbase.TxnManager, store txnif.T
 }
 
 func (txn *txnImpl) CreateDatabase(name, createSql, datTyp string) (db handle.Database, err error) {
-	return txn.Store.CreateDatabase(name, createSql,datTyp)
+	return txn.Store.CreateDatabase(name, createSql, datTyp)
 }
 
-func (txn *txnImpl) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
-	return txn.Store.CreateDatabaseWithID(name, createSql, id)
+func (txn *txnImpl) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+	return txn.Store.CreateDatabaseWithID(name, createSql, datTyp, id)
 }
 
 func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {

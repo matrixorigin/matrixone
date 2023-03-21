@@ -395,7 +395,7 @@ func (txn *Txn) CreateDatabase(name, createSql, datTyp string) (db handle.Databa
 	return
 }
 
-func (txn *Txn) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
 	return
 }
 

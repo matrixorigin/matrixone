@@ -116,13 +116,13 @@ func (e *txnEngine) CreateDatabase(ctx context.Context, name, datTyp string, txn
 }
 
 func (e *txnEngine) CreateDatabaseWithID(ctx context.Context,
-	name, createSql string, id uint64, txnHandle Txn) (err error) {
+	name, createSql, datTyp string, id uint64, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabaseWithID(name, createSql, id)
+	_, err = txn.CreateDatabaseWithID(name, createSql, datTyp, id)
 	return
 }
 
