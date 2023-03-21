@@ -496,14 +496,18 @@ func (data *CheckpointData) PrefetchFrom(
 	if err != nil {
 		return
 	}
+	meta := metas[0].GetMeta()
+	name := meta.GetName()
 
+	pCtx := blockio.NewPrefetchCtx(name, metas[0].GetExtent(), reader.(*blockio.BlockReader))
 	for idx, item := range checkpointDataRefer {
 		idxes := make([]uint16, len(item.attrs))
 		for i := range item.attrs {
 			idxes[i] = uint16(i)
 		}
-		blockio.Prefetch(idxes, reader, []uint32{metas[idx].GetID()}, metas[idx].GetExtent(), nil)
+		pCtx.AddBlock(idxes, []uint32{metas[idx].GetID()})
 	}
+	blockio.PrefetchWithCtx(pCtx, nil)
 	return
 }
 

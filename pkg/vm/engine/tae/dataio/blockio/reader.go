@@ -424,3 +424,9 @@ func Prefetch(idxes []uint16, reader dataio.Reader,
 	logutil.Infof("Prefetch %v", prefetch)
 	return Pipeline.Prefetch(prefetch)
 }
+
+func PrefetchWithCtx(ctx prefetchCtx, m *mpool.MPool) error {
+	logutil.Infof("Prefetch %v", ctx)
+	ctx.pool = m
+	return Pipeline.Prefetch(ctx)
+}
