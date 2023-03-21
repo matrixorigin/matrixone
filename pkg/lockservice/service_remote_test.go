@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,30 +52,34 @@ func TestLockAndUnlockOnRemote(t *testing.T) {
 			table2 := uint64(2)
 
 			// make table1 on l1, table2 on l2
-			require.NoError(t, l1.Lock(ctx, table1, [][]byte{{1}}, txn1, option))
+			_, err := l1.Lock(ctx, table1, [][]byte{{1}}, txn1, option)
+			require.NoError(t, err)
 			checkTxn(t, l1, txn1, "")
 			checkTxnLocks(t, l1, txn1, table1, []byte{1})
 
-			require.NoError(t, l2.Lock(ctx, table2, [][]byte{{2}}, txn2, option))
+			_, err = l2.Lock(ctx, table2, [][]byte{{2}}, txn2, option)
+			require.NoError(t, err)
 			checkTxn(t, l2, txn2, "")
 			checkTxnLocks(t, l2, txn2, table2, []byte{2})
 
 			// lock remote
-			require.NoError(t, l1.Lock(ctx, table2, [][]byte{{3}}, txn1, option))
+			_, err = l1.Lock(ctx, table2, [][]byte{{3}}, txn1, option)
+			require.NoError(t, err)
 			checkTxn(t, l1, txn1, "")
 			checkTxn(t, l2, txn1, "s1")
 			checkTxnLocks(t, l1, txn1, table1, []byte{1})
 			checkTxnLocks(t, l1, txn1, table2, []byte{3})
 
-			require.NoError(t, l2.Lock(ctx, table1, [][]byte{{4}}, txn2, option))
+			_, err = l2.Lock(ctx, table1, [][]byte{{4}}, txn2, option)
+			require.NoError(t, err)
 			checkTxn(t, l2, txn2, "")
 			checkTxn(t, l1, txn2, "s2")
 			checkTxnLocks(t, l2, txn2, table2, []byte{2})
 			checkTxnLocks(t, l2, txn2, table1, []byte{4})
 
 			// unlock
-			require.NoError(t, l1.Unlock(ctx, txn1))
-			require.NoError(t, l2.Unlock(ctx, txn2))
+			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			checkTxnNotExist(t, l1, txn1)
 			checkTxnNotExist(t, l1, txn2)
@@ -147,13 +152,127 @@ func TestLockBlockedOnRemote(t *testing.T) {
 				mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row1}, pb.Granularity_Row)
 				close(c)
 			}()
-			select {
-			case <-time.After(time.Second):
-				break
-			case <-c:
-				assert.Fail(t, "can not get remote lock")
+			waitWaiters(t, l1, 1, row1, 1)
+			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			<-c
+		},
+	)
+}
+
+func TestLockResultWithNoConfictOnRemote(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			row2 := []byte{2}
+
+			// txn1 hold lock row1 on l1
+			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			c := make(chan struct{})
+			go func() {
+				// txn2 try lock row1 on l2
+				res := mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row2}, pb.Granularity_Row)
+				require.False(t, res.Timestamp.IsEmpty())
+				close(c)
+			}()
+			<-c
+		},
+	)
+}
+
+func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			}
-			require.NoError(t, l1.Unlock(ctx, txn1))
+
+			// txn1 hold lock row1 on l1
+			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			c := make(chan struct{})
+			go func() {
+				defer close(c)
+				// txn2 try lock row1 on l2
+				// blocked by txn1
+				res, err := l2.Lock(
+					ctx,
+					1,
+					[][]byte{row1},
+					txn2,
+					option)
+				require.NoError(t, err)
+				assert.Equal(
+					t,
+					timestamp.Timestamp{PhysicalTime: 1},
+					res.Timestamp)
+			}()
+			waitWaiters(t, l1, 1, row1, 1)
+			require.NoError(t, l1.Unlock(
+				ctx,
+				txn1,
+				timestamp.Timestamp{PhysicalTime: 1}))
+			<-c
+		},
+	)
+}
+
+func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			option := LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// txn1 hold lock row1 on l1
+			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			c := make(chan struct{})
+			go func() {
+				defer close(c)
+				// txn2 try lock row1 on l2
+				// blocked by txn1
+				res, err := l2.Lock(
+					ctx,
+					1,
+					[][]byte{row1},
+					txn2,
+					option)
+				require.NoError(t, err)
+				assert.False(t, res.Timestamp.IsEmpty())
+			}()
+			waitWaiters(t, l1, 1, row1, 1)
+			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
 		},
 	)
@@ -191,21 +310,21 @@ func TestDeadlockOnRemote(t *testing.T) {
 				// txn1 try lock tabl2[row2], txn1 wait txn2
 				maybeAddTestLockWithDeadlock(t, ctx, l1, 2, txn1, [][]byte{row2},
 					pb.Granularity_Row)
-				require.NoError(t, l1.Unlock(ctx, txn1))
+				require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			}()
 			go func() {
 				defer wg.Done()
 				// txn2 try lock tabl3[row3], txn2 wait txn3
 				maybeAddTestLockWithDeadlock(t, ctx, l2, 3, txn2, [][]byte{row3},
 					pb.Granularity_Row)
-				require.NoError(t, l2.Unlock(ctx, txn2))
+				require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 			}()
 			go func() {
 				defer wg.Done()
 				// txn3 try lock tabl1[row1], txn3 wait txn1
 				maybeAddTestLockWithDeadlock(t, ctx, l3, 1, txn3, [][]byte{row1},
 					pb.Granularity_Row)
-				require.NoError(t, l3.Unlock(ctx, txn3))
+				require.NoError(t, l3.Unlock(ctx, txn3, timestamp.Timestamp{}))
 			}()
 			wg.Wait()
 		},
@@ -213,7 +332,9 @@ func TestDeadlockOnRemote(t *testing.T) {
 }
 
 func TestGetActiveTxnWithRemote(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID := []byte("txn1")
 	st := time.Now()
@@ -228,7 +349,9 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 }
 
 func TestGetTimeoutRemoveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
 	hold.getActiveTxn(txnID1, true, "s1")
@@ -258,7 +381,9 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 }
 
 func TestKeepRemoteActiveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16)).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
 	txnID2 := []byte("txn2")
@@ -291,7 +416,7 @@ func TestLockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -317,7 +442,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			l2.Unlock(ctx, txnID2)
+			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
 			checkBind(
 				t,
@@ -367,7 +492,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			// l2 hold the old bind, and can not connect to s1, and wait bind changed
 			for {
-				err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 					Granularity: pb.Granularity_Row,
 					Mode:        pb.LockMode_Exclusive,
 					Policy:      pb.WaitPolicy_Wait,
@@ -401,7 +526,7 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 			waitBindDisabled(t, alloc, "s1")
 
 			txnID2 := []byte("txn2")
-			assert.NoError(t, l2.Unlock(ctx, txnID2))
+			assert.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			// l2 get the bind
 			v, ok := l2.tables.Load(table)
 			assert.True(t, ok)
@@ -452,7 +577,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -481,7 +606,7 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			l2.Unlock(ctx, txnID2)
+			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
 			checkBind(
 				t,
@@ -564,7 +689,7 @@ func runBindChangedTests(
 			fn(ctx, alloc, l1, l2, table1)
 		},
 		func(c *Config) {
-			c.KeepLockTableBindDuration.Duration = time.Millisecond * 50
+			c.KeepBindDuration.Duration = time.Millisecond * 50
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
 
 			c.RPC.BackendOptions = append(c.RPC.BackendOptions,

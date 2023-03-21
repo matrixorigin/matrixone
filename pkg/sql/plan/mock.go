@@ -56,7 +56,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["int_var"] = 20
 	vars["bool_var"] = false
 	vars["float_var"] = 20.20
-	dec, _ := types.ParseStringToDecimal128("200.001", 2, 2, false)
+	dec, _ := types.ParseDecimal128("200.001", 38, 3)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
 
@@ -348,6 +348,24 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"character_set_client", types.T_varchar, false, 64, 0},
 			{"collation_connection", types.T_varchar, false, 64, 0},
 			{"database_collation", types.T_varchar, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	moSchema["mo_indexes"] = &Schema{
+		cols: []col{
+			{"id", types.T_uint64, false, 100, 0},
+			{"table_id", types.T_uint64, false, 100, 0},
+			{"database_id", types.T_uint64, false, 100, 0},
+			{"name", types.T_varchar, false, 64, 0},
+			{"type", types.T_varchar, false, 11, 0},
+			{"is_visible", types.T_int8, false, 50, 0},
+			{"hidden", types.T_int8, false, 50, 0},
+			{"comment", types.T_varchar, false, 2048, 0},
+			{"column_name", types.T_varchar, false, 256, 0},
+			{"ordinal_position", types.T_uint32, false, 50, 0},
+			{"options", types.T_text, true, 50, 0},
+			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
@@ -750,6 +768,10 @@ func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *Co
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
 	return m.stats[obj.ObjName]
+}
+
+func (m *MockCompilerContext) GetStatsCache() *StatsCache {
+	return nil
 }
 
 func (m *MockCompilerContext) GetAccountId() uint32 {

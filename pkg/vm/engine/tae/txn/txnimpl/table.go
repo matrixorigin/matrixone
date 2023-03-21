@@ -17,9 +17,10 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -885,7 +886,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 // 2. It is called when appending data into this table.
 func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
-	it := newRelationBlockIt(h)
+	it := newRelationBlockItOnSnap(h)
 	for it.Valid() {
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 		blkData := blk.GetBlockData()
@@ -917,7 +918,7 @@ func (tbl *txnTable) DedupByMetaLocs(metaLocs []string) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
-		it := newRelationBlockIt(h)
+		it := newRelationBlockItOnSnap(h)
 		for it.Valid() {
 			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 			blkData := blk.GetBlockData()
@@ -1048,8 +1049,9 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
-	loaded := false
 	segIt := tbl.entry.MakeSegmentIt(false)
+	var pks containers.Vector
+	//loaded := false
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
 		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
@@ -1075,16 +1077,14 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 		segData := seg.GetSegmentData()
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
-		var pks containers.Vector
-		if !loaded {
-			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx(), nil)
+		if pks == nil {
+			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx())
 			if err != nil {
 				return err
 			}
 			colV.ApplyDeletes()
 			pks = colV.Orphan()
 			defer pks.Close()
-			loaded = true
 		}
 		// TODO: Add a new batch dedup method later
 		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {

@@ -101,10 +101,8 @@ func newTestCase() connectorTestCase {
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{
-		proc: proc,
-		types: []types.Type{
-			{Oid: types.T_int8},
-		},
+		proc:  proc,
+		types: []types.Type{types.T_int8.ToType()},
 		arg: &Argument{
 			Reg: &process.WaitRegister{
 				Ctx: ctx,

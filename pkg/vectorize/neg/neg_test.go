@@ -53,48 +53,45 @@ func TestI64Sum(t *testing.T) {
 }
 
 func TestDecimal64Neg(t *testing.T) {
-	d1, _ := types.InitDecimal64(123, 64, 0)
-	d2, _ := types.InitDecimal64(234, 64, 0)
-	d3, _ := types.InitDecimal64(345, 64, 0)
-	d4, _ := types.InitDecimal64(-234, 64, 0)
-	d5, _ := types.InitDecimal64(-123, 64, 0)
-	d6, _ := types.InitDecimal64(-234, 64, 0)
-	d7, _ := types.InitDecimal64(-345, 64, 0)
-	d8, _ := types.InitDecimal64(234, 64, 0)
+	d1 := types.Decimal64(123)
+	d2 := types.Decimal64(234)
+	d3 := types.Decimal64(345)
+	d4 := types.Decimal64(234).Minus()
+	d5 := types.Decimal64(123).Minus()
+	d6 := types.Decimal64(234).Minus()
+	d7 := types.Decimal64(345).Minus()
+	d8 := types.Decimal64(234)
 
-	xs := []types.Decimal64{d1, d2, d3, types.Decimal64_Zero, d4}
+	xs := []types.Decimal64{d1, d2, d3, types.Decimal64(0), d4}
 	rs := make([]types.Decimal64, len(xs))
 	rs = Decimal64Neg(xs, rs)
-	expectedResult := []types.Decimal64{d5, d6, d7, types.Decimal64_Zero, d8}
+	expectedResult := []types.Decimal64{d5, d6, d7, types.Decimal64(0), d8}
 	for i, r := range rs {
-		require.True(t, r.Eq(expectedResult[i]))
+		require.True(t, r == expectedResult[i])
 	}
 }
 
 func TestDecimal128Neg(t *testing.T) {
 	xs := make([]types.Decimal128, 6)
-	xs[0], _ = types.ParseStringToDecimal128("123456.789", 20, 5, false)
-	xs[1], _ = types.ParseStringToDecimal128("120000.789", 20, 5, false)
-	xs[2], _ = types.ParseStringToDecimal128("-123456.789", 20, 5, false)
-	xs[3], _ = types.ParseStringToDecimal128("0", 20, 5, false)
-	xs[4], _ = types.ParseStringToDecimal128("-123", 20, 5, false)
-	xs[5], _ = types.ParseStringToDecimal128("-123.456789", 20, 5, false)
+	xs[0], _ = types.ParseDecimal128("123456.789", 20, 3)
+	xs[1], _ = types.ParseDecimal128("120000.789", 20, 3)
+	xs[2], _ = types.ParseDecimal128("-123456.789", 20, 3)
+	xs[3], _ = types.ParseDecimal128("0", 20, 0)
+	xs[4], _ = types.ParseDecimal128("-123", 20, 0)
+	xs[5], _ = types.ParseDecimal128("-123.456789", 20, 6)
 	rs := make([]types.Decimal128, 6)
 	rs = Decimal128Neg(xs, rs)
 
-	require.Equal(t, "-123456.789", string(rs[0].ToString()))
+	require.Equal(t, "-123456.789", string(rs[0].Format(3)))
 
-	require.Equal(t, "-123456.79", string(rs[0].ToStringWithScale(2)))
+	require.Equal(t, "-120000.789", string(rs[1].Format(3)))
 
-	require.Equal(t, "-120000.79", string(rs[1].ToStringWithScale(2)))
+	require.Equal(t, "123456.789", string(rs[2].Format(3)))
 
-	require.Equal(t, "123456.79", string(rs[2].ToStringWithScale(2)))
+	require.Equal(t, "0", string(rs[3].Format(0)))
 
-	require.Equal(t, "0", string(rs[3].ToStringWithScale(0)))
+	require.Equal(t, "123", string(rs[4].Format(0)))
 
-	require.Equal(t, "123", string(rs[4].ToStringWithScale(0)))
+	require.Equal(t, "123.456789", string(rs[5].Format(6)))
 
-	require.Equal(t, "123.45679", string(rs[5].ToStringWithScale(5)))
-
-	require.Equal(t, "123", string(rs[5].ToStringWithScale(0)))
 }

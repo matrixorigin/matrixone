@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -78,6 +79,13 @@ type TxnOperator interface {
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error
+
+	// AddLockTable for pessimistic transactions, if the current transaction is successfully
+	// locked, the metadata corresponding to the lockservice needs to be recorded to the txn, and
+	// at transaction commit time, the metadata of all lockservices accessed by the transaction
+	// will be committed to dn to check. If the metadata of the lockservice changes in [lock, commit],
+	// the transaction will be rolled back.
+	AddLockTable(locktable lock.LockTable) error
 }
 
 // DebugableTxnOperator debugable txn operator

@@ -31,6 +31,17 @@ type Path struct {
 	File             string
 }
 
+func (p Path) String() string {
+	return JoinPath(
+		p.ServiceString(),
+		p.File,
+	)
+}
+
+func (p Path) ServiceString() string {
+	return strings.Join(append([]string{p.Service}, p.ServiceArguments...), ",")
+}
+
 func ParsePath(s string) (path Path, err error) {
 	// split
 	i := strings.LastIndex(s, ServiceNameSeparator)
@@ -86,21 +97,24 @@ func parseService(str string) (service string, arguments []string, err error) {
 	return
 }
 
-func ParsePathAtService(s string, serviceName string) (path Path, err error) {
+func ParsePathAtService(s string, serviceStr string) (path Path, err error) {
 	path, err = ParsePath(s)
 	if err != nil {
 		return
 	}
-	if serviceName != "" &&
+	if serviceStr != "" &&
 		path.Service != "" &&
-		!strings.EqualFold(path.Service, serviceName) {
-		err = moerr.NewWrongServiceNoCtx(serviceName, path.Service)
+		!strings.EqualFold(path.ServiceString(), serviceStr) {
+		err = moerr.NewWrongServiceNoCtx(serviceStr, path.Service)
 		return
 	}
 	return
 }
 
 func JoinPath(serviceName string, path string) string {
+	if len(serviceName) == 0 {
+		return path
+	}
 	buf := new(strings.Builder)
 	buf.WriteString(serviceName)
 	buf.WriteString(ServiceNameSeparator)

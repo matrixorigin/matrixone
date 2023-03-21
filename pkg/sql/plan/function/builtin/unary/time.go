@@ -72,7 +72,7 @@ func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	rtyp := types.T_time.ToType()
 	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
@@ -95,7 +95,7 @@ func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 
 func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	rtyp := types.T_time.ToType()
 	ivals := vector.MustFixedCol[int64](inputVector)
 
 	if inputVector.IsConst() {
@@ -126,7 +126,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 		var rvals [1]types.Time
-		_, err := time.Decimal128ToTime(ivals, rvals[:])
+		_, err := time.Decimal128ToTime(ivals, rvals[:], rtyp.Scale)
 		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
@@ -134,7 +134,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[types.Time](rvec)
-		_, err = time.Decimal128ToTime(ivals, rvals)
+		_, err = time.Decimal128ToTime(ivals, rvals, rtyp.Scale)
 		return rvec, err
 	}
 }

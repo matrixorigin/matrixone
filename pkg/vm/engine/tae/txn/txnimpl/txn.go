@@ -31,15 +31,15 @@ type txnImpl struct {
 
 var TxnFactory = func(catalog *catalog.Catalog) txnbase.TxnFactory {
 	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, txnId []byte,
-		start types.TS, info []byte) txnif.AsyncTxn {
-		return newTxnImpl(catalog, mgr, store, txnId, start, info)
+		start, snapshot types.TS) txnif.AsyncTxn {
+		return newTxnImpl(catalog, mgr, store, txnId, start, snapshot)
 	}
 }
 
 func newTxnImpl(catalog *catalog.Catalog, mgr *txnbase.TxnManager, store txnif.TxnStore,
-	txnId []byte, start types.TS, info []byte) *txnImpl {
+	txnId []byte, start, snapshot types.TS) *txnImpl {
 	impl := &txnImpl{
-		Txn:     txnbase.NewTxn(mgr, store, txnId, start, info),
+		Txn:     txnbase.NewTxn(mgr, store, txnId, start, snapshot),
 		catalog: catalog,
 	}
 	return impl

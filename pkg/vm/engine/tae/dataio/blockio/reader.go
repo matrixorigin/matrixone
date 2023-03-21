@@ -65,6 +65,17 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}, nil
 }
 
+func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
+	reader, err := objectio.NewObjectReader(name, service, objectio.WithNoCacheReader(true))
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader: reader,
+		name:   name,
+	}, nil
+}
+
 func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Reader, error) {
 	name, locs, err := DecodeLocationToMetas(key)
 	if err != nil {
@@ -161,7 +172,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 	if err != nil {
 		return nil, err
 	}
-	if r.meta.End() == 0 {
+	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
 	return blocks, nil

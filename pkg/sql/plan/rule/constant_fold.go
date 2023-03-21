@@ -114,7 +114,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 				Id:          e.Typ.Id,
 				NotNullable: e.Typ.NotNullable,
 				Width:       e.Typ.Width,
-				Size:        e.Typ.Size,
 				Scale:       e.Typ.Scale,
 				AutoIncr:    e.Typ.AutoIncr,
 				Table:       e.Typ.Table,
@@ -151,7 +150,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 					Id:          e.Typ.Id,
 					NotNullable: e.Typ.NotNullable,
 					Width:       e.Typ.Width,
-					Size:        e.Typ.Size,
 					Scale:       e.Typ.Scale,
 					AutoIncr:    e.Typ.AutoIncr,
 					Table:       e.Typ.Table,
@@ -164,7 +162,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
-	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width, Size: vec.GetType().Size}
+	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	e.Expr = ec
 	return e
 }
@@ -292,7 +290,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 		}
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{
-				Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(vector.MustFixedCol[types.Decimal64](vec)[0])},
+				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedCol[types.Decimal64](vec)[0])},
 			},
 		}
 	case types.T_decimal128:
@@ -300,7 +298,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 			return nil
 		}
 		decimalValue := &plan.Decimal128{}
-		decimalValue.A, decimalValue.B = types.Decimal128ToInt64Raw(vector.MustFixedCol[types.Decimal128](vec)[0])
+		decimalValue.A = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B0_63)
+		decimalValue.B = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B64_127)
 		return &plan.Const{Value: &plan.Const_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil
@@ -322,6 +321,13 @@ func IsConstant(e *plan.Expr) bool {
 		}
 		for i := range ef.F.Args {
 			if !IsConstant(ef.F.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, arg := range ef.List.List {
+			if !IsConstant(arg) {
 				return false
 			}
 		}

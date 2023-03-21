@@ -393,7 +393,6 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Id:          typ.Id,
 		NotNullable: typ.NotNullable,
 		Width:       typ.Width,
-		Size:        typ.Size,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
 	}
@@ -1011,7 +1010,8 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:           analyzeinfo.GetDiskIO(),
 		S3IOByte:         analyzeinfo.GetS3IOByte(),
-		S3IOCount:        analyzeinfo.GetS3IOCount(),
+		S3IOInputCount:   analyzeinfo.GetS3IOInputCount(),
+		S3IOOutputCount:  analyzeinfo.GetS3IOOutputCount(),
 		NetworkIO:        analyzeinfo.GetNetworkIO(),
 		ScanTime:         analyzeinfo.GetScanTime(),
 		InsertTime:       analyzeinfo.GetInsertTime(),

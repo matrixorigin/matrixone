@@ -50,7 +50,7 @@ func MakeVectors(columnSi int, rowCount int, mp *mpool.MPool) ([]*vector.Vector,
 	valueCount := make(map[int]interface{})
 	vs := make([]*vector.Vector, columnSi)
 	for i := 0; i < columnSi; i++ {
-		vs[i] = vector.NewVec(types.Type{Oid: randType()})
+		vs[i] = vector.NewVec(randType().ToType())
 		randInsertValues(vs[i], vs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 	return vs, valueCount
@@ -309,13 +309,11 @@ func randTimestamp() types.Timestamp {
 }
 
 func randDecimal64() types.Decimal64 {
-	decimal, _ := types.Decimal64FromFloat64(rand.Float64(), 20, 10)
-	return decimal
+	return types.Decimal64(rand.Int() % 10000000000)
 }
 
 func randDecimal128() types.Decimal128 {
-	decimal, _ := types.Decimal128FromFloat64(rand.Float64(), 20, 10)
-	return decimal
+	return types.Decimal128{B0_63: uint64(rand.Int() % 10000000000), B64_127: 0}
 }
 
 func randStringType() []byte {

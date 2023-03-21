@@ -41,7 +41,7 @@ import (
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
-	name string, databaseId uint64, m *mpool.MPool) (*batch.Batch, error) {
+	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	bat.SetZs(1, m)
@@ -84,6 +84,11 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 		idx = catalog.MO_DATABASE_ACCOUNT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // account_id
 		if err := vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_DATABASE_DAT_TYPE_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx])                      // dat_type
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(typ), false, m); err != nil { // TODO
 			return nil, err
 		}
 	}
@@ -910,6 +915,12 @@ func getSql(ctx context.Context) string {
 	}
 	return ""
 }
+func getTyp(ctx context.Context) string {
+	if v := ctx.Value(defines.DatTypKey{}); v != nil {
+		return v.(string)
+	}
+	return ""
+}
 
 func getAccountId(ctx context.Context) uint32 {
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
@@ -1302,7 +1313,7 @@ func transferTimestampval(v int64, oid types.T) (bool, any) {
 func transferDecimal64val(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal64:
-		return true, types.Decimal64FromInt64Raw(v)
+		return true, types.Decimal64(v)
 	default:
 		return false, nil
 	}
@@ -1311,7 +1322,7 @@ func transferDecimal64val(v int64, oid types.T) (bool, any) {
 func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal128:
-		return true, types.Decimal128FromInt64Raw(a, b)
+		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
 		return false, nil
 	}

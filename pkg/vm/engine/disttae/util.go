@@ -17,6 +17,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
 	"math"
 	"sort"
 	"strings"
@@ -733,13 +736,13 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		rows := vector.MustFixedCol[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_decimal128:
 		rows := vector.MustFixedCol[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:
@@ -772,4 +775,11 @@ func mustVectorToProto(v *vector.Vector) *api.Vector {
 		panic(err)
 	}
 	return ret
+}
+
+func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		infos = append(infos, txnMeta.DebugString())
+		logutil.Debugf(msg+" %s", infos...)
+	}
 }

@@ -48,41 +48,41 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
+			types.T_int8.ToType(),
+			types.T_int16.ToType(),
 		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
-			{Oid: types.T_int32},
-			{Oid: types.T_int64},
+			types.T_int8.ToType(),
+			types.T_int16.ToType(),
+			types.T_int32.ToType(),
+			types.T_int64.ToType(),
 		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_decimal128.ToType(),
 		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_decimal128.ToType(),
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: 2},
-			{Oid: types.T_decimal128},
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.New(types.T_varchar, 2, 0),
+			types.T_decimal128.ToType(),
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: types.MaxVarcharLen},
-			{Oid: types.T_decimal128},
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+			types.T_decimal128.ToType(),
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 	}
 }
@@ -121,73 +121,11 @@ func TestGroup(t *testing.T) {
 	}
 }
 
-/*
-	func TestLowCardinalityGroup(t *testing.T) {
-		{
-			// SELECT COUNT(*) FROM t GROUP BY t.values
-			tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
-				[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
-			tc.arg.NeedEval = true
-
-			// a->4, b->3, c->3, d->2
-			values := []string{"a", "b", "b", "a", "c", "b", "c", "a", "a", "d", "c", "d"}
-			v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
-			constructIndex(t, v, tc.proc.Mp())
-
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = nil
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-
-			rbat := tc.proc.Reg.InputBatch
-			require.Equal(t, []string{"a", "b", "c", "d"}, vector.MustStrCols(rbat.Vecs[0]))
-			require.Equal(t, []int64{4, 3, 3, 2}, vector.MustFixedCol[int64](rbat.Vecs[1]))
-
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
-		}
-
-		{
-			// SELECT SUM(t.values) FROM t GROUP BY t.values
-			tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_int64}},
-				[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}})
-			tc.arg.NeedEval = true
-
-			// 16->32, 1->2, 4->8, 2->6, 8->16, 32->32
-			values := []int64{16, 16, 1, 4, 4, 2, 8, 8, 1, 32, 2, 2}
-			v := testutil.NewVector(len(values), types.T_int64.ToType(), tc.proc.Mp(), false, values)
-			constructIndex(t, v, tc.proc.Mp())
-
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = nil
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-
-			rbat := tc.proc.Reg.InputBatch
-			require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustFixedCol[int64](rbat.Vecs[0]))
-			require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustFixedCol[int64](rbat.Vecs[1]))
-
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
-		}
-	}
-*/
-
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -239,13 +177,3 @@ func newExpression(pos int32) *plan.Expr {
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
-
-/*
-func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(*v.GetType(), m)
-	require.NoError(t, err)
-
-	err = idx.InsertBatch(v)
-	require.NoError(t, err)
-}
-*/

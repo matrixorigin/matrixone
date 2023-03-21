@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -203,4 +204,8 @@ func (s *StorageTxnOperator) GetOperationHandler(shard memoryengine.Shard) (memo
 		panic(fmt.Sprintf("storage not found at %s", shard.Address))
 	}
 	return storage.handler, s.meta
+}
+
+func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
+	panic("should not call")
 }

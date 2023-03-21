@@ -44,9 +44,8 @@ func Test_protocol(t *testing.T) {
 		io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
 		cpi.tcpConn = io
 
-		str1, str2, _, _ := cpi.Peer()
-		convey.So(str1, convey.ShouldEqual, "failed")
-		convey.So(str2, convey.ShouldEqual, "0")
+		str1 := cpi.Peer()
+		convey.So(str1, convey.ShouldEqual, "")
 	})
 }
 

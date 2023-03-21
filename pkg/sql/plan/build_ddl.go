@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -521,7 +520,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
@@ -579,7 +577,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				ClusterBy: true,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
@@ -688,7 +685,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
 					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
@@ -709,7 +705,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
-					Size:  types.VarlenaSize,
 					Width: types.MaxVarcharLen,
 				},
 				Default: &plan.Default{
@@ -1298,25 +1293,35 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
+			name := string(opt.Name)
+			name_not_found := true
 			typ := plan.AlterTableDrop_COLUMN
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
 				typ = plan.AlterTableDrop_COLUMN
+				for _, col := range tableDef.Cols {
+					if col.Name == name {
+						name_not_found = false
+						break
+					}
+				}
 			case tree.AlterTableDropIndex:
 				typ = plan.AlterTableDrop_INDEX
 			case tree.AlterTableDropKey:
 				typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				typ = plan.AlterTableDrop_PRIMARY_KEY
+				if tableDef.Pkey == nil {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
+				}
+				name_not_found = false
 			case tree.AlterTableDropForeignKey:
 				typ = plan.AlterTableDrop_FOREIGN_KEY
-			}
-			name := string(opt.Name)
-			name_not_found := true
-			for _, fk := range tableDef.Fkeys {
-				if fk.Name == name {
-					name_not_found = false
-					break
+				for _, fk := range tableDef.Fkeys {
+					if fk.Name == name {
+						name_not_found = false
+						break
+					}
 				}
 			}
 			if name_not_found {
@@ -1368,17 +1373,6 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 	lockTables := make([]*plan.TableLockInfo, 0, len(stmt.TableLocks))
 	uniqueTableName := make(map[string]bool)
 
-	//get session id
-	var sessionIDbytes []byte
-	if ctx.GetProcess() != nil {
-		sessionID := ctx.GetProcess().Id
-		sessionIDbytes = []byte(sessionID)
-	}
-
-	//get rows from 0 to ^uint64(0)
-	rangeMax := make([]byte, 8)
-	binary.BigEndian.PutUint64(rangeMax, ^uint64(0))
-
 	//Check table locks
 	for _, tableLock := range stmt.TableLocks {
 		tb := tableLock.Table
@@ -1408,10 +1402,8 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		uniqueTableName[tblName] = true
 
 		tableLockInfo := &plan.TableLockInfo{
-			LockType:  plan.TableLockType(tableLock.LockType),
-			TableID:   tableDef.TblId,
-			SessionID: sessionIDbytes,
-			Rows:      [][]byte{[]byte("0"), rangeMax},
+			LockType: plan.TableLockType(tableLock.LockType),
+			TableDef: tableDef,
 		}
 		lockTables = append(lockTables, tableLockInfo)
 	}
@@ -1476,8 +1468,7 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		colName := keyPart.ColName.Parts[0]
 		for _, col := range tableDef.Cols {
 			if col.Name == colName {
-				// need to reset to ColId after created.
-				fkData.Def.Cols[i] = 0
+				fkData.Def.Cols[i] = col.ColId
 				fkCols.Cols[i] = colName
 				fkColTyp[i] = col.Typ
 				fkColName[i] = colName

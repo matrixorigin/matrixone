@@ -160,9 +160,17 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
+		defer func() {
+			// record the number of s3 requests
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil
-
 	default:
 		return moerr.NewInternalError(receiver.ctx, "unknown message type")
 	}
@@ -1170,7 +1178,8 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
 		target.analInfos[i].DiskIO += n.DiskIO
 		target.analInfos[i].S3IOByte += n.S3IOByte
-		target.analInfos[i].S3IOCount += n.S3IOCount
+		target.analInfos[i].S3IOInputCount += n.S3IOInputCount
+		target.analInfos[i].S3IOOutputCount += n.S3IOOutputCount
 		target.analInfos[i].NetworkIO += n.NetworkIO
 		target.analInfos[i].ScanTime += n.ScanTime
 		target.analInfos[i].InsertTime += n.InsertTime
@@ -1184,7 +1193,6 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 		result[i] = &plan.Type{
 			Id:    int32(t.Oid),
 			Width: t.Width,
-			Size:  t.Size,
 			Scale: t.Scale,
 		}
 	}
@@ -1195,12 +1203,7 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 func convertToTypes(ts []*plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.Type{
-			Oid:   types.T(t.Id),
-			Width: t.Width,
-			Size:  t.Size,
-			Scale: t.Scale,
-		}
+		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
 	}
 	return result
 }
@@ -1303,7 +1306,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		WaitTimeConsumed: info.WaitTimeConsumed,
 		DiskIO:           info.DiskIO,
 		S3IOByte:         info.S3IOByte,
-		S3IOCount:        info.S3IOCount,
+		S3IOInputCount:   info.S3IOInputCount,
+		S3IOOutputCount:  info.S3IOOutputCount,
 		NetworkIO:        info.NetworkIO,
 		ScanTime:         info.ScanTime,
 		InsertTime:       info.InsertTime,

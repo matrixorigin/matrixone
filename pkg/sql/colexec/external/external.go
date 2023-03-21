@@ -208,11 +208,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
-			typ := types.Type{
-				Oid:   types.T(node.TableDef.Cols[i].Typ.Id),
-				Width: node.TableDef.Cols[i].Typ.Width,
-				Scale: node.TableDef.Cols[i].Typ.Scale,
-			}
+			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
@@ -220,11 +216,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 			}
 			bat.Vecs[i] = vec
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
-			typ := types.Type{
-				Oid:   types.T_varchar,
-				Width: types.MaxVarcharLen,
-				Scale: 0,
-			}
+			typ := types.T_varchar.ToType()
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
@@ -825,7 +817,7 @@ func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					return nil, moerr.NewQueryIdNotFound(ctx, param.Fileparam.Filepath)
+					return nil, moerr.NewResultFileNotFound(ctx, param.Fileparam.Filepath)
 				}
 				return nil, err
 			}
@@ -1243,12 +1235,12 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = float32(d)
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
+				d, err := types.ParseDecimal128(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = float32(d.ToFloat64())
+				cols[rowIdx] = float32(types.Decimal128ToFloat64(d, vec.GetType().Scale))
 			}
 		case types.T_float64:
 			cols := vector.MustFixedCol[float64](vec)
@@ -1265,12 +1257,12 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = d
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
+				d, err := types.ParseDecimal128(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = d.ToFloat64()
+				cols[rowIdx] = types.Decimal128ToFloat64(d, vec.GetType().Scale)
 			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			if isNullOrEmpty {
@@ -1351,7 +1343,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.Decimal64_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
+				d, err := types.ParseDecimal64(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1366,7 +1358,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
-				d, err := types.Decimal128_FromStringWithScale(field, vec.GetType().Width, vec.GetType().Scale)
+				d, err := types.ParseDecimal128(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {

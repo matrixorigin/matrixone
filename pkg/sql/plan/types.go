@@ -99,6 +99,7 @@ type CompilerContext interface {
 	// is building the alter view or not
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
+	GetStatsCache() *StatsCache
 }
 
 type Optimizer interface {

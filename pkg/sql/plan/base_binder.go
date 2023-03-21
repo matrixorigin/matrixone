@@ -379,7 +379,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.Typ = &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
-			Size:        1,
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
@@ -537,7 +536,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				rightArg.Typ = &plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
-					Size:        1,
 				}
 
 				return rightArg, nil
@@ -579,7 +577,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				rightArg.Typ = &plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
-					Size:        1,
 				}
 
 				return rightArg, nil
@@ -635,7 +632,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			expr.Typ = &plan.Type{
 				Id:          int32(types.T_bool),
 				NotNullable: expr.Typ.NotNullable && child.Typ.NotNullable,
-				Size:        1,
 			}
 
 			return expr, nil
@@ -1171,6 +1167,9 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				if argsType[idx].Oid == castType.Oid && types.IsDecimal(castType.Oid) && argsType[idx].Scale == castType.Scale {
+					continue
+				}
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
@@ -1244,7 +1243,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_decimal:
 		if typ != nil {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.Decimal64_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -1253,7 +1252,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 						C: &Const{
 							Isnull: false,
 							Value: &plan.Const_Decimal64Val{
-								Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(d64)},
+								Decimal64Val: &plan.Decimal64{A: int64(d64)},
 							},
 						},
 					},
@@ -1261,11 +1260,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				}, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.Decimal128_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
-				a, b := types.Decimal128ToInt64Raw(d128)
+				a := int64(d128.B0_63)
+				b := int64(d128.B64_127)
 				return &Expr{
 					Expr: &plan.Expr_C{
 						C: &Const{
@@ -1280,11 +1280,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
 		}
-		d128, scale, err := types.ParseStringToDecimal128WithoutTable(astExpr.String())
+		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
 			return nil, err
 		}
-		a, b := types.Decimal128ToInt64Raw(d128)
+		a := int64(d128.B0_63)
+		b := int64(d128.B64_127)
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -1296,7 +1297,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 			Typ: &plan.Type{
 				Id:          int32(types.T_decimal128),
-				Width:       34,
+				Width:       38,
 				Scale:       scale,
 				NotNullable: true,
 			},
@@ -1391,8 +1392,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}
 
 	intervalTypeInFunction := &plan.Type{
-		Id:   int32(types.T_int64),
-		Size: 8,
+		Id: int32(types.T_int64),
 	}
 
 	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
@@ -1409,8 +1409,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 			default:
 				dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, &plan.Type{
-					Id:   int32(types.T_datetime),
-					Size: 8,
+					Id: int32(types.T_datetime),
 				})
 
 				if err != nil {
@@ -1432,8 +1431,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
 			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, &plan.Type{
-				Id:   int32(types.T_datetime),
-				Size: 8,
+				Id: int32(types.T_datetime),
 			})
 
 			if err != nil {
@@ -1464,8 +1462,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 	}
 	list.List[0] = intervalExpr
 	strType := &plan.Type{
-		Id:   int32(types.T_char),
-		Size: 4,
+		Id: int32(types.T_char),
 	}
 	strExpr := &Expr{
 		Expr: &plan.Expr_C{

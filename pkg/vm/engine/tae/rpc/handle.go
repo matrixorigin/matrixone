@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -99,6 +100,12 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
+	logutil.Infof("HandleCommit start : %X\n",
+		string(meta.GetID()))
+	defer func() {
+		logutil.Infof("HandleCommit end : %X\n",
+			string(meta.GetID()))
+	}()
 	//Handle precommit-write command for 1PC
 	var txn moengine.Txn
 	if ok {

@@ -67,14 +67,6 @@ func (l Lock) isLockRow() bool {
 	return l.value&flagLockRow != 0
 }
 
-func (l Lock) isLockRange() bool {
-	return !l.isLockRow()
-}
-
-func (l Lock) isLockRangeStart() bool {
-	return l.value&flagLockRangeStart != 0
-}
-
 func (l Lock) isLockRangeEnd() bool {
 	return l.value&flagLockRangeEnd != 0
 }
@@ -90,7 +82,10 @@ func (l Lock) getLockMode() pb.LockMode {
 func (l Lock) String() string {
 	g := "row"
 	if !l.isLockRow() {
-		g = "range"
+		g = "range(start)"
+		if l.isLockRangeEnd() {
+			g = "range(end)"
+		}
 	}
 
 	// hold txn: mode-[row|range]

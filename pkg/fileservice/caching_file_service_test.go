@@ -33,8 +33,8 @@ func testCachingFileService(
 	fs := newFS()
 	fs.SetAsyncUpdate(false)
 	ctx := context.Background()
-	var counter perfcounter.Counter
-	ctx = perfcounter.WithCounter(ctx, &counter)
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	buf := new(bytes.Buffer)
 	err := gob.NewEncoder(buf).Encode(map[int]int{
@@ -75,9 +75,21 @@ func testCachingFileService(
 		},
 	}
 
+	// nocache
+	vec.NoCache = true
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	m, ok := vec.Entries[0].Object.(map[int]int)
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(m))
+	assert.Equal(t, 42, m[42])
+	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+
+	// cache
+	vec.NoCache = false
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	m, ok = vec.Entries[0].Object.(map[int]int)
 	assert.True(t, ok)
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
@@ -93,8 +105,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	// counter
-	assert.Equal(t, counter.Cache.Read.Load(), int64(2))
-	assert.Equal(t, counter.Cache.Hit.Load(), int64(1))
+	assert.Equal(t, counterSet.Cache.Read.Load(), int64(2))
+	assert.Equal(t, counterSet.Cache.Hit.Load(), int64(1))
 
 	// flush
 	fs.FlushCache()

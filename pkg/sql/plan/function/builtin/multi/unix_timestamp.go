@@ -146,12 +146,12 @@ func UnixTimestampVarcharToFloat64(ivecs []*vector.Vector, proc *process.Process
 }
 
 var (
-	Decimal128Zero = types.Decimal128_FromInt32(0)
+	Decimal128Zero = types.Decimal128{B0_63: 0, B64_127: 0}
 )
 
 func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := ivecs[0]
-	rtyp := types.Type{Oid: types.T_decimal128, Size: 16, Scale: 6}
+	rtyp := types.New(types.T_decimal128, 38, 6)
 	if inVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 	}
@@ -160,7 +160,7 @@ func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Proc
 		var rs [1]types.Decimal128
 		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(0))}
 		unixtimestamp.UnixTimestampToDecimal128(tms[:], rs[:])
-		if rs[0].Ge(Decimal128Zero) {
+		if rs[0].Compare(types.Decimal128{B0_63: 0, B64_127: 0}) > 0 {
 			vec := vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp())
 			return vec, nil
 		} else {

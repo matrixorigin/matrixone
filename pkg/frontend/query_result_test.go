@@ -126,7 +126,6 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			Name: fmt.Sprintf("a_%d", i),
 			Typ: &plan.Type{
 				Id:    int32(ty.Oid),
-				Size:  ty.Size,
 				Scale: ty.Scale,
 				Width: ty.Width,
 			},

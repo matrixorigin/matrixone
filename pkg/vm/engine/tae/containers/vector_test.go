@@ -49,6 +49,49 @@ func withAllocator(opt Options) Options {
 // 	}
 // }
 
+func TestVectorShallowForeach(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opt := withAllocator(Options{})
+	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
+		vec := MakeVector(typ, true, opt)
+		for i := 0; i < 10; i++ {
+			if i%2 == 0 {
+				vec.Append(types.Null{})
+			} else {
+				switch typ.Oid {
+				case types.T_int32:
+					vec.Append(int32(i))
+				case types.T_char:
+					vec.Append([]byte("test null"))
+				}
+			}
+		}
+		vec.ForeachWindowShallow(0, 10, func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+
+		vec.ForeachShallow(func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+
+		vec.GetView().ForeachShallow(func(v any, row int) error {
+			if row%2 == 0 {
+				_, ok := v.(types.Null)
+				assert.True(t, ok)
+			}
+			return nil
+		}, nil)
+	}
+}
+
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
@@ -425,29 +468,6 @@ func TestVector9(t *testing.T) {
 	cloned.Close()
 	vec.Close()
 	assert.Zero(t, opts.Allocator.CurrNB())
-}
-
-func TestCloneWithBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
-	vec.Append([]byte("h1"))
-	vec.Append([]byte("h22"))
-	vec.Append([]byte("h333"))
-	vec.Append(types.Null{})
-	vec.Append([]byte("h4444"))
-
-	buffer := new(bytes.Buffer)
-	cloned := CloneWithBuffer(vec, buffer)
-	assert.True(t, vec.Equals(cloned))
-	assert.Zero(t, cloned.Allocated())
-
-	bs := vec.Bytes()
-	buf := buffer.Bytes()
-	res := bytes.Compare(bs.Storage, buf[:len(bs.Storage)])
-	assert.Zero(t, res)
-	res = bytes.Compare(bs.HeaderBuf(), buf[len(bs.Storage):len(bs.HeaderBuf())+len(bs.Storage)])
-	assert.Zero(t, res)
 }
 
 func TestCompact(t *testing.T) {

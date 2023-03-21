@@ -66,7 +66,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
-		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		var newStmt *tree.ShowCreateView
+		if stmt.Name.NumParts == 1 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		} else if stmt.Name.NumParts == 2 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+		}
+
 		return buildShowCreateView(newStmt, ctx)
 	}
 
@@ -84,6 +90,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemClusterRel {
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
 	}
 	rowCount := 0
 	var pkDefs []string
@@ -124,7 +132,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(col.Typ.Id)}
+		typ := types.T(col.Typ.Id).ToType()
 		typeStr := typ.String()
 		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
@@ -187,7 +195,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 			indexStr += ")"
 			if indexdef.Comment != "" {
-				indexStr += fmt.Sprintf(" COMMENT `%s`", indexdef.Comment)
+				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"

@@ -211,7 +211,7 @@ drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+t1    CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(38,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 SHOW TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 SHOW TRIGGERS like '*%';
@@ -228,6 +228,7 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
+mo_pubs
 mo_database
 mo_tables
 mo_columns
@@ -343,7 +344,7 @@ CREATE TABLE show_03(a int, b int);
 CREATE unique index x ON show_03(a) comment 'x';
 show CREATE table show_03;
 Table    Create Table
-show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT `x`\n)
+show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
 show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
@@ -388,4 +389,11 @@ a    INT(32)    NO    PRI    null
 b    INT(32)    NO    PRI    null
 c    INT(32)    NO    PRI    null
 drop table t3;
+drop database test;
+drop database if exists test;
+create database test;
+use test;
+SHOW CREATE TABLE information_schema.columns;
+View    Create View
+columns    CREATE VIEW COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='%!%mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
 drop database test;

@@ -50,6 +50,7 @@ const (
 	// numeric/decimals
 	T_decimal64  T = 32
 	T_decimal128 T = 33
+	T_decimal256 T = 34
 
 	// pseudo numerics, not used
 
@@ -95,12 +96,12 @@ type Type struct {
 	dummy1  uint8
 	dummy2  uint8
 
+	Size int32
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
-	Size      int32
-	Width     int32
-	Scale     int32
-	Precision int32
+	Width int32
+	// Scale means number of fractional digits for decimal, timestamp, float, etc.
+	Scale int32
 }
 
 type Date int32
@@ -109,8 +110,17 @@ type Datetime int64
 type Timestamp int64
 type Time int64
 
-type Decimal64 [8]byte
-type Decimal128 [16]byte
+type Decimal64 uint64
+type Decimal128 struct {
+	B0_63   uint64
+	B64_127 uint64
+}
+type Decimal256 struct {
+	B0_63    uint64
+	B64_127  uint64
+	B128_191 uint64
+	B192_255 uint64
+}
 
 type Varlena [VarlenaSize]byte
 
@@ -151,7 +161,7 @@ type OrderedT interface {
 }
 
 type Decimal interface {
-	Decimal64 | Decimal128
+	Decimal64 | Decimal128 | Decimal256
 }
 
 // FixedSized types in our type system.   Esp, Varlena.
@@ -180,6 +190,7 @@ var Types map[string]T = map[string]T{
 
 	"decimal64":  T_decimal64,
 	"decimal128": T_decimal128,
+	"decimal256": T_decimal256,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -208,9 +219,9 @@ var Types map[string]T = map[string]T{
 func New(oid T, width, scale int32) Type {
 	return Type{
 		Oid:     oid,
+		Size:    int32(oid.TypeLen()),
 		Width:   width,
 		Scale:   scale,
-		Size:    int32(oid.TypeLen()),
 		Charset: CharsetType(oid),
 	}
 }
@@ -230,8 +241,12 @@ func TypeSize(oid T) int {
 	return oid.TypeLen()
 }
 
+func (t Type) GetSize() int32 {
+	return t.Size
+}
+
 func (t Type) TypeSize() int {
-	return t.Oid.TypeLen()
+	return int(t.Size)
 }
 
 func (t Type) IsBoolean() bool {
@@ -348,8 +363,13 @@ func (t T) ToType() Type {
 		typ.Size = 8
 	case T_decimal64:
 		typ.Size = 8
+		typ.Width = 18
 	case T_decimal128:
 		typ.Size = 16
+		typ.Width = 38
+	case T_decimal256:
+		typ.Size = 32
+		typ.Width = 76
 	case T_uuid:
 		typ.Size = 16
 	case T_TS:
@@ -429,6 +449,8 @@ func (t T) String() string {
 		return "DECIMAL64"
 	case T_decimal128:
 		return "DECIMAL128"
+	case T_decimal256:
+		return "DECIMAL256"
 	case T_blob:
 		return "BLOB"
 	case T_text:
@@ -439,6 +461,8 @@ func (t T) String() string {
 		return "ROWID"
 	case T_uuid:
 		return "UUID"
+	case T_interval:
+		return "INTERVAL"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -492,6 +516,8 @@ func (t T) OidString() string {
 		return "T_decimal64"
 	case T_decimal128:
 		return "T_decimal128"
+	case T_decimal256:
+		return "T_decimal256"
 	case T_blob:
 		return "T_blob"
 	case T_text:
@@ -500,6 +526,8 @@ func (t T) OidString() string {
 		return "T_TS"
 	case T_Rowid:
 		return "T_Rowid"
+	case T_interval:
+		return "T_interval"
 	}
 	return "unknown_type"
 }
@@ -535,16 +563,18 @@ func (t T) TypeLen() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_decimal256:
+		return 32
 	case T_uuid:
 		return 16
 	case T_TS:
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
-	case T_tuple:
+	case T_tuple, T_interval:
 		return 0
 	}
-	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
+	panic(fmt.Sprintf("unknown type %d", t))
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
@@ -564,6 +594,8 @@ func (t T) FixedLength() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_decimal256:
+		return 32
 	case T_uuid:
 		return 16
 	case T_TS:
@@ -573,7 +605,7 @@ func (t T) FixedLength() int {
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
 	}
-	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type
@@ -625,7 +657,7 @@ func IsDateRelate(t T) bool {
 
 // IsDecimal: return true if the types.T is decimal64 or decimal128
 func IsDecimal(t T) bool {
-	if t == T_decimal64 || t == T_decimal128 {
+	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {
 		return true
 	}
 	return false
