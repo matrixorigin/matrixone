@@ -15,6 +15,8 @@
 package memorytable
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
@@ -24,9 +26,10 @@ type BatchIter func() (tuple []Nullable)
 // NewBatchIter create an iter over b
 func NewBatchIter(b *batch.Batch) BatchIter {
 	i := 0
+	length := b.Vecs[0].Length()
 	iter := func() (tuple []Nullable) {
 		for {
-			if i >= b.Vecs[0].Length() {
+			if i >= length {
 				return
 			}
 			if i < len(b.Zs) && b.Zs[i] == 0 {
@@ -35,7 +38,15 @@ func NewBatchIter(b *batch.Batch) BatchIter {
 			}
 			break
 		}
-		for _, vec := range b.Vecs {
+		for attrIdx, vec := range b.Vecs {
+			if vec.Length() < length {
+				panic(fmt.Sprintf(
+					"bad vector length, expecting %d, got %d. vector name: %s",
+					length,
+					vec.Length(),
+					b.Attrs[attrIdx],
+				))
+			}
 			value := VectorAt(vec, i)
 			tuple = append(tuple, value)
 		}
