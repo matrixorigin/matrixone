@@ -509,17 +509,14 @@ func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Mul256(y Decimal256) (Decimal256, error) {
-	if y.B0_63 == 0 && y.B64_127 == 0 && y.B128_191 == 0 && y.B192_255 == 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
-	}
 	if x.B192_255 != 0 && (y.B192_255 != 0 || y.B128_191 != 0 || y.B64_127 != 0) {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	if x.B128_191 != 0 && (y.B192_255 != 0 || y.B128_191 != 0) {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	if x.B64_127 != 0 && y.B192_255 != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	z := Decimal256{0, 0, 0, 0}
 	var hi, lo, ca uint64
@@ -533,51 +530,51 @@ func (x Decimal256) Mul256(y Decimal256) (Decimal256, error) {
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, ca)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B64_127, y.B64_127)
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, 0)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B0_63, y.B128_191)
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, 0)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B192_255, y.B0_63)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B128_191, y.B64_127)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B64_127, y.B128_191)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B0_63, y.B192_255)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 || z.B192_255>>63 != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
 	}
 	return z, nil
 }
@@ -631,18 +628,45 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
-	if y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
+		if y.B0_63 == 0 {
+			return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
+		}
+		x = x.Left(1)
+		z := Decimal256{0, 0, 0, 0}
+		z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
+		z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
+		z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
+		z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
+		if z.B0_63&1 == 0 {
+			z = z.Right(1)
+		} else {
+			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
+		}
+		return z, nil
+	} else {
+		x = x.Left(1)
+		w := Decimal256{1, 0, 0, 0}
+		z := Decimal256{0, 0, 0, 0}
+		for y.Compare(x) <= 0 {
+			y = y.Left(1)
+			w = w.Left(1)
+		}
+		for y.B0_63 != 0 || y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
+			y = y.Right(1)
+			w = w.Right(1)
+			if y.Compare(x) <= 0 {
+				z, _ = z.Add256(w)
+				x, _ = x.Sub256(y)
+			}
+		}
+		if z.B0_63&1 == 0 {
+			z = z.Right(1)
+		} else {
+			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
+		}
+		return z, nil
 	}
-	if y.B0_63 == 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
-	}
-	z := Decimal256{0, 0, 0, 0}
-	z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
-	z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
-	z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
-	z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
-	return z, nil
 }
 
 func (x Decimal64) Mod64(y Decimal64) (Decimal64, error) {
