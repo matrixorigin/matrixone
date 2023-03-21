@@ -195,11 +195,11 @@ func getStrCols(bats []*batch.Batch, idx int) [][]string {
 func (w *S3Writer) mergeBlock(idx int, length int, proc *process.Process) error {
 	bats := w.tableBatches[idx][:length]
 	sortIdx := -1
-	for _, bat := range bats {
+	for i := range bats {
 		// sort bats firstly
 		// for main table
 		if idx == 0 && len(w.sortIndex) != 0 {
-			sortByKey(proc, bat, w.sortIndex, proc.GetMPool())
+			sortByKey(proc, bats[i], w.sortIndex, proc.GetMPool())
 			sortIdx = w.sortIndex[0]
 		}
 	}

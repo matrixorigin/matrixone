@@ -58,7 +58,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 			runtime.ProcessLevelRuntime().
 				SubLogger(runtime.SystemInit).Debug(
 				"task schedule query init task",
-				zap.String("t", task.Metadata.String()))
+				zap.String("task", task.Metadata.String()))
 		}
 	}
 

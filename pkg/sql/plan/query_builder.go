@@ -1754,7 +1754,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
-			return 0, moerr.NewDDTableNotFound(builder.GetContext(), table)
+			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
