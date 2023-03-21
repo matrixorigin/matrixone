@@ -612,12 +612,17 @@ func LoadCheckpointEntries(
 			return
 		}
 
+		pref := blockio.BuildPrefetch(readers[i], common.DefaultAllocator)
 		for idx, item := range checkpointDataRefer {
 			idxes := make([]uint16, len(item.attrs))
-			for i := range item.attrs {
-				idxes[i] = uint16(i)
+			for col := range item.attrs {
+				idxes[col] = uint16(col)
 			}
-			blockio.Prefetch(idxes, readers[i], []uint32{readerMetas[i][idx].GetID()}, readerMetas[i][idx].GetExtent(), nil)
+			pref.AddBlock(idxes, []uint32{readerMetas[i][idx].GetID()})
+		}
+		err = blockio.Prefetch(pref)
+		if err != nil {
+			return
 		}
 
 	}

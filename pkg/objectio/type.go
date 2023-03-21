@@ -33,7 +33,7 @@ type WriteOptions struct {
 	Val  any
 }
 
-type ReadBlock struct {
+type ReadBlockOptions struct {
 	Id    uint32
 	Idxes map[uint16]bool
 }
@@ -71,7 +71,7 @@ type Reader interface {
 
 	ReadBlocks(ctx context.Context,
 		extent Extent,
-		ids map[uint32]*ReadBlock,
+		ids map[uint32]*ReadBlockOptions,
 		m *mpool.MPool,
 		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)

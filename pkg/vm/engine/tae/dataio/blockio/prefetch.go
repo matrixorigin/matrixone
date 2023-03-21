@@ -3,18 +3,19 @@ package blockio
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 )
 
-type prefetchCtx struct {
+type prefetch struct {
 	name   string
 	meta   objectio.Extent
-	ids    map[uint32]*objectio.ReadBlock
+	ids    map[uint32]*objectio.ReadBlockOptions
 	pool   *mpool.MPool
 	reader objectio.Reader
 }
 
-func mergePrefetch(processes []prefetchCtx) map[string]prefetchCtx {
-	pc := make(map[string]prefetchCtx)
+func mergePrefetch(processes []prefetch) map[string]prefetch {
+	pc := make(map[string]prefetch)
 	for _, p := range processes {
 		if pc[p.name].name == "" {
 			pc[p.name] = p
@@ -28,32 +29,33 @@ func mergePrefetch(processes []prefetchCtx) map[string]prefetchCtx {
 	return pc
 }
 
-func NewPrefetchCtx(name string, meta objectio.Extent, reader *BlockReader) prefetchCtx {
-	ids := make(map[uint32]*objectio.ReadBlock)
-	return prefetchCtx{
-		name:   name,
-		meta:   meta,
+func BuildPrefetch(reader dataio.Reader, m *mpool.MPool) prefetch {
+	ids := make(map[uint32]*objectio.ReadBlockOptions)
+	return prefetch{
+		name:   reader.GetObjectName(),
+		meta:   reader.GetObjectExtent(),
 		ids:    ids,
-		reader: reader.reader,
+		reader: reader.GetObjectReader(),
+		pool:   m,
 	}
 }
 
-func (p *prefetchCtx) AddBlock(idxes []uint16, ids []uint32) {
-	blocks := make(map[uint32]*objectio.ReadBlock)
-	blockIdexes := make(map[uint16]bool)
+func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
+	blocks := make(map[uint32]*objectio.ReadBlockOptions)
+	columns := make(map[uint16]bool)
 	for _, idx := range idxes {
-		blockIdexes[idx] = true
+		columns[idx] = true
 	}
 	for _, id := range ids {
-		blocks[id] = &objectio.ReadBlock{
+		blocks[id] = &objectio.ReadBlockOptions{
 			Id:    id,
-			Idxes: blockIdexes,
+			Idxes: columns,
 		}
 	}
 	p.mergeIds(blocks)
 }
 
-func (p *prefetchCtx) mergeIds(ids2 map[uint32]*objectio.ReadBlock) {
+func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
 	for id, block := range ids2 {
 		if p.ids[id] == nil {
 			p.ids[id] = block

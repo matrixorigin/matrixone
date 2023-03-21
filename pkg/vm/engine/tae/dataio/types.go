@@ -57,8 +57,10 @@ type Reader interface {
 	LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error)
 	LoadAllColumns(ctx context.Context, idxes []uint16,
 		size int64, m *mpool.MPool) ([]*batch.Batch, error)
-	Prefetch(ctx context.Context, idxes []uint16,
-		ids []uint32, m *mpool.MPool) error
+
+	GetObjectName() string
+	GetObjectExtent() objectio.Extent
+	GetObjectReader() objectio.Reader
 }
 
 // Writer is the only interface that mo provides to CN/DN/ETL... modules to write data

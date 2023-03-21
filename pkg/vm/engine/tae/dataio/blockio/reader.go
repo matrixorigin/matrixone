@@ -40,7 +40,7 @@ type BlockReader struct {
 	manager *IoPipeline
 }
 
-type proc struct {
+type fetch struct {
 	name   string
 	meta   objectio.Extent
 	idxes  []uint16
@@ -63,23 +63,6 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		name:    name,
 		meta:    meta,
 		manager: Pipeline,
-	}, nil
-}
-
-func NewObjectReader2(service fileservice.FileService, key string, manager *IoPipeline) (dataio.Reader, error) {
-	name, _, meta, _, err := DecodeLocation(key)
-	if err != nil {
-		return nil, err
-	}
-	reader, err := objectio.NewObjectReader(name, service)
-	if err != nil {
-		return nil, err
-	}
-	return &BlockReader{
-		reader:  reader,
-		name:    name,
-		meta:    meta,
-		manager: manager,
 	}, nil
 }
 
@@ -138,7 +121,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	if r.meta.End() == 0 {
 		return bats, nil
 	}
-	proc := proc{
+	proc := fetch{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxes,
@@ -191,33 +174,6 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	return bats, nil
 }
 
-func (r *BlockReader) Prefetch(ctx context.Context, idxes []uint16,
-	ids []uint32, m *mpool.MPool) error {
-	if r.meta.End() == 0 {
-		return nil
-	}
-
-	blocks := make(map[uint32]*objectio.ReadBlock)
-	blockIdexes := make(map[uint16]bool)
-	for _, idx := range idxes {
-		blockIdexes[idx] = true
-	}
-	for _, id := range ids {
-		blocks[id] = &objectio.ReadBlock{
-			Id:    id,
-			Idxes: blockIdexes,
-		}
-	}
-	prefetch := prefetchCtx{
-		name:   r.name,
-		meta:   r.meta,
-		ids:    blocks,
-		pool:   m,
-		reader: r.reader,
-	}
-	return r.manager.Prefetch(prefetch)
-}
-
 func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
 	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
 	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
@@ -234,7 +190,7 @@ func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
 		}
 	}
 	bats := make([]*batch.Batch, 0)
-	proc := proc{
+	proc := fetch{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxs,
@@ -342,6 +298,16 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 	return bat, nil
 }
 
+func (r *BlockReader) GetObjectName() string {
+	return r.name
+}
+func (r *BlockReader) GetObjectExtent() objectio.Extent {
+	return r.meta
+}
+func (r *BlockReader) GetObjectReader() objectio.Reader {
+	return r.reader
+}
+
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
 	zm := NewZoneMap(typ)
 	err := zm.Unmarshal(buf[:])
@@ -397,54 +363,28 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 	}
 }
 
-func Prefetch(idxes []uint16, reader dataio.Reader,
-	ids []uint32, meta objectio.Extent, m *mpool.MPool) error {
-	if meta.End() == 0 {
+func Prefetch(pref prefetch) error {
+	logutil.Infof("Prefetch: %v", pref)
+	return Pipeline.Prefetch(pref)
+}
+
+func PrefetchRaw(idxes []uint16, reader dataio.Reader,
+	ids []uint32, m *mpool.MPool) error {
+	if reader.GetObjectExtent().End() == 0 {
 		return nil
 	}
 
-	blocks := make(map[uint32]*objectio.ReadBlock)
-	blockIdexes := make(map[uint16]bool)
-	for _, idx := range idxes {
-		blockIdexes[idx] = true
-	}
-	for _, id := range ids {
-		blocks[id] = &objectio.ReadBlock{
-			Id:    id,
-			Idxes: blockIdexes,
-		}
-	}
-	prefetch := prefetchCtx{
-		name:   reader.(*BlockReader).name,
-		meta:   meta,
-		ids:    blocks,
-		pool:   m,
-		reader: reader.(*BlockReader).reader,
-	}
-	logutil.Infof("Prefetch %v", prefetch)
-	return Pipeline.Prefetch(prefetch)
-}
-
-func PrefetchWithCtx(ctx prefetchCtx, m *mpool.MPool) error {
-	logutil.Infof("Prefetch %v", ctx)
-	ctx.pool = m
-	return Pipeline.Prefetch(ctx)
+	pref := BuildPrefetch(reader, m)
+	pref.AddBlock(idxes, ids)
+	logutil.Infof("PrefetchRaw: %v", pref)
+	return Pipeline.Prefetch(pref)
 }
 
 func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
-	_, meta, err := DecodeLocationToMetas(reader.(*BlockReader).key)
-	if err != nil {
-		return err
-	}
-	if meta[0].End() == 0 {
+	if reader.GetObjectExtent().End() == 0 {
 		return nil
 	}
-	prefetch := prefetchCtx{
-		name:   reader.(*BlockReader).name,
-		meta:   meta[0],
-		pool:   m,
-		reader: reader.(*BlockReader).reader,
-	}
-	logutil.Infof("Prefetch %v", prefetch)
-	return Pipeline.Prefetch(prefetch)
+	pref := BuildPrefetch(reader, m)
+	logutil.Infof("PrefetchBlocksMeta: %v", pref)
+	return Pipeline.Prefetch(pref)
 }

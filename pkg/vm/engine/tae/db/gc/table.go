@@ -385,16 +385,16 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 	}
 	bats := t.makeBatchWithGCTable()
 	defer t.closeBatch(bats)
-	pCtx := blockio.NewPrefetchCtx(name, bs[0].GetExtent(), reader)
+	pref := blockio.BuildPrefetch(reader, common.DefaultAllocator)
 	for i := range bats {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		bs[i].GetColumnCount()
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
 			idxes[a] = a
 		}
-		pCtx.AddBlock(idxes, []uint32{bs[i].GetID()})
+		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
 	}
-	return blockio.PrefetchWithCtx(pCtx, common.DefaultAllocator)
+	return blockio.Pipeline.Prefetch(pref)
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory

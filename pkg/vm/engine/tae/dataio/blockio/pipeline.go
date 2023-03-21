@@ -53,7 +53,7 @@ func putJob(job *tasks.Job) {
 
 var Pipeline *IoPipeline
 
-type IOJobFactory func(context.Context, *objectio.ObjectFS, proc) *tasks.Job
+type IOJobFactory func(context.Context, fetch) *tasks.Job
 
 // type Pipeline interface {
 // 	Start()
@@ -80,8 +80,7 @@ func makeName(location string) string {
 
 func jobFactory(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
-	proc proc,
+	proc fetch,
 ) *tasks.Job {
 	return getJob(
 		ctx,
@@ -101,16 +100,16 @@ func jobFactory(
 	)
 }
 
-func prefetchJob(ctx context.Context,
-	fs *objectio.ObjectFS, pCtx prefetchCtx) *tasks.Job {
+func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pCtx.name),
+		makeName(pref.name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := pCtx.reader.ReadBlocks(ctx, pCtx.meta, pCtx.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+			ioVectors, err := pref.reader.ReadBlocks(ctx,
+				pref.meta, pref.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -121,16 +120,16 @@ func prefetchJob(ctx context.Context,
 	)
 }
 
-func prefetchMetaJob(ctx context.Context,
-	fs *objectio.ObjectFS, pCtx prefetchCtx) *tasks.Job {
+func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pCtx.name),
+		makeName(pref.name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := pCtx.reader.ReadMeta(ctx, []objectio.Extent{pCtx.meta}, nil, LoadZoneMapFunc)
+			ioVectors, err := pref.reader.ReadMeta(ctx,
+				[]objectio.Extent{pref.meta}, nil, LoadZoneMapFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -232,7 +231,7 @@ func (p *IoPipeline) Stop() {
 
 func (p *IoPipeline) Fetch(
 	ctx context.Context,
-	proc proc,
+	proc fetch,
 ) (res any, err error) {
 	job, err := p.AsyncFetch(ctx, proc)
 	if err != nil {
@@ -245,11 +244,10 @@ func (p *IoPipeline) Fetch(
 
 func (p *IoPipeline) AsyncFetch(
 	ctx context.Context,
-	proc proc,
+	proc fetch,
 ) (job *tasks.Job, err error) {
 	job = p.jobFactory(
 		ctx,
-		p.fs,
 		proc,
 	)
 	if _, err = p.fetch.queue.Enqueue(job); err != nil {
@@ -260,7 +258,7 @@ func (p *IoPipeline) AsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(ctx prefetchCtx) (err error) {
+func (p *IoPipeline) Prefetch(ctx prefetch) (err error) {
 	if _, err = p.prefetch.queue.Enqueue(ctx); err != nil {
 		return
 	}
@@ -276,6 +274,20 @@ func (p *IoPipeline) onFetch(jobs ...any) {
 	}
 }
 
+func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
+	if err := p.prefetch.scheduler.Schedule(job); err != nil {
+		job.DoneWithErr(err)
+		logutil.Infof("err is %v", err.Error())
+		putJob(job)
+	} else {
+		if _, err := p.waitQ.Enqueue(job); err != nil {
+			job.DoneWithErr(err)
+			logutil.Infof("err is %v", err.Error())
+			putJob(job)
+		}
+	}
+}
+
 func (p *IoPipeline) onPrefetch(items ...any) {
 	if len(items) == 0 {
 		return
@@ -283,54 +295,30 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if !p.active.Load() {
 		return
 	}
-	processes := make([]prefetchCtx, 0)
+	processes := make([]prefetch, 0)
 	for _, item := range items {
-		pCtx := item.(prefetchCtx)
-		if len(pCtx.ids) == 0 {
+		option := item.(prefetch)
+		if len(option.ids) == 0 {
 			job := prefetchMetaJob(
 				context.Background(),
-				p.fs,
-				pCtx,
+				item.(prefetch),
 			)
-			if err := p.prefetch.scheduler.Schedule(job); err != nil {
-				job.DoneWithErr(err)
-				logutil.Infof("err is %v", err.Error())
-				putJob(job)
-			} else {
-				if _, err := p.waitQ.Enqueue(job); err != nil {
-					job.DoneWithErr(err)
-					logutil.Infof("err is %v", err.Error())
-					putJob(job)
-				}
-			}
+			p.schedulerPrefetch(job)
 			continue
 		}
-		processes = append(processes, pCtx)
+		processes = append(processes, option)
 	}
 	if len(processes) == 0 {
 		return
 	}
 	merged := mergePrefetch(processes)
 	logutil.Infof("items is %d, merged is %d", len(items), len(merged))
-	for _, object := range merged {
-		/*ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-		defer cancel()*/
+	for _, option := range merged {
 		job := prefetchJob(
 			context.Background(),
-			p.fs,
-			object,
+			option,
 		)
-		if err := p.prefetch.scheduler.Schedule(job); err != nil {
-			job.DoneWithErr(err)
-			logutil.Infof("err is %v", err.Error())
-			putJob(job)
-		} else {
-			if _, err := p.waitQ.Enqueue(job); err != nil {
-				job.DoneWithErr(err)
-				logutil.Infof("err is %v", err.Error())
-				putJob(job)
-			}
-		}
+		p.schedulerPrefetch(job)
 	}
 }
 
@@ -342,6 +330,5 @@ func (p *IoPipeline) onWait(jobs ...any) {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
 		putJob(job)
-		//bat := res.Res.(*fileservice.IOVector)
 	}
 }

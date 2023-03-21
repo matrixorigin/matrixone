@@ -401,22 +401,21 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	name, _, extent, _, err := blockio.DecodeLocation(req.DeltaLocs[0])
 	reader, err := blockio.NewObjectReader(
 		h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
 	if err != nil {
 		return nil
 	}
 
-	pCtx := blockio.NewPrefetchCtx(name, extent, reader.(*blockio.BlockReader))
+	pref := blockio.BuildPrefetch(reader, nil)
 	for _, key := range req.DeltaLocs {
 		_, id, _, _, err := blockio.DecodeLocation(key)
 		if err != nil {
 			return nil
 		}
-		pCtx.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
 	}
-	return blockio.PrefetchWithCtx(pCtx, nil)
+	return blockio.Prefetch(pref)
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
