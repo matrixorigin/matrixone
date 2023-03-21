@@ -108,7 +108,7 @@ GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRAN
 
 .PHONY: cgo
 cgo:
-	@(cd cgo; $(MAKE) ${CGO_DEBUG_OPT})
+	@(cd cgo; make ${CGO_DEBUG_OPT})
 
 BUILD_NAME=binary
 # build mo-service binary
