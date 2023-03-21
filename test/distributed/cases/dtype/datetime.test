@@ -217,3 +217,5 @@ select * from t1;
 drop table t1;
 create table t1(a datetime);
 insert into t1 values("9999-12-31 23:59:59.999999");
+
+set @@time_zone='+5:99';
