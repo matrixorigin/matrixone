@@ -360,13 +360,15 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		insertNode.NotCacheable = true
 
 		rs := c.newMergeScope(ss)
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
 			onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
 			if err != nil {
 				return nil, err
 			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
+			rs.appendInstruction(vm.Instruction{
 				Op:  vm.OnDuplicateKey,
+				Idx: c.anal.curr,
 				Arg: onDuplicateKeyArg,
 			})
 		}
@@ -374,8 +376,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
+		rs.appendInstruction(vm.Instruction{
 			Op:  vm.PreInsert,
+			Idx: c.anal.curr,
 			Arg: preArg,
 		})
 
@@ -385,7 +388,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				return nil, err
 			}
 			rs.PreScopes = append(rs.PreScopes, dedupScope)
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
+			rs.appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
 				Idx: c.anal.curr,
 				Arg: constructDispatchLocal(true, dedupScope.Proc.Reg.MergeReceivers),
@@ -401,10 +404,12 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
+			ss = []*Scope{rs}
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeBlock,
+			rs.appendInstruction(vm.Instruction{
+				Op:  vm.MergeBlock,
+				Idx: c.anal.curr,
 				Arg: &mergeblock.Argument{
 					Tbl:         arg.InsertCtx.Source,
 					Unique_tbls: arg.InsertCtx.UniqueSource,
@@ -412,11 +417,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			})
 			return rs, nil
 		}
-
 		rs.Magic = Insert
-		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
+		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Insert,
+			Idx: c.anal.curr,
 			Arg: arg,
 		})
 		return rs, nil
