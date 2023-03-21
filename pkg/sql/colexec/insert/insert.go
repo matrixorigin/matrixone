@@ -37,14 +37,14 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, x any, _ bool, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	defer analyze(proc, idx)()
 
-	arg := x.(*Argument)
-	s3Writer := arg.s3Writer
+	insertArg := arg.(*Argument)
+	s3Writer := insertArg.s3Writer
 	bat := proc.InputBatch()
 	if bat == nil {
-		if arg.IsRemote {
+		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
 			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
@@ -58,14 +58,14 @@ func Call(idx int, proc *process.Process, x any, _ bool, _ bool) (bool, error) {
 	}
 
 	defer func() {
-		if !arg.IsRemote {
+		if !insertArg.IsRemote {
 			bat.Clean(proc.Mp())
 		}
 	}()
 
-	insertCtx := arg.InsertCtx
+	insertCtx := insertArg.InsertCtx
 
-	if arg.IsRemote {
+	if insertArg.IsRemote {
 		// write to s3
 		err := s3Writer.WriteS3Batch(bat, proc, 0)
 		if err != nil {
@@ -87,10 +87,10 @@ func Call(idx int, proc *process.Process, x any, _ bool, _ bool) (bool, error) {
 	}
 
 	affectedRows := uint64(bat.Vecs[0].Length())
-	if arg.IsRemote {
+	if insertArg.IsRemote {
 		s3Writer.WriteEnd(proc)
 	}
-	atomic.AddUint64(&arg.Affected, affectedRows)
+	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
 }
 
