@@ -335,6 +335,8 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+
+	//TODO: retest after cloneWindow()
 	cloned.downstreamVector, _ = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
 	cloned.isOwner = true
 
@@ -438,12 +440,20 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	// TODO: Not doing tryPromoting(). Is it ok XuPeng?
 	//TODO: Do you have any other suggestion for converting []uint32 to []int64 using uns
-	var dels []int64
-	for i := range deletes.ToArray() {
-		dels = append(dels, int64(i))
+	//var dels []int64
+	//for i := range deletes.ToArray() {
+	//	dels = append(dels, int64(i))
+	//}
+
+	var sels []int64
+	vecLen := uint32(vec.Length())
+	for i := uint32(0); i < vecLen; i++ {
+		if !deletes.Contains(i) {
+			sels = append(sels, int64(i))
+		}
 	}
 
-	vec.downstreamVector.Shrink(dels, true)
+	vec.downstreamVector.Shrink(sels, false)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
