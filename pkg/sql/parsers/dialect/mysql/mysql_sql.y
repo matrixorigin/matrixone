@@ -206,6 +206,10 @@ import (
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
+    incrementByOption *tree.IncrementByOption
+    minValueOption  *tree.MinValueOption
+    maxValueOption  *tree.MaxValueOption 
+    startWithOption *tree.StartWithOption 
     subscriptionOption *tree.SubscriptionOption
     accountsSetOption *tree.AccountsSetOption
 }
@@ -273,7 +277,7 @@ import (
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
-%token <str> SCHEMA TABLE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
+%token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
@@ -286,6 +290,8 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 
+// Sequence
+%token <str> INCREMENT CYCLE MINVALUE
 // publication
 %token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
 
@@ -331,7 +337,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
@@ -365,6 +371,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
+// Sequence function
+%token <str> NEXTVAL SETVAL CURRVAL LASTVAL
+
 //JSON function
 %token <str> ARROW
 
@@ -383,12 +392,12 @@ import (
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_sequence_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
-%type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
+%type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
@@ -447,7 +456,7 @@ import (
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
-%type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type
+%type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
@@ -559,12 +568,16 @@ import (
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
+%type <incrementByOption> increment_by_opt
+%type <minValueOption> min_value_opt
+%type <maxValueOption> max_value_opt
+%type <startWithOption> start_with_opt
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
@@ -2452,6 +2465,7 @@ show_stmt:
 |   show_columns_stmt
 |   show_databases_stmt
 |   show_tables_stmt
+|   show_sequences_stmt
 |   show_process_stmt
 |   show_errors_stmt
 |   show_warnings_stmt
@@ -2690,6 +2704,15 @@ show_process_stmt:
         $$ = &tree.ShowProcessList{Full: $2}
     }
 
+show_sequences_stmt:
+    SHOW SEQUENCES database_name_opt where_expression_opt
+    {
+        $$ = &tree.ShowSequences{
+           DBName: $3, 
+           Where: $4,
+        }
+    }
+
 show_tables_stmt:
     SHOW full_opt TABLES database_name_opt like_opt where_expression_opt
     {
@@ -2884,7 +2907,17 @@ drop_ddl_stmt:
 |   drop_user_stmt
 |   drop_account_stmt
 |   drop_function_stmt
+|   drop_sequence_stmt
 |   drop_publication_stmt
+
+drop_sequence_stmt:
+    DROP SEQUENCE exists_opt table_name_list
+    {
+        $$ = &tree.DropSequence{
+            IfExists: $3,
+            Names:   $4,
+        }
+    }
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
@@ -4322,6 +4355,7 @@ create_ddl_stmt:
 |    create_view_stmt
 |   create_function_stmt
 |   create_extension_stmt
+|   create_sequence_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -5175,7 +5209,150 @@ tail_param_opt:
             Assignments: $5,
         }
     }
-
+create_sequence_stmt:
+    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
+    {
+        $$ = &tree.CreateSequence {
+            IfNotExists: $3,
+            Name: $4,
+            Type: $5,
+            IncrementBy: $6,
+            MinValue: $7,
+            MaxValue: $8,
+            StartWith: $9,
+            Cycle: $10, 
+        }
+    }
+as_datatype_opt:
+    {
+        locale := ""
+        fstr := "bigint"
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.IntFamily,
+                FamilyString: fstr,
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
+        }
+    }
+|   AS column_type
+    {
+        $$ = $2
+    }
+increment_by_opt:
+    {
+        $$ = nil
+    }
+|   INCREMENT BY INTEGRAL 
+    {
+        $$ = &tree.IncrementByOption{
+            Minus: false,
+            Num: $3,
+        }
+    }
+|   INCREMENT INTEGRAL
+    {
+        $$ = &tree.IncrementByOption{
+            Minus: false,
+            Num: $2,
+        }
+    }
+|   INCREMENT BY '-' INTEGRAL
+    {
+        $$ = &tree.IncrementByOption{
+            Minus: true,
+            Num: $4,
+        }
+    }
+|   INCREMENT '-' INTEGRAL
+    {
+        $$ = &tree.IncrementByOption {
+            Minus: true,
+            Num: $3,
+        }
+    }
+cycle_opt:
+    {
+        $$ = false
+    }
+|   NO CYCLE
+    {
+        $$ = false
+    }
+|   CYCLE
+    {
+        $$ = true
+    }
+min_value_opt:
+    {
+        $$ = nil
+    }
+|   MINVALUE INTEGRAL 
+    {
+        $$ = &tree.MinValueOption{
+            Minus: false,
+            Num: $2,
+        }
+    }
+|   MINVALUE '-' INTEGRAL
+    {
+        $$ = &tree.MinValueOption{
+            Minus: true,
+            Num: $3,
+        }
+    }
+max_value_opt:
+    {
+        $$ = nil
+    }
+|   MAXVALUE INTEGRAL
+    {
+        $$ = &tree.MaxValueOption{
+            Minus: false,
+            Num: $2,
+        }
+    }
+|   MAXVALUE '-' INTEGRAL
+    {
+        $$ = &tree.MaxValueOption{
+            Minus: true,
+            Num: $3,
+        }
+    }
+start_with_opt:
+    {
+        $$ = nil
+    }
+|   START WITH INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            Minus: false,
+            Num: $3,
+        }
+    }
+|   START INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            Minus:  false,
+            Num: $2,
+        }
+    }
+|   START WITH '-' INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            Minus: true,
+            Num: $4,
+        }
+    }
+|   START '-' INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            Minus: true,
+            Num: $3,
+        }
+    }
 temporary_opt:
     {
         $$ = false
@@ -6828,6 +7005,38 @@ function_call_generic:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
+        }
+    }
+|   NEXTVAL '(' expression_list ')'
+    {
+        name := tree.SetUnresolvedName("nextval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   SETVAL '(' expression_list  ')'
+    {
+        name := tree.SetUnresolvedName("setval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   CURRVAL '(' expression_list  ')'
+    {
+        name := tree.SetUnresolvedName("currval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   LASTVAL '('')'
+    {
+        name := tree.SetUnresolvedName("lastval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: nil,
         }
     }
 |   TRIM '(' expression ')'
@@ -8640,6 +8849,7 @@ non_reserved_keyword:
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
+|   SEQUENCES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
@@ -8653,6 +8863,9 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|   INCREMENT
+|   CYCLE
+|   MINVALUE
 |	PROCESSLIST
 |   PUBLICATION
 |   SUBSCRIPTIONS
@@ -8708,6 +8921,10 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|   NEXTVAL
+|   SETVAL
+|   CURRVAL
+|   LASTVAL
 
 //mo_keywords:
 //    PROPERTIES

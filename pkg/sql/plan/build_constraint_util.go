@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -238,10 +239,13 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+
 	if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
+	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.GetContext().Value(defines.BgKey{}) == nil {
+		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
