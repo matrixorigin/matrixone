@@ -41,9 +41,10 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
 	}
 
+	accountId := ctx.GetAccountId()
 	// get data from schema
 	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, stmt.Name, accountId)
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 
 	//sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
@@ -409,6 +410,16 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
+	sub, err := ctx.GetSubscriptionMeta(dbName)
+	if err != nil {
+		return nil, err
+	}
+	subName := dbName
+	if sub != nil {
+		accountId = uint32(sub.AccountId)
+		dbName = sub.DbName
+		ctx.SetQueryingSubscription(sub)
+	}
 
 	var sql string
 	if accountId == catalog.System_Account {
@@ -416,24 +427,45 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
 	} else {
 		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
 	}
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		p, err := returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			ctx.SetQueryingSubscription(nil)
+		}
+		return p, nil
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("relname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		p, err := returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			ctx.SetQueryingSubscription(nil)
+		}
+		return p, nil
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	p, err := returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	if sub != nil {
+		ctx.SetQueryingSubscription(nil)
+	}
+	return p, nil
 }
 
 func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
@@ -556,11 +588,19 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-
+	var sub *SubscriptionMeta
+	if obj.PubAccountId != -1 {
+		dbName = obj.SchemaName
+		accountId = uint32(obj.PubAccountId)
+		sub = &SubscriptionMeta{
+			AccountId: obj.PubAccountId,
+		}
+		ctx.SetQueryingSubscription(sub)
+	}
 	var keyStr string
 	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
 		keyStr = "case when attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
@@ -606,17 +646,32 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		p, err := returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		if err != nil {
+			return nil, err
+		}
+		ctx.SetQueryingSubscription(nil)
+		return p, nil
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("attname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		p, err := returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		if err != nil {
+			return nil, err
+		}
+		ctx.SetQueryingSubscription(nil)
+		return p, nil
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	p, err := returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	ctx.SetQueryingSubscription(nil)
+	return p, nil
 }
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {

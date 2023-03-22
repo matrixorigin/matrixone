@@ -16,7 +16,6 @@ package memoryengine
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -31,6 +30,26 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (e *Engine) NewCompilerContext(
@@ -62,6 +81,10 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 
 func (*CompilerContext) GetStatsCache() *plan.StatsCache {
 	return nil
+}
+
+func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return nil, nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {

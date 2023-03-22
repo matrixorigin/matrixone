@@ -42,6 +42,11 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) CheckSubscriptionValid(subName,accName string, pubName string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
 	return "", nil
 }
@@ -773,6 +778,19 @@ func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewNam
 
 func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
+}
+
+func (m *MockCompilerContext) GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error) {
+	return nil, nil
+}
+func (m *MockCompilerContext) SetQueryingSubscription(*SubscriptionMeta) {
+	return
+}
+func (m *MockCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
+	return nil
+}
+func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
+	return false, nil
 }
 
 type MockOptimizer struct {

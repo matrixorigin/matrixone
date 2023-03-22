@@ -138,6 +138,16 @@ message ObjectRef {
 	string db_name		= 6;
 	string schema_name	= 7;
 	string obj_name		= 8;
+	string subscription_name = 9;
+	int32 pub_account_id = 10;
+}
+
+message SubscriptionMeta{
+	string name = 1; // pubName
+	int32 account_id = 2; // pubAccountID
+	string db_name = 3; // pubDbName
+	string account_name = 4;// pubAccountName
+	string sub_name = 5; // subName(subscription side db name)
 }
 
 message Function {

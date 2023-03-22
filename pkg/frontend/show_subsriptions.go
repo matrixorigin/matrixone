@@ -16,13 +16,14 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const (
-	getSubscriptionInfoFormat = `select datname,dat_createsql from mo_catalog.mo_database where dat_type='subscription';`
+	getSubscriptionInfoFormat = `select datname,dat_createsql from mo_catalog.mo_database where dat_type='subscription' and account_id=%d;`
 )
 
 var (
@@ -42,6 +43,10 @@ var (
 	}
 )
 
+func getSqlForShowSubscriptions(_ context.Context, accId uint32) (string, error) {
+	return fmt.Sprintf(getSubscriptionInfoFormat, accId), nil
+}
+
 func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscriptions) error {
 	var err error
 	var rs = &MysqlResultSet{}
@@ -50,6 +55,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 	var lowerInt64 int64
 	var createSql string
 	var ast []tree.Statement
+	var sql string
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -57,7 +63,11 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 	if err != nil {
 		goto handleFailed
 	}
-	err = bh.Exec(ctx, getSubscriptionInfoFormat)
+	sql, err = getSqlForShowSubscriptions(ctx, ses.GetTenantInfo().TenantID)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
 	}

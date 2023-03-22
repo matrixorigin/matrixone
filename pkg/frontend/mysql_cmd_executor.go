@@ -408,14 +408,21 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
+	var dbMeta engine.Database
 	txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if _, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
+	}
+	if dbMeta.IsSubscription(ctx) {
+		_, err = checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx))
+		if err != nil {
+			return err
+		}
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
@@ -3050,6 +3057,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
+				return false
+			}
+			if node.ObjRef != nil && len(node.ObjRef.SubscriptionName) > 0 {
 				return false
 			}
 		}

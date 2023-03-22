@@ -625,7 +625,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		}
 
 	default:
-		if len(node.Children) > 0 {
+		if len(node.Children) > 0 && childStats != nil {
 			node.Stats = &plan.Stats{
 				Outcnt:      childStats.Outcnt,
 				Cost:        childStats.Outcnt,

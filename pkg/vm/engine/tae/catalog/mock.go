@@ -194,6 +194,14 @@ func (h *mockDBHandle) GetRelationByID(id uint64) (rel handle.Relation, err erro
 	return nil, nil
 }
 
+func (h *mockDBHandle) IsSubscription() bool {
+	return h.entry.IsSubscription()
+}
+
+func (h *mockDBHandle) GetCreateSql() string {
+	return h.entry.GetCreateSql()
+}
+
 func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
 	return new(mockSegIt)
 }

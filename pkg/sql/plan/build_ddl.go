@@ -817,7 +817,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
@@ -854,6 +854,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			}
 		}
 	}
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -880,7 +883,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
+	}
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -983,6 +989,12 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 	}
 
 	if stmt.SubscriptionOption != nil {
+		accName := string(stmt.SubscriptionOption.From)
+		pubName := string(stmt.SubscriptionOption.Publication)
+		subName := string(stmt.Name)
+		if err := ctx.CheckSubscriptionValid(subName, accName, pubName); err != nil {
+			return nil, err
+		}
 		createDB.SubscriptionOption = &plan.SubscriptionOption{
 			From:        string(stmt.SubscriptionOption.From),
 			Publication: string(stmt.SubscriptionOption.Publication),
@@ -1006,7 +1018,11 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
 	}
-
+	if publishing, err := ctx.IsPublishing(dropDB.Database); err != nil {
+		return nil, err
+	} else if publishing {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
+	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

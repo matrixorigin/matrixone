@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"math"
 	"math/bits"
 	"os"
@@ -837,10 +838,10 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
-		`drop table if exists mo_catalog.mo_pubs;`,
-		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
-
+	dropMoPubsSql                     = `drop table if exists mo_catalog.mo_pubs;`
+	deleteMoPubsSql                   = `delete from mo_catalog.mo_pubs;`
+	dropAutoIcrColSql                 = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName)
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
 		account_name,
 		dat_name,
@@ -1190,11 +1191,14 @@ const (
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 
-	getDbIdAndTypFormat    = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
-	insertIntoMoPubsFormat = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
-	getPubInfoFormat       = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat    = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
-	dropPubFormat          = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
+	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
+	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
+	updatePubInfoFormat         = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
+	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
+	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
+	getPubInfoForSubFormat      = `select database_name,all_account,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
+	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 )
 
 var (
@@ -1224,6 +1228,20 @@ var (
 		PrivilegeTypeDropAccount:   0,
 	}
 )
+
+func getSqlForAccountIdAndStatus(ctx context.Context, accName string, check bool) (string, error) {
+	if check && accountNameIsInvalid(accName) {
+		return "", moerr.NewInternalError(ctx, fmt.Sprintf("account name %s is invalid", accName))
+	}
+	return fmt.Sprintf(getAccountIdAndStatusFormat, accName), nil
+}
+
+func getSqlForPubInfoForSub(ctx context.Context, pubName string, check bool) (string, error) {
+	if check && nameIsInvalid(pubName) {
+		return "", moerr.NewInternalError(ctx, fmt.Sprintf("pub name %s is invalid", pubName))
+	}
+	return fmt.Sprintf(getPubInfoForSubFormat, pubName), nil
+}
 
 func getSqlForGetConfiguationByDbName(ctx context.Context, path string, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
@@ -1542,6 +1560,15 @@ func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bo
 		}
 	}
 	return fmt.Sprintf(dropPubFormat, pubName), nil
+}
+
+func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
+
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -2495,6 +2522,219 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	return err
 }
 
+func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
+	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
+	if err != nil {
+		return nil, err
+	}
+
+	if dbMeta.IsSubscription(ctx) {
+		if sub, err := checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx)); err != nil {
+			return nil, err
+		} else {
+			return sub, nil
+		}
+	}
+	return nil, nil
+}
+
+func isSubscriptionValid(allAccount bool, accountList string, accName string) bool {
+	if allAccount {
+		return true
+	}
+	return strings.Contains(accountList, accName)
+}
+
+func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (*plan.SubscriptionMeta, error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	var (
+		err                                                      error
+		sql, accStatus, allAccountStr, accountList, databaseName string
+		erArray                                                  []ExecResult
+		tenantInfo                                               *TenantInfo
+		accId                                                    int64
+		newCtx                                                   context.Context
+		subs                                                     *plan.SubscriptionMeta
+	)
+	tenantInfo = ses.GetTenantInfo()
+	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	//get pubAccountId from publication info
+	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
+
+	if err != nil {
+		return nil, err
+	}
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(newCtx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(newCtx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		goto handleFailed
+	}
+	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+
+	accStatus, err = erArray[0].GetString(newCtx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if accStatus == tree.AccountStatusSuspend.String() {
+		err = moerr.NewInternalError(newCtx, "the account %s is suspended", accName)
+		goto handleFailed
+	}
+
+	//check the publication is already exist or not
+
+	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accId))
+	sql, err = getSqlForPubInfoForSub(newCtx, pubName, true)
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(newCtx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	if erArray, err = getResultSet(newCtx, bh); err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		goto handleFailed
+	}
+
+	databaseName, err = erArray[0].GetString(newCtx, 0, 0)
+
+	if err != nil {
+		goto handleFailed
+	}
+
+	allAccountStr, err = erArray[0].GetString(newCtx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+	accountList, err = erArray[0].GetString(newCtx, 0, 2)
+	if err != nil {
+		goto handleFailed
+	}
+	if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
+		goto handleFailed
+	}
+
+	subs = &plan.SubscriptionMeta{
+		Name:        pubName,
+		AccountId:   int32(accId),
+		DbName:      databaseName,
+		AccountName: accName,
+		SubName:     subName,
+	}
+
+	return subs, nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
+}
+
+func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string) (*plan.SubscriptionMeta, error) {
+	var (
+		err                       error
+		lowerAny                  any
+		lowerInt64                int64
+		accName, pubName, subName string
+		tenantInfo                *TenantInfo
+		ast                       []tree.Statement
+	)
+	tenantInfo = ses.GetTenantInfo()
+	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return nil, err
+	}
+	lowerInt64 = lowerAny.(int64)
+	ast, err = mysql.Parse(ctx, createSql, lowerInt64)
+	if err != nil {
+		return nil, err
+	}
+
+	accName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
+	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
+	subName = string(ast[0].(*tree.CreateDatabase).Name)
+
+	if accName == tenantInfo.GetTenant() {
+		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
+	}
+	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
+}
+
+func isDbPublishing(ctx context.Context, dbName string, ses *Session) (bool, error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	var (
+		err     error
+		sql     string
+		erArray []ExecResult
+		count   int64
+	)
+
+	sql, err = getSqlForDbPubCount(ctx, dbName)
+	if err != nil {
+		return false, err
+	}
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+	}
+	count, err = erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return count > 0, nil
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return false, rbErr
+	}
+	return false, err
+}
+
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) error {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -2840,12 +3080,19 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		//step 7 : drop table mo_user_defined_function
 		//step 8 : drop table mo_mysql_compatbility_mode
 		//step 9 : drop table %!%mo_increment_columns
-		//step 10 : drop table mo_pubs
 		for _, sql = range getSqlForDropAccount() {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
 				goto handleFailed
 			}
+		}
+
+		// delete all publications
+
+		err = bh.Exec(deleteCtx, deleteMoPubsSql)
+
+		if err != nil {
+			goto handleFailed
 		}
 
 		//drop databases created by user
@@ -2897,6 +3144,18 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 				goto handleFailed
 			}
 		}
+	}
+
+	// step -1: drop table mo_pubs
+	err = bh.Exec(deleteCtx, dropMoPubsSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step 0: drop autoIcr table
+	err = bh.Exec(deleteCtx, dropAutoIcrColSql)
+	if err != nil {
+		goto handleFailed
 	}
 
 	//step 1 : delete the account in the mo_account of the sys account

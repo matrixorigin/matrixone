@@ -375,6 +375,8 @@ type Database interface {
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
 	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
+	IsSubscription(context.Context) bool
+	GetCreateSql(context.Context) string
 }
 
 type Engine interface {
