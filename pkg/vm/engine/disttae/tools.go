@@ -154,6 +154,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 
 func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
+	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	bat.SetZs(1, m)
