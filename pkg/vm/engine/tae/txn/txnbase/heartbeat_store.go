@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnimpl
+package txnbase
 
 import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
-const (
-	TxnEntryCreateDatabase txnif.TxnEntryType = iota
-	TxnEntryDropDatabase
-	TxnEntryCretaeTable
-	TxnEntryDropTable
-)
+type heartbeatStore struct {
+	NoopTxnStore
+}
+
+func (store *heartbeatStore) IsReadonly() bool {
+	return false
+}
+
+func (store *heartbeatStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Heartbeat
+}
