@@ -419,6 +419,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
 	}
 
 	var sql string
@@ -434,38 +437,17 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if stmt.Where != nil {
-		p, err := returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
-		if err != nil {
-			return nil, err
-		}
-		if sub != nil {
-			ctx.SetQueryingSubscription(nil)
-		}
-		return p, nil
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("relname")
-		p, err := returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
-		if err != nil {
-			return nil, err
-		}
-		if sub != nil {
-			ctx.SetQueryingSubscription(nil)
-		}
-		return p, nil
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
-	p, err := returnByRewriteSQL(ctx, sql, ddlType)
-	if err != nil {
-		return nil, err
-	}
-	if sub != nil {
-		ctx.SetQueryingSubscription(nil)
-	}
-	return p, nil
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
@@ -481,6 +463,17 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoDB(ctx.GetContext())
 	}
 
+	sub, err := ctx.GetSubscriptionMeta(dbName)
+	if err != nil {
+		return nil, err
+	}
+	subName := dbName
+	if sub != nil {
+		accountId = uint32(sub.AccountId)
+		dbName = sub.DbName
+		ctx.SetQueryingSubscription(sub)
+	}
+
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	var sql string
 
@@ -489,13 +482,15 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+			subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
 	} else {
 		sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
-		sql = fmt.Sprintf(sql, dbName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+		sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	p, err := returnByRewriteSQL(ctx, sql, ddlType)
+	ctx.SetQueryingSubscription(nil)
+	return p, err
 }
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
@@ -508,13 +503,26 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
 	var sql string
+
+	var sub *SubscriptionMeta
+	if obj.PubAccountId != -1 {
+		accountId = uint32(obj.PubAccountId)
+		dbName = obj.SchemaName
+		sub = &SubscriptionMeta{
+			AccountId: obj.PubAccountId,
+		}
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
+	}
 
 	if accountId == catalog.System_Account {
 		mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
@@ -542,9 +550,19 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+
+	if obj.PubAccountId != -1 {
+		sub := &SubscriptionMeta{
+			AccountId: obj.PubAccountId,
+		}
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TARGET
@@ -600,6 +618,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			AccountId: obj.PubAccountId,
 		}
 		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
 	}
 	var keyStr string
 	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
@@ -646,32 +667,17 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	if stmt.Where != nil {
-		p, err := returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
-		if err != nil {
-			return nil, err
-		}
-		ctx.SetQueryingSubscription(nil)
-		return p, nil
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("attname")
-		p, err := returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
-		if err != nil {
-			return nil, err
-		}
-		ctx.SetQueryingSubscription(nil)
-		return p, nil
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
-	p, err := returnByRewriteSQL(ctx, sql, ddlType)
-	if err != nil {
-		return nil, err
-	}
-	ctx.SetQueryingSubscription(nil)
-	return p, nil
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
@@ -692,6 +698,20 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
 	accountId := ctx.GetAccountId()
+
+	sub, err := ctx.GetSubscriptionMeta(dbName)
+	if err != nil {
+		return nil, err
+	}
+	if sub != nil {
+		accountId = uint32(sub.AccountId)
+		dbName = sub.DbName
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
+	}
+
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
 	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)"
@@ -809,13 +829,26 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	tblName := string(stmt.TableName.Name())
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_INDEX
+
+	if obj.PubAccountId != -1 {
+		sub := &SubscriptionMeta{
+			AccountId: obj.PubAccountId,
+		}
+		accountId = uint32(obj.PubAccountId)
+		dbName = obj.SchemaName
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
+	}
+
 	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
 	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
