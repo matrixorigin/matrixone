@@ -266,10 +266,27 @@ type TxnStore interface {
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
+	DoneWaitEvent(cnt int)
+	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+	ObserveTxn(
+		visitDatabase func(db any),
+		visitTable func(tbl any),
+		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		visitMetadata func(block any),
+		visitAppend func(bat any),
+		visitDelete func(deletes []uint32, prefix []byte))
+	GetTransactionType() TxnType
 }
+
+type TxnType int8
+
+const (
+	TxnType_Normal = iota
+	TxnType_Heartbeat
+)
 
 type TxnEntryType int16
 

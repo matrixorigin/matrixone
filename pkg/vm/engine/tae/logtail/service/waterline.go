@@ -23,17 +23,11 @@ import (
 // Waterliner maintains waterline for all subscribed tables.
 type Waterliner struct {
 	sync.Mutex
-
-	initialized bool
-	clock       func() (timestamp.Timestamp, timestamp.Timestamp)
-	waterline   timestamp.Timestamp
+	waterline timestamp.Timestamp
 }
 
-func NewWaterliner(nowFn func() (timestamp.Timestamp, timestamp.Timestamp)) *Waterliner {
-	return &Waterliner{
-		initialized: false,
-		clock:       nowFn,
-	}
+func NewWaterliner() *Waterliner {
+	return &Waterliner{}
 }
 
 // Waterline returns waterline for subscribed table.
@@ -42,12 +36,6 @@ func NewWaterliner(nowFn func() (timestamp.Timestamp, timestamp.Timestamp)) *Wat
 func (w *Waterliner) Waterline() timestamp.Timestamp {
 	w.Lock()
 	defer w.Unlock()
-
-	if !w.initialized {
-		now, _ := w.clock()
-		w.waterline = now
-		w.initialized = true
-	}
 
 	return w.waterline
 }
@@ -58,10 +46,6 @@ func (w *Waterliner) Waterline() timestamp.Timestamp {
 func (w *Waterliner) Advance(update timestamp.Timestamp) {
 	w.Lock()
 	defer w.Unlock()
-
-	if !w.initialized {
-		panic("advance on uninitailized instance")
-	}
 
 	if update.Less(w.waterline) {
 		panic("timestamp rollback for waterline")
