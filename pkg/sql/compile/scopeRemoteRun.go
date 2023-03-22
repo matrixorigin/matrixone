@@ -940,13 +940,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    convertToTypes(t.Types),
-			Aggs:     convertToAggregates(t.Aggs),
-			// MultiAggs: ,
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToTypes(t.Types),
+			Aggs:      convertToAggregates(t.Aggs),
+			MultiAggs: convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()
