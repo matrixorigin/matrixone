@@ -449,6 +449,8 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	//	dels = append(dels, int64(i))
 	//}
 
+	vec.tryPromoting()
+
 	var sels []int64
 	vecLen := uint32(vec.Length())
 	for i := uint32(0); i < vecLen; i++ {
