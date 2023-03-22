@@ -279,6 +279,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 		}
 	}
+	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
+		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
+	}
 	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
 	return nil
 }
@@ -718,7 +721,10 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
-	if err := tc.option.lockService.Unlock(ctx, tc.mu.txn.ID); err != nil {
+	if err := tc.option.lockService.Unlock(
+		ctx,
+		tc.mu.txn.ID,
+		tc.mu.txn.CommitTS); err != nil {
 		tc.rt.Logger().Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
