@@ -62,7 +62,7 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		reader:  reader,
 		name:    name,
 		meta:    meta,
-		manager: Pipeline,
+		manager: pipeline,
 	}, nil
 }
 
@@ -74,7 +74,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	return &BlockReader{
 		reader:  reader,
 		name:    name,
-		manager: Pipeline,
+		manager: pipeline,
 	}, nil
 }
 
@@ -103,7 +103,7 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 		reader:  reader,
 		name:    name,
 		meta:    locs[0],
-		manager: Pipeline,
+		manager: pipeline,
 	}, nil
 }
 
@@ -317,8 +317,7 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 }
 
 func Prefetch(pref prefetch) error {
-	logutil.Infof("Prefetch: %v", pref)
-	return Pipeline.Prefetch(pref)
+	return pipeline.Prefetch(pref)
 }
 
 func PrefetchRaw(idxes []uint16, reader dataio.Reader,
@@ -330,7 +329,7 @@ func PrefetchRaw(idxes []uint16, reader dataio.Reader,
 	pref := BuildPrefetch(reader, m)
 	pref.AddBlock(idxes, ids)
 	logutil.Infof("PrefetchRaw: %v", pref)
-	return Pipeline.Prefetch(pref)
+	return pipeline.Prefetch(pref)
 }
 
 func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
@@ -338,6 +337,5 @@ func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
 		return nil
 	}
 	pref := BuildPrefetch(reader, m)
-	logutil.Infof("PrefetchBlocksMeta: %v", pref)
-	return Pipeline.Prefetch(pref)
+	return pipeline.Prefetch(pref)
 }

@@ -36,6 +36,14 @@ var (
 	}
 )
 
+// type pipeline interface {
+// 	Start()
+// 	Stop()
+// 	Prefetch(location string) error
+// 	Fetch(ctx context.Context, location string) (any, error)
+// 	AsyncFetch(ctx context.Context, location string) (tasks.Job, error)
+// }
+
 func getJob(
 	ctx context.Context,
 	id string,
@@ -51,27 +59,20 @@ func putJob(job *tasks.Job) {
 	_jobPool.Put(job)
 }
 
-var Pipeline *IoPipeline
+var pipeline *IoPipeline
 
 type IOJobFactory func(context.Context, fetch) *tasks.Job
 
-// type Pipeline interface {
-// 	Start()
-// 	Stop()
-// 	Prefetch(location string) error
-// 	Fetch(ctx context.Context, location string) (any, error)
-// 	AsyncFetch(ctx context.Context, location string) (tasks.Job, error)
-// }
+func init() {
+	pipeline = NewIOPipeline(nil)
+}
 
 func Start() {
-	if Pipeline == nil {
-		Pipeline = NewIOPipeline(nil)
-	}
-	Pipeline.Start()
+	pipeline.Start()
 }
 
 func Stop() {
-	Pipeline.Stop()
+	pipeline.Stop()
 }
 
 func makeName(location string) string {

@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"time"
 
@@ -130,6 +131,9 @@ func NewService(
 		return nil, err
 	}
 
+	// start I/O pipeline
+	blockio.Start()
+
 	s := &store{
 		cfg:                 cfg,
 		rt:                  rt,
@@ -181,6 +185,8 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	// stop I/O pipeline
+	blockio.Stop()
 	s.stopper.Stop()
 	var err error
 	s.moCluster.Close()

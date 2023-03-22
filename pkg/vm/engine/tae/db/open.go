@@ -101,8 +101,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
-	blockio.Pipeline = blockio.NewIOPipeline(db.Fs)
-	blockio.Pipeline.Start()
+	blockio.Start()
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(

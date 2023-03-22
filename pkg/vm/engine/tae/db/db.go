@@ -147,8 +147,6 @@ func (db *DB) Close() error {
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	db.DiskCleaner.Stop()
-	blockio.Pipeline.Stop()
-	blockio.Pipeline = nil
 	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }

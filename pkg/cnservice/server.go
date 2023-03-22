@@ -162,6 +162,8 @@ func (s *service) Start() error {
 func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
+	// stop I/O pipeline
+	blockio.Stop()
 	s.stopper.Stop()
 	if err := s.stopFrontend(); err != nil {
 		return err
@@ -275,7 +277,6 @@ func (s *service) initEngine(
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-	blockio.Start()
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
@@ -317,7 +318,6 @@ func (s *service) runMoServer() error {
 }
 
 func (s *service) serverShutdown(isgraceful bool) error {
-	blockio.Stop()
 	return s.mo.Stop()
 }
 
