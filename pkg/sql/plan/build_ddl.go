@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -287,7 +288,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(builder, bindContext)
-		err = buildPartitionByClause(partitionBinder, stmt, createTable.TableDef)
+		err = buildPartitionByClause(ctx.GetContext(), partitionBinder, stmt, createTable.TableDef)
 		if err != nil {
 			return nil, err
 		}
@@ -307,18 +308,19 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported
-func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+	var builder partitionBuilder
 	switch stmt.PartitionOption.PartBy.PType.(type) {
 	case *tree.HashType:
-		err = buildHashPartition(partitionBinder, stmt, tableDef)
+		builder = &hashPartitionBuilder{}
 	case *tree.KeyType:
-		err = buildKeyPartition(partitionBinder, stmt, tableDef)
+		builder = &keyPartitionBuilder{}
 	case *tree.RangeType:
-		err = buildRangePartition(partitionBinder, stmt, tableDef)
+		builder = &rangePartitionBuilder{}
 	case *tree.ListType:
-		err = buildListPartitiion(partitionBinder, stmt, tableDef)
+		builder = &listPartitionBuilder{}
 	}
-	return err
+	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
