@@ -198,7 +198,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
-	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -241,7 +240,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Account:              tenant.GetTenant(),
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
+		Host:                 ses.protocol.Peer(),
 		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
