@@ -305,22 +305,18 @@ func (t *GCTable) replayData(ctx context.Context,
 	attrs []string,
 	types []types.Type,
 	bats []*containers.Batch,
-	bs []objectio.BlockObject) error {
+	bs []objectio.BlockObject,
+	reader *blockio.BlockReader) error {
+	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
-		col, err := bs[typ].GetColumn(uint16(i))
-		if err != nil {
-			return err
-		}
-		colData, err := col.GetData(ctx, common.DefaultAllocator)
-		if err != nil {
-			return err
-		}
-		pkgVec := vector.NewVec(types[i])
-		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
-		copy(v, colData.Entries[0].Object.([]byte))
-		if err = pkgVec.UnmarshalBinary(v); err != nil {
-			return err
-		}
+		idxes[i] = uint16(i)
+	}
+	mobat, err := reader.LoadColumns(ctx, idxes, []uint32{bs[typ].GetID()}, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	for i := range attrs {
+		pkgVec := mobat[0].Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i], false)
@@ -388,7 +384,6 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 	pref := blockio.BuildPrefetch(reader, common.DefaultAllocator)
 	for i := range bats {
 		idxes := make([]uint16, bs[i].GetColumnCount())
-		bs[i].GetColumnCount()
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
 			idxes[a] = a
 		}
