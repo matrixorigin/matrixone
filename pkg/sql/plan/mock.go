@@ -42,7 +42,7 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
-func (m *MockCompilerContext) CheckSubscriptionValid(subName,accName string, pubName string) error {
+func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -784,7 +784,7 @@ func (m *MockCompilerContext) GetSubscriptionMeta(dbName string) (*SubscriptionM
 	return nil, nil
 }
 func (m *MockCompilerContext) SetQueryingSubscription(*SubscriptionMeta) {
-	return
+
 }
 func (m *MockCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
 	return nil

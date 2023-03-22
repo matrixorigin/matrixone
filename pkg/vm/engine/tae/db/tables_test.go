@@ -40,7 +40,7 @@ func TestTables1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 	txn, _ := db.StartTxn(nil)
-	database, _ := txn.CreateDatabase("db", "")
+	database, _ := txn.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -113,7 +113,7 @@ func TestTxn1(t *testing.T) {
 	bats := bat.Split(20)
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "")
+		database, err := txn.CreateDatabase("db", "", "")
 		assert.Nil(t, err)
 		_, err = database.CreateRelation(schema)
 		assert.Nil(t, err)
@@ -193,7 +193,7 @@ func TestTxn2(t *testing.T) {
 	run := func() {
 		defer wg.Done()
 		txn, _ := db.StartTxn(nil)
-		if _, err := txn.CreateDatabase("db", ""); err != nil {
+		if _, err := txn.CreateDatabase("db", "", ""); err != nil {
 			assert.Nil(t, txn.Rollback())
 		} else {
 			assert.Nil(t, txn.Commit())
@@ -218,7 +218,7 @@ func TestTxn4(t *testing.T) {
 	schema.SegmentMaxBlocks = 8
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
 		defer pk.Close()
@@ -250,7 +250,7 @@ func TestTxn5(t *testing.T) {
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		_, err := database.CreateRelation(schema)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
@@ -321,7 +321,7 @@ func TestTxn6(t *testing.T) {
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bats[0])
 		assert.Nil(t, err)
@@ -451,7 +451,7 @@ func TestMergeBlocks1(t *testing.T) {
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
 		assert.Nil(t, err)
@@ -552,7 +552,7 @@ func TestMergeBlocks2(t *testing.T) {
 	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	{
 		txn, _ := tae.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
 		assert.Nil(t, err)
@@ -588,7 +588,7 @@ func TestCompaction1(t *testing.T) {
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bats[0])
 		assert.Nil(t, err)
@@ -649,7 +649,7 @@ func TestCompaction2(t *testing.T) {
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bats[0])
 		assert.Nil(t, err)

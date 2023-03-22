@@ -583,7 +583,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1")
+		_, _, err := tcc.getRelation("abc", "t1", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1")
