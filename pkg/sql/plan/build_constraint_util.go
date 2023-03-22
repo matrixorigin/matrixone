@@ -1015,6 +1015,13 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
+
+					// //if the table is cluster table, set the schema name as 'mo_catalog'
+					// if tableDef.GetTableType() == catalog.SystemClusterRel {
+					// 	idxRef.SchemaName = catalog.MO_CATALOG
+					// 	astTblName.SchemaName = tree.Identifier(catalog.MO_CATALOG)
+					// }
+
 					rightId, err := builder.buildTable(astTblName, rightCtx)
 					if err != nil {
 						return err

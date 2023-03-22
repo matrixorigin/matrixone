@@ -2210,6 +2210,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	}
 	proc.SessionInfo.QueryId = ses.QueryId
 	ses.txnCompileCtx.SetProcess(proc)
+	ses.txnCompileCtx.SetDatabase(ses.GetDatabaseName())
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
 		ses.GetUserName(),

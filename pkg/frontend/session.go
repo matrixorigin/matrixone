@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -302,7 +303,7 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, autoincrcaches defines.AutoIncrCaches) *BackgroundSession {
+func NewBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, autoincrcaches defines.AutoIncrCaches, txnCompilerContext *TxnCompilerContext) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	ses.SetAutoIncrCaches(autoincrcaches)
@@ -313,6 +314,7 @@ func NewBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, PU *
 	ses.SetRequestContext(cancelBackgroundCtx)
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
+	ses.SetTxnCompilerContext(txnCompilerContext)
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -331,6 +333,7 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.errInfo.msgs = nil
 		bgs.Session.errInfo = nil
 		bgs.Session.cache.invalidate()
+		bgs.Session.txnCompileCtx = nil
 		bgs.Session.cache = nil
 		bgs.Session.txnCompileCtx = nil
 		bgs.Session.txnHandler = nil
@@ -352,6 +355,12 @@ func (ses *Session) SetBackgroundSession(b bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.isBackgroundSession = b
+}
+
+func (ses *Session) SetTxnCompilerContext(txnCompilerContext *TxnCompilerContext) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.txnCompileCtx = txnCompilerContext
 }
 
 func (ses *Session) IsBackgroundSession() bool {
@@ -491,7 +500,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	return NewBackgroundHandler(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCaches)
+	return NewBackgroundHandler(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCaches, ses.GetTxnCompileCtx())
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1001,7 +1010,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionInfo, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCaches())
+	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCaches(), ses.txnCompileCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -1037,7 +1046,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches())
+	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches(), ses.GetTxnCompileCtx())
 	if err != nil {
 		return nil, err
 	}
@@ -1083,7 +1092,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches())
+		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches(), ses.GetTxnCompileCtx())
 		if err != nil {
 			return nil, err
 		}
@@ -1098,7 +1107,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches())
+		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches(), ses.GetTxnCompileCtx())
 		if err != nil {
 			return nil, err
 		}
@@ -1116,7 +1125,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sql, ses.GetAutoIncrCaches())
+		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sql, ses.GetAutoIncrCaches(), ses.GetTxnCompileCtx())
 		if err != nil {
 			return nil, err
 		}
@@ -1265,8 +1274,8 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, autoIncrCaches defines.AutoIncrCaches) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(connCtx, reqCtx, mp, pu, autoIncrCaches)
+func executeSQLInBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, autoIncrCaches defines.AutoIncrCaches, txnCompilerContext *TxnCompilerContext) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(connCtx, reqCtx, mp, pu, autoIncrCaches, txnCompilerContext)
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
@@ -1298,10 +1307,10 @@ type BackgroundHandler struct {
 
 // NewBackgroundHandler with first two parameters.
 // connCtx as the parent of the txnCtx
-var NewBackgroundHandler = func(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, autoincrcaches defines.AutoIncrCaches) BackgroundExec {
+var NewBackgroundHandler = func(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, autoincrcaches defines.AutoIncrCaches, txnCompilerContext *TxnCompilerContext) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(connCtx, reqCtx, mp, pu, GSysVariables, autoincrcaches),
+		ses: NewBackgroundSession(connCtx, reqCtx, mp, pu, GSysVariables, autoincrcaches, txnCompilerContext),
 	}
 	return bh
 }

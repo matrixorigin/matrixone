@@ -103,6 +103,9 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 		return true, nil
 		//show
+	case *tree.CreateAccount, *tree.DropAccount:
+		return true, nil
+		//account
 	case *tree.ShowCreateTable,
 		*tree.ShowCreateView,
 		*tree.ShowCreateDatabase,
