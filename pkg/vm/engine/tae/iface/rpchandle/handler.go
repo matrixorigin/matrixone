@@ -27,7 +27,7 @@ type Handler interface {
 	HandleCommit(
 		ctx context.Context,
 		meta txn.TxnMeta,
-	) error
+	) (error, timestamp.Timestamp)
 
 	HandleRollback(
 		ctx context.Context,
