@@ -404,6 +404,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 func doUse(ctx context.Context, ses *Session, db string) error {
+	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
