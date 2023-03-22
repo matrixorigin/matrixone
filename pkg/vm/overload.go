@@ -17,7 +17,6 @@ package vm
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -112,8 +111,6 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	HashBuild: hashbuild.String,
 
 	TableFunction: table_function.String,
-
-	LockOp: lockop.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -164,7 +161,6 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	HashBuild: hashbuild.Prepare,
 
 	TableFunction: table_function.Prepare,
-	LockOp:        lockop.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
@@ -216,5 +212,4 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	HashBuild: hashbuild.Call,
 
 	TableFunction: table_function.Call,
-	LockOp:        lockop.Call,
 }

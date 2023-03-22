@@ -18,23 +18,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-// fetchRowsFunc fetch rows from vector.
-type fetchRowsFunc func(
+// FetchLockRowsFunc fetch lock rows from vector.
+type FetchLockRowsFunc func(
+	// primary data vector
 	vec *vector.Vector,
+	// hodler to encode primary key to lock row
 	parker *types.Packer,
+	// primary key type
 	tp types.Type,
+	// global config: max lock rows bytes per lock
 	max int,
+	// is lock table lock
 	lockTabel bool) ([][]byte, lock.Granularity)
 
-type Argument struct {
-	tableID    uint64
-	tabaleName string
-	pkIdx      int32
-	pkType     types.Type
-	mode       lock.LockMode
-	lockTable  bool
-	fetcher    fetchRowsFunc
-	packer     *types.Packer
+// LockOptions lock operation options
+type LockOptions struct {
+	maxBytesPerLock int
+	mode            lock.LockMode
+	lockTable       bool
+	parker          *types.Packer
+	fetchFunc       FetchLockRowsFunc
+}
+
+// RetryTimestamp retry timestamp range [from, to)
+type RetryTimestamp struct {
+	From timestamp.Timestamp
+	To   timestamp.Timestamp
 }

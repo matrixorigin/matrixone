@@ -44,7 +44,8 @@ var (
 		math.MaxInt8}
 )
 
-func getFetchRowsFunc(t types.Type) fetchRowsFunc {
+// GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
+func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	switch t.Oid {
 	case types.T_bool:
 		return fetchBoolRows

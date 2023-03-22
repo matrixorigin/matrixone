@@ -431,12 +431,19 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
+		rt := runtime.ProcessLevelRuntime()
+		client.SetupRuntimeTxnOptions(
+			rt,
+			txn.GetTxnMode(s.cfg.Txn.Mode),
+			txn.GetTxnIsolation(s.cfg.Txn.Isolation),
+		)
 		var sender rpc.TxnSender
 		sender, err = s.getTxnSender()
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(runtime.ProcessLevelRuntime(),
+		c = client.NewTxnClient(
+			rt,
 			sender,
 			client.WithLockService(s.lockService))
 		s._txnClient = c

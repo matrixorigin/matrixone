@@ -15,113 +15,133 @@
 package lockop
 
 import (
-	"bytes"
-	"fmt"
-	"sync"
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-// NewArgument create new argument
-func NewArgument(
+// Lock lock
+func Lock(
+	ctx context.Context,
 	tableID uint64,
-	tableName string,
-	pkIndx int32,
+	txnOp client.TxnOperator,
+	lockService lockservice.LockService,
+	vec *vector.Vector,
 	pkType types.Type,
-	mode lock.LockMode) *Argument {
-	arg := argPool.Get().(*Argument)
-	arg.tableID = tableID
-	arg.tabaleName = tableName
-	arg.pkIdx = pkIndx
-	arg.pkType = pkType
-	arg.mode = mode
-	return arg
-}
-
-var (
-	argPool = sync.Pool{
-		New: func() any {
-			return &Argument{}
-		},
-	}
-)
-
-func (arg *Argument) Free(
-	proc *process.Process,
-	pipelineFailed bool) {
-	arg.reset()
-	argPool.Put(arg)
-}
-
-func (arg *Argument) reset() {
-	arg.packer.Reset()
-	arg.packer.FreeMem()
-	*arg = Argument{}
-}
-
-func String(
-	v any,
-	buf *bytes.Buffer) {
-	arg := v.(*Argument)
-	buf.WriteString(fmt.Sprintf("lock-%s(%d)",
-		arg.tabaleName,
-		arg.tableID))
-}
-
-func Prepare(
-	proc *process.Process,
-	v any) error {
-	arg := v.(*Argument)
-	arg.fetcher = getFetchRowsFunc(arg.pkType)
-	arg.packer = types.NewPacker(proc.Mp())
-	return nil
-}
-
-// Call add primary key to lockservice, blcoked if conflict encountered.
-func Call(
-	idx int,
-	proc *process.Process,
-	v any,
-	isFirst bool,
-	isLast bool) (bool, error) {
-	bat := proc.InputBatch()
-	if bat == nil {
-		return true, nil
-	}
-	if bat.Length() == 0 {
-		return false, nil
+	opts LockOptions) (RetryTimestamp, error) {
+	if !txnOp.Txn().IsPessimistic() {
+		return RetryTimestamp{}, nil
 	}
 
-	arg := v.(*Argument)
-	var vec *vector.Vector
-	if !arg.lockTable {
-		vec = bat.GetVector(arg.pkIdx)
+	if opts.maxBytesPerLock == 0 {
+		opts.maxBytesPerLock = int(lockService.GetConfig().MaxLockRowBytes)
 	}
-	rows, g := arg.fetcher(
+	fetchFunc := opts.fetchFunc
+	if fetchFunc == nil {
+		fetchFunc = GetFetchRowsFunc(pkType)
+	}
+
+	rows, g := fetchFunc(
 		vec,
-		arg.packer,
-		arg.pkType,
-		0,
-		arg.lockTable)
-	txnOp := proc.TxnOperator
-	bind, err := proc.LockService.Lock(
-		proc.Ctx,
-		arg.tableID,
+		opts.parker,
+		pkType,
+		opts.maxBytesPerLock,
+		opts.lockTable)
+	result, err := lockService.Lock(
+		ctx,
+		tableID,
 		rows,
 		txnOp.Txn().ID,
 		lock.LockOptions{
 			Granularity: g,
 			Policy:      lock.WaitPolicy_Wait,
-			Mode:        arg.mode,
+			Mode:        opts.mode,
 		})
 	if err != nil {
-		return false, err
+		return RetryTimestamp{}, err
 	}
-	if err := txnOp.AddLockTable(bind); err != nil {
-		return false, err
+
+	// add bind locks
+	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
+		return RetryTimestamp{}, err
 	}
-	return false, nil
+
+	// no conflict or has conflict, but all prev txn all aborted
+	// current txn can read and write normally
+	if !result.HasConflict ||
+		!result.HasPrevCommit {
+		return RetryTimestamp{}, nil
+	}
+
+	// arriving here means that at least one of the conflicting transactions
+	// has committed. Arriving here means that at least one of the conflicting
+	// transactions has committed.
+	//
+	// For the RC schema we need some retries between
+	// [txn.snapshotts, prev.committs] (de-duplication for insert, re-query for
+	// update and delete).
+	//
+	// For the SI schema the current transaction needs to be abort (TODO: later
+	// we can consider recording the ReadSet of the transaction and check if data
+	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
+	// the SI transaction to eliminate conflicts)
+	if !txnOp.Txn().IsRCIsolation() {
+		return RetryTimestamp{}, moerr.NewTxnWWConflict(ctx)
+	}
+
+	// forward rc's snapshot ts
+	oldTS := txnOp.Txn().SnapshotTS
+	if err := txnOp.UpdateSnapshot(result.Timestamp); err != nil {
+		return RetryTimestamp{}, err
+	}
+	return RetryTimestamp{From: oldTS, To: result.Timestamp.Next()}, nil
+}
+
+// DefaultLockOptions create a default lock operation. The parker is used to
+// encode primary key into lock row.
+func DefaultLockOptions(parker *types.Packer) LockOptions {
+	return LockOptions{
+		mode:            lock.LockMode_Exclusive,
+		lockTable:       false,
+		maxBytesPerLock: 0,
+		parker:          parker,
+	}
+}
+
+// WithLockMode set lock mode, Exclusive or Shared
+func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
+	opts.mode = mode
+	return opts
+}
+
+// WithLockTable set lock all table
+func (opts LockOptions) WithLockTable() LockOptions {
+	opts.lockTable = true
+	return opts
+}
+
+// WithMaxBytesPerLock every lock operation, will add some lock rows into
+// lockservice. If very many rows of data are added at once, this can result
+// in an excessive memory footprint. This value limits the amount of lock memory
+// that can be allocated per lock operation, and if it is exceeded, it will be
+// converted to a range lock.
+func (opts LockOptions) WithMaxBytesPerLock() LockOptions {
+	opts.lockTable = true
+	return opts
+}
+
+// WithFetchLockRowsFunc set the primary key into lock rows conversion function.
+func (opts LockOptions) WithFetchLockRowsFunc(fetchFunc FetchLockRowsFunc) LockOptions {
+	opts.fetchFunc = fetchFunc
+	return opts
+}
+
+// NeedRetry return true if need retry
+func (v RetryTimestamp) NeedRetry() bool {
+	return v.To.Greater(v.From)
 }
