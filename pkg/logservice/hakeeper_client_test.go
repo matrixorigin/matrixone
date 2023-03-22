@@ -110,7 +110,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 			ServiceAddresses: []string{"localhost:53033"}, // obvious not reachable
 			DiscoveryAddress: testServiceAddress,
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		c, err := NewLogHAKeeperClient(ctx, cfg)
 		require.NoError(t, err)

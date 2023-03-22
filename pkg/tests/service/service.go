@@ -1394,6 +1394,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			defines.LocalFileServiceName,
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
+			fileservices.getETLFileService(),
 		)
 		if err != nil {
 			panic(err)
