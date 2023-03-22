@@ -52,12 +52,6 @@ func (e *MetadataMVCCNode) String() string {
 		e.MetaLoc,
 		e.DeltaLoc)
 }
-func (e *MetadataMVCCNode) UpdateMetaLoc(metaLoc string) {
-	e.MetaLoc = metaLoc
-}
-func (e *MetadataMVCCNode) UpdateDeltaLoc(deltaLoc string) {
-	e.DeltaLoc = deltaLoc
-}
 
 // for create drop in one txn
 func (e *MetadataMVCCNode) Update(vun BaseNode) {

@@ -142,7 +142,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry.MetaBaseEntry, ts); err == nil {
+	if err = readWriteConfilictCheck(entry.BaseEntryImpl, ts); err == nil {
 		return
 	}
 	err = nil

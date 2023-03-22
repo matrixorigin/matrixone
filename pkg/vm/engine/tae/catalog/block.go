@@ -41,21 +41,24 @@ type BlockEntry struct {
 
 func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
-		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](),
+		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} },
+		),
 	}
 }
 
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		segment:       segment,
-		state:         state,
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		segment: segment,
+		state:   state,
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.BaseEntryImpl.CreateWithTxn(txn)
+	e.BaseEntryImpl.CreateWithTxn(txn, &MetadataMVCCNode{})
 	return e
 }
 
@@ -68,9 +71,10 @@ func NewBlockEntryWithMeta(
 	deltaLoc string) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		segment:       segment,
-		state:         state,
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		segment: segment,
+		state:   state,
 	}
 	e.BaseEntryImpl.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
@@ -81,11 +85,12 @@ func NewBlockEntryWithMeta(
 
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		segment:       segment,
-		state:         ES_Appendable,
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		segment: segment,
+		state:   ES_Appendable,
 	}
-	e.BaseEntryImpl.CreateWithTS(ts)
+	e.BaseEntryImpl.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
 }
 
@@ -96,9 +101,10 @@ func NewStandaloneBlockWithLoc(
 	metaLoc string,
 	delLoc string) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		segment:       segment,
-		state:         ES_NotAppendable,
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		segment: segment,
+		state:   ES_NotAppendable,
 	}
 	e.BaseEntryImpl.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
@@ -106,11 +112,12 @@ func NewStandaloneBlockWithLoc(
 
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		segment:       segment,
-		state:         ES_Appendable,
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		segment: segment,
+		state:   ES_Appendable,
 	}
-	e.BaseEntryImpl.CreateWithTS(types.SystemDBTS)
+	e.BaseEntryImpl.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	return e
 }
 

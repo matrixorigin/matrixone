@@ -130,12 +130,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry.MetaBaseEntry, ts)
+	return readWriteConfilictCheck(entry.BaseEntryImpl, ts)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, block := range checker.readSet {
-		if err = readWriteConfilictCheck(block.MetaBaseEntry, ts); err != nil {
+		if err = readWriteConfilictCheck(block.BaseEntryImpl, ts); err != nil {
 			return
 		}
 	}

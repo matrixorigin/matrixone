@@ -91,20 +91,21 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64
 	//id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntryImpl: NewBaseEntry[*DBMVCCNode](id),
-		catalog:       catalog,
-		name:          name,
-		createSql:     createSql,
-		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:     make(map[string]*nodeList[*TableEntry]),
-		link:          common.NewGenericSortedDList(compareTableFn),
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *DBMVCCNode { return &DBMVCCNode{} }),
+		catalog:   catalog,
+		name:      name,
+		createSql: createSql,
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	if txn != nil {
 		// Only in unit test, txn can be nil
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &DBMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -113,20 +114,21 @@ func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *D
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntryImpl: NewBaseEntry[*DBMVCCNode](id),
-		catalog:       catalog,
-		name:          name,
-		createSql:     createSql,
-		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:     make(map[string]*nodeList[*TableEntry]),
-		link:          common.NewGenericSortedDList(compareTableFn),
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *DBMVCCNode { return &DBMVCCNode{} }),
+		catalog:   catalog,
+		name:      name,
+		createSql: createSql,
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	if txn != nil {
 		// Only in unit test, txn can be nil
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &DBMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -135,39 +137,44 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntryImpl: NewBaseEntry[*DBMVCCNode](id),
-		catalog:       catalog,
-		name:          name,
-		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:     make(map[string]*nodeList[*TableEntry]),
-		link:          common.NewGenericSortedDList(compareTableFn),
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *DBMVCCNode { return &DBMVCCNode{} }),
+		catalog:   catalog,
+		name:      name,
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
-	e.CreateWithTS(ts)
+	e.CreateWithTS(ts, &DBMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	entry := &DBEntry{
-		BaseEntryImpl: NewBaseEntry[*DBMVCCNode](pkgcatalog.MO_CATALOG_ID),
-		catalog:       catalog,
-		name:          pkgcatalog.MO_CATALOG,
-		createSql:     "create database " + pkgcatalog.MO_CATALOG,
-		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:     make(map[string]*nodeList[*TableEntry]),
-		link:          common.NewGenericSortedDList(compareTableFn),
-		isSys:         true,
+		BaseEntryImpl: NewBaseEntry(pkgcatalog.MO_CATALOG_ID,
+			func() *DBMVCCNode {
+				return &DBMVCCNode{}
+			}),
+		catalog:   catalog,
+		name:      pkgcatalog.MO_CATALOG,
+		createSql: "create database " + pkgcatalog.MO_CATALOG,
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
+		isSys:     true,
 	}
-	entry.CreateWithTS(types.SystemDBTS)
+	entry.CreateWithTS(types.SystemDBTS, &DBMVCCNode{})
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntryImpl: NewReplayBaseEntry[*DBMVCCNode](),
-		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:     make(map[string]*nodeList[*TableEntry]),
-		link:          common.NewGenericSortedDList(compareTableFn),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *DBMVCCNode { return &DBMVCCNode{} }),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	return entry
 }

@@ -122,10 +122,13 @@ type MVCCNode[T BaseNode] struct {
 	BaseNode T
 }
 
-func NewEmptyMVCCNode[T BaseNode]() txnif.MVCCNode {
-	return &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+func NewEmptyMVCCNodeFactory[T BaseNode](factory func() T) func() txnif.MVCCNode {
+	return func() txnif.MVCCNode {
+		return &MVCCNode[T]{
+			EntryMVCCNode: &EntryMVCCNode{},
+			TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+			BaseNode:      factory(),
+		}
 	}
 }
 

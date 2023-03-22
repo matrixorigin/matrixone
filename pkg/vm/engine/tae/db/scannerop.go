@@ -425,7 +425,7 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 
 	// Skip uncommitted entries and appendable block
 	if !entry.IsCommitted() ||
-		!catalog.ActiveWithNoTxnFilter(entry.MetaBaseEntry) ||
+		!catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) ||
 		!catalog.NonAppendableBlkFilter(entry) {
 		return
 	}

@@ -50,13 +50,14 @@ type SegmentEntry struct {
 func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	id := table.GetDB().catalog.NextSegment()
 	e := &SegmentEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:         state,
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:   state,
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &MetadataMVCCNode{})
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -65,34 +66,37 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](),
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
 }
 
 func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:         ES_Appendable,
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:   ES_Appendable,
 	}
-	e.CreateWithTS(ts)
+	e.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:         ES_Appendable,
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:   ES_Appendable,
 	}
-	e.CreateWithTS(types.SystemDBTS)
+	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid uint64
 	if table.schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID

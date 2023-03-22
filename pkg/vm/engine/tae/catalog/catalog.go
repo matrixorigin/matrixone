@@ -317,12 +317,14 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		}
 		return
 	}
+	prev := db.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])
 	un := &MVCCNode[*DBMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: db.GetCreatedAt(),
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
+		BaseNode:    prev.BaseNode.CloneAll().(*DBMVCCNode),
 	}
 	db.Insert(un)
 }
@@ -468,6 +470,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
+		BaseNode:    prev.BaseNode.CloneAll().(*TableMVCCNode),
 	}
 	tbl.Insert(un)
 
@@ -568,6 +571,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 			CreatedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
+		BaseNode:    &MetadataMVCCNode{},
 	}
 	seg.Insert(un)
 }
@@ -602,6 +606,7 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, txnNode 
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
+		BaseNode:    prevUn.BaseNode.CloneAll().(*MetadataMVCCNode),
 	}
 	seg.Insert(un)
 }

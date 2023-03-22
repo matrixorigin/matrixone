@@ -70,28 +70,30 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](tableId),
-		db:            db,
-		schema:        schema,
-		link:          common.NewGenericSortedDList(compareSegmentFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry(tableId,
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		db:      db,
+		schema:  schema,
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
-	// e.CreateWithTxn(txnCtx, schema)
+	e.CreateWithTxnAndSchema(txnCtx, schema)
 	return e
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
-		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](id),
-		db:            db,
-		schema:        schema,
-		link:          common.NewGenericSortedDList(compareSegmentFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		db:      db,
+		schema:  schema,
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
-	e.CreateWithTS(types.SystemDBTS)
+	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{})
 	var sid uint64
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -109,19 +111,21 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		BaseEntryImpl: NewReplayBaseEntry[*TableMVCCNode](),
-		link:          common.NewGenericSortedDList(compareSegmentFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
-		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](id),
-		schema:        schema,
-		link:          common.NewGenericSortedDList(compareSegmentFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry(id,
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		schema:  schema,
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 

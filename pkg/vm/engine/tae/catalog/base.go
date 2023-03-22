@@ -80,17 +80,17 @@ type BaseEntryImpl[T BaseNode] struct {
 	ID uint64
 }
 
-func NewReplayBaseEntry[T BaseNode]() *BaseEntryImpl[T] {
+func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
 	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNode[T]),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory[T](factory)),
 	}
 	return be
 }
 
-func NewBaseEntry[T BaseNode](id uint64) *BaseEntryImpl[T] {
+func NewBaseEntry[T BaseNode](id uint64, factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
 		ID:        id,
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNode[T]),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory[T](factory)),
 	}
 }
 
@@ -148,12 +148,13 @@ func (be *BaseEntryImpl[T]) GetVisibleDeltaLoc(ts types.TS) string {
 
 func (be *BaseEntryImpl[T]) GetID() uint64 { return be.ID }
 
-func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS) {
+func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
+		BaseNode:    baseNode,
 	}
 	be.Insert(node)
 }
@@ -173,12 +174,26 @@ func (be *BaseEntryImpl[T]) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc 
 	be.Insert(node)
 }
 
-func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn) {
+func (be *BaseEntryImpl[T]) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Schema) {
+	node := &MVCCNode[*TableMVCCNode]{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		BaseNode: &TableMVCCNode{
+			SchemaConstraints: string(schema.Constraint),
+		},
+	}
+	be.Insert(node)
+}
+
+func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		BaseNode:    baseNode,
 	}
 	be.Insert(node)
 }
@@ -219,17 +234,28 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 	}
 	return
 }
+func (be *BaseEntryImpl[T]) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+	be.Lock()
+	defer be.Unlock()
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		be.Unlock()
+		txnToWait.GetTxnState(true)
+		be.Lock()
+	}
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	var entry *MVCCNode[T]
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.BaseNode.Update(
+		&TableMVCCNode{
+			SchemaConstraints: string(cstr),
+		})
+	return
+}
 
-//	func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, schema *Schema) {
-//		node := &TableMVCCNode{
-//			EntryMVCCNode: &EntryMVCCNode{
-//				CreatedAt: txnif.UncommitTS,
-//			},
-//			TxnMVCCNode:       txnbase.NewTxnMVCCNodeWithTxn(txn),
-//			SchemaConstraints: string(schema.Constraint),
-//		}
-//		be.Insert(node)
-//	}
 func (be *BaseEntryImpl[T]) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
 	baseNode := &MetadataMVCCNode{
 		MetaLoc:  metaLoc,

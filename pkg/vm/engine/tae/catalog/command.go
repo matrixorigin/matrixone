@@ -358,7 +358,8 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	switch cmd.GetType() {
 	case CmdUpdateDatabase:
-		entry := NewReplayBaseEntry[*DBMVCCNode]()
+		entry := NewReplayBaseEntry[*DBMVCCNode](
+			func() *DBMVCCNode { return &DBMVCCNode{} })
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -379,7 +380,8 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 		cmd.DB.BaseEntryImpl = cmd.entry.(*BaseEntryImpl[*DBMVCCNode])
 	case CmdUpdateTable:
-		entry := NewReplayBaseEntry[*TableMVCCNode]()
+		entry := NewReplayBaseEntry[*TableMVCCNode](
+			func() *TableMVCCNode { return &TableMVCCNode{} })
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -402,7 +404,11 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 	case CmdUpdateSegment:
-		entry := NewReplayBaseEntry[*MetadataMVCCNode]()
+		entry := NewReplayBaseEntry[*MetadataMVCCNode](
+			func() *MetadataMVCCNode {
+				return &MetadataMVCCNode{}
+			},
+		)
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -435,7 +441,8 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.Segment.state = state
 		cmd.Segment.sorted = sorted
 	case CmdUpdateBlock:
-		entry := NewReplayBaseEntry[*MetadataMVCCNode]()
+		entry := NewReplayBaseEntry[*MetadataMVCCNode](
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}

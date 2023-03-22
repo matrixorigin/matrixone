@@ -133,7 +133,7 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.(*catalog.MVCCNode[*catalog.TableMVCCNode]).BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
@@ -154,7 +154,7 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.(*catalog.MVCCNode[*catalog.TableMVCCNode]).BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
@@ -175,7 +175,7 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.(*catalog.MVCCNode[*catalog.TableMVCCNode]).BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
