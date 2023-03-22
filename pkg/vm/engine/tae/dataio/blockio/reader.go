@@ -72,8 +72,9 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 		return nil, err
 	}
 	return &BlockReader{
-		reader: reader,
-		name:   name,
+		reader:  reader,
+		name:    name,
+		manager: Pipeline,
 	}, nil
 }
 
