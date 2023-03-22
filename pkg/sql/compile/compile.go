@@ -1360,6 +1360,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Magic:     Merge,
 		NodeInfo: engine.Node{
 			Addr: c.addr,
+			Mcpu: c.NumCPU(),
 		},
 	}
 	cnt := 0
@@ -1694,6 +1695,22 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// some log for finding a bug.
+	tblId := rel.GetTableID(ctx)
+	expectedLen := len(ranges)
+	logutil.Infof("cn generateNodes-1, tbl %d ranges is %d", tblId, expectedLen)
+	defer func() {
+		if expectedLen != 0 {
+			sum := 0
+			for i := range nodes {
+				sum += len(nodes[i].Data)
+			}
+			if sum != expectedLen {
+				logutil.Errorf("cn generateNodes-2, tbl %d, need %d, but %d", tblId, expectedLen, sum)
+			}
+		}
+	}()
 
 	// If ranges == 0, it's temporary table ?
 	// XXX the code is too confused. should be removed once we remove the memory-engine.
