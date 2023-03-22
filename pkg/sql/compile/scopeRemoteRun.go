@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
@@ -648,12 +649,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    convertToPlanTypes(t.Types),
-			Aggs:     convertToPipelineAggregates(t.Aggs),
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToPlanTypes(t.Types),
+			Aggs:      convertToPipelineAggregates(t.Aggs),
+			MultiAggs: convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -938,12 +940,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    convertToTypes(t.Types),
-			Aggs:     convertToAggregates(t.Aggs),
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToTypes(t.Types),
+			Aggs:      convertToAggregates(t.Aggs),
+			MultiAggs: convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()
@@ -1229,6 +1232,35 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 			Op:   int(a.Op),
 			Dist: a.Dist,
 			E:    a.Expr,
+		}
+	}
+	return result
+}
+
+// for now, it's group_concat
+func convertPipelineMultiAggs(multiAggs []group_concat.Argument) []*pipeline.MultiArguemnt {
+	result := make([]*pipeline.MultiArguemnt, len(multiAggs))
+	for i, a := range multiAggs {
+		result[i] = &pipeline.MultiArguemnt{
+			Dist:        a.Dist,
+			GroupExpr:   a.GroupExpr,
+			OrderByExpr: a.OrderByExpr,
+			Separator:   a.Separator,
+			OrderId:     a.OrderId,
+		}
+	}
+	return result
+}
+
+func convertToMultiAggs(multiAggs []*pipeline.MultiArguemnt) []group_concat.Argument {
+	result := make([]group_concat.Argument, len(multiAggs))
+	for i, a := range multiAggs {
+		result[i] = group_concat.Argument{
+			Dist:        a.Dist,
+			GroupExpr:   a.GroupExpr,
+			OrderByExpr: a.OrderByExpr,
+			Separator:   a.Separator,
+			OrderId:     a.OrderId,
 		}
 	}
 	return result
