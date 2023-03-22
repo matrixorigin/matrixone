@@ -489,7 +489,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var auto_incr bool
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
-				case *tree.AttributePrimaryKey:
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -517,6 +517,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 								ColName: def.Name,
 							},
 						},
+						Name: def.Name.Parts[0],
 					})
 					indexs = append(indexs, def.Name.Parts[0])
 				}
@@ -753,20 +754,114 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return err
+	}
+
 	// build index table
 	if len(uniqueIndexInfos) != 0 {
-		err := buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
+		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err := buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
+func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {
+	constrNames := map[string]bool{}
+	// Check not empty constraint name whether is duplicated.
+	for _, constr := range indexConstraints {
+		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+		if err != nil {
+			return err
+		}
+	}
+	for _, constr := range uniqueConstraints {
+		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+		if err != nil {
+			return err
+		}
+	}
+	// set empty constraint names(index and unique index)
+	for _, constr := range indexConstraints {
+		setEmptyIndexName(constrNames, constr)
+	}
+	for _, constr := range uniqueConstraints {
+		setEmptyUniqueIndexName(constrNames, constr)
+	}
+	return nil
+}
+
+// Check whether the constraint name is duplicate
+func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign bool, ctx context.Context) error {
+	if name == "" {
+		return nil
+	}
+	nameLower := strings.ToLower(name)
+	if namesMap[nameLower] {
+		if foreign {
+			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
+		}
+		return moerr.NewInvalidInput(ctx, "duplicate key name '%s'", name)
+	}
+	namesMap[nameLower] = true
+	return nil
+}
+
+// Set name for unqiue index constraint with an empty name
+func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
+	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
+		var colName string
+		if colName == "" {
+			colName = indexConstr.KeyParts[0].ColName.Parts[0]
+		}
+		constrName := colName
+		i := 2
+		if strings.EqualFold(constrName, "PRIMARY") {
+			constrName = fmt.Sprintf("%s_%d", constrName, 2)
+			i = 3
+		}
+		for namesMap[constrName] {
+			// loop forever until we find constrName that haven't been used.
+			constrName = fmt.Sprintf("%s_%d", colName, i)
+			i++
+		}
+		indexConstr.Name = constrName
+		namesMap[constrName] = true
+	}
+}
+
+// Set name for index constraint with an empty name
+func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
+	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
+		var colName string
+		if colName == "" {
+			colName = indexConstr.KeyParts[0].ColName.Parts[0]
+		}
+		constrName := colName
+		i := 2
+		if strings.EqualFold(constrName, "PRIMARY") {
+			constrName = fmt.Sprintf("%s_%d", constrName, 2)
+			i = 3
+		}
+		for namesMap[constrName] {
+			//  loop forever until we find constrName that haven't been used.
+			constrName = fmt.Sprintf("%s_%d", colName, i)
+			i++
+		}
+		indexConstr.Name = constrName
+		namesMap[constrName] = true
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
@@ -787,8 +882,6 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	nameCount := make(map[string]int)
-
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
@@ -875,18 +968,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
-		if indexInfo.Name == "" {
-			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
-			nameCount[firstPart]++
-			count := nameCount[firstPart]
-			indexName := firstPart
-			if count > 1 {
-				indexName = firstPart + "_" + strconv.Itoa(count)
-			}
-			indexDef.IndexName = indexName
-		} else {
-			indexDef.IndexName = indexInfo.Name
-		}
+		indexDef.IndexName = indexInfo.Name
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
@@ -896,7 +978,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			indexDef.Comment = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
-
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
