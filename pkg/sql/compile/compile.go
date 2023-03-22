@@ -1695,16 +1695,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 	if len(ranges) == 0 {
-		nodes = make(engine.Nodes, len(c.cnList))
-		for i, node := range c.cnList {
-			nodes[i] = engine.Node{
-				Rel:  rel,
-				Id:   node.Id,
-				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-			}
-		}
-		return nodes, nil
+		logutil.Errorf("unreached code, rel.Ranges return 0, rel is %v", rel)
+		return nil, moerr.NewInternalError(c.ctx, "generate table-scan nodes failed because get 0 from Ranges")
 	}
 
 	// In fact, the first element of Ranges is always a memory table.

@@ -254,7 +254,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, c.addr)
+	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
