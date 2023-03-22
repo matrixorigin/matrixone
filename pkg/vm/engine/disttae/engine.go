@@ -96,6 +96,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
+	typ := getTyp(ctx)
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
 	databaseId, err := txn.allocateID(ctx)
@@ -103,7 +104,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, e.mp)
+		name, databaseId, typ, e.mp)
 	if err != nil {
 		return err
 	}
@@ -433,6 +434,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	}
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
+	}
+	err := txn.DumpBatch(true)
+	if err != nil {
+		return err
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {

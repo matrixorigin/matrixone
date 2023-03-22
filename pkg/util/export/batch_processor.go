@@ -508,7 +508,6 @@ func (c *MOCollector) Stop(graceful bool) error {
 		c.mux.Unlock()
 		close(c.stopCh)
 		c.stopWait.Wait()
-		close(c.awakeCollect)
 		close(c.awakeGenerate)
 		close(c.awakeBatch)
 		if !graceful {

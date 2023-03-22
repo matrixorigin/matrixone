@@ -399,7 +399,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 		return bat, nil
 	}
 	for i, vec := range originBatch.Vecs {
-		err := vector.UnionBatch(bat.Vecs[i], vec, 0, length, flags, proc.Mp())
+		err := bat.Vecs[i].UnionBatch(vec, 0, length, flags, proc.Mp())
 		if err != nil {
 			return nil, err
 		}
