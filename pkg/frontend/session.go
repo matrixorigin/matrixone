@@ -790,12 +790,6 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	return ses.txnCompileCtx
 }
 
-func (ses *Session) SetTxnCompileCtx(txnCompileCtx *TxnCompilerContext) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.txnCompileCtx = txnCompileCtx
-}
-
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	gSysVars := ses.GetGlobalSysVars()
