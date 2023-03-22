@@ -4216,6 +4216,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.ShowSequences:
+		typs = append(typs, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
@@ -4233,6 +4235,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.CreateSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
@@ -4269,6 +4278,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if len(st.Names) != 0 {
+			dbName = string(st.Names[0].SchemaName)
+		}
+	case *tree.DropSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)

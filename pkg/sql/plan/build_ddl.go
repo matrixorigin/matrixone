@@ -136,6 +136,148 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}, nil
 }
 
+func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
+	// Sequence table got 1 row and 7 col
+	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
+	cols := make([]*plan.ColDef, len(Sequence_cols_name))
+
+	typ, err := getTypeFromAst(ctx.GetContext(), stmt.Type)
+	if err != nil {
+		return err
+	}
+	for i := range cols {
+		if i == 4 {
+			break
+		}
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  typ,
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	cols[4] = &plan.ColDef{
+		Name: Sequence_cols_name[4],
+		Alg:  plan.CompressType_Lz4,
+		Typ: &plan.Type{
+			Id:    int32(types.T_int64),
+			Width: 0,
+			Scale: 0,
+		},
+		Default: &plan.Default{
+			NullAbility:  true,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
+	for i := 5; i <= 6; i++ {
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_bool),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+
+	cs.TableDef.Cols = cols
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemSequenceRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+
+	cs.TableDef.Defs = append(cs.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+	return nil
+}
+
+func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, error) {
+	dropSequence := &plan.DropSequence{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) Sequence in one statement", len(stmt.Names))
+	}
+	dropSequence.Database = string(stmt.Names[0].SchemaName)
+	if dropSequence.Database == "" {
+		dropSequence.Database = ctx.DefaultDatabase()
+	}
+	dropSequence.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
+		if !dropSequence.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
+		}
+		dropSequence.Table = ""
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_SEQUENCE,
+				Definition: &plan.DataDefinition_DropSequence{
+					DropSequence: dropSequence,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	createSequence := &plan.CreateSequence{
+		IfNotExists: stmt.IfNotExists,
+		TableDef: &TableDef{
+			Name: string(stmt.Name.ObjectName),
+		},
+	}
+	// Get database name.
+	if len(stmt.Name.SchemaName) == 0 {
+		createSequence.Database = ctx.DefaultDatabase()
+	} else {
+		createSequence.Database = string(stmt.Name.SchemaName)
+	}
+
+	err := buildSequenceTableDef(stmt, ctx, createSequence)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_SEQUENCE,
+				Definition: &plan.DataDefinition_CreateSequence{
+					CreateSequence: createSequence,
+				},
+			},
+		},
+	}, nil
+}
+
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
@@ -899,6 +1041,14 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		} else if isView {
 			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
+		}
+
+		// Can not use drop table to drop sequence.
+		if tableDef.TableType == catalog.SystemSequenceRel && !dropTable.IfExists {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
+		} else if tableDef.TableType == catalog.SystemSequenceRel {
+			// If exists, don't drop anything.
 			dropTable.Table = ""
 		}
 
