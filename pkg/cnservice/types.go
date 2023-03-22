@@ -42,8 +42,9 @@ import (
 
 var (
 	defaultListenAddress = "127.0.0.1:6002"
-	defaultTxnIsolation  = txn.TxnIsolation_RC
-	defaultTxnMode       = txn.TxnMode_Pessimistic
+	// TODO(fagongzi): make rc and pessimistic as default
+	defaultTxnIsolation = txn.TxnIsolation_SI
+	defaultTxnMode      = txn.TxnMode_Optimistic
 )
 
 type Service interface {
@@ -230,6 +231,7 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 	return nil
 }

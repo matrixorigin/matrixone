@@ -576,6 +576,21 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		return nil, err
 	}
 	util.LogTxnReceivedResponses(tc.rt.Logger(), result.Responses)
+
+	if len(result.Responses) == 0 {
+		return result, nil
+	}
+
+	// update commit timestamp
+	resp := result.Responses[len(result.Responses)-1]
+	if resp.Txn == nil {
+		return result, nil
+	}
+	if !locked {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+	}
+	tc.mu.txn.CommitTS = resp.Txn.CommitTS
 	return result, nil
 }
 
@@ -732,7 +747,7 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 }
 
 func (tc *txnOperator) needUnlockLocked() bool {
-	if tc.mu.txn.Mode !=
+	if tc.mu.txn.Mode ==
 		txn.TxnMode_Optimistic {
 		return false
 	}

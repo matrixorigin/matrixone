@@ -25,7 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-// Lock lock
+// Lock locks a set of data so that no other transaction can modify it.
+// The data is described by the primary key. When the returned RetryTimestamp.NeedRetry
+// returns True, it means there is a conflict with other transactions and the data to
+// be manipulated has been modified, you need to get the latest data within the range of
+// [RetryTimestamp.From, RetryTimestamp.To).
 func Lock(
 	ctx context.Context,
 	tableID uint64,
@@ -78,8 +82,7 @@ func Lock(
 		return RetryTimestamp{}, nil
 	}
 
-	// arriving here means that at least one of the conflicting transactions
-	// has committed. Arriving here means that at least one of the conflicting
+	// Arriving here means that at least one of the conflicting
 	// transactions has committed.
 	//
 	// For the RC schema we need some retries between

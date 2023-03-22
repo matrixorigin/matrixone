@@ -111,6 +111,7 @@ func TestCommit(t *testing.T) {
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
+		assert.Equal(t, tc.mu.txn.SnapshotTS.Next(), tc.mu.txn.CommitTS)
 
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
