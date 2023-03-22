@@ -23,7 +23,6 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -404,23 +403,23 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTable()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
