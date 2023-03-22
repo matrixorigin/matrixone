@@ -86,7 +86,7 @@ func genDBFullName(tenantID uint32, name string) string {
 }
 
 func compareDBFn(a, b *DBEntry) int {
-	return a.DBBaseEntry.DoCompre(b.DBBaseEntry)
+	return a.BaseEntryImpl.DoCompre(b.BaseEntryImpl)
 }
 
 func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
@@ -226,7 +226,7 @@ func (catalog *Catalog) ReplayCmd(
 func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
 	var err error
-	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -294,7 +294,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 		CreateAt: createAt,
 	}
 	_ = catalog.AddEntryLocked(db, nil, true)
-	un := &DBMVCCNode{
+	un := &MVCCNode[*DBMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
@@ -317,7 +317,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		}
 		return
 	}
-	un := &DBMVCCNode{
+	un := &MVCCNode[*DBMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: db.GetCreatedAt(),
 			DeletedAt: txnNode.End,
@@ -341,7 +341,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
 
-	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*TableMVCCNode])
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -412,12 +412,14 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// update constraint
-		un := &TableMVCCNode{
+		un := &MVCCNode[*TableMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
-			TxnMVCCNode:       txnNode,
-			SchemaConstraints: string(schema.Constraint),
+			TxnMVCCNode: txnNode,
+			BaseNode: &TableMVCCNode{
+				SchemaConstraints: string(schema.Constraint),
+			},
 		}
 		tbl.Insert(un)
 
@@ -429,12 +431,14 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
-	un := &TableMVCCNode{
+	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode:       txnNode,
-		SchemaConstraints: string(schema.Constraint),
+		TxnMVCCNode: txnNode,
+		BaseNode: &TableMVCCNode{
+			SchemaConstraints: string(schema.Constraint),
+		},
 	}
 	tbl.Insert(un)
 }
@@ -457,8 +461,8 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 		}
 		return
 	}
-	prev := tbl.MVCCChain.GetLatestCommittedNode().(*TableMVCCNode)
-	un := &TableMVCCNode{
+	prev := tbl.MVCCChain.GetLatestCommittedNode().(*MVCCNode[*TableMVCCNode])
+	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
 			DeletedAt: txnNode.End,
@@ -475,7 +479,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 
-	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -559,7 +563,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	seg.sorted = sorted
 	seg.segData = dataFactory.MakeSegmentFactory()(seg)
 	rel.AddEntryLocked(seg)
-	un := &MetadataMVCCNode{
+	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
@@ -591,8 +595,8 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, txnNode 
 		}
 		return
 	}
-	prevUn := seg.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
-	un := &MetadataMVCCNode{
+	prevUn := seg.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
 			DeletedAt: txnNode.End,
@@ -620,7 +624,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -695,7 +699,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		panic(err)
 	}
 	blk, _ := seg.GetBlockEntryByID(blkid)
-	var un *MetadataMVCCNode
+	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
 		blk.segment = seg
@@ -703,34 +707,38 @@ func (catalog *Catalog) onReplayCreateBlock(
 		blk.state = state
 		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 		seg.AddEntryLocked(blk)
-		un = &MetadataMVCCNode{
+		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: txnNode.End,
 			},
 			TxnMVCCNode: txnNode,
-			MetaLoc:     metaloc,
-			DeltaLoc:    deltaloc,
+			BaseNode: &MetadataMVCCNode{
+				MetaLoc:  metaloc,
+				DeltaLoc: deltaloc,
+			},
 		}
 	} else {
-		prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
-		un = &MetadataMVCCNode{
+		prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: prevUn.CreatedAt,
 			},
 			TxnMVCCNode: txnNode,
-			MetaLoc:     metaloc,
-			DeltaLoc:    deltaloc,
+			BaseNode: &MetadataMVCCNode{
+				MetaLoc:  metaloc,
+				DeltaLoc: deltaloc,
+			},
 		}
-		node := blk.MVCCChain.SearchNode(un).(*MetadataMVCCNode)
+		node := blk.MVCCChain.SearchNode(un).(*MVCCNode[*MetadataMVCCNode])
 		if node != nil {
 			if !node.CreatedAt.Equal(un.CreatedAt) {
 				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
 			}
-			if node.MetaLoc != un.MetaLoc {
-				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.MetaLoc, un.MetaLoc))
+			if node.BaseNode.MetaLoc != un.BaseNode.MetaLoc {
+				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.BaseNode.MetaLoc, un.BaseNode.MetaLoc))
 			}
-			if node.DeltaLoc != un.DeltaLoc {
-				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.DeltaLoc, un.DeltaLoc))
+			if node.BaseNode.DeltaLoc != un.BaseNode.DeltaLoc {
+				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.BaseNode.DeltaLoc, un.BaseNode.DeltaLoc))
 			}
 			return
 		}
@@ -766,15 +774,17 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, meta
 		}
 		return
 	}
-	prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
-	un := &MetadataMVCCNode{
+	prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
-		MetaLoc:     metaloc,
-		DeltaLoc:    deltaloc,
+		BaseNode: &MetadataMVCCNode{
+			MetaLoc:  metaloc,
+			DeltaLoc: deltaloc,
+		},
 	}
 	blk.Insert(un)
 }

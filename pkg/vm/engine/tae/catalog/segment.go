@@ -33,11 +33,11 @@ import (
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 func compareSegmentFn(a, b *SegmentEntry) int {
-	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
+	return a.BaseEntryImpl.DoCompre(b.BaseEntryImpl)
 }
 
 type SegmentEntry struct {
-	*MetaBaseEntry
+	*BaseEntryImpl[*MetadataMVCCNode]
 	table   *TableEntry
 	entries map[uint64]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
@@ -50,7 +50,7 @@ type SegmentEntry struct {
 func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	id := table.GetDB().catalog.NextSegment()
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
 		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
@@ -65,7 +65,7 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewReplayMetaBaseEntry(),
+		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](),
 		link:          common.NewGenericSortedDList(compareBlockFn),
 		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 	}
@@ -74,7 +74,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
 		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
@@ -86,7 +86,7 @@ func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEnt
 
 func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
 		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
@@ -190,7 +190,7 @@ func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 		return fmt.Sprintf("[%s%s]SEG[%d][C@%s,D@%s]",
 			entry.state.Repr(), sorted, entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s%s]SEG%s", entry.state.Repr(), sorted, entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s%s]SEG%s", entry.state.Repr(), sorted, entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -364,7 +364,7 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 
 func (entry *SegmentEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	if isEmpty, err = entry.MetaBaseEntry.PrepareRollback(); err != nil {
+	if isEmpty, err = entry.BaseEntryImpl.PrepareRollback(); err != nil {
 		return
 	}
 	if isEmpty {
@@ -377,7 +377,7 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 
 func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 	sn := int64(0)
-	if sn, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
+	if sn, err = entry.BaseEntryImpl.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -392,7 +392,7 @@ func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = entry.BaseEntryImpl.ReadAllFrom(r); err != nil {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &entry.state); err != nil {
@@ -410,14 +410,14 @@ func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
 	return entry.GetTable().GetCatalog().GetScheduler()
 }
 
-func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEntry) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
+func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImpl[*MetadataMVCCNode]) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
 	blks := make([]*BlockEntry, 0)
 	blkIt := entry.MakeBlockIt(true)
 	for blkIt.Valid() {
 		blk := blkIt.Get().GetPayload()
 		blk.RLock()
 		if commitFilter != nil && blockFilter != nil {
-			if commitFilter(blk.MetaBaseEntry) && blockFilter(blk) {
+			if commitFilter(blk.BaseEntryImpl) && blockFilter(blk) {
 				blks = append(blks, blk)
 			}
 		} else if blockFilter != nil {
@@ -425,7 +425,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEnt
 				blks = append(blks, blk)
 			}
 		} else if commitFilter != nil {
-			if commitFilter(blk.MetaBaseEntry) {
+			if commitFilter(blk.BaseEntryImpl) {
 				blks = append(blks, blk)
 			}
 		}
@@ -448,13 +448,13 @@ func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	table := entry.GetTable()
 	db := table.GetDB()
 	if db.HasDropCommittedLocked() {
-		return db.DBBaseEntry
+		return db.BaseEntryImpl
 	}
 	if table.HasDropCommittedLocked() {
-		return table.TableBaseEntry
+		return table.BaseEntryImpl
 	}
 	if entry.HasDropCommittedLocked() {
-		return entry.MetaBaseEntry
+		return entry.BaseEntryImpl
 	}
 	return nil
 }

@@ -38,7 +38,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts t
 }
 
 type TableEntry struct {
-	*TableBaseEntry
+	*BaseEntryImpl[*TableMVCCNode]
 	db      *DBEntry
 	schema  *Schema
 	entries map[uint64]*common.GenericDLNode[*SegmentEntry]
@@ -70,26 +70,26 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(tableId),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](tableId),
+		db:            db,
+		schema:        schema,
+		link:          common.NewGenericSortedDList(compareSegmentFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
-	e.CreateWithTxn(txnCtx, schema)
+	// e.CreateWithTxn(txnCtx, schema)
 	return e
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](id),
+		db:            db,
+		schema:        schema,
+		link:          common.NewGenericSortedDList(compareSegmentFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	e.CreateWithTS(types.SystemDBTS)
 	var sid uint64
@@ -109,19 +109,19 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		TableBaseEntry: NewReplayTableBaseEntry(),
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewReplayBaseEntry[*TableMVCCNode](),
+		link:          common.NewGenericSortedDList(compareSegmentFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewBaseEntry[*TableMVCCNode](id),
+		schema:        schema,
+		link:          common.NewGenericSortedDList(compareSegmentFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 
@@ -251,7 +251,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
 			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TBL%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), entry.schema.Name)
 }
 
 func (entry *TableEntry) StringLocked() string {
@@ -364,7 +364,7 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 
 func (entry *TableEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	isEmpty, err = entry.TableBaseEntry.PrepareRollback()
+	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
 		return
 	}
@@ -378,7 +378,7 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 }
 
 func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.TableBaseEntry.WriteAllTo(w); err != nil {
+	if n, err = entry.BaseEntryImpl.WriteAllTo(w); err != nil {
 		return
 	}
 	buf, err := entry.schema.Marshal()
@@ -392,7 +392,7 @@ func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.TableBaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = entry.BaseEntryImpl.ReadAllFrom(r); err != nil {
 		return
 	}
 	if entry.schema == nil {

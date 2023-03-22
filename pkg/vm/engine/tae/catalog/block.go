@@ -29,11 +29,11 @@ import (
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 func compareBlockFn(a, b *BlockEntry) int {
-	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
+	return a.BaseEntryImpl.DoCompre(b.BaseEntryImpl)
 }
 
 type BlockEntry struct {
-	*MetaBaseEntry
+	*BaseEntryImpl[*MetadataMVCCNode]
 	segment *SegmentEntry
 	state   EntryState
 	blkData data.Block
@@ -41,21 +41,21 @@ type BlockEntry struct {
 
 func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
-		MetaBaseEntry: NewReplayMetaBaseEntry(),
+		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](),
 	}
 }
 
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		segment:       segment,
 		state:         state,
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.MetaBaseEntry.CreateWithTxn(txn)
+	e.BaseEntryImpl.CreateWithTxn(txn)
 	return e
 }
 
@@ -68,11 +68,11 @@ func NewBlockEntryWithMeta(
 	deltaLoc string) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		segment:       segment,
 		state:         state,
 	}
-	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
+	e.BaseEntryImpl.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
@@ -81,11 +81,11 @@ func NewBlockEntryWithMeta(
 
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		segment:       segment,
 		state:         ES_Appendable,
 	}
-	e.MetaBaseEntry.CreateWithTS(ts)
+	e.BaseEntryImpl.CreateWithTS(ts)
 	return e
 }
 
@@ -96,21 +96,21 @@ func NewStandaloneBlockWithLoc(
 	metaLoc string,
 	delLoc string) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		segment:       segment,
 		state:         ES_NotAppendable,
 	}
-	e.MetaBaseEntry.CreateWithLoc(ts, metaLoc, delLoc)
+	e.BaseEntryImpl.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
 }
 
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id),
 		segment:       segment,
 		state:         ES_Appendable,
 	}
-	e.MetaBaseEntry.CreateWithTS(types.SystemDBTS)
+	e.BaseEntryImpl.CreateWithTS(types.SystemDBTS)
 	return e
 }
 
@@ -154,7 +154,7 @@ func (entry *BlockEntry) String() string {
 }
 
 func (entry *BlockEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
@@ -168,7 +168,7 @@ func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 		return fmt.Sprintf("[%s]BLK[%d][C@%s,D@%s]",
 			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
@@ -190,7 +190,7 @@ func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
-	empty, err = entry.MetaBaseEntry.PrepareRollback()
+	empty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
 		panic(err)
 	}
@@ -203,7 +203,7 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 }
 
 func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
+	if n, err = entry.BaseEntryImpl.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -214,7 +214,7 @@ func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = entry.BaseEntryImpl.ReadAllFrom(r); err != nil {
 		return
 	}
 	err = binary.Read(r, binary.BigEndian, &entry.state)

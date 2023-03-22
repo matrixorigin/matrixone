@@ -89,7 +89,7 @@ func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand {
 		Segment: entry.GetSegment(),
 		Block:   entry,
 		cmdType: cmdType,
-		entry:   entry.MetaBaseEntry,
+		entry:   entry.BaseEntryImpl,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -101,7 +101,7 @@ func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand 
 		Table:   entry.GetTable(),
 		Segment: entry,
 		cmdType: cmdType,
-		entry:   entry.MetaBaseEntry,
+		entry:   entry.BaseEntryImpl,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -112,7 +112,7 @@ func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand {
 		DB:      entry.GetDB(),
 		Table:   entry,
 		cmdType: cmdType,
-		entry:   entry.TableBaseEntry,
+		entry:   entry.BaseEntryImpl,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -124,7 +124,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 		cmdType: cmdType,
 	}
 	if entry != nil {
-		impl.entry = entry.DBBaseEntry
+		impl.entry = entry.BaseEntryImpl
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -144,11 +144,11 @@ func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 func (cmd *EntryCommand) SetReplayTxn(txn txnif.AsyncTxn) {
 	switch cmd.cmdType {
 	case CmdUpdateBlock, CmdUpdateSegment:
-		cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode).Txn = txn
+		cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode]).Txn = txn
 	case CmdUpdateTable:
-		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).Txn = txn
+		cmd.entry.GetLatestNodeLocked().(*MVCCNode[*TableMVCCNode]).Txn = txn
 	case CmdUpdateDatabase:
-		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).Txn = txn
+		cmd.entry.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode]).Txn = txn
 	default:
 		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
 	}
@@ -170,7 +170,7 @@ func (cmd *EntryCommand) ApplyCommit() {
 func (cmd *EntryCommand) ApplyRollback() {
 	switch cmd.cmdType {
 	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
-		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+		node := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
 		if node.Is1PC() {
 			return
 		}
@@ -358,7 +358,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	switch cmd.GetType() {
 	case CmdUpdateDatabase:
-		entry := NewReplayDBBaseEntry()
+		entry := NewReplayBaseEntry[*DBMVCCNode]()
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -377,9 +377,9 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		cmd.DB.DBBaseEntry = cmd.entry.(*DBBaseEntry)
+		cmd.DB.BaseEntryImpl = cmd.entry.(*BaseEntryImpl[*DBMVCCNode])
 	case CmdUpdateTable:
-		entry := NewReplayTableBaseEntry()
+		entry := NewReplayBaseEntry[*TableMVCCNode]()
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -395,14 +395,14 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 		cmd.Table = NewReplayTableEntry()
-		cmd.Table.TableBaseEntry = cmd.entry.(*TableBaseEntry)
+		cmd.Table.BaseEntryImpl = cmd.entry.(*BaseEntryImpl[*TableMVCCNode])
 		cmd.Table.schema = NewEmptySchema("")
 		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
 			return
 		}
 		n += sn
 	case CmdUpdateSegment:
-		entry := NewReplayMetaBaseEntry()
+		entry := NewReplayBaseEntry[*MetadataMVCCNode]()
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -431,11 +431,11 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 		cmd.Segment = NewReplaySegmentEntry()
-		cmd.Segment.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
+		cmd.Segment.BaseEntryImpl = cmd.entry.(*BaseEntryImpl[*MetadataMVCCNode])
 		cmd.Segment.state = state
 		cmd.Segment.sorted = sorted
 	case CmdUpdateBlock:
-		entry := NewReplayMetaBaseEntry()
+		entry := NewReplayBaseEntry[*MetadataMVCCNode]()
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
 			return
 		}
@@ -461,7 +461,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += n2
 		cmd.Block = NewReplayBlockEntry()
-		cmd.Block.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
+		cmd.Block.BaseEntryImpl = cmd.entry.(*BaseEntryImpl[*MetadataMVCCNode])
 		cmd.Block.state = state
 	}
 	return

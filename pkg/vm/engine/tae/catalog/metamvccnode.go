@@ -20,54 +20,35 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MetadataMVCCNode struct {
-	*EntryMVCCNode
-	*txnbase.TxnMVCCNode
 	MetaLoc  string
 	DeltaLoc string
 }
 
-func NewEmptyMetadataMVCCNode() txnif.MVCCNode {
-	return &MetadataMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-	}
+func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+	return &MetadataMVCCNode{}
 }
 
-func CompareMetaBaseNode(e, o txnif.MVCCNode) int {
-	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
-}
-
-func (e *MetadataMVCCNode) CloneAll() txnif.MVCCNode {
+func (e *MetadataMVCCNode) CloneAll() BaseNode {
 	node := &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
-		MetaLoc:       e.MetaLoc,
-		DeltaLoc:      e.DeltaLoc,
+		MetaLoc:  e.MetaLoc,
+		DeltaLoc: e.DeltaLoc,
 	}
 	return node
 }
 
-func (e *MetadataMVCCNode) CloneData() txnif.MVCCNode {
+func (e *MetadataMVCCNode) CloneData() BaseNode {
 	return &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-		MetaLoc:       e.MetaLoc,
-		DeltaLoc:      e.DeltaLoc,
+		MetaLoc:  e.MetaLoc,
+		DeltaLoc: e.DeltaLoc,
 	}
 }
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s%s[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
-		e.TxnMVCCNode.String(),
-		e.EntryMVCCNode.String(),
+	return fmt.Sprintf("[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
 		e.MetaLoc,
 		e.DeltaLoc)
 }
@@ -79,58 +60,17 @@ func (e *MetadataMVCCNode) UpdateDeltaLoc(deltaLoc string) {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) Update(vun txnif.MVCCNode) {
+func (e *MetadataMVCCNode) Update(vun BaseNode) {
 	un := vun.(*MetadataMVCCNode)
-	e.CreatedAt = un.CreatedAt
-	e.DeletedAt = un.DeletedAt
-	e.MetaLoc = un.MetaLoc
-	e.DeltaLoc = un.DeltaLoc
-}
-
-func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
-	if err != nil {
-		return
+	if un.MetaLoc != "" {
+		e.MetaLoc = un.MetaLoc
 	}
-	err = e.EntryMVCCNode.ApplyCommit(commitTS)
-	return err
-}
-func (e *MetadataMVCCNode) PrepareRollback() (err error) {
-	return e.TxnMVCCNode.PrepareRollback()
-}
-func (e *MetadataMVCCNode) ApplyRollback(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
-	if err != nil {
-		return
+	if un.DeltaLoc != "" {
+		e.DeltaLoc = un.DeltaLoc
 	}
-	err = e.EntryMVCCNode.ApplyCommit(commitTS)
-	return
-}
-
-func (e *MetadataMVCCNode) PrepareCommit() (err error) {
-	_, err = e.TxnMVCCNode.PrepareCommit()
-	if err != nil {
-		return
-	}
-	err = e.EntryMVCCNode.PrepareCommit()
-	return
 }
 
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	var sn int64
-	sn, err = e.EntryMVCCNode.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	sn, err = e.TxnMVCCNode.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-
 	length := uint32(len([]byte(e.MetaLoc)))
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
 		return
@@ -162,18 +102,6 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	var sn int64
-	sn, err = e.EntryMVCCNode.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	sn, err = e.TxnMVCCNode.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-
 	length := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
 		return
