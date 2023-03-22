@@ -45,9 +45,9 @@ var (
 
 func init() {
 	tcs = []topTestCase{
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
 }
 
@@ -89,8 +89,8 @@ func TestTop(t *testing.T) {
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []topTestCase{
-			newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {

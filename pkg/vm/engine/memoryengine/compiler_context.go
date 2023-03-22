@@ -57,7 +57,11 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
-	return &plan.Stats{}
+	return plan.DefaultStats()
+}
+
+func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+	return nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
@@ -223,7 +227,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
-			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},
 		Default:   attr.Default,

@@ -20,8 +20,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -63,7 +63,8 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+			logutil.Errorf("pipeline closed unexpectedly")
+			return true, nil
 		}
 		anal.WaitStop(start)
 

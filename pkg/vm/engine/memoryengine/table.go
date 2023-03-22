@@ -35,7 +35,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, e *plan2.Expr) (*plan.Stats, error) {
+func (t *Table) Stats(ctx context.Context, e *plan2.Expr, statsInfoMap any) (*plan.Stats, error) {
 	stats := plan2.DefaultStats()
 	rows, err := t.Rows(ctx)
 	if err != nil {

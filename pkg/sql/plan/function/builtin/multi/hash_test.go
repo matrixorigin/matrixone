@@ -41,18 +41,18 @@ var (
 
 func init() {
 	tcs = []hashTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
-			{Oid: types.T_int32},
-			{Oid: types.T_int64},
+			types.T_int8.ToType(),
+			types.T_int16.ToType(),
+			types.T_int32.ToType(),
+			types.T_int64.ToType(),
 		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
-			{Oid: types.T_varchar},
-			{Oid: types.T_varchar},
+			types.T_int8.ToType(),
+			types.T_int16.ToType(),
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
 		}),
 	}
 }

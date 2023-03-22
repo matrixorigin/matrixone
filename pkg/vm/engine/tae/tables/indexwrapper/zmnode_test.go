@@ -17,9 +17,10 @@ package indexwrapper
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -64,7 +65,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	cType := common.Plain
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.T_int32.ToType()
 	pkColIdx := uint16(0)
 	interIdx := uint16(0)
 	// var visibility *roaring.Bitmap
@@ -106,14 +107,14 @@ func TestBlockZoneMapIndex(t *testing.T) {
 func newBatch() *batch.Batch {
 	mp := mpool.MustNewZero()
 	types := []types.Type{
-		{Oid: types.T_int32},
-		{Oid: types.T_int16},
-		{Oid: types.T_int32},
-		{Oid: types.T_int64},
-		{Oid: types.T_uint16},
-		{Oid: types.T_uint32},
-		{Oid: types.T_uint8},
-		{Oid: types.T_uint64},
+		types.T_int32.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint64.ToType(),
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
 }

@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
-		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+		input:  "select 1 + 1",
+		output: "select 1 + 1",
 	}
 )
 
@@ -754,7 +754,7 @@ var (
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
 		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 	}, {
 		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
 		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
@@ -779,10 +779,10 @@ var (
 		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 	}, {
 		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	},
 		{
-			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
 		}, {
@@ -1754,30 +1754,6 @@ var (
 			output: `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
 		},
 		{
-			input:  `modump database t into 'a.sql'`,
-			output: `modump database t into a.sql`,
-		},
-		{
-			input:  `modump database t into 'a.sql' max_file_size 1`,
-			output: `modump database t into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql'`,
-			output: `modump database t tables t1 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1 into a.sql max_file_size 1`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql'`,
-			output: `modump database t tables t1, t2 into a.sql`,
-		},
-		{
-			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
-			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
-		},
-		{
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
@@ -2063,6 +2039,26 @@ var (
 		},
 		{
 			input: "show subscriptions",
+		},
+		{
+			input:  "insert into tbl values ($$this is a dollar-quoted string$$)",
+			output: "insert into tbl values (this is a dollar-quoted string)",
+		},
+		{
+			input:  "select $tag$this is a dollar-quoted string$tag$",
+			output: "select this is a dollar-quoted string",
+		},
+		{
+			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
+			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+		},
+		{
+			input:  "show table_size from test",
+			output: "show table size from test",
+		},
+		{
+			input:  "show table_size from mo_role from mo_catalog",
+			output: "show table size from mo_role from mo_catalog",
 		},
 	}
 )

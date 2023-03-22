@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -100,15 +99,15 @@ func init() {
 	wareHouse = catalog.NewEmptySchema("WAREHOUSE")
 	wareHouse.BlockMaxRows = 40000
 	wareHouse.SegmentMaxBlocks = 40
-	_ = wareHouse.AppendPKCol("W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8}, 0)
-	_ = wareHouse.AppendCol("W_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	_ = wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = wareHouse.AppendPKCol("W_ID", types.T_uint8.ToType(), 0)
+	_ = wareHouse.AppendCol("W_NAME", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_STREET_1", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_STREET_2", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_CITY", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_STATE", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_ZIP", types.T_varchar.ToType())
+	_ = wareHouse.AppendCol("W_TAX", types.T_float64.ToType())
+	_ = wareHouse.AppendCol("W_YTD", types.T_float64.ToType())
 	if err = wareHouse.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -116,17 +115,17 @@ func init() {
 	district = catalog.NewEmptySchema("DISTRICT")
 	district.BlockMaxRows = 40000
 	district.SegmentMaxBlocks = 40
-	_ = district.AppendPKCol("D_ID", types.Type{Oid: types.T_int16, Size: 2, Width: 16}, 0)
-	_ = district.AppendCol("D_W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
-	_ = district.AppendCol("D_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	_ = district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	_ = district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
+	_ = district.AppendPKCol("D_ID", types.T_int16.ToType(), 0)
+	_ = district.AppendCol("D_W_ID", types.T_uint8.ToType())
+	_ = district.AppendCol("D_NAME", types.T_varchar.ToType())
+	_ = district.AppendCol("D_STREET_1", types.T_varchar.ToType())
+	_ = district.AppendCol("D_STREET_2", types.T_varchar.ToType())
+	_ = district.AppendCol("D_CITY", types.T_varchar.ToType())
+	_ = district.AppendCol("D_STATE", types.T_varchar.ToType())
+	_ = district.AppendCol("D_ZIP", types.T_varchar.ToType())
+	_ = district.AppendCol("D_TAX", types.T_float64.ToType())
+	_ = district.AppendCol("D_YTD", types.T_float64.ToType())
+	_ = district.AppendCol("D_NEXT_O_ID", types.T_int64.ToType())
 	if err = district.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -134,9 +133,9 @@ func init() {
 	balance = catalog.NewEmptySchema("BALANCE")
 	balance.BlockMaxRows = 40000
 	balance.SegmentMaxBlocks = 40
-	_ = balance.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	_ = balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	// balance.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = balance.AppendPKCol("ID", types.T_uint64.ToType(), 0)
+	_ = balance.AppendCol("BALANCE", types.T_float64.ToType())
+	// balance.AppendCol("USERID", types.T_uint64.ToType())
 	if err = balance.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -144,11 +143,11 @@ func init() {
 	user = catalog.NewEmptySchema("USER")
 	user.BlockMaxRows = 40000
 	user.SegmentMaxBlocks = 40
-	_ = user.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	_ = user.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
-	_ = user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = user.AppendPKCol("ID", types.T_uint64.ToType(), 0)
+	_ = user.AppendCol("NAME", types.T_varchar.ToType())
+	_ = user.AppendCol("BIRTH", types.T_date.ToType())
+	_ = user.AppendCol("ADDR", types.T_varchar.ToType())
+	_ = user.AppendCol("BALANCEID", types.T_uint64.ToType())
 	if err = user.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -156,10 +155,10 @@ func init() {
 	goods = catalog.NewEmptySchema("GOODS")
 	goods.BlockMaxRows = 40000
 	goods.SegmentMaxBlocks = 40
-	_ = goods.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	_ = goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	_ = goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	_ = goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = goods.AppendPKCol("ID", types.T_uint64.ToType(), 0)
+	_ = goods.AppendCol("NAME", types.T_varchar.ToType())
+	_ = goods.AppendCol("PRICE", types.T_float64.ToType())
+	_ = goods.AppendCol("DESC", types.T_varchar.ToType())
 	if err = goods.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -167,9 +166,9 @@ func init() {
 	repertory = catalog.NewEmptySchema("REPERTORY")
 	repertory.BlockMaxRows = 40000
 	repertory.SegmentMaxBlocks = 40
-	_ = repertory.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	_ = repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	_ = repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = repertory.AppendPKCol("ID", types.T_uint64.ToType(), 0)
+	_ = repertory.AppendCol("GOODID", types.T_uint64.ToType())
+	_ = repertory.AppendCol("COUNT", types.T_uint64.ToType())
 	if err = repertory.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -177,11 +176,11 @@ func init() {
 	deal = catalog.NewEmptySchema("DEAL")
 	deal.BlockMaxRows = 40000
 	deal.SegmentMaxBlocks = 40
-	_ = deal.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	_ = deal.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	_ = deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	_ = deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
-	_ = deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
+	_ = deal.AppendPKCol("ID", types.T_uint64.ToType(), 0)
+	_ = deal.AppendCol("USERID", types.T_uint64.ToType())
+	_ = deal.AppendCol("GOODID", types.T_uint64.ToType())
+	_ = deal.AppendCol("QUANTITY", types.T_uint32.ToType())
+	_ = deal.AppendCol("DEALTIME", types.T_datetime.ToType())
 	if err = deal.Finalize(false); err != nil {
 		panic(err)
 	}
@@ -242,13 +241,11 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeBlockIt()
-	var buffer bytes.Buffer
 	var view *model.ColumnView
 	found := false
 	for blockIt.Valid() {
-		buffer.Reset()
 		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name, &buffer)
+		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name)
 		if err != nil {
 			return
 		}
@@ -570,8 +567,7 @@ func TestWarehouse(t *testing.T) {
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		var buffer bytes.Buffer
-		view, _ := blk.GetColumnDataById(1, &buffer)
+		view, _ := blk.GetColumnDataById(1)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		checkAllColRowsByScan(t, rel, 20, false)
@@ -710,7 +706,7 @@ func TestTxn9(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(2, nil)
+			view, err := blk.GetColumnDataById(2)
 			assert.NoError(t, err)
 			defer view.Close()
 			t.Log(view.GetData().String())

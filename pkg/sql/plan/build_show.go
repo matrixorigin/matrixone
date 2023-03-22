@@ -90,7 +90,12 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemClusterRel {
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
+	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	}
+
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
@@ -130,7 +135,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(col.Typ.Id)}
+		typ := types.T(col.Typ.Id).ToType()
 		typeStr := typ.String()
 		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)

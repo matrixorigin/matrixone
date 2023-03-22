@@ -25,7 +25,6 @@ import (
 
 func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
 	rawA := int64(v)
-	typ.Size = types.T_decimal64.ToType().Size
 	return &plan.Expr{
 		Typ: typ,
 		Expr: &plan.Expr_C{
@@ -44,7 +43,6 @@ func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
 func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 	rawA := v.B0_63
 	rawB := v.B64_127
-	typ.Size = types.T_decimal128.ToType().Size
 	return &plan.Expr{
 		Typ: typ,
 		Expr: &plan.Expr_C{
@@ -144,7 +142,6 @@ func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
-			Size:        1,
 		},
 	}
 }
@@ -166,7 +163,6 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_int64),
 			NotNullable: true,
-			Size:        8,
 		},
 	}
 }
@@ -186,7 +182,6 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_uint64),
 			NotNullable: true,
-			Size:        8,
 		},
 	}
 }
@@ -208,7 +203,6 @@ func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_float64),
 			NotNullable: true,
-			Size:        8,
 		},
 	}
 }
@@ -234,7 +228,6 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_varchar),
 			NotNullable: true,
-			Size:        4,
 			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
@@ -253,7 +246,6 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 		Typ: &plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
-			Size:        4,
 			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
@@ -298,12 +290,10 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 10
 		typ.Width = 38 // width
-		typ.Size = int32(types.T_decimal128.TypeLen())
 	}
 	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 2
 		typ.Width = 6 // width
-		typ.Size = int32(types.T_decimal64.TypeLen())
 	}
 	return typ
 }
@@ -314,7 +304,6 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
 		Id:    int32(typ.Oid),
 		Width: typ.Width,
-		Size:  typ.Size,
 		Scale: typ.Scale,
 	}
 }
@@ -322,31 +311,13 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 
 func makeTypeByPlan2Type(typ *plan.Type) types.Type {
-	var size int32 = 0
 	oid := types.T(typ.Id)
-	if oid != types.T_any && oid != types.T_interval {
-		size = int32(oid.TypeLen())
-	}
-	return types.Type{
-		Oid:   types.T(typ.Id),
-		Size:  size,
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return types.New(oid, typ.Width, typ.Scale)
 }
 
 var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
-	var size int32 = 0
 	oid := types.T(expr.Typ.Id)
-	if oid != types.T_any && oid != types.T_interval {
-		size = int32(oid.TypeLen())
-	}
-	return types.Type{
-		Oid:   oid,
-		Size:  size,
-		Width: expr.Typ.Width,
-		Scale: expr.Typ.Scale,
-	}
+	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
