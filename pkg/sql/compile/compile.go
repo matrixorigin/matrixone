@@ -1694,9 +1694,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// If ranges == 0, it's temporary table ?
+	// XXX the code is too confused. should be removed once we remove the memory-engine.
 	if len(ranges) == 0 {
-		logutil.Errorf("unreached code, rel.Ranges return 0, rel is %v", rel)
-		return nil, moerr.NewInternalError(c.ctx, "generate table-scan nodes failed because get 0 from Ranges")
+		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i, node := range c.cnList {
+			nodes[i] = engine.Node{
+				Rel:  rel,
+				Id:   node.Id,
+				Addr: node.Addr,
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+			}
+		}
+		return nodes, nil
 	}
 
 	// In fact, the first element of Ranges is always a memory table.
@@ -1718,7 +1730,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		ranges = ranges[1:]
 	}
 
-	// 1. If the length of cn list is 1, query is small or for temporary table.
+	// 1. If the length of cn list is 1, query is small or just one cn now.
 	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
 	// Both these queries only needs to be executed on the current cn.
 	if len(ranges) == 0 {
