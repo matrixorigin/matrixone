@@ -246,9 +246,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node.(*catalog.DBMVCCNode)
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -291,9 +291,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			}
 		}
 	}
@@ -364,9 +364,10 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
+	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), commitTs)
+		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
@@ -470,31 +471,37 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 // appendBlkMeta add block metadata into api entry according to logtail protocol
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
+	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted(), metaNode.End, metaNode.CreatedAt, metaNode.DeletedAt)
+}
+
+func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
+	logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
+		e.AsCommonID().String(), e.IsAppendable(),
+		createts.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	insBatch := b.blkMetaInsBatch
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.MetaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.DeltaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
-	if metaNode.HasDropCommitted() {
-		if metaNode.DeletedAt.IsEmpty() {
+	if delete {
+		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch := b.blkMetaDelBatch
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
 		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 	}
+
 }
 
 // visitBlkData collects logtail in memory
