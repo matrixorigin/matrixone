@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
 
 func NewPartitionBinder(builder *QueryBuilder, ctx *BindContext) *PartitionBinder {
@@ -29,7 +30,71 @@ func NewPartitionBinder(builder *QueryBuilder, ctx *BindContext) *PartitionBinde
 	return p
 }
 
+// From: https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations-functions.html#partitioning-limitations-ceiling-floor
+var supportedFunctionsInPartitionExpr = map[string]int{
+	"abs":            0,
+	"ceiling":        0, //TODO: double check
+	"ceil":           0, //TODO: double check
+	"datediff":       0,
+	"day":            0,
+	"dayofmonth":     0,
+	"dayofweek":      0,
+	"dayofyear":      0,
+	"extract":        0,
+	"floor":          0, //TODO: double check
+	"hour":           0,
+	"microsecond":    0,
+	"minute":         0,
+	"mod":            0,
+	"month":          0,
+	"quarter":        0,
+	"second":         0,
+	"time_to_sec":    0,
+	"to_days":        0,
+	"to_seconds":     0,
+	"unix_timestamp": 0,
+	"weekday":        0,
+	"year":           0,
+	"yearweek":       0,
+	"hash_value":     0,
+}
+
+func functionIsSupported(funcName string) bool {
+	if _, ok := supportedFunctionsInPartitionExpr[funcName]; ok {
+		return ok
+	}
+	return false
+}
+
 func (p *PartitionBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr, error) {
+	/*
+		Base on reference:
+		https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
+		https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations-functions.html#partitioning-limitations-ceiling-floor
+	*/
+	switch exprImpl := expr.(type) {
+	case *tree.BinaryExpr:
+		//unsupported operator
+		switch exprImpl.Op {
+		case tree.DIV, tree.BIT_XOR, tree.BIT_OR,
+			tree.BIT_AND, tree.LEFT_SHIFT, tree.RIGHT_SHIFT:
+			return nil, moerr.NewInvalidInput(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
+		}
+	case *tree.UnaryExpr:
+		if exprImpl.Op == tree.UNARY_TILDE {
+			return nil, moerr.NewInvalidInput(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
+		}
+	case *tree.FuncExpr:
+		//supported function
+		funcRef, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return nil, moerr.NewNYI(p.GetContext(), "invalid function expr '%v'", exprImpl)
+		}
+		funcName := strings.ToLower(funcRef.Parts[0])
+		if !functionIsSupported(funcName) {
+			return nil, moerr.NewInvalidInput(p.GetContext(), "function %s is not allowed in the partition expression", funcName)
+		}
+	}
 	return p.baseBindExpr(expr, i, b)
 }
 
