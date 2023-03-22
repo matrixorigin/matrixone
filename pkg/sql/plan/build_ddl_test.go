@@ -229,3 +229,143 @@ func TestBuildLockTables(t *testing.T) {
 	_, err = buildLockTables(stmt3.(*tree.LockTableStmt), ctx)
 	assert.Error(t, err)
 }
+
+func TestBuildCreateTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqls := []string{
+		`CREATE TABLE t3(
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL UNIQUE KEY,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					PRIMARY KEY (col1),
+					KEY(col3),
+					KEY(col3) )`,
+		`CREATE TABLE t2 (
+						col1 INT NOT NULL,
+						col2 DATE NOT NULL,
+						col3 INT NOT NULL,
+						col4 INT NOT NULL,
+						UNIQUE KEY (col1),
+						UNIQUE KEY (col3)
+					);`,
+		`CREATE TABLE t2 (
+						col1 INT NOT NULL,
+						col2 DATE NOT NULL,
+						col3 INT NOT NULL,
+						col4 INT NOT NULL,
+						UNIQUE KEY (col1),
+						UNIQUE KEY (col1, col3)
+					);`,
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					UNIQUE KEY (col1),
+					UNIQUE KEY (col1, col3)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					UNIQUE KEY (col1),
+					UNIQUE KEY (col1, col3)
+				);`,
+
+		"CREATE TABLE t2 (" +
+			"	`PRIMARY` INT NOT NULL, " +
+			"	col2 DATE NOT NULL, " +
+			"	col3 INT NOT NULL," +
+			"	col4 INT NOT NULL," +
+			"	UNIQUE KEY (`PRIMARY`)," +
+			"	UNIQUE KEY (`PRIMARY`, col3)" +
+			");",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildCreateTableError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL unique key,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key col2 (col3)
+		);`,
+
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key idx_sp1 (col2),
+			unique key idx_sp1 (col3)
+		);`,
+
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key idx_sp1 (col2),
+			key idx_sp1 (col3)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL UNIQUE KEY,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			KEY col2 (col3)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL KEY,
+			col2 DATE NOT NULL KEY,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL
+		);`,
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}

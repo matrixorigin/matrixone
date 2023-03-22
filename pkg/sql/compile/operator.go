@@ -970,7 +970,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 		}
 
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			isSameCN(currentCNAddr, s.NodeInfo.Addr) {
+			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
