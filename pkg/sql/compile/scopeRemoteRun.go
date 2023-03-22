@@ -84,6 +84,7 @@ import (
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 func CnServerMessageHandler(
 	ctx context.Context,
+	cnAddr string,
 	message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine,
@@ -97,7 +98,7 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 
-	receiver := newMessageReceiverOnServer(ctx, msg,
+	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -254,7 +255,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, c.addr)
+	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
@@ -458,7 +459,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId, s.NodeInfo); err != nil {
 			return ctxId, err
 		}
 	}
@@ -581,7 +582,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline)
 }
 
 // convert vm.Instruction to pipeline.Instruction
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
 	var err error
 
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
@@ -627,7 +628,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
 				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
-				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
 					return ctxId, nil, err
 				}
 			}
@@ -812,7 +813,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
 			id := colexec.Srv.RegistConnector(t.Reg)
-			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
 				return ctxId, nil, err
 			}
 		}
@@ -1412,12 +1413,12 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 	return -1, nil
 }
 
-func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int32, error) {
+func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeInfo engine.Node) (int32, error) {
 	ds := &Scope{Magic: Pushdown}
 	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
 	ds.DataSource = &Source{
 		PushdownId:   id,
-		PushdownAddr: colexec.CnAddr,
+		PushdownAddr: nodeInfo.Addr,
 	}
 	ds.appendInstruction(vm.Instruction{
 		Op: vm.Connector,
@@ -1432,7 +1433,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
-		PushdownAddr: colexec.CnAddr,
+		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
 		Op: vm.Connector,
