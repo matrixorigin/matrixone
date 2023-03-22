@@ -172,7 +172,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isSameCN(s.NodeInfo.Addr, c.addr) {
+		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
