@@ -125,3 +125,52 @@ func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	e.DeltaLoc = string(buf)
 	return
 }
+
+type SegmentNode struct {
+	state  EntryState
+	sorted bool
+}
+
+func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &node.state); err != nil {
+		return
+	}
+	n += 1
+	if err = binary.Read(r, binary.BigEndian, &node.sorted); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, node.state); err != nil {
+		return
+	}
+	n += 1
+	if err = binary.Write(w, binary.BigEndian, node.sorted); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+type BlockNode struct {
+	state EntryState
+}
+
+func (node *BlockNode) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &node.state); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+func (node *BlockNode) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, node.state); err != nil {
+		return
+	}
+	n += 1
+	return
+}

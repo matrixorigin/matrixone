@@ -41,9 +41,8 @@ type SegmentEntry struct {
 	table   *TableEntry
 	entries map[uint64]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
-	link    *common.GenericSortedDList[*BlockEntry]
-	state   EntryState
-	sorted  bool
+	link *common.GenericSortedDList[*BlockEntry]
+	*SegmentNode
 	segData data.Segment
 }
 
@@ -55,7 +54,9 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 		table:   table,
 		link:    common.NewGenericSortedDList(compareBlockFn),
 		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:   state,
+		SegmentNode: &SegmentNode{
+			state: state,
+		},
 	}
 	e.CreateWithTxn(txn, &MetadataMVCCNode{})
 	if dataFactory != nil {
@@ -81,7 +82,9 @@ func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEnt
 		table:   table,
 		link:    common.NewGenericSortedDList(compareBlockFn),
 		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:   ES_Appendable,
+		SegmentNode: &SegmentNode{
+			state: ES_Appendable,
+		},
 	}
 	e.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
@@ -94,7 +97,9 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 		table:   table,
 		link:    common.NewGenericSortedDList(compareBlockFn),
 		entries: make(map[uint64]*common.GenericDLNode[*BlockEntry]),
-		state:   ES_Appendable,
+		SegmentNode: &SegmentNode{
+			state: ES_Appendable,
+		},
 	}
 	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid uint64

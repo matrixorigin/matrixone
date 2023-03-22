@@ -68,9 +68,8 @@ func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) 
 
 type DBEntry struct {
 	*BaseEntryImpl[*DBMVCCNode]
-	catalog   *Catalog
-	acInfo    accessInfo
-	name      string
+	catalog *Catalog
+	*DBNode
 	createSql string
 	fullName  string
 	isSys     bool
@@ -93,8 +92,10 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64
 	e := &DBEntry{
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *DBMVCCNode { return &DBMVCCNode{} }),
-		catalog:   catalog,
-		name:      name,
+		catalog: catalog,
+		DBNode: &DBNode{
+			name: name,
+		},
 		createSql: createSql,
 		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes: make(map[string]*nodeList[*TableEntry]),
@@ -116,8 +117,10 @@ func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *D
 	e := &DBEntry{
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *DBMVCCNode { return &DBMVCCNode{} }),
-		catalog:   catalog,
-		name:      name,
+		catalog: catalog,
+		DBNode: &DBNode{
+			name: name,
+		},
 		createSql: createSql,
 		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes: make(map[string]*nodeList[*TableEntry]),
@@ -139,8 +142,10 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 	e := &DBEntry{
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *DBMVCCNode { return &DBMVCCNode{} }),
-		catalog:   catalog,
-		name:      name,
+		catalog: catalog,
+		DBNode: &DBNode{
+			name: name,
+		},
 		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes: make(map[string]*nodeList[*TableEntry]),
 		link:      common.NewGenericSortedDList(compareTableFn),
@@ -156,8 +161,10 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 			func() *DBMVCCNode {
 				return &DBMVCCNode{}
 			}),
-		catalog:   catalog,
-		name:      pkgcatalog.MO_CATALOG,
+		catalog: catalog,
+		DBNode: &DBNode{
+			name: pkgcatalog.MO_CATALOG,
+		},
 		createSql: "create database " + pkgcatalog.MO_CATALOG,
 		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes: make(map[string]*nodeList[*TableEntry]),

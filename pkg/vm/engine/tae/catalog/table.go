@@ -39,8 +39,8 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts t
 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
+	*TableNode
 	db      *DBEntry
-	schema  *Schema
 	entries map[uint64]*common.GenericDLNode[*SegmentEntry]
 	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
@@ -72,8 +72,10 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	e := &TableEntry{
 		BaseEntryImpl: NewBaseEntry(tableId,
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:      db,
-		schema:  schema,
+		db: db,
+		TableNode: &TableNode{
+			schema: schema,
+		},
 		link:    common.NewGenericSortedDList(compareSegmentFn),
 		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
@@ -88,8 +90,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:      db,
-		schema:  schema,
+		db: db,
+		TableNode: &TableNode{
+			schema: schema,
+		},
 		link:    common.NewGenericSortedDList(compareSegmentFn),
 		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
@@ -123,7 +127,9 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		schema:  schema,
+		TableNode: &TableNode{
+			schema: schema,
+		},
 		link:    common.NewGenericSortedDList(compareSegmentFn),
 		entries: make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}

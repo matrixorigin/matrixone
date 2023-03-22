@@ -207,26 +207,26 @@ func (catalog *Catalog) ReplayCmd(
 			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
 	case CmdUpdateDatabase:
-		cmd := txncmd.(*EntryCommand)
+		cmd := txncmd.(*EntryCommand[*DBMVCCNode, *DBNode])
 		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
 	case CmdUpdateTable:
-		cmd := txncmd.(*EntryCommand)
+		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
 		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateSegment:
-		cmd := txncmd.(*EntryCommand)
+		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *SegmentNode])
 		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateBlock:
-		cmd := txncmd.(*EntryCommand)
+		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
 		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
-	catalog.OnReplayDBID(cmd.DB.ID)
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*DBMVCCNode, *DBNode], idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayDBID(cmd.DBID)
 	var err error
-	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])
+	un := cmd.mvccNode
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -234,12 +234,14 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		}
 	}
 
-	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		cmd.DB.RWMutex = new(sync.RWMutex)
-		cmd.DB.catalog = catalog
-		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
-		err = catalog.AddEntryLocked(cmd.DB, un.GetTxn(), false)
+		db = NewReplayDBEntry()
+		db.ID = cmd.DBID
+		db.catalog = catalog
+		db.DBNode = cmd.node
+		db.Insert(un)
+		err = catalog.AddEntryLocked(db, un.GetTxn(), false)
 		if err != nil {
 			panic(err)
 		}
@@ -286,6 +288,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db = NewReplayDBEntry()
 	db.catalog = catalog
 	db.ID = dbid
+	db.DBNode = &DBNode{}
 	db.name = name
 	db.acInfo = accessInfo{
 		TenantID: tenantID,
@@ -328,8 +331,8 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	}
 	db.Insert(un)
 }
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
-	catalog.OnReplayTableID(cmd.Table.ID)
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayTableID(cmd.ID.TableID)
 	// prepareTS := cmd.GetTs()
 	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 	// 	if observer != nil {
@@ -341,9 +344,9 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if err != nil {
 		panic(err)
 	}
-	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
+	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 
-	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*TableMVCCNode])
+	un := cmd.mvccNode
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -352,9 +355,13 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 
 	if err != nil {
-		cmd.Table.db = db
-		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		err = db.AddEntryLocked(cmd.Table, un.GetTxn(), false)
+		tbl = NewReplayTableEntry()
+		tbl.ID = cmd.ID.TableID
+		tbl.db = db
+		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
+		tbl.TableNode = cmd.node
+		tbl.Insert(un)
+		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
@@ -428,6 +435,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		return
 	}
 	tbl = NewReplayTableEntry()
+	tbl.TableNode = &TableNode{}
 	tbl.schema = schema
 	tbl.db = db
 	tbl.ID = tid
@@ -476,35 +484,38 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 
 }
 func (catalog *Catalog) onReplayUpdateSegment(
-	cmd *EntryCommand,
+	cmd *EntryCommand[*MetadataMVCCNode, *SegmentNode],
 	dataFactory DataFactory,
 	idx *wal.Index,
 	observer wal.ReplayObserver) {
-	catalog.OnReplaySegmentID(cmd.Segment.ID)
+	catalog.OnReplaySegmentID(cmd.ID.SegmentID)
 
-	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	if err != nil {
+		panic(err)
+	}
+	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
+	if err != nil {
+		logutil.Infof("tbl %d-%d", cmd.DBID, cmd.ID.TableID)
+		logutil.Info(catalog.SimplePPString(3))
+		panic(err)
+	}
+	seg, err := tbl.GetSegmentByID(cmd.ID.SegmentID)
+	un := cmd.mvccNode
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
 			panic(err)
 		}
 	}
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		panic(err)
-	}
-	tbl, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.DBID, cmd.TableID)
-		logutil.Info(catalog.SimplePPString(3))
-		panic(err)
-	}
-	seg, err := tbl.GetSegmentByID(cmd.Segment.ID)
-	if err != nil {
-		cmd.Segment.table = tbl
-		cmd.Segment.RWMutex = new(sync.RWMutex)
-		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
-		tbl.AddEntryLocked(cmd.Segment)
+		seg = NewReplaySegmentEntry()
+		seg.ID = cmd.ID.SegmentID
+		seg.table = tbl
+		seg.segData = dataFactory.MakeSegmentFactory()(seg)
+		seg.Insert(un)
+		seg.SegmentNode = cmd.node
+		tbl.AddEntryLocked(seg)
 	} else {
 		node := seg.SearchNode(un)
 		if node == nil {
@@ -560,6 +571,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 		return
 	}
 	seg = NewReplaySegmentEntry()
+	seg.SegmentNode = &SegmentNode{}
 	seg.table = rel
 	seg.ID = segid
 	seg.state = state
@@ -610,26 +622,27 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, txnNode 
 	}
 	seg.Insert(un)
 }
-func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
+func (catalog *Catalog) onReplayUpdateBlock(
+	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
 	dataFactory DataFactory,
 	idx *wal.Index,
 	observer wal.ReplayObserver) {
-	catalog.OnReplayBlockID(cmd.Block.ID)
+	catalog.OnReplayBlockID(cmd.ID.BlockID)
 	prepareTS := cmd.GetTs()
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
 	}
-	tbl, err := db.GetTableEntryByID(cmd.TableID)
+	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
 		panic(err)
 	}
-	seg, err := tbl.GetSegmentByID(cmd.SegmentID)
+	seg, err := tbl.GetSegmentByID(cmd.ID.SegmentID)
 	if err != nil {
 		panic(err)
 	}
-	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	blk, err := seg.GetBlockEntryByID(cmd.ID.BlockID)
+	un := cmd.mvccNode
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
 		if err := un.ApplyCommit(nil); err != nil {
@@ -645,13 +658,16 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		}
 		return
 	}
-	cmd.Block.RWMutex = new(sync.RWMutex)
-	cmd.Block.segment = seg
-	cmd.Block.blkData = dataFactory.MakeBlockFactory()(cmd.Block)
+	blk = NewReplayBlockEntry()
+	blk.ID = cmd.ID.BlockID
+	blk.BlockNode = cmd.node
+	blk.BaseEntryImpl.Insert(un)
+	blk.segment = seg
+	blk.blkData = dataFactory.MakeBlockFactory()(blk)
 	if observer != nil {
 		observer.OnTimeStamp(prepareTS)
 	}
-	seg.AddEntryLocked(cmd.Block)
+	seg.AddEntryLocked(blk)
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
@@ -707,6 +723,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
+		blk.BlockNode = &BlockNode{}
 		blk.segment = seg
 		blk.ID = blkid
 		blk.state = state

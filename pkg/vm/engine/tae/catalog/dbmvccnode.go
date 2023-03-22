@@ -16,6 +16,8 @@ package catalog
 
 import (
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type DBMVCCNode struct{}
@@ -43,3 +45,34 @@ func (e *DBMVCCNode) Update(vun BaseNode) {}
 func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 
 func (e *DBMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
+
+type DBNode struct {
+	acInfo accessInfo
+	name   string
+}
+
+func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	if node.name, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = node.acInfo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
+	return
+}
+
+func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int64
+	if sn, err = common.WriteString(node.name, w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = node.acInfo.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
+	return
+}

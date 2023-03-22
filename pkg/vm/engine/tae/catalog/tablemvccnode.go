@@ -87,3 +87,27 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	e.SchemaConstraints = string(buf)
 	return
 }
+
+type TableNode struct {
+	schema *Schema
+}
+
+func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {
+	var schemaBuf []byte
+	if schemaBuf, err = node.schema.Marshal(); err != nil {
+		return
+	}
+	if _, err = w.Write(schemaBuf); err != nil {
+		return
+	}
+	n += int64(len(schemaBuf))
+	return
+}
+
+func (node *TableNode) ReadFrom(r io.Reader) (n int64, err error) {
+	node.schema = NewEmptySchema("")
+	if n, err = node.schema.ReadFrom(r); err != nil {
+		return
+	}
+	return
+}

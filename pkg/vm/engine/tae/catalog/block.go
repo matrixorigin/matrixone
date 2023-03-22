@@ -35,7 +35,7 @@ func compareBlockFn(a, b *BlockEntry) int {
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
 	segment *SegmentEntry
-	state   EntryState
+	*BlockNode
 	blkData data.Block
 }
 
@@ -53,7 +53,9 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
-		state:   state,
+		BlockNode: &BlockNode{
+			state: state,
+		},
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
@@ -74,7 +76,9 @@ func NewBlockEntryWithMeta(
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
-		state:   state,
+		BlockNode: &BlockNode{
+			state: state,
+		},
 	}
 	e.BaseEntryImpl.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
@@ -88,7 +92,9 @@ func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEnt
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
-		state:   ES_Appendable,
+		BlockNode: &BlockNode{
+			state: ES_Appendable,
+		},
 	}
 	e.BaseEntryImpl.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
@@ -104,7 +110,9 @@ func NewStandaloneBlockWithLoc(
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
-		state:   ES_NotAppendable,
+		BlockNode: &BlockNode{
+			state: ES_Appendable,
+		},
 	}
 	e.BaseEntryImpl.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
@@ -115,7 +123,9 @@ func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
-		state:   ES_Appendable,
+		BlockNode: &BlockNode{
+			state: ES_Appendable,
+		},
 	}
 	e.BaseEntryImpl.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	return e
