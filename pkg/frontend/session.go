@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -169,6 +170,55 @@ type Session struct {
 	statsCache *plan2.StatsCache
 
 	autoIncrCaches defines.AutoIncrCaches
+
+	seqCurValues map[uint64]string
+
+	seqLastValue string
+
+	sqlHelper *SqlHelper
+}
+
+func (ses *Session) SetSeqLastValue(proc *process.Process) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.seqLastValue = proc.SessionInfo.SeqLastValue[0]
+}
+
+func (ses *Session) DeleteSeqValues(proc *process.Process) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, k := range proc.SessionInfo.SeqDeleteKeys {
+		delete(ses.seqCurValues, k)
+	}
+}
+
+func (ses *Session) AddSeqValues(proc *process.Process) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for k, v := range proc.SessionInfo.SeqAddValues {
+		ses.seqCurValues[k] = v
+	}
+}
+
+func (ses *Session) GetSeqLastValue() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqLastValue
+}
+
+func (ses *Session) CopySeqToProc(proc *process.Process) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for k, v := range ses.seqCurValues {
+		proc.SessionInfo.SeqCurValues[k] = v
+	}
+	proc.SessionInfo.SeqLastValue[0] = ses.seqLastValue
+}
+
+func (ses *Session) GetSqlHelper() *SqlHelper {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.sqlHelper
 }
 
 // The update version. Four function.
@@ -201,6 +251,9 @@ func (ses *Session) Dispose() {
 		ses.SetMemPool(mp)
 	}
 	ses.cleanCache()
+
+	// Clean sequence record data.
+	ses.seqCurValues = nil
 }
 
 type errInfo struct {
@@ -266,6 +319,12 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
+
+	// For seq init values.
+	ses.seqCurValues = make(map[uint64]string)
+	ses.seqLastValue = ""
+
+	ses.sqlHelper = &SqlHelper{ses: ses}
 
 	var err error
 	if ses.mp == nil {
@@ -1319,6 +1378,11 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 		bh.ses.SetRequestContext(ctx)
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
+
+	// For determine this is a background sql.
+	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	bh.mce.GetSession().SetRequestContext(ctx)
+
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := bh.ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
@@ -1349,4 +1413,53 @@ func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
 
 func (bh *BackgroundHandler) ClearExecResultSet() {
 	bh.ses.ClearAllMysqlResultSet()
+}
+
+type SqlHelper struct {
+	ses *Session
+}
+
+// Made for sequence func. nextval, setval.
+func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
+	var err error
+	var erArray []ExecResult
+
+	ctx := sh.ses.GetRequestContext()
+	bh := sh.ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// Success.
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(erArray) == 0 {
+		return nil, nil
+	}
+
+	return erArray[0].(*MysqlResultSet).Data[0], nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
 }
