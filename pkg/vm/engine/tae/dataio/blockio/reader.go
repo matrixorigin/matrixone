@@ -107,26 +107,6 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns2(ctx context.Context, idxs []uint16,
-	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
-	bats := make([]*batch.Batch, 0)
-	if r.meta.End() == 0 {
-		return bats, nil
-	}
-	ioVectors, err := r.reader.Read(ctx, r.meta, idxs, ids, nil, LoadZoneMapFunc, LoadColumnFunc)
-	if err != nil {
-		return nil, err
-	}
-	for y := range ids {
-		bat := batch.NewWithSize(len(idxs))
-		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
-		}
-		bats = append(bats, bat)
-	}
-	return bats, nil
-}
-
 func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
@@ -176,45 +156,6 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	for y := range blocks {
-		bat := batch.NewWithSize(len(idxs))
-		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
-		}
-		bats = append(bats, bat)
-	}
-	return bats, nil
-}
-
-func (r *BlockReader) LoadAllColumns2(ctx context.Context, idxs []uint16,
-	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
-	if err != nil {
-		return nil, err
-	}
-	if blocks[0].GetExtent().End() == 0 {
-		return nil, nil
-	}
-	if len(idxs) == 0 {
-		idxs = make([]uint16, blocks[0].GetColumnCount())
-		for i := range idxs {
-			idxs[i] = uint16(i)
-		}
-	}
-	bats := make([]*batch.Batch, 0)
-	proc := fetch{
-		name:   r.name,
-		meta:   r.meta,
-		idxes:  idxs,
-		ids:    nil,
-		pool:   m,
-		reader: r.reader,
-	}
-	v, err := r.manager.Fetch(ctx, proc)
-	if err != nil {
-		return nil, err
-	}
-	ioVectors := v.(*fileservice.IOVector)
 	for y := range blocks {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
