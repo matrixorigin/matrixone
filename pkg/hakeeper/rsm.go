@@ -124,19 +124,8 @@ func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 	return data
 }
 
-func GetGetIDCmd(count uint64) []byte {
-	cmd := make([]byte, headerSize+8)
-	binaryEnc.PutUint32(cmd, uint32(pb.GetIDUpdate))
-	binaryEnc.PutUint64(cmd[headerSize:], count)
-	return cmd
-}
-
 func parseHeartbeatCmd(cmd []byte) []byte {
 	return cmd[headerSize:]
-}
-
-func parseGetIDCmd(cmd []byte) uint64 {
-	return binaryEnc.Uint64(cmd[headerSize:])
 }
 
 func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
@@ -145,6 +134,18 @@ func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
 
 func parseSetInitTaskStateCmd(cmd []byte) pb.TaskSchedulerState {
 	return pb.TaskSchedulerState(binaryEnc.Uint32(cmd[headerSize:]))
+}
+
+func parseAllocateIDCmd(cmd []byte) pb.CNAllocateID {
+	if parseCmdTag(cmd) != pb.GetIDUpdate {
+		panic("not a allocate ID cmd")
+	}
+	payload := cmd[headerSize:]
+	var result pb.CNAllocateID
+	if err := result.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return result
 }
 
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
@@ -195,6 +196,15 @@ func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	return cmd
 }
 
+func GetAllocateIDCmd(allocID pb.CNAllocateID) []byte {
+	cmd := make([]byte, headerSize+allocID.Size())
+	binaryEnc.PutUint32(cmd, uint32(pb.GetIDUpdate))
+	if _, err := allocID.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	if shardID != DefaultHAKeeperShardID {
 		panic(moerr.NewInvalidInputNoCtx("HAKeeper shard ID %d does not match DefaultHAKeeperShardID %d", shardID, DefaultHAKeeperShardID))
@@ -212,6 +222,14 @@ func (s *stateMachine) Close() error {
 func (s *stateMachine) assignID() uint64 {
 	s.state.NextID++
 	return s.state.NextID
+}
+
+func (s *stateMachine) assignIDByKey(key string) uint64 {
+	if _, ok := s.state.NextIDByKey[key]; !ok {
+		s.state.NextIDByKey[key] = 0
+	}
+	s.state.NextIDByKey[key]++
+	return s.state.NextIDByKey[key]
 }
 
 func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
@@ -306,10 +324,22 @@ func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
-	count := parseGetIDCmd(cmd)
-	s.state.NextID++
-	v := s.state.NextID
-	s.state.NextID += count - 1
+	allocIDCmd := parseAllocateIDCmd(cmd)
+	// Empty key means it is a shared ID.
+	if len(allocIDCmd.Key) == 0 {
+		s.state.NextID++
+		v := s.state.NextID
+		s.state.NextID += allocIDCmd.Batch - 1
+		return sm.Result{Value: v}
+	}
+
+	_, ok := s.state.NextIDByKey[allocIDCmd.Key]
+	if !ok {
+		s.state.NextIDByKey[allocIDCmd.Key] = 0
+	}
+	s.state.NextIDByKey[allocIDCmd.Key]++
+	v := s.state.NextIDByKey[allocIDCmd.Key]
+	s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
 	return sm.Result{Value: v}
 }
 

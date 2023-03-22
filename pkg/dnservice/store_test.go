@@ -311,6 +311,10 @@ func (thc *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return atomic.AddUint64(&nextID, 1), nil
 }
 
+func (thc *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return atomic.AddUint64(&nextID, 1), nil
+}
+
 func (thc *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservicepb.ClusterDetails, error) {
 	return logservicepb.ClusterDetails{}, nil
 }
