@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -207,5 +208,9 @@ func (s *StorageTxnOperator) GetOperationHandler(shard memoryengine.Shard) (memo
 }
 
 func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
 	panic("should not call")
 }

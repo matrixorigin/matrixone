@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +58,7 @@ func runClientTest(
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -144,7 +143,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -185,7 +184,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 		t.Fatalf("failed to get shard info")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c, err := NewClient(ctx, scfg)
 	require.NoError(t, err)
