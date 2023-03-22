@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -345,18 +346,38 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Deletion
-		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
+		deleteNode := qry.Nodes[qry.Steps[0]]
+		deleteNode.NotCacheable = true
+		nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
+		// 1.Estiminate the cost of delete rows, if we need to delete too much rows,
+		// just use distributed deletion
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) {
+			arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+			arg.IsRemote = true
+			if err != nil {
+				return nil, err
+			}
+			rs = c.newDeleteMergeScope(arg, ss)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.MergeBlock,
+				Arg: &mergeblock.Argument{
+					//Todo； Ask @ouyunaning for help
+				},
+			})
+		} else {
+			rs = c.newMergeScope(ss)
+			updateScopesLastFlag([]*Scope{rs})
+			rs.Magic = Deletion
+			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: scp,
+			})
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
@@ -1323,6 +1344,39 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Ar
 	}
 	for i := range ss2 {
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
+	}
+	return c.newMergeScope(ss2)
+}
+
+// DeleteMergeScope need to assure this:
+// one block can only delete by one and the same
+// CN, so we need to transfer the rows from the
+// the same block to one and the same CN to perform
+// the deletion operators.
+func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
+	//Todo: implemet delete merge
+	ss2 := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+	delete := &vm.Instruction{
+		Op:  vm.Deletion,
+		Arg: arg,
+	}
+	// for every scope, it should dispatch its
+	// batch to other cn
+	for i := 0; i < len(ss2); i++ {
+		construcnDeleteDispatch(i, ss)
+	}
+	//Todo: need to build dispatch operator
+	for i := range ss2 {
+		arg.IsRemote = true
+		arg.IBucket = uint64(i)
+		arg.NBucket = uint64(len(ss2))
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(delete, nil))
 	}
 	return c.newMergeScope(ss2)
 }

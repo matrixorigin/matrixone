@@ -58,5 +58,6 @@ type DeleteCtx struct {
 	OnSetUpdateCol    []map[string]int32
 }
 
+// delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

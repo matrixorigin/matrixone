@@ -781,3 +781,20 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		logutil.Debugf(msg+" %s", infos...)
 	}
 }
+
+/*
+	RowId:
+
+| segmentId | blockId | offsetId |
+
+	12 bytes   2 bytes   2 bytes
+*/
+func generateRowIdForCNBlock(segmentName string, blockId [2]byte, offsetId [2]byte) (rowId types.Rowid) {
+	segmentId := rowId[:0]
+	segmentId = append(segmentId, []byte(segmentName)...)
+	block_id := rowId[12:14]
+	block_id = append(block_id, blockId[:]...)
+	offset_id := rowId[14:16]
+	offset_id = append(offset_id, offsetId[:]...)
+	return
+}

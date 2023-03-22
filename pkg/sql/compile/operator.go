@@ -386,6 +386,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			TableDef:   t.TableDef,
 			ParentIdx:  t.ParentIdx,
 		}
+	case vm.Deletion:
+		t := sourceIns.Arg.(*deletion.Argument)
+		res.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			DeleteCtx:    t.DeleteCtx,
+			AffectedRows: t.AffectedRows,
+			Engine:       t.Engine,
+			IsRemote:     t.IsRemote,
+			IBucket:      t.IBucket,
+			NBucket:      t.NBucket,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -947,7 +958,51 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 	} else {
 		arg.FuncId = dispatch.SendToAnyLocalFunc
 	}
+	return arg
+}
 
+// ss[currentIdx] means it's local scope
+// the dispatch rule should be like below:
+// dispatch batch to all other cn and also
+// put one into proc.InputBatch for local
+// deletion
+func construcnDeleteDispatch(currentIdx int, ss []*Scope) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+	arg.FuncId = dispatch.DeleteSendFunc
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
+	ss[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(ss)-1)
+	// use arg.RemoteRegs to know the uuid,
+	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
+	// So how to use this?
+	// the answer is that:
+	// when the remote Cn run the scope, if scope's RemoteReceivRegInfos
+	// is not empty, it will start to give a PrepareDoneNotifyMessage to
+	// tell the dispatcher it's prepared, and also to know,this messgae
+	// will carry the uuid and a clientSession. In dispatch instruction,
+	// first it will use the uuid to get the proc.DispatchNotifyCh from the Server.
+	// (remember the DispatchNotifyCh is in a process,not a global one,because we
+	// need to send the WrapCs (a struct,contains clientSession,uuid and So on) in the
+	// sepcified process).
+	// And then Dispatcher will use this clientSession to dispatch batches to remoteCN.
+	// When remoteCn get the batches, it should know send it to where by itself.
+	for i := 0; i < len(ss); i++ {
+		if i != currentIdx {
+			id := uuid.New()
+			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+				Uuid: id,
+			})
+			// let rscope knows it need to recieve bacth from
+			// remote CN, it will use this to send PrepareDoneNotifyMessage
+			// and then to recieve batches from remote CNs
+			ss[currentIdx].RemoteReceivRegInfos = append(ss[currentIdx].RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Uuid: id,
+				// I use -1 to tag, scope should send the batches (recieved from remote CNs)
+				// to process.InputBatch (used by next operator, that's deletion operator)
+				Idx:      -1,
+				FromAddr: ss[i].NodeInfo.Addr,
+			})
+		}
+	}
 	return arg
 }
 
