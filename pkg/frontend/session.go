@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -788,6 +790,12 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	return ses.txnCompileCtx
 }
 
+func (ses *Session) SetTxnCompileCtx(txnCompileCtx *TxnCompilerContext) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.txnCompileCtx = txnCompileCtx
+}
+
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	gSysVars := ses.GetGlobalSysVars()
@@ -1312,6 +1320,7 @@ func (bh *BackgroundHandler) Close() {
 }
 
 func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
+	bh.ses.Session.txnCompileCtx.dbName = catalog.MO_CATALOG
 	bh.mce.SetSession(bh.ses.Session)
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
