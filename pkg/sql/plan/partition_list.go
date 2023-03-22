@@ -111,7 +111,7 @@ func (lpb *listPartitionBuilder) checkPartitionIntegrity(ctx context.Context, pa
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(nil, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {

@@ -350,24 +350,6 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 	return caseWhenExpr, nil
 }
 
-func verifyOptionsInPartitionDefIsSupported(def *tree.Partition) error {
-	var err error
-
-	return err
-}
-
-func isSupportedOptionInPartitionDef(opt tree.TableOption) error {
-	switch opt.(type) {
-	//only support COMMENT
-	case *tree.TableOptionComment:
-		return nil
-	//unsupported options
-	case *tree.TableOptionEngine:
-
-	}
-	return nil
-}
-
 // The permitted data types are shown in the following list:
 // All integer types
 // DATE and DATETIME

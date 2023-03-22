@@ -39,7 +39,7 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		partitionsNum = 1
 	}
 	// check partition number
-	if err := checkPartitionCount(nil, partitionBinder, int(partitionsNum)); err != nil {
+	if err := checkPartitionCount(ctx, partitionBinder, int(partitionsNum)); err != nil {
 		return err
 	}
 
@@ -66,15 +66,15 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		return err
 	}
 
-	err = kpb.buildPartitionDefs(nil, partitionBinder, partitionInfo, partitionOp.Partitions)
+	err = kpb.buildPartitionDefs(ctx, partitionBinder, partitionInfo, partitionOp.Partitions)
 	if err != nil {
 		return err
 	}
-	err = kpb.checkPartitionIntegrity(nil, partitionBinder, tableDef, partitionInfo)
+	err = kpb.checkPartitionIntegrity(ctx, partitionBinder, tableDef, partitionInfo)
 	if err != nil {
 		return err
 	}
-	err = kpb.buildEvalPartitionExpression(nil, partitionBinder, stmt, partitionInfo)
+	err = kpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (kpb *keyPartitionBuilder) checkPartitionIntegrity(ctx context.Context, par
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(nil, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {

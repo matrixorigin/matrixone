@@ -61,17 +61,17 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 		}
 	}
 
-	err := rpb.buildPartitionDefs(nil, partitionBinder, partitionInfo, partitionOp.Partitions)
+	err := rpb.buildPartitionDefs(ctx, partitionBinder, partitionInfo, partitionOp.Partitions)
 	if err != nil {
 		return err
 	}
 
-	err = rpb.checkPartitionIntegrity(nil, partitionBinder, tableDef, partitionInfo)
+	err = rpb.checkPartitionIntegrity(ctx, partitionBinder, tableDef, partitionInfo)
 	if err != nil {
 		return err
 	}
 
-	err = rpb.buildEvalPartitionExpression(nil, partitionBinder, stmt, partitionInfo)
+	err = rpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func (rpb *rangePartitionBuilder) checkPartitionIntegrity(ctx context.Context, p
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(nil, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {
