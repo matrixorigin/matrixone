@@ -177,18 +177,18 @@ func NewIOPipeline(
 
 	p.waitQ = sm.NewSafeQueue(
 		100000,
-		p.options.prefetchParallism*10,
+		100,
 		p.onWait)
 
 	p.prefetch.queue = sm.NewSafeQueue(
 		100000,
-		p.options.prefetchParallism*2,
+		64,
 		p.onPrefetch)
 	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 
 	p.fetch.queue = sm.NewSafeQueue(
 		100000,
-		p.options.fetchParallism*2,
+		64,
 		p.onFetch)
 	p.fetch.scheduler = tasks.NewParallelJobScheduler(p.options.fetchParallism)
 	return p

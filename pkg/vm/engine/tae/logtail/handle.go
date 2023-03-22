@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -596,7 +597,10 @@ func LoadCheckpointEntries(
 	if metLoc == "" {
 		return
 	}
-
+	now := time.Now()
+	defer func() {
+		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
+	}()
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
 
@@ -604,9 +608,14 @@ func LoadCheckpointEntries(
 	readerMetas := make([][]objectio.BlockObject, len(locations))
 	for i, key := range locations {
 		readers[i], err = blockio.NewCheckPointReader(fs, key)
+
+		err = blockio.PrefetchBlocksMeta(readers[i], nil)
 		if err != nil {
 			return
 		}
+	}
+
+	for i := range locations {
 		readerMetas[i], err = readers[i].LoadBlocksMeta(ctx, common.DefaultAllocator)
 		if err != nil {
 			return
