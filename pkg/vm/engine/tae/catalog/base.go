@@ -82,7 +82,7 @@ type BaseEntryImpl[T BaseNode] struct {
 
 func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
 	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory[T](factory)),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
 	}
 	return be
 }
@@ -90,7 +90,7 @@ func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
 func NewBaseEntry[T BaseNode](id uint64, factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
 		ID:        id,
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory[T](factory)),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
 	}
 }
 

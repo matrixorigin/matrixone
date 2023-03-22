@@ -41,7 +41,7 @@ type BlockEntry struct {
 
 func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
-		BaseEntryImpl: NewReplayBaseEntry[*MetadataMVCCNode](
+		BaseEntryImpl: NewReplayBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} },
 		),
 	}
@@ -50,7 +50,7 @@ func NewReplayBlockEntry() *BlockEntry {
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
 		state:   state,
@@ -71,7 +71,7 @@ func NewBlockEntryWithMeta(
 	deltaLoc string) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
 		state:   state,
@@ -85,7 +85,7 @@ func NewBlockEntryWithMeta(
 
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
 		state:   ES_Appendable,
@@ -101,7 +101,7 @@ func NewStandaloneBlockWithLoc(
 	metaLoc string,
 	delLoc string) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
 		state:   ES_NotAppendable,
@@ -112,7 +112,7 @@ func NewStandaloneBlockWithLoc(
 
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntryImpl: NewBaseEntry[*MetadataMVCCNode](id,
+		BaseEntryImpl: NewBaseEntry(id,
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
 		state:   ES_Appendable,
