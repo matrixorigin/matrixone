@@ -85,7 +85,9 @@ func buildCountCheckExpr(pkCol *plan.ColDef) (*plan.Expr, error) {
 		},
 	}
 	pkStrExpr, err := plan2.AppendCastBeforeExpr(context.TODO(), pkExpr, plan2.MakePlan2Type(&tVarLen))
-
+	if err != nil {
+		return nil, err
+	}
 	tInt64 := types.T_int64.ToType()
 	countExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&tInt64),
@@ -95,9 +97,6 @@ func buildCountCheckExpr(pkCol *plan.ColDef) (*plan.Expr, error) {
 			},
 		},
 	}
-	if err != nil {
-		return nil, err
-	}
 	colNameExpr := plan2.MakePlan2StringConstExprWithType(pkCol.Name)
 	funcExpr, err := plan2.BindFuncExprImplByPlanExpr(context.TODO(), "internal_assert_count_eq_1", []*plan.Expr{countExpr, pkStrExpr, colNameExpr})
 	if err != nil {
@@ -106,20 +105,20 @@ func buildCountCheckExpr(pkCol *plan.ColDef) (*plan.Expr, error) {
 	return funcExpr, nil
 }
 
-func buildDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, error) {
-	dedupScope := &Scope{
+func buildGroupDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, error) {
+	groupDedupScope := &Scope{
 		Magic:        Merge,
 		Instructions: make([]vm.Instruction, 0, 3),
 		Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 	}
-	dedupScope.appendInstruction(vm.Instruction{
+	groupDedupScope.appendInstruction(vm.Instruction{
 		Op:  vm.Merge,
 		Idx: c.anal.curr,
 		Arg: &merge.Argument{},
 	})
 
 	// select count(pk) from table group by table.pk;
-	dedupScope.appendInstruction(vm.Instruction{
+	groupDedupScope.appendInstruction(vm.Instruction{
 		Op:  vm.Group,
 		Idx: c.anal.curr,
 		Arg: groupArgument(pkIdx, pkCol),
@@ -131,12 +130,12 @@ func buildDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, error
 	}
 
 	// select assert(count(pk) = 1) from table;
-	dedupScope.appendInstruction(vm.Instruction{
+	groupDedupScope.appendInstruction(vm.Instruction{
 		Op:  vm.Restrict,
 		Idx: c.anal.curr,
 		Arg: &restrict.Argument{
 			E: funcExpr,
 		},
 	})
-	return dedupScope, nil
+	return groupDedupScope, nil
 }
