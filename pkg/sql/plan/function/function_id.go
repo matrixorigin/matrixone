@@ -303,6 +303,12 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
+	//Sequence function
+	NEXTVAL
+	SETVAL
+	CURRVAL
+	LASTVAL
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -526,6 +532,10 @@ var functionIdRegister = map[string]int32{
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
+	"nextval":                        NEXTVAL,
+	"setval":                         SETVAL,
+	"currval":                        CURRVAL,
+	"lastval":                        LASTVAL,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

@@ -35,6 +35,8 @@ type basicHAKeeperClient interface {
 	Close() error
 	// AllocateID allocate a globally unique ID
 	AllocateID(ctx context.Context) (uint64, error)
+	// AllocateIDByKey allocate a globally unique ID by key.
+	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
@@ -124,7 +126,14 @@ func newManagedHAKeeperClient(ctx context.Context,
 		clientOptions:  GetClientOptions(ctx),
 	}
 	mc.mu.client = c
+	mc.mu.allocIDByKey = make(map[string]*allocID)
 	return mc, nil
+}
+
+// allocID contains nextID and lastID.
+type allocID struct {
+	nextID uint64
+	lastID uint64
 }
 
 type managedHAKeeperClient struct {
@@ -137,8 +146,11 @@ type managedHAKeeperClient struct {
 
 	mu struct {
 		sync.RWMutex
-		nextID uint64
-		lastID uint64
+		// allocIDByKey is used to alloc IDs by different key.
+		allocIDByKey map[string]*allocID
+		// sharedAllocID is used to alloc global IDs.
+		sharedAllocID allocID
+
 		client *hakeeperClient
 	}
 }
@@ -186,9 +198,9 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 
 func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	c.mu.Lock()
-	if c.mu.nextID != c.mu.lastID {
-		v := c.mu.nextID
-		c.mu.nextID++
+	if c.mu.sharedAllocID.nextID != c.mu.sharedAllocID.lastID {
+		v := c.mu.sharedAllocID.nextID
+		c.mu.sharedAllocID.nextID++
 		c.mu.Unlock()
 		return v, nil
 	}
@@ -197,7 +209,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", c.cfg.AllocateIDBatch)
 		if err != nil {
 			c.resetClientLocked()
 		}
@@ -205,8 +217,48 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 			continue
 		}
 
-		c.mu.nextID = firstID + 1
-		c.mu.lastID = firstID + c.cfg.AllocateIDBatch - 1
+		c.mu.sharedAllocID.nextID = firstID + 1
+		c.mu.sharedAllocID.lastID = firstID + c.cfg.AllocateIDBatch - 1
+		c.mu.Unlock()
+		return firstID, err
+	}
+}
+
+// AllocateIDByKey implements the basicHAKeeperClient interface.
+func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	// empty key is used in shared allocated IDs.
+	if len(key) == 0 {
+		return 0, moerr.NewInternalError(ctx, "key should not be empty")
+	}
+
+	c.mu.Lock()
+	allocIDs, ok := c.mu.allocIDByKey[key]
+	if !ok {
+		allocIDs = &allocID{nextID: 0, lastID: 0}
+		c.mu.allocIDByKey[key] = allocIDs
+	}
+
+	if allocIDs.nextID != allocIDs.lastID {
+		v := allocIDs.nextID
+		allocIDs.nextID++
+		c.mu.Unlock()
+		return v, nil
+	}
+
+	for {
+		if err := c.prepareClientLocked(ctx); err != nil {
+			return 0, err
+		}
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, c.cfg.AllocateIDBatch)
+		if err != nil {
+			c.resetClientLocked()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+
+		allocIDs.nextID = firstID + 1
+		allocIDs.lastID = firstID + c.cfg.AllocateIDBatch - 1
 		c.mu.Unlock()
 		return firstID, err
 	}
@@ -442,10 +494,10 @@ func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeart
 	return c.sendHeartbeat(ctx, req)
 }
 
-func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, batch uint64) (uint64, error) {
+func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch uint64) (uint64, error) {
 	req := pb.Request{
 		Method:       pb.CN_ALLOCATE_ID,
-		CNAllocateID: &pb.CNAllocateID{Batch: batch},
+		CNAllocateID: &pb.CNAllocateID{Key: key, Batch: batch},
 	}
 	resp, err := c.request(ctx, req)
 	if err != nil {
