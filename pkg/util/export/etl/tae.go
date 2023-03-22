@@ -313,7 +313,7 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 		r.typs = append(r.typs, c.ColType.ToType())
 		r.idxs[idx] = uint16(idx)
 	}
-	r.blockReader, err = blockio.NewFileReader(r.fs, r.filepath)
+	r.blockReader, err = blockio.NewFileReaderNoCache(r.fs, r.filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -358,9 +358,11 @@ func (r *TAEReader) ReadRow(row *table.Row) error {
 }
 
 func (r *TAEReader) Close() {
-	for _, b := range r.batchs {
-		b.Clean(r.mp)
+	for idx := range r.batchs {
+		// do NOT release it in mpool (like r.batchs[idx].Clean(r.mp)). right now, the buffer is new one.
+		r.batchs[idx] = nil
 	}
+	r.batchs = nil
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {

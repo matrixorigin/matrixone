@@ -156,7 +156,7 @@ func newTestCase(offset uint64) offsetTestCase {
 	return offsetTestCase{
 		proc: proc,
 		types: []types.Type{
-			{Oid: types.T_int8},
+			types.T_int8.ToType(),
 		},
 		arg: &Argument{
 			Offset: offset,

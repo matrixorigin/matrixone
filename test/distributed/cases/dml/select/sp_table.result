@@ -9,11 +9,12 @@ system    %!%mo_increment_columns
 system_metrics    %!%mo_increment_columns    
 select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 order by relname;
 relname    relkind
-%!%mo_increment_columns    
+%!%mo_increment_columns
 mo_account    r
 mo_columns    r
 mo_database    r
 mo_mysql_compatbility_mode    r
+mo_pubs    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r

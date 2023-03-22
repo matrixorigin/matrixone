@@ -115,7 +115,7 @@ func getTypeCharLength(typ types.Type) (bool, int32) {
 // 'internal_char_size' function operator
 func getTypeCharSize(typ types.Type) (bool, int32) {
 	if types.IsString(typ.Oid) {
-		return true, typ.Size * typ.Width
+		return true, typ.GetSize() * typ.Width
 	} else {
 		return false, -1
 	}

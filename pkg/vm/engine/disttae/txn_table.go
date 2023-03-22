@@ -26,19 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
-	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+	if !plan2.NeedStats(tbl.getTableDef()) {
 		return plan2.DefaultStats(), nil
 	}
-
+	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
+	if !ok {
+		return plan2.DefaultStats(), nil
+	}
 	if tbl.meta == nil || !tbl.updated {
 		err := tbl.updateMeta(ctx, expr)
 		if err != nil {
@@ -46,7 +47,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 		}
 	}
 	if tbl.meta != nil {
-		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil
@@ -54,7 +55,6 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -134,7 +134,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	var init bool
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
-			blkVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
+			blkVal, blkTypes, err := getZonemapDataFromMeta(columns, blk, tbl.getTableDef())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -247,7 +247,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				}
 			}
 		}
-
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
@@ -275,7 +274,6 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
-						Size:     attr.Attr.Type.Size,
 						Scale:    attr.Attr.Type.Scale,
 						AutoIncr: attr.Attr.AutoIncrement,
 					},
@@ -527,7 +525,6 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
-	var index memorytable.Tuple
 	var encodedPrimaryKey []byte
 	if tbl.primaryIdx >= 0 && expr != nil {
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
@@ -536,10 +533,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			packer, put := tbl.db.txn.engine.packerPool.Get()
 			defer put()
 			encodedPrimaryKey = encodePrimaryKey(v, packer)
-			index = memorytable.Tuple{
-				index_PrimaryKey,
-				memorytable.ToOrdered(v),
-			}
 		}
 	}
 
@@ -567,7 +560,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			ctx,
 			i,
 			num,
-			index,
 			encodedPrimaryKey,
 			blks,
 			writes,
@@ -645,7 +637,6 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	partitionIndex int,
 	readerNumber int,
-	index memorytable.Tuple,
 	encodedPrimaryKey []byte,
 	blks []ModifyBlockMeta,
 	entries []Entry,
