@@ -173,16 +173,8 @@ func (node *memoryNode) ApplyAppend(
 	from = int(node.data.Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		if def.IsPhyAddr() {
-			continue
-		}
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
-	}
-	if err = node.FillPhyAddrColumn(
-		uint32(from),
-		uint32(bat.Length())); err != nil {
-		return
 	}
 	return
 }
