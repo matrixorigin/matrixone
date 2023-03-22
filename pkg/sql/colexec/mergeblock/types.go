@@ -25,7 +25,10 @@ import (
 )
 
 type Container struct {
+	// mp is used to store the metaLoc Batch
 	mp map[int]*batch.Batch
+	// mp2 is used to store the normal data batches
+	mp2 map[int][]*batch.Batch
 }
 
 type Argument struct {
@@ -35,7 +38,7 @@ type Argument struct {
 	Unique_tbls  []engine.Relation
 	AffectedRows uint64
 	// 3. used for ut_test, otherwise the batch will free,
-	// and we cna't get the result to check
+	// and we can't get the result to check
 	notFreeBatch bool
 	container    *Container
 }
@@ -50,29 +53,43 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) GetMetaLocBat(name string) {
 	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
+		0, 0))
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
 		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
+			0, 0))
 		arg.container.mp[i+1] = bat
 	}
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	arg.GetMetaLocBat(bat.Attrs[1])
-	tblIdx := vector.MustFixedCol[uint16](bat.GetVector(0))
-	metaLocs := vector.MustStrCol(bat.GetVector(1))
+	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
+	metaLocs := vector.MustBytesCol(bat.GetVector(1))
 	for i := range tblIdx {
-		if tblIdx[i] == 0 {
-			val, err := strconv.ParseUint(strings.Split(metaLocs[i], ":")[2], 0, 64)
-			if err != nil {
+		if tblIdx[i] >= 0 {
+			if tblIdx[i] == 0 {
+				val, err := strconv.ParseUint(strings.Split(string(metaLocs[i]), ":")[2], 0, 64)
+				if err != nil {
+					return err
+				}
+				arg.AffectedRows += val
+			}
+			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
+		} else {
+			idx := int(-(tblIdx[i] + 1))
+			bat := &batch.Batch{}
+			if err := bat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
 				return err
 			}
-			arg.AffectedRows += val
+			if idx == 0 {
+				arg.AffectedRows += uint64(bat.Length())
+			}
+			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
 		}
-		vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())

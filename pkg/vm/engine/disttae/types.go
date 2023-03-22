@@ -113,6 +113,8 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes [][]Entry
+	// txn workspace size
+	workspaceSize uint64
 
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
