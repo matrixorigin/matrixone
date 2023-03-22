@@ -335,10 +335,14 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-
-	//TODO: retest after cloneWindow()
-	cloned.downstreamVector, _ = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
-	cloned.isOwner = true
+	op := func(v any, _ int) error {
+		cloned.Append(v)
+		return nil
+	}
+	err := vec.ForeachWindowShallow(offset, length, op, nil)
+	if err != nil {
+		return nil
+	}
 
 	return cloned
 }
