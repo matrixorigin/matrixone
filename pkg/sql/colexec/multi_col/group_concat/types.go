@@ -28,4 +28,11 @@ type Argument struct {
 	GroupExpr   []*plan.Expr // group Expressions
 	OrderByExpr []*plan.Expr // orderby Expressions, for now we don't care about it
 	Separator   string
+	// because we store multiAgg and UnaryAgg separately.
+	// we use this to record the order in sql.
+	// like 'select group_concat(a),avg(a) from t;'
+	// this orderId will be 0.
+	// but for 'select group_concat(a),avg(a) from t;'
+	// this orderId will be 1.
+	OrderId int32
 }
