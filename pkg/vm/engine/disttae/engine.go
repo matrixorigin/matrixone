@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -45,11 +44,9 @@ func New(
 	ctx context.Context,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	lockService lockservice.LockService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -64,15 +61,14 @@ func New(
 	}
 
 	e := &Engine{
-		mp:          mp,
-		fs:          fs,
-		lockService: lockService,
-		cli:         cli,
-		idGen:       idGen,
-		catalog:     cache.NewCatalog(),
-		txns:        make(map[string]*Transaction),
-		dnMap:       dnMap,
-		partitions:  make(map[[2]uint64]Partitions),
+		mp:         mp,
+		fs:         fs,
+		cli:        cli,
+		idGen:      idGen,
+		catalog:    cache.NewCatalog(),
+		txns:       make(map[string]*Transaction),
+		dnMap:      dnMap,
+		partitions: make(map[[2]uint64]Partitions),
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -358,7 +354,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
-		e.lockService,
+		nil,
 	)
 	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
 	workspace.DisableHistory()

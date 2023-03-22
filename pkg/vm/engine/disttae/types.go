@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -62,16 +61,15 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp          *mpool.MPool
-	fs          fileservice.FileService
-	lockService lockservice.LockService
-	cli         client.TxnClient
-	idGen       IDGenerator
-	txns        map[string]*Transaction
-	catalog     *cache.CatalogCache
-	dnMap       map[string]int
-	partitions  map[[2]uint64]Partitions
-	packerPool  *fileservice.Pool[*types.Packer]
+	mp         *mpool.MPool
+	fs         fileservice.FileService
+	cli        client.TxnClient
+	idGen      IDGenerator
+	txns       map[string]*Transaction
+	catalog    *cache.CatalogCache
+	dnMap      map[string]int
+	partitions map[[2]uint64]Partitions
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel       bool
