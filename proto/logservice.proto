@@ -107,7 +107,8 @@ message CNStoreHeartbeat {
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
 message CNAllocateID {
-  uint64 Batch = 1;
+  string key = 1;
+  uint64 Batch = 2;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
@@ -488,17 +489,20 @@ message CheckerState {
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
 message HAKeeperRSMState {
   uint64 Tick                                = 1;
+  // NextID is a shared, global ID.
   uint64 NextID                              = 2;
-  uint64 Term                                = 3;
-  HAKeeperState State                        = 4;
-  TaskSchedulerState TaskSchedulerState      = 5;
-  map<string, CommandBatch> ScheduleCommands = 6 [(gogoproto.nullable) = false];
-  map<string, uint64> LogShards = 7;
-  CNState CNState               = 8  [(gogoproto.nullable) = false];
-  DNState DNState               = 9  [(gogoproto.nullable) = false];
-  LogState LogState             = 10  [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 11 [(gogoproto.nullable) = false];
-  TaskTableUser TaskTableUser   = 12 [(gogoproto.nullable) = false];
+  // NextIDByKey is IDs isolated by keys.
+  map<string, uint64> NextIDByKey            = 3;
+  uint64 Term                                = 4;
+  HAKeeperState State                        = 5;
+  TaskSchedulerState TaskSchedulerState      = 6;
+  map<string, CommandBatch> ScheduleCommands = 7 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 8;
+  CNState CNState               = 9  [(gogoproto.nullable) = false];
+  DNState DNState               = 10 [(gogoproto.nullable) = false];
+  LogState LogState             = 11 [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 12 [(gogoproto.nullable) = false];
+  TaskTableUser TaskTableUser   = 13 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

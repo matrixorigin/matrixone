@@ -1,4 +1,5 @@
 // Copyright 2021 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -44,8 +45,8 @@ func (r *LogtailResponse) Size() int {
 	return r.ProtoSize()
 }
 
-// ResponsePool acquires or releases LogtailResponse.
-type ResponsePool interface {
+// LogtailResponsePool acquires or releases LogtailResponse.
+type LogtailResponsePool interface {
 	// Acquire fetches item from pool.
 	Acquire() *LogtailResponse
 
@@ -57,7 +58,7 @@ type responsePool struct {
 	pool *sync.Pool
 }
 
-func NewResponsePool() ResponsePool {
+func NewLogtailResponsePool() LogtailResponsePool {
 	return &responsePool{
 		pool: &sync.Pool{
 			New: func() any {
@@ -105,25 +106,53 @@ func (s *LogtailResponseSegment) Size() int {
 	return s.ProtoSize()
 }
 
-// SegmentPool acquires or releases LogtailResponseSegment.
-type SegmentPool interface {
+// LogtailResponseSegmentPool acquires or releases LogtailResponseSegment.
+type LogtailResponseSegmentPool interface {
 	// Acquire fetches item from pool.
 	Acquire() *LogtailResponseSegment
 
 	// Release puts item back to pool.
 	Release(*LogtailResponseSegment)
-
-	// LeastEffectiveCapacity evaluates least payload limit.
-	LeastEffectiveCapacity() int
 }
 
 type segmentPool struct {
+	pool *sync.Pool
+}
+
+func NewLogtailResponseSegmentPool() LogtailResponseSegmentPool {
+	return &segmentPool{
+		pool: &sync.Pool{
+			New: func() any {
+				return &LogtailResponseSegment{}
+			},
+		},
+	}
+}
+
+func (p *segmentPool) Acquire() *LogtailResponseSegment {
+	return p.pool.Get().(*LogtailResponseSegment)
+}
+
+func (p *segmentPool) Release(seg *LogtailResponseSegment) {
+	seg.Reset()
+	p.pool.Put(seg)
+}
+
+// LogtailServerSegmentPool describes segment pool for logtail server.
+type LogtailServerSegmentPool interface {
+	LogtailResponseSegmentPool
+
+	// LeastEffectiveCapacity evaluates least effective payload size.
+	LeastEffectiveCapacity() int
+}
+
+type serverSegmentPool struct {
 	maxMessageSize int
 	pool           *sync.Pool
 }
 
-func NewSegmentPool(maxMessageSize int) SegmentPool {
-	s := &segmentPool{
+func NewLogtailServerSegmentPool(maxMessageSize int) LogtailServerSegmentPool {
+	return &serverSegmentPool{
 		maxMessageSize: maxMessageSize,
 		pool: &sync.Pool{
 			New: func() any {
@@ -133,31 +162,29 @@ func NewSegmentPool(maxMessageSize int) SegmentPool {
 			},
 		},
 	}
-	return s
 }
 
-func (s *segmentPool) Acquire() *LogtailResponseSegment {
-	return s.pool.Get().(*LogtailResponseSegment)
+func (p *serverSegmentPool) Acquire() *LogtailResponseSegment {
+	return p.pool.Get().(*LogtailResponseSegment)
 }
 
-func (s *segmentPool) Release(seg *LogtailResponseSegment) {
+func (p *serverSegmentPool) Release(seg *LogtailResponseSegment) {
 	buf := seg.Payload
 	seg.Reset()
 	seg.Payload = buf[:cap(buf)]
-	s.pool.Put(seg)
+	p.pool.Put(seg)
 }
 
-func (s *segmentPool) LeastEffectiveCapacity() int {
-	segment := s.Acquire()
-	defer s.Release(segment)
+func (p *serverSegmentPool) LeastEffectiveCapacity() int {
+	segment := p.Acquire()
+	defer p.Release(segment)
 
 	segment.StreamID = math.MaxUint64
 	segment.Sequence = math.MaxInt32
 	segment.MaxSequence = math.MaxInt32
 	segment.MessageSize = math.MaxInt32
-	// Now, maxHeaderSize is 32 bytes.
-	maxHeaderSize := segment.ProtoSize() - s.maxMessageSize
+	maxHeaderSize := segment.ProtoSize() - p.maxMessageSize
 
 	// Take out reserved size, then effective capacity left.
-	return s.maxMessageSize - maxHeaderSize
+	return p.maxMessageSize - maxHeaderSize
 }

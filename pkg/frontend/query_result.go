@@ -346,7 +346,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 	switch stmt.(type) {
 	case *tree.Select:
 		s.Typ = int(astSelect)
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
+	case *tree.ShowTables, *tree.ShowSequences, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
 		s.Typ = int(astShowAboutTable)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,

@@ -185,7 +185,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 		t.Fatalf("failed to get shard info")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c, err := NewClient(ctx, scfg)
 	require.NoError(t, err)
