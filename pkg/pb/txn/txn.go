@@ -310,3 +310,13 @@ func ValidTxnIsolation(value string) bool {
 	}
 	return found
 }
+
+// IsRCIsolation returns the isolation of current txn
+func (m TxnMeta) IsRCIsolation() bool {
+	return m.Isolation == TxnIsolation_RC
+}
+
+// IsPessimistic returns true if txn is in pessimistic mode
+func (m TxnMeta) IsPessimistic() bool {
+	return m.Mode == TxnMode_Pessimistic
+}
