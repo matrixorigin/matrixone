@@ -32,6 +32,11 @@ const (
 	HIndex
 )
 
+const (
+	UnaryAgg = iota
+	MultiAgg
+)
+
 type evalVector struct {
 	needFree bool
 	vec      *vector.Vector
@@ -55,6 +60,8 @@ type container struct {
 	multiVecs [][]evalVector
 
 	vecs []*vector.Vector
+	// we use this to distinct bat.Aggs[i] is UnaryAgg or MultiAgg
+	mapAggType map[int32]int
 
 	bat *batch.Batch
 }
@@ -89,7 +96,7 @@ func (ctr *container) ToInputType(idx int) (t []types.Type) {
 	return
 }
 
-func (ctr *container) ToVecotrs(idx int) (vecs []*vector.Vector) {
+func (ctr *container) ToVectors(idx int) (vecs []*vector.Vector) {
 	for i := range ctr.multiVecs[idx] {
 		vecs = append(vecs, ctr.multiVecs[idx][i].vec)
 	}
