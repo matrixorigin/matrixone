@@ -17,6 +17,5 @@ package disttae
 import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 
 const (
-	index_PrimaryKey         = memorytable.Text("primary key")
 	index_TableID_PrimaryKey = memorytable.Text("table id, primary key")
 )

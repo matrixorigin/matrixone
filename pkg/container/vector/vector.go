@@ -851,14 +851,11 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var err error
-		var va types.Varlena
 		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+		v.col.([]types.Varlena)[oldLen], v.area, err = types.BuildVarlena(bs, v.area, mp)
 		if err != nil {
 			return err
 		}
-		col := v.col.([]types.Varlena)
-		col[oldLen] = va
 	} else {
 		tlen := v.GetType().TypeSize()
 		copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
@@ -869,6 +866,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
+	if cnt == 0 {
+		return nil
+	}
+
 	if err := extend(v, cnt, mp); err != nil {
 		return err
 	}
@@ -909,6 +910,10 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 }
 
 func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
+	if len(sels) == 0 {
+		return nil
+	}
+
 	if err := extend(v, len(sels), mp); err != nil {
 		return err
 	}
@@ -942,19 +947,18 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var err error
-		var va types.Varlena
+		vCol := v.col.([]types.Varlena)
+		wCol := w.col.([]types.Varlena)
 		for i, sel := range sels {
 			if nulls.Contains(w.GetNulls(), uint64(sel)) {
 				nulls.Add(v.GetNulls(), uint64(oldLen+i))
 				continue
 			}
-			bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-			va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+			bs := wCol[sel].GetByteSlice(w.area)
+			vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
 			if err != nil {
 				return err
 			}
-			col := v.col.([]types.Varlena)
-			col[oldLen+i] = va
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
@@ -971,6 +975,10 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	if cnt == 0 {
+		return nil
+	}
+
 	if err := extend(v, cnt, mp); err != nil {
 		return err
 	}
@@ -1008,23 +1016,22 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 	if v.GetType().IsVarlen() {
 		var err error
-		var va types.Varlena
+		vCol := v.col.([]types.Varlena)
+		wCol := w.col.([]types.Varlena)
 		for i := range flags {
 			if flags[i] == 0 {
 				continue
 			}
-			v.length++
 			if nulls.Contains(w.GetNulls(), uint64(offset)+uint64(i)) {
-				nulls.Add(v.GetNulls(), uint64(v.length-1))
+				nulls.Add(v.GetNulls(), uint64(v.length))
 			} else {
-				bs := w.col.([]types.Varlena)[int(offset)+i].GetByteSlice(w.area)
-				va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+				bs := wCol[int(offset)+i].GetByteSlice(w.area)
+				vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
 				if err != nil {
 					return err
 				}
-				col := v.col.([]types.Varlena)
-				col[v.length-1] = va
 			}
+			v.length++
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
@@ -1032,12 +1039,12 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if flags[i] == 0 {
 				continue
 			}
-			v.length++
 			if nulls.Contains(w.GetNulls(), uint64(offset)+uint64(i)) {
-				nulls.Add(v.GetNulls(), uint64(v.length-1))
+				nulls.Add(v.GetNulls(), uint64(v.length))
 			} else {
-				copy(v.data[(v.length-1)*tlen:v.length*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+				copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 			}
+			v.length++
 		}
 	}
 
@@ -1561,7 +1568,7 @@ func CopyConst(toVec, fromVec *Vector, length int, mp *mpool.MPool) error {
 	return nil
 }
 
-// Window just returns a window out of input and no deep copy.
+// CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	w := NewVec(v.typ)
 	w.nsp = nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
@@ -1583,15 +1590,16 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		w.length = end - start
 		if v.GetType().IsVarlen() {
 			var va types.Varlena
+			vCol := v.col.([]types.Varlena)
+			wCol := w.col.([]types.Varlena)
 			for i := start; i < end; i++ {
 				if !nulls.Contains(v.GetNulls(), uint64(i)) {
-					bs := v.col.([]types.Varlena)[i].GetByteSlice(v.area)
+					bs := vCol[i].GetByteSlice(v.area)
 					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
 					if err != nil {
 						return nil, err
 					}
-					col := v.col.([]types.Varlena)
-					col[i-start] = va
+					wCol[i-start] = va
 				}
 			}
 		} else {

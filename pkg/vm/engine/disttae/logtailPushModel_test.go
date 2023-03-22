@@ -95,14 +95,8 @@ func debugToPrintLogList(ls []logtail.TableLogtail) string {
 			str += "\tcommands are :\n"
 		}
 		for j, command := range l.Commands {
-			typ := "insert"
-			if command.EntryType == 1 {
-				typ = "delete"
-			} else if command.EntryType == 2 {
-				typ = "update"
-			}
 			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
-				j, command.DatabaseName, command.TableName, typ)
+				j, command.DatabaseName, command.TableName, command.EntryType.String())
 		}
 	}
 	return str

@@ -70,16 +70,13 @@ func fetchZonemapAndRowsFromBlockInfo(
 
 	for i := range idxs {
 		bytes := obs[0][i].GetBuf()
-		if err != nil {
-			return nil, 0, err
-		}
 		copy(zonemapList[i][:], bytes[:])
 	}
 
 	return zonemapList, rows, nil
 }
 
-func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
