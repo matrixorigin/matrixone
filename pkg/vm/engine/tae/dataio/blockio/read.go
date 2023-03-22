@@ -64,7 +64,7 @@ func BlockRead(
 			//TODO: Added for on passing BVT. Will remove it after the proper fix is merge to master.
 			vec.Close()
 		}
-		vec.Close()
+		//vec.Close()
 	}
 	bat.SetZs(bat.Vecs[0].Length(), pool)
 
