@@ -1822,7 +1822,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						maskedCTEs[name] = nil
 					}
 				}
-
+				defaultDatabase := viewData.DefaultDatabase
+				if obj.PubAccountId != -1 {
+					defaultDatabase = obj.SubscriptionName
+				}
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
@@ -1831,7 +1834,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						},
 						Stmt: viewStmt.AsSource,
 					},
-					defaultDatabase: viewData.DefaultDatabase,
+					defaultDatabase: defaultDatabase,
 					maskedCTEs:      maskedCTEs,
 				}
 
