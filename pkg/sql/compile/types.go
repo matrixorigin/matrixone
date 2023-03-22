@@ -61,6 +61,9 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	CreateSequence
+	DropSequence
+	AlterSequence
 )
 
 // Source contains information of a relation which will be used in execution,

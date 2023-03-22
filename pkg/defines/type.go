@@ -177,6 +177,9 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
 
+// Determine if now is a bg sql.
+type BgKey struct{}
+
 type AutoIncrCaches struct {
 	Mu             *sync.Mutex
 	AutoIncrCaches map[string]AutoIncrCache

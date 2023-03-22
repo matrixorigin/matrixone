@@ -12,3 +12,61 @@ aabb
 select group_concat(distinct b,c separator '|') from t1;
 group_concat(distinct b, c, |)
 abc|abc|aabb
+set @@sql_mode = "STRICT_TRANS_TABLES";
+select group_concat(distinct b,c separator '|'),a from t1;
+group_concat(distinct b, c, |)    a
+abc|abc|aabb    1
+select a,group_concat(distinct b,c separator '|') from t1;
+a    group_concat(distinct b, c, |)
+1    abc|abc|aabb
+select group_concat(distinct b,c separator '|'),avg(a) from t1;
+group_concat(distinct b, c, |)    avg(a)
+abc|abc|aabb    2.25
+select avg(a),group_concat(distinct b,c separator '|') from t1;
+avg(a)    group_concat(distinct b, c, |)
+2.25    abc|abc|aabb
+select group_concat(distinct b,c separator '|'),sum(a) from t1;
+group_concat(distinct b, c, |)    sum(a)
+abc|abc|aabb    9
+select sum(a),group_concat(distinct b,c separator '|') from t1;
+sum(a)    group_concat(distinct b, c, |)
+9    abc|abc|aabb
+select group_concat(distinct b,c separator '|'),a from t1 group by a;
+group_concat(distinct b, c, |)    a
+abc    1
+abc    2
+aabb    3
+select a,group_concat(distinct b,c separator '|') from t1 group by a;
+a    group_concat(distinct b, c, |)
+1    abc
+2    abc
+3    aabb
+select group_concat(distinct b,c separator '|'),avg(a) from t1 group by a;
+group_concat(distinct b, c, |)    avg(a)
+abc    1.0
+abc    2.0
+aabb    3.0
+select avg(a),group_concat(distinct b,c separator '|') from t1 group by a;
+avg(a)    group_concat(distinct b, c, |)
+1.0    abc
+2.0    abc
+3.0    aabb
+select group_concat(distinct b,c separator '|'),sum(a) from t1 group by a;
+group_concat(distinct b, c, |)    sum(a)
+abc    1
+abc    2
+aabb    6
+select sum(a),group_concat(distinct b,c separator '|') from t1 group by a;
+sum(a)    group_concat(distinct b, c, |)
+1    abc
+2    abc
+6    aabb
+drop table if exists t1;
+create table t1(a int, b char(1));
+insert into t1 values (1, 'a');
+select group_concat(a) as bb, case b when 1 then '是' else '否' end aa from t1;
+invalid argument cast to int, bad value a
+select group_concat(b) as bb, case a when 1 then '是' else '否' end aa from t1;
+bb    aa
+a    是
+set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
