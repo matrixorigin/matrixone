@@ -57,7 +57,7 @@ func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
-		*tree.CreateDatabase, *tree.DropDatabase,
+		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
 	}
@@ -67,7 +67,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex, *tree.DropSequence:
 		return true
 	}
 	return false
@@ -94,7 +94,7 @@ StatementCanBeExecutedInUncommittedTransaction checks the statement can be execu
 func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
+	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable, *tree.CreateSequence:
 		return true, nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
@@ -112,6 +112,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowTableStatus,
 		*tree.ShowGrants,
 		*tree.ShowTables,
+		*tree.ShowSequences,
 		*tree.ShowProcessList,
 		*tree.ShowErrors,
 		*tree.ShowWarnings,
@@ -161,7 +162,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView:
+	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView, *tree.DropSequence:
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession(), nil
 	}

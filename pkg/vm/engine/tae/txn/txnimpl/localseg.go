@@ -176,11 +176,14 @@ func (seg *localSegment) PrepareApply() (err error) {
 
 func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	if !node.IsPersisted() {
+		an := node.(*anode)
+		an.storage.mnode.data.Compact()
 		tableData := seg.table.entry.GetTableData()
 		if seg.tableHandle == nil {
 			seg.tableHandle = tableData.GetHandle()
 		}
 		appended := uint32(0)
+		vec := containers.MakeVector(catalog.PhyAddrColumnType, false)
 		for appended < node.RowsWithoutDeletes() {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
@@ -209,6 +212,17 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			if err != nil {
 				return err
 			}
+			prefix := appender.GetMeta().(*catalog.BlockEntry).MakeKey()
+			col, err := model.PreparePhyAddrData(
+				catalog.PhyAddrColumnType,
+				prefix,
+				anode.GetMaxRow()-toAppend,
+				toAppend)
+			if err != nil {
+				return err
+			}
+			defer col.Close()
+			vec.Extend(col)
 			toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 			ctx := &appendCtx{
 				driver: appender,
@@ -233,6 +247,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				break
 			}
 		}
+		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx].Close()
+		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx] = vec
 		return
 	}
 	//handle persisted insertNode.

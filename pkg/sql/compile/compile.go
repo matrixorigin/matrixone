@@ -182,6 +182,10 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.AlterTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case DropSequence:
+		return c.scope.DropSequence(c)
+	case CreateSequence:
+		return c.scope.CreateSequence(c)
 	case CreateIndex:
 		return c.scope.CreateIndex(c)
 	case DropIndex:
@@ -252,9 +256,19 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Magic: DropTable,
 				Plan:  pn,
 			}, nil
+		case plan.DataDefinition_DROP_SEQUENCE:
+			return &Scope{
+				Magic: DropSequence,
+				Plan:  pn,
+			}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
 			return &Scope{
 				Magic: TruncateTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_SEQUENCE:
+			return &Scope{
+				Magic: CreateSequence,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
