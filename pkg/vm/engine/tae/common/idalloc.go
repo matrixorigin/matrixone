@@ -24,8 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func MustUuid1() types.Uuid {
+	return types.Uuid(uuid.Must(uuid.NewUUID()))
+}
+
 func NewSegmentid() types.Uuid {
-	return types.Uuid(uuid.New())
+	return MustUuid1()
 }
 
 func NewObjectName(seg *types.Uuid, filen uint16) string {
