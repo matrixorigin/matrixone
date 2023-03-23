@@ -47,7 +47,6 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -357,6 +356,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
+		nil,
 	)
 	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
 	workspace.DisableHistory()
@@ -436,6 +436,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	}
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
+	}
+	err := txn.DumpBatch(true)
+	if err != nil {
+		return err
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {

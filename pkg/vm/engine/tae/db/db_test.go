@@ -4246,27 +4246,30 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
-	assert.NoError(t, err)
-
+	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 
+	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
 	})
 	t.Log(time.Since(now))
 	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
 
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+	assert.NoError(t, err)
+	now = time.Now()
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(4000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		tae.BGCheckpointRunner.ExistPendingEntryToGC()
 		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
 	})
+	t.Log(time.Since(now))
 	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -5736,6 +5739,32 @@ func TestForceCheckpoint(t *testing.T) {
 	assert.Error(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
+}
+
+func TestLogailAppend(t *testing.T) {
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
+	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	batch := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks)-1))
+	//create database, create table, append
+	tae.createRelAndAppend(batch, true)
+	//delete
+	err := tae.deleteAll(true)
+	assert.NoError(t, err)
+	//compact(metadata)
+	tae.DoAppend(batch)
+	tae.compactBlocks(false)
+	//drop table
+	tae.dropRelation(t)
+	//drop database
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	txn.DropDatabase("db")
+	assert.NoError(t, txn.Commit())
 }
 
 func TestSnapshotLag1(t *testing.T) {

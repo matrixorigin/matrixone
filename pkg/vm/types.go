@@ -72,6 +72,11 @@ const (
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
 	LastInstructionOp
+
+	// LockOp is used to add locks to lockservice for pessimistic transactions.
+	// Operator that encounters a write conflict will block until the previous
+	// transaction has released the lock
+	LockOp
 )
 
 // Instruction contains relational algebra

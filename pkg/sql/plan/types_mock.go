@@ -470,7 +470,7 @@ func (m *MockRule) EXPECT() *MockRuleMockRecorder {
 }
 
 // Apply mocks base method.
-func (m *MockRule) Apply(arg0 Node, arg1 Query, arg2 *process.Process) {
+func (m *MockRule) Apply(arg0 *Node, arg1 *Query, arg2 *process.Process) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "Apply", arg0, arg1, arg2)
 }
@@ -482,7 +482,7 @@ func (mr *MockRuleMockRecorder) Apply(arg0, arg1, arg2 interface{}) *gomock.Call
 }
 
 // Match mocks base method.
-func (m *MockRule) Match(arg0 Node) bool {
+func (m *MockRule) Match(arg0 *Node) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Match", arg0)
 	ret0, _ := ret[0].(bool)

@@ -47,6 +47,8 @@ func (store *NoopTxnStore) PreApplyCommit() error  { return nil }
 func (store *NoopTxnStore) ApplyCommit() error     { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error { return nil }
 
+func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
+func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
@@ -144,3 +146,16 @@ func (store *NoopTxnStore) GetDirty() *common.Tree                        { retu
 func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }
+
+func (store *NoopTxnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)) {
+}
+
+func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Normal
+}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -264,4 +265,58 @@ func (m TxnError) UnwrapError() error {
 		panic(e)
 	}
 	return err
+}
+
+// GetTxnMode get txn mode from string
+func GetTxnMode(value string) TxnMode {
+	for name, m := range TxnMode_value {
+		if strings.EqualFold(name, value) {
+			return TxnMode(m)
+		}
+	}
+	panic("BUG")
+}
+
+// GetTxnIsolation get txn mode from string
+func GetTxnIsolation(value string) TxnIsolation {
+	for name, m := range TxnIsolation_value {
+		if strings.EqualFold(name, value) {
+			return TxnIsolation(m)
+		}
+	}
+	panic("BUG")
+}
+
+// ValidTxnMode valid txn mode
+func ValidTxnMode(value string) bool {
+	found := true
+	for name := range TxnMode_value {
+		if strings.EqualFold(name, value) {
+			found = true
+			break
+		}
+	}
+	return found
+}
+
+// ValidTxnIsolation valid txn isolation
+func ValidTxnIsolation(value string) bool {
+	found := true
+	for name := range TxnIsolation_value {
+		if strings.EqualFold(name, value) {
+			found = true
+			break
+		}
+	}
+	return found
+}
+
+// IsRCIsolation returns the isolation of current txn
+func (m TxnMeta) IsRCIsolation() bool {
+	return m.Isolation == TxnIsolation_RC
+}
+
+// IsPessimistic returns true if txn is in pessimistic mode
+func (m TxnMeta) IsPessimistic() bool {
+	return m.Mode == TxnMode_Pessimistic
 }
