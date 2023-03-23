@@ -72,3 +72,13 @@ select * from indup_00 order by id;
 insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 select * from indup_00 order by id;
 drop table indup_00;
+CREATE TABLE IF NOT EXISTS indup(
+col1 INT primary key,
+col2 VARCHAR(20) NOT NULL,
+col3 VARCHAR(30) NOT NULL,
+col4 BIGINT default 30
+);
+insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+select * from indup;
+insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
+select * from indup;

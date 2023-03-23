@@ -2195,7 +2195,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3082,7 +3083,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		ses.GetMemPool(),
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
