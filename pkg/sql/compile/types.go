@@ -175,11 +175,6 @@ type Compile struct {
 	stmt tree.Statement
 
 	s3CounterSet perfcounter.CounterSet
-
-	// when we construct the scope, compileTableScan will new a scope, the magic is
-	// remote, but now the tempEngine is just standlone. So for now use this to read
-	// table locally. But int the future, this will disappear.
-	isTemporaryScan bool
 }
 
 type RemoteReceivRegInfo struct {
