@@ -33,4 +33,5 @@ select status, err_code, error from system.statement_info where account = 'query
 status    err_code    error
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
+Success    0
 drop account `query_tae_table`;
