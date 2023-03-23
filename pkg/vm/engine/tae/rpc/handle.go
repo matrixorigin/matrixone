@@ -96,7 +96,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (err error, cts timestamp.Timestamp) {
+	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()

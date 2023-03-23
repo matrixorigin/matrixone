@@ -330,17 +330,17 @@ func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) err
 	return nil
 }
 
-func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
 	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return nil
+		return timestamp.Timestamp{}, nil
 	}
 
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
 	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), writeKeys) {
-		return moerr.NewTxnWriteConflictNoCtx("")
+		return timestamp.Timestamp{}, moerr.NewTxnWriteConflictNoCtx("")
 	}
 
 	var log *KVLog
@@ -353,15 +353,16 @@ func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 		panic(fmt.Sprintf("commit with invalid status: %s", txnMeta.Status))
 	}
 	log.Txn.Status = txn.TxnStatus_Committed
+	log.Txn.CommitTS, _ = kv.clock.Now()
 	lsn, err := kv.saveLog(log)
 	if err != nil {
-		return err
+		return timestamp.Timestamp{}, err
 	}
 
 	kv.commitKeysLocked(txnMeta, writeKeys)
 	kv.recoverFrom = lsn
 	kv.eventC <- Event{Txn: log.Txn, Type: CommitType}
-	return nil
+	return log.Txn.CommitTS, nil
 }
 
 func (kv *KVTxnStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
