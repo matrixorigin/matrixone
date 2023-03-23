@@ -3144,18 +3144,17 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 				goto handleFailed
 			}
 		}
-	}
+		//  drop table mo_pubs
+		err = bh.Exec(deleteCtx, dropMoPubsSql)
+		if err != nil {
+			goto handleFailed
+		}
 
-	// step -1: drop table mo_pubs
-	err = bh.Exec(deleteCtx, dropMoPubsSql)
-	if err != nil {
-		goto handleFailed
-	}
-
-	// step 0: drop autoIcr table
-	err = bh.Exec(deleteCtx, dropAutoIcrColSql)
-	if err != nil {
-		goto handleFailed
+		// drop autoIcr table
+		err = bh.Exec(deleteCtx, dropAutoIcrColSql)
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	//step 1 : delete the account in the mo_account of the sys account
