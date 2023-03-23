@@ -356,6 +356,7 @@ message PartitionItem {
 	string comment = 4;
 	repeated Expr less_than = 5;
 	repeated Expr in_values = 6;
+	string partition_table_name = 7;// the table name of a partition
 }
 
 
@@ -855,6 +856,7 @@ message CreateTable {
 	repeated string fk_tables = 7;
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 8;
+	repeated TableDef partition_tables = 9;
 }
 
 message AlterTableDrop {
@@ -906,6 +908,7 @@ message DropTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	repeated string partition_table_names = 8;
 }
 
 message CreateIndex {

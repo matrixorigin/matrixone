@@ -260,6 +260,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	partitionTables := qry.GetPartitionTables()
+	for _, table := range partitionTables {
+		storageCols := planColsToExeCols(table.GetCols())
+		storageDefs, err := planDefsToExeDefs(table)
+		if err != nil {
+			return err
+		}
+		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+		if err != nil {
+			return err
+		}
+	}
+
 	fkDbs := qry.GetFkDbs()
 	if len(fkDbs) > 0 {
 		fkTables := qry.GetFkTables()
@@ -872,6 +885,12 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		//delete partition table
+		for _, name := range qry.GetPartitionTableNames() {
+			if err = dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 	}
 }
@@ -908,7 +927,8 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			return nil, err
 		}
 		exeDefs = append(exeDefs, &engine.PartitionDef{
-			Partition: string(bytes),
+			Partitioned: 1,
+			Partition:   string(bytes),
 		})
 	}
 
