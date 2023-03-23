@@ -93,7 +93,7 @@ func (s *taeStorage) Close(ctx context.Context) error {
 }
 
 // Commit implements storage.TxnTAEStorage
-func (s *taeStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+func (s *taeStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (error, timestamp.Timestamp) {
 	return s.taeHandler.HandleCommit(ctx, txnMeta)
 }
 
