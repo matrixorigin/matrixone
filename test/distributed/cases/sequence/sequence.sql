@@ -6,3 +6,5 @@ create sequence s1 as bigint unsigned increment by -1000 maxvalue 300;
 select * from s1;
 drop table s1;
 show sequences;
+create sequence `序列`;
+select nextval('序列');

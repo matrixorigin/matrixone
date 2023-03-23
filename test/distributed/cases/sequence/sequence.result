@@ -13,3 +13,7 @@ internal error: Should use 'drop sequence' to drop a sequence
 show sequences;
 Names    Data Type
 s1    BIGINT UNSIGNED
+create sequence `序列`;
+select nextval('序列');
+nextval(序列)
+1
