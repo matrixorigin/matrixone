@@ -37,6 +37,13 @@ type CounterSet struct {
 		DiskHit  stats.Counter
 	}
 
+	FileWithChecksum struct {
+		Read            stats.Counter
+		Write           stats.Counter
+		UnderlyingRead  stats.Counter
+		UnderlyingWrite stats.Counter
+	}
+
 	FileServices map[string]*CounterSet
 
 	DistTAE struct {

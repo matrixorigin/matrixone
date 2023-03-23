@@ -535,7 +535,7 @@ func (l *LocalETLFS) ETLCompatible() {}
 
 var _ MutableFileService = new(LocalETLFS)
 
-func (l *LocalETLFS) NewMutator(filePath string) (Mutator, error) {
+func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
