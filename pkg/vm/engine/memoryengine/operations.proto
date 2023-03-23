@@ -28,66 +28,66 @@ option (gogoproto.goproto_unkeyed_all)      = false;
 option (gogoproto.goproto_sizecache_all)    = false;
 
 message AccessInfo {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint32 AccountID            = 1;
     uint32 UserID               = 2;
     uint32 RoleID               = 3;
 }
 
 message OpenDatabaseReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
     string Name                 = 2;
 }
 
 message OpenDatabaseResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
     string name                 = 2;
 }
 
 message CreateDatabaseReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
     AccessInfo access_info      = 2 [(gogoproto.nullable) = false];
     string name                 = 3;
 }
 
 message CreateDatabaseResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetDatabasesReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
 }
 
 message GetDatabasesResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated string Names       = 1;
 }
 
 message DeleteDatabaseReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
     string Name                 = 2;
 }
 
 message DeleteDatabaseResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message OpenRelationReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string Name                 = 3;
 }
 
 message OpenRelationResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
     uint32 type                 = 2 [(gogoproto.casttype) = "RelationType"];
     string DatabaseName         = 3;
@@ -95,7 +95,7 @@ message OpenRelationResp {
 }
 
 message CreateRelationReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
     uint64 DatabaseID           = 2 [(gogoproto.casttype) = "ID"];
     string database_name        = 3;
@@ -107,46 +107,46 @@ message CreateRelationReq {
 }
 
 message CreateRelationResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetRelationsReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetRelationsResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated string Names       = 1;
 }
 
 message DeleteRelationReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string Name                 = 3;
 }
 
 message DeleteRelationResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetTableDefsReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetTableDefsResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated bytes Defs         = 1
         [(gogoproto.customtype) =
              "github.com/matrixorigin/matrixone/pkg/vm/engine.TableDefPB"];
 }
 
 message WriteReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string TableName            = 3;
@@ -156,22 +156,22 @@ message WriteReq {
 }
 
 message WriteResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }
 
 message NewTableIterReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     plan.Expr Expr              = 2;
 }
 
 message NewTableIterResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message ReadReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
     repeated string ColNames    = 2;
 }
@@ -184,7 +184,7 @@ message ReadResp {
 }
 
 message DeleteReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string TableName            = 3;
@@ -195,66 +195,66 @@ message DeleteReq {
 }
 
 message DeleteResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }
 
 message GetPrimaryKeysReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetPrimaryKeysResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated bytes Attrs        = 1
         [(gogoproto.customtype) =
              "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
 }
 
 message CloseTableIterReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message CloseTableIterResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }
 
 message GetHiddenKeysReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetHiddenKeysResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated bytes Attrs        = 1
         [(gogoproto.customtype) =
              "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
 }
 
 message TableStatsReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message TableStatsResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     int64 Rows                  = 1 [(gogoproto.casttype) = "int"];
 }
 
 message GetTableColumnsReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message GetTableColumnsResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated bytes Attrs        = 1
         [(gogoproto.customtype) =
              "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
 }
 
 message TruncateRelationReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 NewTableID           = 1 [(gogoproto.casttype) = "ID"];
     uint64 OldTableID           = 2 [(gogoproto.casttype) = "ID"];
     uint64 DatabaseID           = 3 [(gogoproto.casttype) = "ID"];
@@ -263,12 +263,12 @@ message TruncateRelationReq {
 }
 
 message TruncateRelationResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
 }
 
 message AddTableDefReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string TableName            = 3;
@@ -280,11 +280,11 @@ message AddTableDefReq {
 }
 
 message AddTableDefResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }
 
 message DelTableDefReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string TableName            = 3;
@@ -296,11 +296,11 @@ message DelTableDefReq {
 }
 
 message DelTableDefResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }
 
 message UpdateReq {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
     string DatabaseName         = 2;
     string TableName            = 3;
@@ -310,5 +310,5 @@ message UpdateReq {
 }
 
 message UpdateResp {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
 }

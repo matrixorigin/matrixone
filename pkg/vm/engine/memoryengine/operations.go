@@ -17,10 +17,7 @@ package memoryengine
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -109,163 +106,6 @@ type Response interface {
 		apipb.SyncLogTailResp
 }
 
-type CreateDatabaseReq struct {
-	ID         ID
-	AccessInfo AccessInfo
-	Name       string
-}
-
-type CreateDatabaseResp struct {
-	ID ID
-}
-
-type OpenDatabaseReq struct {
-	AccessInfo AccessInfo
-	Name       string
-}
-
-type OpenDatabaseResp struct {
-	ID   ID
-	Name string
-}
-
-type GetDatabasesReq struct {
-	AccessInfo AccessInfo
-}
-
-type GetDatabasesResp struct {
-	Names []string
-}
-
-type DeleteDatabaseReq struct {
-	AccessInfo AccessInfo
-	Name       string
-}
-
-type DeleteDatabaseResp struct {
-	ID ID
-}
-
-type CreateRelationReq struct {
-	ID           ID
-	DatabaseID   ID
-	DatabaseName string
-	Name         string
-	Type         RelationType
-	Defs         []engine.TableDefPB
-}
-
-type CreateRelationResp struct {
-	ID ID
-}
-
-type DeleteRelationReq struct {
-	DatabaseID   ID
-	DatabaseName string
-	Name         string
-}
-
-type TruncateRelationReq struct {
-	NewTableID   ID
-	OldTableID   ID
-	DatabaseID   ID
-	DatabaseName string
-	Name         string
-}
-
-type DeleteRelationResp struct {
-	ID ID
-}
-
-type TruncateRelationResp struct {
-	ID ID
-}
-
-type OpenRelationReq struct {
-	DatabaseID   ID
-	DatabaseName string
-	Name         string
-}
-
-type OpenRelationResp struct {
-	ID           ID
-	Type         RelationType
-	DatabaseName string
-	RelationName string
-}
-
-type GetRelationsReq struct {
-	DatabaseID ID
-}
-
-type GetRelationsResp struct {
-	Names []string
-}
-
-type AddTableDefReq struct {
-	TableID ID
-	Def     engine.TableDefPB
-
-	DatabaseName string
-	TableName    string
-}
-
-type AddTableDefResp struct {
-}
-
-type DelTableDefReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-	Def          engine.TableDefPB
-}
-
-type DelTableDefResp struct {
-}
-
-type DeleteReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-	ColumnName   string
-	Vector       *vector.Vector
-}
-
-type DeleteResp struct {
-}
-
-type GetPrimaryKeysReq struct {
-	TableID ID
-}
-
-type GetPrimaryKeysResp struct {
-	Attrs []engine.Attribute
-}
-
-type GetTableDefsReq struct {
-	TableID ID
-}
-
-type GetTableColumnsReq struct {
-	TableID ID
-}
-
-type GetTableColumnsResp struct {
-	Attrs []engine.Attribute
-}
-
-type GetTableDefsResp struct {
-	Defs []engine.TableDefPB
-}
-
-type GetHiddenKeysReq struct {
-	TableID ID
-}
-
-type GetHiddenKeysResp struct {
-	Attrs []engine.Attribute
-}
-
 //type TruncateReq struct {
 //	TableID      ID
 //	DatabaseName string
@@ -275,40 +115,6 @@ type GetHiddenKeysResp struct {
 //type TruncateResp struct {
 //	AffectedRows int64
 //}
-
-type UpdateReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-	Batch        *batch.Batch
-}
-
-type UpdateResp struct {
-}
-
-type WriteReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-	Batch        *batch.Batch
-}
-
-type WriteResp struct {
-}
-
-type NewTableIterReq struct {
-	TableID ID
-	Expr    *plan.Expr
-}
-
-type NewTableIterResp struct {
-	IterID ID
-}
-
-type ReadReq struct {
-	IterID   ID
-	ColNames []string
-}
 
 type ReadResp struct {
 	Batch *batch.Batch
@@ -325,19 +131,4 @@ func (r *ReadResp) Close() error {
 
 func (r *ReadResp) SetHeap(mp *mpool.MPool) {
 	r.mp = mp
-}
-
-type CloseTableIterReq struct {
-	IterID ID
-}
-
-type CloseTableIterResp struct {
-}
-
-type TableStatsReq struct {
-	TableID ID
-}
-
-type TableStatsResp struct {
-	Rows int
 }

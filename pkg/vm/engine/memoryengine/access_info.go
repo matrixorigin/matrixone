@@ -20,12 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
-type AccessInfo struct {
-	AccountID uint32
-	UserID    uint32
-	RoleID    uint32
-}
-
 func getAccessInfo(ctx context.Context) (info AccessInfo) {
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
 		info.AccountID = v.(uint32)
