@@ -236,7 +236,8 @@ func TestInsertIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	})
-	mockEngine.EXPECT().AllocateID(gomock.Any()).Return(uint64(272510), nil).AnyTimes()
+
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).Return(uint64(272510), nil).AnyTimes()
 	//-------------------------------------------------mo_catalog + mo_indexes-----------------------------------------------------------
 	catalog_database := mock_frontend.NewMockDatabase(ctrl)
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
@@ -340,7 +341,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	})
-	mockEngine.EXPECT().AllocateID(gomock.Any()).Return(uint64(272510), nil).AnyTimes()
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).Return(uint64(272510), nil).AnyTimes()
 	//-------------------------------------------------mo_catalog + mo_indexes-----------------------------------------------------------
 	catalog_database := mock_frontend.NewMockDatabase(ctrl)
 
