@@ -169,12 +169,16 @@ type EngineKey struct{}
 
 // SqlKey use SqlKey{} to get string value from Context
 type SqlKey struct{}
+type DatTypKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
+
+// Determine if now is a bg sql.
+type BgKey struct{}
 
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}

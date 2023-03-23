@@ -1071,6 +1071,18 @@ func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) er
 	return doReset(ctx, mce.GetSession(), st)
 }
 
+func (mce *MysqlCmdExecutor) handleCreatePublication(ctx context.Context, cp *tree.CreatePublication) error {
+	return doCreatePublication(ctx, mce.GetSession(), cp)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tree.AlterPublication) error {
+	return doAlterPublication(ctx, mce.GetSession(), ap)
+}
+
+func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree.DropPublication) error {
+	return doDropPublication(ctx, mce.GetSession(), dp)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
@@ -1209,6 +1221,40 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	return err
 }
 
+func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tree.ShowPublications, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowPublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, sp *tree.ShowCreatePublications, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowCreatePublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1315,7 +1361,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
@@ -1422,6 +1468,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			st: st,
+		})
+	case *tree.ShowSequences:
+		ret = (&ShowSequencesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ss: st,
 		})
 	case *tree.ShowDatabases:
 		ret = (&ShowDatabasesExecutor{
@@ -1645,6 +1698,30 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			u: st,
 		})
+	case *tree.CreatePublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&CreatePublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cp: st,
+		})
+	case *tree.AlterPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&AlterPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ap: st,
+		})
+	case *tree.DropPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&DropPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			dp: st,
+		})
 	case *tree.CreateAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 		ret = (&CreateAccountExecutor{
@@ -1757,6 +1834,20 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			di: st,
+		})
+	case *tree.CreateSequence:
+		ret = (&CreateSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cs: st,
+		})
+	case *tree.DropSequence:
+		ret = (&DropSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ds: st,
 		})
 	case *tree.CreateView:
 		ret = (&CreateViewExecutor{
@@ -2104,7 +2195,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -2121,7 +2213,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:      ses.GetLastInsertID(),
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		SqlHelper:         ses.GetSqlHelper(),
 	}
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -2380,6 +2477,31 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreatePublication:
+			selfHandle = true
+			if err = mce.handleCreatePublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.AlterPublication:
+			selfHandle = true
+			if err = mce.handleAlterPublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropPublication:
+			selfHandle = true
+			if err = mce.handleDropPublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowPublications:
+			selfHandle = true
+			if err = mce.handleShowPublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowCreatePublications:
+			selfHandle = true
+			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateAccount:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -2422,10 +2544,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.AlterView:
-			ses.InvalidatePrivilegeCache()
-		case *tree.AlterTable:
-			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -2540,7 +2658,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch statement := cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
@@ -2639,8 +2757,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
-			*tree.CreateView, *tree.DropView,
-			*tree.AlterView, *tree.AlterTable,
+			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+			*tree.CreateSequence, *tree.DropSequence,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -2652,7 +2770,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 			//change privilege
 			switch cw.GetAst().(type) {
-			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
+			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole,
 				*tree.Revoke, *tree.Grant,
@@ -2798,10 +2916,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			return txnErr
 		}
 		switch stmt.(type) {
+		case *tree.Select:
+			if len(proc.SessionInfo.SeqAddValues) != 0 {
+				ses.AddSeqValues(proc)
+			}
+			ses.SetSeqLastValue(proc)
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
+			*tree.CreateSequence, *tree.DropSequence,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -2813,6 +2937,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if proc.GetLastInsertID() != 0 {
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
+			}
+			if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
+				ses.DeleteSeqValues(proc)
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
@@ -2956,7 +3083,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		ses.GetMemPool(),
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -2972,7 +3100,10 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
-
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3200,6 +3331,8 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 func (mce *MysqlCmdExecutor) Close() {}
 
 /*
+=======
+>>>>>>> main
 convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {

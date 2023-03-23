@@ -65,6 +65,17 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}, nil
 }
 
+func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
+	reader, err := objectio.NewObjectReader(name, service, objectio.WithNoCacheReader(true))
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader: reader,
+		name:   name,
+	}, nil
+}
+
 func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Reader, error) {
 	name, locs, err := DecodeLocationToMetas(key)
 	if err != nil {

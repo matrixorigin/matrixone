@@ -17,7 +17,9 @@ package client
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -57,6 +59,9 @@ type TxnOperator interface {
 	// node, or it can be used to pass information back to the transaction coordinator
 	// after the non-CN coordinator completes the transaction operation.
 	Snapshot() ([]byte, error)
+	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
+	// the w-w conflict
+	UpdateSnapshot(ts timestamp.Timestamp) error
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error
@@ -101,4 +106,13 @@ type DebugableTxnOperator interface {
 type TxnIDGenerator interface {
 	// Generate returns a unique transaction id
 	Generate() []byte
+}
+
+// SetupRuntimeTxnOptions setup runtime based txn options
+func SetupRuntimeTxnOptions(
+	rt runtime.Runtime,
+	m txn.TxnMode,
+	iso txn.TxnIsolation) {
+	rt.SetGlobalVariables(runtime.TxnIsolation, iso)
+	rt.SetGlobalVariables(runtime.TxnMode, m)
 }

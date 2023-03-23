@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 type TxnCompilerContext struct {
@@ -45,6 +46,12 @@ type TxnCompilerContext struct {
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+
+func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.statsCache
+}
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
@@ -607,7 +614,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,
-				Size:  key.Type.Size,
 			},
 			Primary: key.Primary,
 		})
@@ -640,7 +646,6 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 			Id:    int32(hideKey.Type.Oid),
 			Width: hideKey.Type.Width,
 			Scale: hideKey.Type.Scale,
-			Size:  hideKey.Type.Size,
 		},
 		Primary: hideKey.Primary,
 	}
@@ -663,7 +668,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	stats, _ = table.Stats(ctx, e)
+	stats, _ = table.Stats(ctx, e, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 	return stats
 }
 

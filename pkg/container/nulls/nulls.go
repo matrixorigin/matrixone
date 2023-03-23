@@ -217,26 +217,48 @@ func Range(nsp *Nulls, start, end, bias uint64, m *Nulls) *Nulls {
 	return m
 }
 
-func Filter(nsp *Nulls, sels []int64) *Nulls {
+func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
 	if nsp == nil || nsp.Np == nil || len(sels) == 0 {
 		return nsp
 	}
-	var sp []uint64
-	if len(sels) > 0 {
-		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
-	}
-	np := bitmap.New(len(sels))
-	upperLimit := uint64(nsp.Np.Len())
-	for i, sel := range sp {
-		if sel >= upperLimit {
-			continue
+
+	if negate {
+		oldLen := nsp.Np.Len()
+		np := bitmap.New(oldLen)
+		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < oldLen; oldIdx++ {
+			if oldIdx != int(sel) {
+				if nsp.Np.Contains(uint64(oldIdx)) {
+					np.Add(uint64(newIdx))
+				}
+				newIdx++
+			} else {
+				selIdx++
+				if selIdx >= oldLen {
+					break
+				}
+				sel = sels[selIdx]
+			}
 		}
-		if nsp.Np.Contains(sel) {
-			np.Add(uint64(i))
+		nsp.Np = np
+		return nsp
+	} else {
+		var sp []uint64
+		if len(sels) > 0 {
+			sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 		}
+		np := bitmap.New(len(sels))
+		upperLimit := uint64(nsp.Np.Len())
+		for i, sel := range sp {
+			if sel >= upperLimit {
+				continue
+			}
+			if nsp.Np.Contains(sel) {
+				np.Add(uint64(i))
+			}
+		}
+		nsp.Np = np
+		return nsp
 	}
-	nsp.Np = np
-	return nsp
 }
 
 func (nsp *Nulls) Any() bool {

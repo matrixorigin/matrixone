@@ -85,6 +85,9 @@ type Config struct {
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	GossipAddress string `toml:"gossip-address"`
+	// GossipAddressV2 is the address used for accepting gossip communication.
+	// This is for domain name support.
+	GossipAddressV2 string `toml:"gossip-address-v2"`
 	// GossipListenAddress is the local listen address of the GossipAddress
 	GossipListenAddress string `toml:"gossip-listen-address"`
 	// GossipSeedAddresses is list of seed addresses that are used for
@@ -341,6 +344,11 @@ func (c *Config) Fill() {
 	}
 	if c.LogDBBufferSize == 0 {
 		c.LogDBBufferSize = defaultLogDBBufferSize
+	}
+	// If GossipAddressV2 is set, we use it as gossip address, and GossipAddress
+	// will be overridden by it.
+	if len(c.GossipAddressV2) != 0 {
+		c.GossipAddress = c.GossipAddressV2
 	}
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress

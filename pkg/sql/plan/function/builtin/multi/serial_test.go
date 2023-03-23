@@ -50,7 +50,7 @@ func MakeVectors(columnSi int, rowCount int, mp *mpool.MPool) ([]*vector.Vector,
 	valueCount := make(map[int]interface{})
 	vs := make([]*vector.Vector, columnSi)
 	for i := 0; i < columnSi; i++ {
-		vs[i] = vector.NewVec(types.Type{Oid: randType()})
+		vs[i] = vector.NewVec(randType().ToType())
 		randInsertValues(vs[i], vs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 	return vs, valueCount

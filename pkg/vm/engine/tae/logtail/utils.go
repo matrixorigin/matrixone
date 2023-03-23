@@ -549,7 +549,7 @@ func (data *CheckpointData) ReadFrom(
 			}
 			result := job.WaitDone()
 			defer job.Close()
-			if result != nil && result.Res != nil {
+			if result != nil && result.Res != nil && result.Res.(*containers.Batch) != nil {
 				result.Res.(*containers.Batch).Close()
 				result.Res = nil
 			}
@@ -661,6 +661,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				entry, DelSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
+				dbNode.GetEnd(),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID())
@@ -670,6 +671,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				catalog.SystemDBSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
+				dbNode.GetEnd(),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBInsertTxnIDX])
 		}
@@ -727,6 +729,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),
+				tblNode.GetEnd(),
 			)
 
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLInsertTxnIDX])
@@ -750,6 +753,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				entry, DelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
+				tblNode.GetEnd(),
 				tblNode.GetEnd(),
 			)
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLDeleteTxnIDX])

@@ -54,7 +54,7 @@ DROP TABLE t1;
 
 
 #EXTREME VALUE
--- @bvt:issue#4689
+-- @bvt:issue#8562
 select extract(DAY_MINUTE FROM "02 10:11:12");
 select extract(DAY_SECOND FROM "225 10:11:12");
 select extract(HOUR_MINUTE FROM "10:11:12");

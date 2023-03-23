@@ -1,4 +1,5 @@
 // Copyright 2021 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -43,10 +44,10 @@ func (r *LogtailRequest) Size() int {
 	return r.ProtoSize()
 }
 
-// RequestPool acquires or releases LogtailRequest.
-type RequestPool interface {
+// LogtailRequestPool acquires or releases LogtailRequest.
+type LogtailRequestPool interface {
 	// Acquire fetches item from pool.
-	Acquire() morpc.Message
+	Acquire() *LogtailRequest
 
 	// Release puts item back to pool.
 	Release(*LogtailRequest)
@@ -56,7 +57,7 @@ type requestPool struct {
 	pool *sync.Pool
 }
 
-func NewRequestPool() RequestPool {
+func NewLogtailRequestPool() LogtailRequestPool {
 	return &requestPool{
 		pool: &sync.Pool{
 			New: func() any {
@@ -66,7 +67,7 @@ func NewRequestPool() RequestPool {
 	}
 }
 
-func (p *requestPool) Acquire() morpc.Message {
+func (p *requestPool) Acquire() *LogtailRequest {
 	return p.pool.Get().(*LogtailRequest)
 }
 

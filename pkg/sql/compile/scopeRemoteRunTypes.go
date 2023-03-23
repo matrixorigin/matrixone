@@ -27,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,8 +43,10 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
+	cnAddr      string
 	storeEngine engine.Engine
 	fileService fileservice.FileService
+	lockService lockservice.LockService
 }
 
 // processHelper records source process information to help
@@ -189,11 +191,13 @@ type messageReceiverOnServer struct {
 
 func newMessageReceiverOnServer(
 	ctx context.Context,
+	cnAddr string,
 	m *pipeline.Message,
 	cs morpc.ClientSession,
 	messageAcquirer func() morpc.Message,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
+	lockService lockservice.LockService,
 	txnClient client.TxnClient) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
@@ -204,6 +208,12 @@ func newMessageReceiverOnServer(
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
 		sequence:        0,
+	}
+	receiver.cnInformation = cnInformation{
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
+		lockService: lockService,
 	}
 
 	switch m.GetCmd() {
@@ -217,10 +227,6 @@ func newMessageReceiverOnServer(
 
 	case pipeline.PipelineMessage:
 		var err error
-		receiver.cnInformation = cnInformation{
-			storeEngine: storeEngine,
-			fileService: fileService,
-		}
 		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
 		if err != nil {
 			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
@@ -258,7 +264,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
-		cnInfo.fileService)
+		cnInfo.fileService,
+		cnInfo.lockService)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
@@ -275,7 +282,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc: proc,
 		e:    cnInfo.storeEngine,
 		anal: &anaylze{},
-		addr: colexec.CnAddr,
+		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.ctx = c.proc.Ctx

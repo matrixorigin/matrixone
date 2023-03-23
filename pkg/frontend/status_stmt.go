@@ -269,6 +269,33 @@ func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
 	return nil
 }
 
+type DropPublicationExecutor struct {
+	*statusStmtExecutor
+	dp *tree.DropPublication
+}
+
+func (dpe *DropPublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doDropPublication(ctx, ses, dpe.dp)
+}
+
+type AlterPublicationExecutor struct {
+	*statusStmtExecutor
+	ap *tree.AlterPublication
+}
+
+func (ape *AlterPublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doAlterPublication(ctx, ses, ape.ap)
+}
+
+type CreatePublicationExecutor struct {
+	*statusStmtExecutor
+	cp *tree.CreatePublication
+}
+
+func (cpe *CreatePublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doCreatePublication(ctx, ses, cpe.cp)
+}
+
 type CreateAccountExecutor struct {
 	*statusStmtExecutor
 	ca *tree.CreateAccount
@@ -400,6 +427,16 @@ type CreateViewExecutor struct {
 type AlterViewExecutor struct {
 	*statusStmtExecutor
 	av *tree.AlterView
+}
+
+type CreateSequenceExecutor struct {
+	*statusStmtExecutor
+	cs *tree.CreateSequence
+}
+
+type DropSequenceExecutor struct {
+	*statusStmtExecutor
+	ds *tree.DropSequence
 }
 
 type DropViewExecutor struct {
