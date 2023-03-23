@@ -14,8 +14,6 @@
 
 package memorytable
 
-//TODO move to vector?
-
 import (
 	"fmt"
 
@@ -28,175 +26,71 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	if vec.IsConst() {
 		i = 0
 	}
+
 	switch vec.GetType().Oid {
 
 	case types.T_bool:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  false,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[bool](vec)[i],
-		}
-		return
+		return vectorAtFixed[bool](vec, i)
 
 	case types.T_int8:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  int8(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int8](vec)[i],
-		}
-		return
+		return vectorAtFixed[int8](vec, i)
 
 	case types.T_int16:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  int16(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int16](vec)[i],
-		}
-		return
+		return vectorAtFixed[int16](vec, i)
 
 	case types.T_int32:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  int32(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int32](vec)[i],
-		}
-		return
+		return vectorAtFixed[int32](vec, i)
 
 	case types.T_int64:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  int64(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int64](vec)[i],
-		}
-		return
+		return vectorAtFixed[int64](vec, i)
 
 	case types.T_uint8:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  uint8(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint8](vec)[i],
-		}
-		return
+		return vectorAtFixed[uint8](vec, i)
 
 	case types.T_uint16:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  uint16(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint16](vec)[i],
-		}
-		return
+		return vectorAtFixed[uint16](vec, i)
 
 	case types.T_uint32:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  uint32(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint32](vec)[i],
-		}
-		return
+		return vectorAtFixed[uint32](vec, i)
 
 	case types.T_uint64:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  uint64(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint64](vec)[i],
-		}
-		return
+		return vectorAtFixed[uint64](vec, i)
 
 	case types.T_float32:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  float32(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[float32](vec)[i],
-		}
-		return
+		return vectorAtFixed[float32](vec, i)
 
 	case types.T_float64:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  float64(0),
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[float64](vec)[i],
-		}
-		return
+		return vectorAtFixed[float64](vec, i)
 
 	case types.T_tuple:
-		if vec.IsConstNull() {
-			value = Nullable{
-				IsNull: true,
-				Value:  []any{},
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[[]any](vec)[i],
-		}
-		return
+		return vectorAtFixed[[]any](vec, i)
+
+	case types.T_date:
+		return vectorAtFixed[types.Date](vec, i)
+
+	case types.T_time:
+		return vectorAtFixed[types.Time](vec, i)
+
+	case types.T_datetime:
+		return vectorAtFixed[types.Datetime](vec, i)
+
+	case types.T_timestamp:
+		return vectorAtFixed[types.Timestamp](vec, i)
+
+	case types.T_decimal64:
+		return vectorAtFixed[types.Decimal64](vec, i)
+
+	case types.T_decimal128:
+		return vectorAtFixed[types.Decimal128](vec, i)
+
+	case types.T_TS:
+		return vectorAtFixed[types.TS](vec, i)
+
+	case types.T_Rowid:
+		return vectorAtFixed[types.Rowid](vec, i)
+
+	case types.T_uuid:
+		return vectorAtFixed[types.Uuid](vec, i)
 
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		if vec.IsConstNull() {
@@ -212,142 +106,32 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_date:
-		if vec.IsConstNull() {
-			var zero types.Date
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Date](vec)[i],
-		}
-		return
-
-	case types.T_time:
-		if vec.IsConstNull() {
-			var zero types.Time
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Time](vec)[i],
-		}
-		return
-
-	case types.T_datetime:
-		if vec.IsConstNull() {
-			var zero types.Datetime
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Datetime](vec)[i],
-		}
-		return
-
-	case types.T_timestamp:
-		if vec.IsConstNull() {
-			var zero types.Timestamp
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Timestamp](vec)[i],
-		}
-		return
-
-	case types.T_decimal64:
-		if vec.IsConstNull() {
-			var zero types.Decimal64
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Decimal64](vec)[i],
-		}
-		return
-
-	case types.T_decimal128:
-		if vec.IsConstNull() {
-			var zero types.Decimal128
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Decimal128](vec)[i],
-		}
-		return
-
-	case types.T_TS:
-		if vec.IsConstNull() {
-			var zero types.TS
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.TS](vec)[i],
-		}
-		return
-
-	case types.T_Rowid:
-		if vec.IsConstNull() {
-			var zero types.Rowid
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Rowid](vec)[i],
-		}
-		return
-
-	case types.T_uuid:
-		if vec.IsConstNull() {
-			var zero types.Uuid
-			value = Nullable{
-				IsNull: true,
-				Value:  zero,
-			}
-			return
-		}
-		value = Nullable{
-			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Uuid](vec)[i],
-		}
-		return
-
 	}
 
 	panic(fmt.Sprintf("unknown column type: %v", *vec.GetType()))
+}
+
+func vectorAtFixed[T any](vec *vector.Vector, i int) (value Nullable) {
+	if vec.IsConstNull() {
+		var zero T
+		value = Nullable{
+			IsNull: true,
+			Value:  zero,
+		}
+		return
+	}
+
+	slice := vector.MustFixedCol[T](vec)
+	if len(slice) != vec.Length() {
+		panic(fmt.Sprintf(
+			"bad vector length, expected %d, got %d",
+			vec.Length(),
+			len(slice),
+		))
+	}
+	value = Nullable{
+		IsNull: vec.GetNulls().Contains(uint64(i)),
+		Value:  slice[i],
+	}
+	return
 }
