@@ -20,7 +20,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+var (
+	gsColDefs = [2][]*plan.ColDef{}
+)
+
+func init() {
+	retTyp := types.T_int64.ToType()
+	gsColDefs[0] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
+	retTyp = types.T_datetime.ToType()
+	gsColDefs[1] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
+}
+
 func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) int32 {
+	var retsIdx int
+	if types.IsInteger(types.T(exprs[0].Typ.Id)) {
+		retsIdx = 0
+	} else {
+		retsIdx = 1
+	}
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -30,14 +57,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			TblFunc: &plan.TableFunction{
 				Name: "generate_series",
 			},
-			Cols: []*plan.ColDef{{
-				Name: "result",
-				Typ: &plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
-			},
-			},
+			Cols: gsColDefs[retsIdx],
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		Children:        []int32{childId},

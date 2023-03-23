@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -79,7 +78,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.NewVec(dupType(plan.MakePlan2Type(startVec.GetType())))
+		rbat.Vecs[i] = vector.NewVec(dupType(arg.Rets[i].Typ))
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
@@ -118,19 +117,13 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 		startSlice := vector.MustStrCol(startVec)
 		endSlice := vector.MustStrCol(endVec)
-		stepSlice := vector.MustStrCol(stepVec)
 		startStr := startSlice[0]
 		endStr := endSlice[0]
-		stepStr := stepSlice[0]
 		scale := int32(findScale(startStr, endStr))
 		rbat.Vecs[0].GetType().Scale = scale
 		start, err := types.ParseDatetime(startStr, scale)
 		if err != nil {
-			err = tryInt(startStr, endStr, stepStr, proc, rbat)
-			if err != nil {
-				return false, err
-			}
-			break
+			return false, err
 		}
 
 		end, err := types.ParseDatetime(endStr, scale)
