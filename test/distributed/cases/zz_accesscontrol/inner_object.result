@@ -31,7 +31,8 @@ Field    Type    Null    Key    Default    Extra    Comment
 viewdef    BLOB(0)    YES        null
 relpersistence    VARCHAR(5000)    YES        null
 creator    INT UNSIGNED(0)    YES        null
-partitioned    BLOB(0)    YES        null
+partitioned    TINYINT(0)    YES        null
+partition_info    BLOB(0)    YES        null
 account_id    INT UNSIGNED(0)    YES        null
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null
 relkind    VARCHAR(5000)    YES        null

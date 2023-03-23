@@ -483,6 +483,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 	partitionDef := createTable.TableDef.Partition
 	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
 
+	partitionTableNames := make([]string, partitionDef.PartitionNum)
 	for i := 0; i < int(partitionDef.PartitionNum); i++ {
 		part := partitionDef.Partitions[i]
 		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
@@ -492,6 +493,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 
 		//save the table name for a partition
 		part.PartitionTableName = partitionTableName
+		partitionTableNames[i] = partitionTableName
 
 		partitionTableDefs[i] = &TableDef{
 			Name: partitionTableName,
@@ -499,6 +501,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 		}
 		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
 	}
+	partitionDef.PartitionTableNames = partitionTableNames
 	createTable.PartitionTables = partitionTableDefs
 	return nil
 }
@@ -1214,10 +1217,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		if tableDef.GetPartition() != nil {
-			dropTable.PartitionTableNames = make([]string, 0, tableDef.GetPartition().GetPartitionNum())
-			for _, item := range tableDef.GetPartition().GetPartitions() {
-				dropTable.PartitionTableNames = append(dropTable.PartitionTableNames, item.GetPartitionTableName())
-			}
+			dropTable.PartitionTableNames = tableDef.GetPartition().GetPartitionTableNames()
 		}
 	}
 	return &Plan{

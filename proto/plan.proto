@@ -337,6 +337,7 @@ message PartitionByDef {
 	int64 algorithm = 7;
 	bool is_sub_partition = 8;
 	string partition_msg = 9;
+	repeated string partition_table_names = 10;
 }
 
 message PartitionExpr {
