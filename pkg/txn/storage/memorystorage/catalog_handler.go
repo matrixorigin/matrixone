@@ -225,9 +225,8 @@ func (c *CatalogHandler) HandleCloseTableIter(ctx context.Context, meta txn.TxnM
 	return c.upstream.HandleCloseTableIter(ctx, meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
-	err := c.upstream.HandleCommit(ctx, meta)
-	return err
+func (c *CatalogHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) (timestamp.Timestamp, error) {
+	return c.upstream.HandleCommit(ctx, meta)
 }
 
 func (c *CatalogHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta) error {
