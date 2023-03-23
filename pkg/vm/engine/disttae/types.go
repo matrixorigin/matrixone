@@ -99,8 +99,6 @@ type Transaction struct {
 	// not-used now
 	// blockId uint64
 
-	// use for solving halloween problem
-	statementId uint64
 	// local timestamp for workspace operations
 	localTS timestamp.Timestamp
 	meta    txn.TxnMeta
@@ -109,8 +107,7 @@ type Transaction struct {
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
-	// every statement is an element
-	writes [][]Entry
+	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
 
@@ -197,6 +194,11 @@ type txnTable struct {
 	updated bool
 	// use for skip rows
 	skipBlocks map[uint64]uint8
+
+	// snapshot for read
+	writes []Entry
+	// offset of the writes in workspace
+	writesOffset int
 }
 
 type column struct {

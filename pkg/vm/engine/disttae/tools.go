@@ -647,22 +647,20 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 }
 */
 
-func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
-	for i := range writes {
-		for _, e := range writes[i] {
-			if e.bat.Length() == 0 {
-				continue
-			}
-			pe, err := toPBEntry(e)
-			if err != nil {
-				return nil, err
-			}
-			mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
-			if _, ok := mq[e.dnStore.ServiceID]; !ok {
-				mq[e.dnStore.ServiceID] = e.dnStore
-			}
+	for _, e := range writes {
+		if e.bat.Length() == 0 {
+			continue
+		}
+		pe, err := toPBEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
+		if _, ok := mq[e.dnStore.ServiceID]; !ok {
+			mq[e.dnStore.ServiceID] = e.dnStore
 		}
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
