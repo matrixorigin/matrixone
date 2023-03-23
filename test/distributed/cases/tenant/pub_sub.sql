@@ -48,6 +48,7 @@ create database sys_db_1;
 use sys_db_1;
 create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
+create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
 
@@ -61,6 +62,11 @@ show tables;
 desc sys_tbl_1;
 select * from sys_tbl_1 order by a;
 select * from sub1.sys_tbl_1;
+select * from v1;
+show table_number from sub1;
+show column_number from t1;
+show table_values from t1;
+
 -- @session
 
 
