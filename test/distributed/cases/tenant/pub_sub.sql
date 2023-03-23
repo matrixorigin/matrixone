@@ -64,9 +64,8 @@ select * from sys_tbl_1 order by a;
 select * from sub1.sys_tbl_1;
 select * from v1;
 show table_number from sub1;
-show column_number from t1;
-show table_values from t1;
-
+show column_number from sys_tbl_1;
+show table_values from sys_tbl_1;
 -- @session
 
 

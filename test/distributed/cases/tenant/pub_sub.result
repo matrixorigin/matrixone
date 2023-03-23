@@ -76,6 +76,7 @@ create database sys_db_1;
 use sys_db_1;
 create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
+create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
 Name    Database
@@ -84,10 +85,10 @@ create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
 system
-sub1
 system_metrics
 information_schema
 mysql
+sub1
 mo_catalog
 show subscriptions;
 Name    From_Account
@@ -96,6 +97,7 @@ use sub1;
 show tables;
 Tables_in_sub1
 sys_tbl_1
+v1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -109,6 +111,20 @@ a
 1
 2
 3
+select * from v1;
+a
+1
+2
+3
+show table_number from sub1;
+Number of tables in sub1
+2
+show column_number from sys_tbl_1;
+Number of columns in sys_tbl_1
+2
+show table_values from sys_tbl_1;
+max(a)    min(a)
+3    1
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -125,6 +141,7 @@ use sub1;
 show tables;
 Tables_in_sub1
 sys_tbl_1
+v1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
