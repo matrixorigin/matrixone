@@ -84,11 +84,11 @@ sys_pub_1    sys_db_1
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
+sub1
 system
 system_metrics
 information_schema
 mysql
-sub1
 mo_catalog
 show subscriptions;
 Name    From_Account
@@ -215,7 +215,6 @@ create table acc2_tbl_1(q text,c int primary key auto_increment);
 insert into acc2_tbl_1(q) values ('acc2'),('acc1'),('acc0'),('sys');
 create publication acc2_pub_1 database acc2_db_1;
 create database sub2 from acc2 publication acc2_pub_1;
-database sub2 already exists
 use sub2;
 show subscriptions;
 Name    From_Account
