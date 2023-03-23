@@ -36,6 +36,8 @@ type Logtailer interface {
 		ctx context.Context, from, to timestamp.Timestamp,
 	) ([]logtail.TableLogtail, error)
 
+	RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
+
 	// TableLogtail returns logtail for the specified table.
 	//
 	// NOTE: If table not exist, logtail.TableLogtail shouldn't be a simple zero value.
@@ -97,6 +99,9 @@ func (l *LogtailerImpl) TableLogtail(
 	ret.Table = &table
 	ret.Commands = nonPointerEntryList(resp.Commands)
 	return ret, nil
+}
+func (l *LogtailerImpl) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) {
+	l.mgr.RegisterCallback(cb)
 }
 
 // RangeLogtail returns logtail for all tables that are modified within the range (from, to].

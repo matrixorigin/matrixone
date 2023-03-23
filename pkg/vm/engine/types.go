@@ -412,8 +412,8 @@ type Engine interface {
 	// Get relation by table id
 	GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error)
 
-	// generate ID for index or table
-	AllocateID(ctx context.Context) (uint64, error)
+	// AllocateIDByKey allocate a globally unique ID by key.
+	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
 type Hints struct {

@@ -97,6 +97,6 @@ func (e *EntireEngine) GetRelationById(ctx context.Context, op client.TxnOperato
 	return e.Engine.GetRelationById(ctx, op, tableId)
 }
 
-func (e *EntireEngine) AllocateID(ctx context.Context) (uint64, error) {
-	return e.Engine.AllocateID(ctx)
+func (e *EntireEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.Engine.AllocateIDByKey(ctx, key)
 }

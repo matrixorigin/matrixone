@@ -612,19 +612,19 @@ func (m *MockEngine) EXPECT() *MockEngineMockRecorder {
 	return m.recorder
 }
 
-// AllocateID mocks base method.
-func (m *MockEngine) AllocateID(ctx context.Context) (uint64, error) {
+// AllocateIDByKey mocks base method.
+func (m *MockEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AllocateID", ctx)
+	ret := m.ctrl.Call(m, "AllocateIDByKey", ctx, key)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// AllocateID indicates an expected call of AllocateID.
-func (mr *MockEngineMockRecorder) AllocateID(ctx interface{}) *gomock.Call {
+// AllocateIDByKey indicates an expected call of AllocateIDByKey.
+func (mr *MockEngineMockRecorder) AllocateIDByKey(ctx, key interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateID", reflect.TypeOf((*MockEngine)(nil).AllocateID), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateIDByKey", reflect.TypeOf((*MockEngine)(nil).AllocateIDByKey), ctx, key)
 }
 
 // Commit mocks base method.

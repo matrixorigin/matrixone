@@ -25,8 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
+	"time"
 )
 
+const (
+	ALLOCID_INDEX_KEY = "index_key"
+)
 const (
 	// 'mo_indexes' table
 	MO_INDEX_ID               = "id"
@@ -239,7 +243,9 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, index := range def.Indexes {
-				indexId, err := eg.AllocateID(proc.Ctx)
+				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+				defer cancelFunc()
+				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				if err != nil {
 					return nil, err
 				}
@@ -304,7 +310,9 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			indexId, err := eg.AllocateID(proc.Ctx)
+			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+			defer cancelFunc()
+			indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			if err != nil {
 				return nil, err
 			}

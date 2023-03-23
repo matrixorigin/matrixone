@@ -130,6 +130,7 @@ func NewService(
 	srv._txnClient = pu.TxnClient
 
 	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,
 		engine engine.Engine,
@@ -241,6 +242,7 @@ func (s *service) handleRequest(
 		}
 	}
 	go s.requestHandler(ctx,
+		s.cfg.ServiceAddress,
 		req,
 		cs,
 		s.storeEngine,

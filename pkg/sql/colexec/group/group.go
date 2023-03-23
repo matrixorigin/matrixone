@@ -64,6 +64,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.mapAggType = make(map[int32]int)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
@@ -89,6 +90,31 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		ap.Free(proc, false)
 	}
 	return end, err
+}
+
+func (ctr *container) getBatchAggs(ap *Argument) error {
+	var err error
+	i := 0
+	j := 0
+	idx := int32(0)
+	for i < len(ap.Aggs) || j < len(ap.MultiAggs) {
+		if j < len(ap.MultiAggs) && ap.MultiAggs[j].OrderId == idx {
+			if ctr.bat.Aggs[idx] = group_concat.NewGroupConcat(&ap.MultiAggs[j], ctr.ToInputType(j)); err != nil {
+				return err
+			}
+			ctr.mapAggType[idx] = MultiAgg
+			j++
+		} else {
+			if ctr.bat.Aggs[idx], err = agg.New(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
+				ctr.bat = nil
+				return err
+			}
+			ctr.mapAggType[idx] = UnaryAgg
+			i++
+		}
+		idx++
+	}
+	return nil
 }
 
 func (ctr *container) process(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
@@ -149,16 +175,8 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Zs = proc.Mp().GetSels()
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
-				ctr.bat = nil
-				return false, err
-			}
-		}
-		for i, agg := range ap.MultiAggs {
-			if ctr.bat.Aggs[i+len(ap.Aggs)] = group_concat.NewGroupConcat(&agg, ctr.ToInputType(i)); err != nil {
-				return false, err
-			}
+		if err = ctr.getBatchAggs(ap); err != nil {
+			return false, err
 		}
 		for _, ag := range ctr.bat.Aggs {
 			if err := ag.Grows(1, proc.Mp()); err != nil {
@@ -278,15 +296,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
-				return false, err
-			}
-		}
-		for i, agg := range ap.MultiAggs {
-			if ctr.bat.Aggs[i+len(ap.Aggs)] = group_concat.NewGroupConcat(&agg, ctr.ToInputType(i)); err != nil {
-				return false, err
-			}
+		if err = ctr.getBatchAggs(ap); err != nil {
+			return false, err
 		}
 		switch {
 		//case ctr.idx != nil:
@@ -320,17 +331,21 @@ func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
+	mulAggIdx := 0
+	unaryAggIdx := 0
 	for i, ag := range ctr.bat.Aggs {
-		if i < len(ctr.aggVecs) {
-			err := ag.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[i].vec})
+		if ctr.mapAggType[int32(i)] == UnaryAgg {
+			err := ag.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
 			if err != nil {
 				return err
 			}
+			unaryAggIdx++
 		} else {
-			err := ag.BulkFill(0, bat.Zs, ctr.ToVecotrs(i-len(ctr.aggVecs)))
+			err := ag.BulkFill(0, bat.Zs, ctr.ToVectors(mulAggIdx))
 			if err != nil {
 				return err
 			}
+			mulAggIdx++
 		}
 	}
 	return nil
@@ -463,17 +478,21 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	if valCnt == 0 {
 		return nil
 	}
+	mulAggIdx := 0
+	unaryAggIdx := 0
 	for j, ag := range ctr.bat.Aggs {
-		if j < len(ctr.aggVecs) {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+		if ctr.mapAggType[int32(j)] == UnaryAgg {
+			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
 			if err != nil {
 				return err
 			}
+			unaryAggIdx++
 		} else {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, ctr.ToVecotrs(j-len(ctr.aggVecs)))
+			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, ctr.ToVectors(mulAggIdx))
 			if err != nil {
 				return err
 			}
+			mulAggIdx++
 		}
 	}
 	return nil

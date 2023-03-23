@@ -63,8 +63,7 @@ const (
 
 const (
 	// Non-hard-coded data dictionary table
-	MO_INDEXES            = "mo_indexes"
-	MO_INDEX_COLUMN_USAGE = "mo_index_column_usage"
+	MO_INDEXES = "mo_indexes"
 )
 
 const (

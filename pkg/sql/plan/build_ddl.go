@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -130,6 +131,148 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				DdlType: plan.DataDefinition_CREATE_TABLE,
 				Definition: &plan.DataDefinition_CreateTable{
 					CreateTable: createTable,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
+	// Sequence table got 1 row and 7 col
+	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
+	cols := make([]*plan.ColDef, len(Sequence_cols_name))
+
+	typ, err := getTypeFromAst(ctx.GetContext(), stmt.Type)
+	if err != nil {
+		return err
+	}
+	for i := range cols {
+		if i == 4 {
+			break
+		}
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  typ,
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	cols[4] = &plan.ColDef{
+		Name: Sequence_cols_name[4],
+		Alg:  plan.CompressType_Lz4,
+		Typ: &plan.Type{
+			Id:    int32(types.T_int64),
+			Width: 0,
+			Scale: 0,
+		},
+		Default: &plan.Default{
+			NullAbility:  true,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
+	for i := 5; i <= 6; i++ {
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_bool),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+
+	cs.TableDef.Cols = cols
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemSequenceRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+
+	cs.TableDef.Defs = append(cs.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+	return nil
+}
+
+func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, error) {
+	dropSequence := &plan.DropSequence{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) Sequence in one statement", len(stmt.Names))
+	}
+	dropSequence.Database = string(stmt.Names[0].SchemaName)
+	if dropSequence.Database == "" {
+		dropSequence.Database = ctx.DefaultDatabase()
+	}
+	dropSequence.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
+		if !dropSequence.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
+		}
+		dropSequence.Table = ""
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_SEQUENCE,
+				Definition: &plan.DataDefinition_DropSequence{
+					DropSequence: dropSequence,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	createSequence := &plan.CreateSequence{
+		IfNotExists: stmt.IfNotExists,
+		TableDef: &TableDef{
+			Name: string(stmt.Name.ObjectName),
+		},
+	}
+	// Get database name.
+	if len(stmt.Name.SchemaName) == 0 {
+		createSequence.Database = ctx.DefaultDatabase()
+	} else {
+		createSequence.Database = string(stmt.Name.SchemaName)
+	}
+
+	err := buildSequenceTableDef(stmt, ctx, createSequence)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_SEQUENCE,
+				Definition: &plan.DataDefinition_CreateSequence{
+					CreateSequence: createSequence,
 				},
 			},
 		},
@@ -288,7 +431,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(builder, bindContext)
-		err = buildPartitionByClause(partitionBinder, stmt, createTable.TableDef)
+		err = buildPartitionByClause(ctx.GetContext(), partitionBinder, stmt, createTable.TableDef)
 		if err != nil {
 			return nil, err
 		}
@@ -308,18 +451,19 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported
-func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+	var builder partitionBuilder
 	switch stmt.PartitionOption.PartBy.PType.(type) {
 	case *tree.HashType:
-		err = buildHashPartition(partitionBinder, stmt, tableDef)
+		builder = &hashPartitionBuilder{}
 	case *tree.KeyType:
-		err = buildKeyPartition(partitionBinder, stmt, tableDef)
+		builder = &keyPartitionBuilder{}
 	case *tree.RangeType:
-		err = buildRangePartition(partitionBinder, stmt, tableDef)
+		builder = &rangePartitionBuilder{}
 	case *tree.ListType:
-		err = buildListPartitiion(partitionBinder, stmt, tableDef)
+		builder = &listPartitionBuilder{}
 	}
-	return err
+	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
@@ -346,7 +490,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var auto_incr bool
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
-				case *tree.AttributePrimaryKey:
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -374,6 +518,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 								ColName: def.Name,
 							},
 						},
+						Name: def.Name.Parts[0],
 					})
 					indexs = append(indexs, def.Name.Parts[0])
 				}
@@ -610,20 +755,114 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return err
+	}
+
 	// build index table
 	if len(uniqueIndexInfos) != 0 {
-		err := buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
+		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err := buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
+func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {
+	constrNames := map[string]bool{}
+	// Check not empty constraint name whether is duplicated.
+	for _, constr := range indexConstraints {
+		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+		if err != nil {
+			return err
+		}
+	}
+	for _, constr := range uniqueConstraints {
+		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+		if err != nil {
+			return err
+		}
+	}
+	// set empty constraint names(index and unique index)
+	for _, constr := range indexConstraints {
+		setEmptyIndexName(constrNames, constr)
+	}
+	for _, constr := range uniqueConstraints {
+		setEmptyUniqueIndexName(constrNames, constr)
+	}
+	return nil
+}
+
+// Check whether the constraint name is duplicate
+func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign bool, ctx context.Context) error {
+	if name == "" {
+		return nil
+	}
+	nameLower := strings.ToLower(name)
+	if namesMap[nameLower] {
+		if foreign {
+			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
+		}
+		return moerr.NewInvalidInput(ctx, "duplicate key name '%s'", name)
+	}
+	namesMap[nameLower] = true
+	return nil
+}
+
+// Set name for unqiue index constraint with an empty name
+func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
+	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
+		var colName string
+		if colName == "" {
+			colName = indexConstr.KeyParts[0].ColName.Parts[0]
+		}
+		constrName := colName
+		i := 2
+		if strings.EqualFold(constrName, "PRIMARY") {
+			constrName = fmt.Sprintf("%s_%d", constrName, 2)
+			i = 3
+		}
+		for namesMap[constrName] {
+			// loop forever until we find constrName that haven't been used.
+			constrName = fmt.Sprintf("%s_%d", colName, i)
+			i++
+		}
+		indexConstr.Name = constrName
+		namesMap[constrName] = true
+	}
+}
+
+// Set name for index constraint with an empty name
+func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
+	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
+		var colName string
+		if colName == "" {
+			colName = indexConstr.KeyParts[0].ColName.Parts[0]
+		}
+		constrName := colName
+		i := 2
+		if strings.EqualFold(constrName, "PRIMARY") {
+			constrName = fmt.Sprintf("%s_%d", constrName, 2)
+			i = 3
+		}
+		for namesMap[constrName] {
+			//  loop forever until we find constrName that haven't been used.
+			constrName = fmt.Sprintf("%s_%d", colName, i)
+			i++
+		}
+		indexConstr.Name = constrName
+		namesMap[constrName] = true
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
@@ -644,8 +883,6 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	nameCount := make(map[string]int)
-
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
@@ -732,18 +969,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
-		if indexInfo.Name == "" {
-			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
-			nameCount[firstPart]++
-			count := nameCount[firstPart]
-			indexName := firstPart
-			if count > 1 {
-				indexName = firstPart + "_" + strconv.Itoa(count)
-			}
-			indexDef.IndexName = indexName
-		} else {
-			indexDef.IndexName = indexInfo.Name
-		}
+		indexDef.IndexName = indexInfo.Name
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
@@ -753,7 +979,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			indexDef.Comment = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
-
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
@@ -899,6 +1124,14 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		} else if isView {
 			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
+		}
+
+		// Can not use drop table to drop sequence.
+		if tableDef.TableType == catalog.SystemSequenceRel && !dropTable.IfExists {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
+		} else if tableDef.TableType == catalog.SystemSequenceRel {
+			// If exists, don't drop anything.
 			dropTable.Table = ""
 		}
 

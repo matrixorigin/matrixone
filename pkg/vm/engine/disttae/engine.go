@@ -267,8 +267,8 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	return
 }
 
-func (e *Engine) AllocateID(ctx context.Context) (uint64, error) {
-	return e.idGen.AllocateID(ctx)
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {

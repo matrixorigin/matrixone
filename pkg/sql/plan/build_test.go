@@ -33,7 +33,7 @@ func TestSingleSQL(t *testing.T) {
 	//sql := "select * from nation"
 	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
 	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
-	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)"
+	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)"
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -765,7 +765,7 @@ func TestDdl(t *testing.T) {
 		"create unique index idx_name on nation(n_regionkey)",
 		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
 		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
-		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
+		"create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)",
 		"lock tables nation read",
 		"lock tables nation write, supplier read",
 		"unlock tables",

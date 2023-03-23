@@ -86,6 +86,6 @@ func (b *BindedEngine) GetRelationById(ctx context.Context, op client.TxnOperato
 	return b.engine.GetRelationById(ctx, op, tableId)
 }
 
-func (b *BindedEngine) AllocateID(ctx context.Context) (uint64, error) {
-	return b.engine.AllocateID(ctx)
+func (b *BindedEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return b.engine.AllocateIDByKey(ctx, key)
 }

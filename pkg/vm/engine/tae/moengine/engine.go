@@ -153,7 +153,7 @@ func (e *txnEngine) GetRelationById(ctx context.Context, op client.TxnOperator, 
 	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
 }
 
-func (e *txnEngine) AllocateID(ctx context.Context) (uint64, error) {
+func (e *txnEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return 0, moerr.NewNYI(ctx, "teaEngine cannot generate ID")
 }
 
