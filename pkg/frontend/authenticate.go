@@ -2772,6 +2772,12 @@ handleFailed:
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	bh := ses.GetBackgroundExec(ctx)
+
+	//set backgroundHandler's default schema
+	if handler, ok := bh.(*BackgroundHandler); ok {
+		handler.ses.Session.txnCompileCtx.dbName = catalog.MO_CATALOG
+	}
+
 	defer bh.Close()
 	var err error
 	var sql, db, table string
