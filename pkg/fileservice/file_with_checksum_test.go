@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"crypto/rand"
 	"io"
 	"os"
@@ -25,7 +26,8 @@ import (
 )
 
 func TestFileWithChecksumOffsets(t *testing.T) {
-	f := NewFileWithChecksum[*os.File](nil, 64)
+	ctx := context.Background()
+	f := NewFileWithChecksum[*os.File](ctx, nil, 64, nil)
 
 	blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(0)
 	assert.Equal(t, int64(0), blockOffset)
@@ -79,7 +81,8 @@ func testFileWithChecksum(
 	for i := 0; i < blockContentSize*4; i++ {
 
 		underlying := newUnderlying()
-		fileWithChecksum := NewFileWithChecksum(underlying, blockContentSize)
+		ctx := context.Background()
+		fileWithChecksum := NewFileWithChecksum(ctx, underlying, blockContentSize, nil)
 
 		check := func(data []byte) {
 			// check content
@@ -168,9 +171,10 @@ func TestMultiLayerFileWithChecksum(t *testing.T) {
 			t.Cleanup(func() {
 				f.Close()
 			})
-			f2 := NewFileWithChecksum(f, blockContentSize)
-			f3 := NewFileWithChecksum(f2, blockContentSize)
-			f4 := NewFileWithChecksum(f3, blockContentSize)
+			ctx := context.Background()
+			f2 := NewFileWithChecksum(ctx, f, blockContentSize, nil)
+			f3 := NewFileWithChecksum(ctx, f2, blockContentSize, nil)
+			f4 := NewFileWithChecksum(ctx, f3, blockContentSize, nil)
 			return f4
 		},
 	)
