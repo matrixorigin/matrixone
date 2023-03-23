@@ -27,7 +27,6 @@ import (
 )
 
 var Srv *Server
-var CnAddr string
 
 func NewServer(client logservice.CNHAKeeperClient) *Server {
 	if Srv != nil {

@@ -101,3 +101,24 @@ select * from t1;
 a    b    c
 1    1    12
 2    2    2
+CREATE TABLE IF NOT EXISTS indup(
+col1 INT primary key,
+col2 VARCHAR(20) NOT NULL,
+col3 VARCHAR(30) NOT NULL,
+col4 BIGINT default 30
+);
+insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+select * from indup;
+col1    col2    col3    col4
+33    11    33    1
+23    22    55    2
+24    66    77    1
+25    99    88    1
+insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
+Data truncation: data out of range: data type int32, value '2147483649'
+select * from indup;
+col1    col2    col3    col4
+33    11    33    1
+23    22    55    2
+24    66    77    1
+25    99    88    1

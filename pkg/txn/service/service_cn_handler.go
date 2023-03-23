@@ -181,7 +181,6 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		s.logger.Fatal("commit with empty dn shards")
 	}
 
-	// TODO: use lock table
 	if len(request.Txn.LockTables) > 0 &&
 		!s.allocator.Valid(request.Txn.LockTables) {
 		response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
@@ -235,6 +234,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		txnCtx.updateTxnLocked(newTxn)
 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
+		// TODO(fagongzi): commmit need return commit ts
 		if err := s.storage.Commit(ctx, newTxn); err != nil {
 			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
 			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
