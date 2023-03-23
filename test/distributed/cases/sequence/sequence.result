@@ -26,3 +26,5 @@ insert into t1 values(nextval('s2'));
 select * from t1;
 a
 1
+drop sequence s5;
+no such sequence sequence.s5

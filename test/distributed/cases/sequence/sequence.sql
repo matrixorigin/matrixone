@@ -13,3 +13,4 @@ create sequence s2;
 create table t1(a int);
 insert into t1 values(nextval('s2'));
 select * from t1;
+drop sequence s5;
