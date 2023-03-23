@@ -1433,6 +1433,10 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 			} else {
 				selIdx++
 				if selIdx >= len(sels) {
+					for idx := oldIdx + 1; idx < v.length; idx++ {
+						vs[newIdx] = vs[idx]
+						newIdx++
+					}
 					break
 				}
 				sel = sels[selIdx]
@@ -1482,6 +1486,9 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	w := NewVec(v.typ)
+	if start == end {
+		return w, nil
+	}
 	w.nsp = nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
