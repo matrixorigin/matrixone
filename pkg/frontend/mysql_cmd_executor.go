@@ -2389,7 +2389,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 		case *tree.DropDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
