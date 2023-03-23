@@ -47,7 +47,6 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -355,6 +354,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
+		nil,
 	)
 	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
 	workspace.DisableHistory()

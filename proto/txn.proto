@@ -25,6 +25,22 @@ import "lock.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
+// TxnIsolation txn txn isolation
+enum TxnIsolation {
+    // SI snapshot isolation
+    SI = 0;
+    // RC read committed
+    RC = 1;
+}
+
+// TxnMode txn mode
+enum TxnMode {
+    // Optimistic check conflict on commit.
+    Optimistic    = 0;
+    // Pessimistic check conflict every write
+    Pessimistic = 1;
+}
+
 // TxnStatus transaction status
 enum TxnStatus {
     // Active is the state of transaction creation, in this state, can execute the 
@@ -92,6 +108,10 @@ message TxnMeta {
     // is committed to the DN at Commit time, and the DN will check once if these bindings have 
     // changed, and if they have, the transaction will be rolled back.
     repeated lock.LockTable   LockTables = 7 [(gogoproto.nullable) = false];
+    // TxnMode txn mode
+    TxnMode                   Mode       = 8;
+    // TxnIsolation isolation
+    TxnIsolation              Isolation  = 9;
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.

@@ -48,7 +48,7 @@ type service struct {
 
 // NewLockService create a lock service instance
 func NewLockService(cfg Config) LockService {
-	cfg.adjust()
+	cfg.Validate()
 	s := &service{
 		cfg: cfg,
 		fsp: newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
@@ -103,6 +103,10 @@ func (s *service) Unlock(
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
 	return nil
+}
+
+func (s *service) GetConfig() Config {
+	return s.cfg
 }
 
 func (s *service) Close() error {

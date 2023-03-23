@@ -34,7 +34,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestIDAllocatorDefaultState(t *testing.T) {
@@ -226,7 +225,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -237,7 +236,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -248,7 +247,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	cfg3.Fill()
 	service3, err := NewService(cfg3,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -259,7 +258,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	cfg4.Fill()
 	service4, err := NewService(cfg4,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

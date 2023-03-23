@@ -459,3 +459,79 @@ func (mr *MockBackgroundExecMockRecorder) GetExecResultSet() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultSet", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultSet))
 }
+
+// MockoutputPool is a mock of outputPool interface.
+type MockoutputPool struct {
+	ctrl     *gomock.Controller
+	recorder *MockoutputPoolMockRecorder
+}
+
+// MockoutputPoolMockRecorder is the mock recorder for MockoutputPool.
+type MockoutputPoolMockRecorder struct {
+	mock *MockoutputPool
+}
+
+// NewMockoutputPool creates a new mock instance.
+func NewMockoutputPool(ctrl *gomock.Controller) *MockoutputPool {
+	mock := &MockoutputPool{ctrl: ctrl}
+	mock.recorder = &MockoutputPoolMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockoutputPool) EXPECT() *MockoutputPoolMockRecorder {
+	return m.recorder
+}
+
+// flush mocks base method.
+func (m *MockoutputPool) flush() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "flush")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// flush indicates an expected call of flush.
+func (mr *MockoutputPoolMockRecorder) flush() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "flush", reflect.TypeOf((*MockoutputPool)(nil).flush))
+}
+
+// getEmptyRow mocks base method.
+func (m *MockoutputPool) getEmptyRow() ([]interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getEmptyRow")
+	ret0, _ := ret[0].([]interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// getEmptyRow indicates an expected call of getEmptyRow.
+func (mr *MockoutputPoolMockRecorder) getEmptyRow() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getEmptyRow", reflect.TypeOf((*MockoutputPool)(nil).getEmptyRow))
+}
+
+// reset mocks base method.
+func (m *MockoutputPool) reset() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "reset")
+}
+
+// reset indicates an expected call of reset.
+func (mr *MockoutputPoolMockRecorder) reset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "reset", reflect.TypeOf((*MockoutputPool)(nil).reset))
+}
+
+// resetLineStr mocks base method.
+func (m *MockoutputPool) resetLineStr() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "resetLineStr")
+}
+
+// resetLineStr indicates an expected call of resetLineStr.
+func (mr *MockoutputPoolMockRecorder) resetLineStr() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resetLineStr", reflect.TypeOf((*MockoutputPool)(nil).resetLineStr))
+}
