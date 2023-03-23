@@ -33,7 +33,7 @@ func TestTestClient(t *testing.T) {
 
 	// you need to decision what timeout value to use
 	// you also need to retry requests on timeout
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// get two clients, you can get many clients to be used concurrently

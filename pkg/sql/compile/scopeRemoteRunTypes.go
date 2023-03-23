@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,6 +42,7 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
+	cnAddr      string
 	storeEngine engine.Engine
 	fileService fileservice.FileService
 }
@@ -189,6 +189,7 @@ type messageReceiverOnServer struct {
 
 func newMessageReceiverOnServer(
 	ctx context.Context,
+	cnAddr string,
 	m *pipeline.Message,
 	cs morpc.ClientSession,
 	messageAcquirer func() morpc.Message,
@@ -205,6 +206,11 @@ func newMessageReceiverOnServer(
 		maxMessageSize:  maxMessageSizeToMoRpc,
 		sequence:        0,
 	}
+	receiver.cnInformation = cnInformation{
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
+	}
 
 	switch m.GetCmd() {
 	case pipeline.PrepareDoneNotifyMessage:
@@ -217,10 +223,6 @@ func newMessageReceiverOnServer(
 
 	case pipeline.PipelineMessage:
 		var err error
-		receiver.cnInformation = cnInformation{
-			storeEngine: storeEngine,
-			fileService: fileService,
-		}
 		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
 		if err != nil {
 			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
@@ -275,7 +277,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc: proc,
 		e:    cnInfo.storeEngine,
 		anal: &anaylze{},
-		addr: colexec.CnAddr,
+		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.ctx = c.proc.Ctx

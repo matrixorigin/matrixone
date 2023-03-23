@@ -155,6 +155,76 @@ show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `a_2` (`a`)\n)
 drop table t1;
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL unique key,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+PRIMARY KEY (col1),
+unique key col2 (col3)
+);
+invalid input: duplicate key name 'col2'
+drop table t1;
+no such table create_table.t1
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+PRIMARY KEY (col1),
+unique key idx_sp1 (col2),
+unique key idx_sp1 (col3)
+);
+invalid input: duplicate key name 'idx_sp1'
+drop table t1;
+no such table create_table.t1
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+PRIMARY KEY (col1),
+unique key idx_sp1 (col2),
+key idx_sp1 (col3)
+);
+invalid input: duplicate key name 'idx_sp1'
+drop table t1;
+no such table create_table.t1
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL UNIQUE KEY,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+PRIMARY KEY (col1),
+KEY col2 (col3)
+);
+invalid input: duplicate key name 'col2'
+drop table t1;
+no such table create_table.t1
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL KEY,
+col2 DATE NOT NULL KEY,
+col3 INT NOT NULL,
+col4 INT NOT NULL
+);
+invalid input: more than one primary key defined
+drop table t1;
+no such table create_table.t1
+drop table if exists t2;
+CREATE TABLE t2 (
+`PRIMARY` INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+UNIQUE KEY (`PRIMARY`),
+UNIQUE KEY (`PRIMARY`, col3)
+);
+drop table t2;
 create table test (`a` varchar(255) DEFAULT b'0');
 insert into test values (), ();
 select * from test;
@@ -171,6 +241,6 @@ desc products;
 Field    Type    Null    Key    Default    Extra    Comment
 pid    INT(32)    NO        null        
 pname    VARCHAR(50)    NO        null        
-price    DECIMAL64(9)    NO        null        
 description    VARCHAR(20)    NO        null        
+price    DECIMAL64(9)    NO        null        
 drop table products;
