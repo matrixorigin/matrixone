@@ -131,7 +131,7 @@ func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, se
 }
 
 func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	return win.ref.CloneWindow(win.offset, win.length)
+	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
 }
 
 func (win *vectorWindow[T]) Equals(o Vector) bool {
@@ -160,7 +160,7 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		}
 		var v T
 		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(win.Get(i).([]byte), o.Get(i).([]byte)) {
+			if !bytes.Equal(win.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal64); ok {
@@ -215,5 +215,5 @@ func (win *vectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
 
 func (win *vectorWindow[T]) SetDownstreamVector(vec *cnVector.Vector) {
 	// Windows are read only
-	panic("not implemented")
+	panic("cannot modify window")
 }
