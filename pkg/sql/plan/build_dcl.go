@@ -31,7 +31,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)

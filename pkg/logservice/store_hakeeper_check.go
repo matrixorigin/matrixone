@@ -97,7 +97,7 @@ func (l *store) setInitialClusterInfo(numOfLogShards uint64,
 }
 
 func (l *store) updateIDAlloc(count uint64) error {
-	cmd := hakeeper.GetGetIDCmd(count)
+	cmd := hakeeper.GetAllocateIDCmd(pb.CNAllocateID{Batch: count})
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)

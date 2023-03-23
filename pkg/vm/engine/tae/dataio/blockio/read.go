@@ -60,8 +60,11 @@ func BlockRead(
 		} else {
 			// FIXME: CN may modify the vector, so it must be copied here now
 			bat.Vecs[i] = containers.CopyToMoVec(vec)
+
+			//TODO: Added for on passing BVT. Will remove it after the proper fix is merge to master.
+			vec.Close()
 		}
-		vec.Close()
+		//vec.Close()
 	}
 	bat.SetZs(bat.Vecs[0].Length(), pool)
 

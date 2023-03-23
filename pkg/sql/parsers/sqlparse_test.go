@@ -90,4 +90,14 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 	require.Equal(t, "select 1", ret4[0])
 	require.Equal(t, "select '2;;'", ret4[1])
 	require.Equal(t, "select 3", ret4[2])
+
+	ret5 := SplitSqlBySemicolon("select 1;select '2;;';select 3")
+	require.Equal(t, 3, len(ret5))
+	require.Equal(t, "select 1", ret5[0])
+	require.Equal(t, "select '2;;'", ret5[1])
+	require.Equal(t, "select 3", ret5[2])
+
+	ret6 := SplitSqlBySemicolon("abc")
+	require.Equal(t, 1, len(ret6))
+	require.Equal(t, "abc", ret6[0])
 }

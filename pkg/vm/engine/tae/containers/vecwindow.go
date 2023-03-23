@@ -41,7 +41,7 @@ func (win *windowBase) Allocated() int                      { return 0 }
 func (win *windowBase) Close()                              {}
 func (win *windowBase) ReadFrom(io.Reader) (int64, error)   { panic("cannot modify window") }
 
-func (win *windowBase) ResetWithData(*Bytes, *cnNulls.Nulls) { panic("cannot modify window") }
+//func (win *windowBase) ResetWithData(*Bytes, *cnNulls.Nulls) { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
@@ -68,11 +68,16 @@ func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
 	return cnNulls.Range(mask, uint64(win.offset), uint64(win.offset+win.length), 0, cnNulls.NewWithSize(0))
 }
 
-func (win *vectorWindow[T]) Bytes() *Bytes {
-	bs := win.ref.Bytes()
-	bs = bs.Window(win.offset, win.length)
-	return bs
+func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
+	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
+	return res
 }
+
+//func (win *vectorWindow[T]) Bytes() *Bytes {
+//	bs := win.ref.Bytes()
+//	bs = bs.Window(win.offset, win.length)
+//	return bs
+//}
 
 func (win *vectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
@@ -205,11 +210,6 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 }
 
 func (win *vectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
-	panic("not implemented")
-}
-
-func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
-	// Since WriteTo is not implemented, we don't need to expose Downstream here.
 	panic("not implemented")
 }
 

@@ -16,25 +16,37 @@ package containers
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 // ### Shallow copy Functions
 
+func CloneWithBuffer(src Vector, allocator ...*mpool.MPool) (cloned Vector) {
+	opts := Options{}
+	if len(allocator) > 0 {
+		opts.Allocator = common.DefaultAllocator
+	} else {
+		opts.Allocator = src.GetAllocator()
+	}
+	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
+	cloned.SetDownstreamVector(src.GetDownstreamVector())
+	return
+}
+
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	bs := vec.Bytes()
+	return vec.GetDownstreamVector()
+	//bs := vec.Bytes()
+	//
+	//mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
+	//cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
+	//
+	////mov.SetOriginal(true)
 
-	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
-	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-
-	//mov.SetOriginal(true)
-
-	return mov
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -63,45 +75,52 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 // ### Deep copy Functions
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
-	bs := vec.Bytes()
-	typ := vec.GetType()
+	//TODO: XuPeng. Need your help here. Should we do alloc from mpool or just copy()?
+	// @Long can this be implemented in CN vector?
+	a, _ := vec.GetDownstreamVector().Dup(vec.GetAllocator())
+	return a
 
-	if vec.GetType().IsVarlen() {
-		var header []types.Varlena
-		if bs.AsWindow {
-			header = make([]types.Varlena, bs.WinLength)
-			copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
-		} else {
-			header = make([]types.Varlena, len(bs.Header))
-			copy(header, bs.Header)
-		}
-		storage := make([]byte, len(bs.Storage))
-		if len(storage) > 0 {
-			copy(storage, bs.Storage)
-		}
-		mov, _ = movec.FromDNVector(typ, header, storage, true)
-		//} else if vec.GetType().IsTuple() {
-		//	mov = movec.NewVector(vec.GetType())
-		//	cnt := types.DecodeInt32(bs.Storage)
-		//	if cnt != 0 {
-		//		if err := types.Decode(bs.Storage, &mov.Col); err != nil {
-		//			panic(any(err))
-		//		}
-		//	}
-	} else {
-		data := make([]byte, len(bs.Storage))
-		if len(data) > 0 {
-			copy(data, bs.Storage)
-		}
-		mov, _ = movec.FromDNVector(typ, nil, data, true)
-	}
-
-	if vec.HasNull() {
-		cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-		//mov.GetNulls().Np = vec.NullMask()
-	}
-
-	return mov
+	//movec.FromDNVector()
+	//bs := vec.Bytes()
+	//typ := vec.GetType()
+	//
+	//if vec.GetType().IsVarlen() {
+	//	var header []types.Varlena
+	//	if bs.AsWindow {
+	//		header = make([]types.Varlena, bs.WinLength)
+	//		copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
+	//	} else {
+	//		header = make([]types.Varlena, len(bs.Header))
+	//		copy(header, bs.Header)
+	//	}
+	//	storage := make([]byte, len(bs.Storage))
+	//	if len(storage) > 0 {
+	//		copy(storage, bs.Storage)
+	//	}
+	//
+	//	mov, _ = movec.FromDNVector(typ, header, storage, true)
+	//	//} else if vec.GetType().IsTuple() {
+	//	//	mov = movec.NewVector(vec.GetType())
+	//	//	cnt := types.DecodeInt32(bs.Storage)
+	//	//	if cnt != 0 {
+	//	//		if err := types.Decode(bs.Storage, &mov.Col); err != nil {
+	//	//			panic(any(err))
+	//	//		}
+	//	//	}
+	//} else {
+	//	data := make([]byte, len(bs.Storage))
+	//	if len(data) > 0 {
+	//		copy(data, bs.Storage)
+	//	}
+	//	mov, _ = movec.FromDNVector(typ, nil, data, true)
+	//}
+	//
+	//if vec.HasNull() {
+	//	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
+	//	//mov.GetNulls().Np = vec.NullMask()
+	//}
+	//
+	//return mov
 }
 
 func CopyToMoVecs(vecs []Vector) []*movec.Vector {
@@ -122,71 +141,71 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 
 // ### Bytes Functions
 
-func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
-	bs := stl.NewFixedTypeBytes[T]()
-	if v.Length() == 0 {
-		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-	} else {
-		bs.Storage = types.EncodeSlice(movec.MustFixedCol[T](v))
-	}
-	return bs
-}
-
-func MoVecToBytes(v *movec.Vector) *Bytes {
-	var bs *Bytes
-
-	switch v.GetType().Oid {
-	case types.T_bool:
-		bs = movecToBytes[bool](v)
-	case types.T_int8:
-		bs = movecToBytes[int8](v)
-	case types.T_int16:
-		bs = movecToBytes[int16](v)
-	case types.T_int32:
-		bs = movecToBytes[int32](v)
-	case types.T_int64:
-		bs = movecToBytes[int64](v)
-	case types.T_uint8:
-		bs = movecToBytes[uint8](v)
-	case types.T_uint16:
-		bs = movecToBytes[uint16](v)
-	case types.T_uint32:
-		bs = movecToBytes[uint32](v)
-	case types.T_uint64:
-		bs = movecToBytes[uint64](v)
-	case types.T_float32:
-		bs = movecToBytes[float32](v)
-	case types.T_float64:
-		bs = movecToBytes[float64](v)
-	case types.T_date:
-		bs = movecToBytes[types.Date](v)
-	case types.T_time:
-		bs = movecToBytes[types.Time](v)
-	case types.T_datetime:
-		bs = movecToBytes[types.Datetime](v)
-	case types.T_timestamp:
-		bs = movecToBytes[types.Timestamp](v)
-	case types.T_decimal64:
-		bs = movecToBytes[types.Decimal64](v)
-	case types.T_decimal128:
-		bs = movecToBytes[types.Decimal128](v)
-	case types.T_uuid:
-		bs = movecToBytes[types.Uuid](v)
-	case types.T_TS:
-		bs = movecToBytes[types.TS](v)
-	case types.T_Rowid:
-		bs = movecToBytes[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
-		if v.Length() > 0 {
-			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
-		}
-	default:
-		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
-	}
-	return bs
-}
+//func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
+//	bs := stl.NewFixedTypeBytes[T]()
+//	if v.Length() == 0 {
+//		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
+//	} else {
+//		bs.Storage = types.EncodeSlice(movec.MustFixedCol[T](v))
+//	}
+//	return bs
+//}
+//
+//func MoVecToBytes(v *movec.Vector) *Bytes {
+//	var bs *Bytes
+//
+//	switch v.GetType().Oid {
+//	case types.T_bool:
+//		bs = movecToBytes[bool](v)
+//	case types.T_int8:
+//		bs = movecToBytes[int8](v)
+//	case types.T_int16:
+//		bs = movecToBytes[int16](v)
+//	case types.T_int32:
+//		bs = movecToBytes[int32](v)
+//	case types.T_int64:
+//		bs = movecToBytes[int64](v)
+//	case types.T_uint8:
+//		bs = movecToBytes[uint8](v)
+//	case types.T_uint16:
+//		bs = movecToBytes[uint16](v)
+//	case types.T_uint32:
+//		bs = movecToBytes[uint32](v)
+//	case types.T_uint64:
+//		bs = movecToBytes[uint64](v)
+//	case types.T_float32:
+//		bs = movecToBytes[float32](v)
+//	case types.T_float64:
+//		bs = movecToBytes[float64](v)
+//	case types.T_date:
+//		bs = movecToBytes[types.Date](v)
+//	case types.T_time:
+//		bs = movecToBytes[types.Time](v)
+//	case types.T_datetime:
+//		bs = movecToBytes[types.Datetime](v)
+//	case types.T_timestamp:
+//		bs = movecToBytes[types.Timestamp](v)
+//	case types.T_decimal64:
+//		bs = movecToBytes[types.Decimal64](v)
+//	case types.T_decimal128:
+//		bs = movecToBytes[types.Decimal128](v)
+//	case types.T_uuid:
+//		bs = movecToBytes[types.Uuid](v)
+//	case types.T_TS:
+//		bs = movecToBytes[types.TS](v)
+//	case types.T_Rowid:
+//		bs = movecToBytes[types.Rowid](v)
+//	case types.T_char, types.T_varchar, types.T_json,
+//		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+//		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
+//		if v.Length() > 0 {
+//			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
+//		}
+//	default:
+//		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
+//	}
+//	return bs
+//}
 
 // ### Get Functions
 
@@ -341,8 +360,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window := movec.NewVec(*bat.Vecs[j].GetType())
-				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
+				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
 				newBat.Vecs[j] = window
 			}
 			bats = append(bats, newBat)
@@ -370,8 +388,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window := movec.NewVec(*bat.Vecs[j].GetType())
-			movec.Window(bat.Vecs[j], start, start+row, window)
+			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
 			newBat.Vecs[j] = window
 		}
 		start += row

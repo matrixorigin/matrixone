@@ -1959,6 +1959,10 @@ var (
 			output: "UnLock Tables",
 		},
 		{
+			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+		},
+		{
 			input: "alter table tbl1 drop column col1",
 		},
 		{
@@ -2051,6 +2055,14 @@ var (
 		{
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
 			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+		},
+		{
+			input:  "show table_size from test",
+			output: "show table size from test",
+		},
+		{
+			input:  "show table_size from mo_role from mo_catalog",
+			output: "show table size from mo_role from mo_catalog",
 		},
 	}
 )

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -49,6 +50,8 @@ type txnStore struct {
 	warChecker    *warChecker
 	dataFactory   *tables.DataFactory
 	writeOps      atomic.Uint32
+
+	wg sync.WaitGroup
 }
 
 var TxnStoreFactory = func(
@@ -77,6 +80,7 @@ func newStore(
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
 		nodesMgr:      txnBufMgr,
+		wg:            sync.WaitGroup{},
 	}
 }
 
@@ -354,6 +358,58 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
+func (store *txnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)) {
+	for _, db := range store.dbs {
+		if db.createEntry != nil || db.dropEntry != nil {
+			visitDatabase(db.entry)
+		}
+		dbName := db.entry.GetName()
+		dbid := db.entry.ID
+		for _, tbl := range db.tables {
+			tblName := tbl.entry.GetSchema().Name
+			tid := tbl.entry.ID
+			rotateTable(dbName, tblName, dbid, tid)
+			if tbl.createEntry != nil || tbl.dropEntry != nil {
+				visitTable(tbl.entry)
+			}
+			for _, iTxnEntry := range tbl.txnEntries.entries {
+				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.BlockEntry:
+					visitMetadata(txnEntry)
+				case *updates.DeleteNode:
+					deletes := txnEntry.DeletedRows()
+					prefix := txnEntry.GetPrefix()
+					visitDelete(deletes, prefix)
+				case *catalog.TableEntry:
+					if tbl.createEntry != nil || tbl.dropEntry != nil {
+						continue
+					}
+					visitTable(txnEntry)
+				}
+			}
+			if tbl.localSegment != nil {
+				for _, node := range tbl.localSegment.nodes {
+					anode, ok := node.(*anode)
+					if ok {
+						visitAppend(anode.storage.mnode.data)
+					}
+				}
+			}
+		}
+	}
+}
+func (store *txnStore) AddWaitEvent(cnt int) {
+	store.wg.Add(cnt)
+}
+func (store *txnStore) DoneWaitEvent(cnt int) {
+	store.wg.Add(-cnt)
+}
 func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {
 	hasNewEntry, meta, err := store.catalog.DropDBEntryByID(id, store.txn)
 	if err != nil {
@@ -551,6 +607,7 @@ func (store *txnStore) WaitPrepared() (err error) {
 		}
 		e.Free()
 	}
+	store.wg.Wait()
 	return
 }
 

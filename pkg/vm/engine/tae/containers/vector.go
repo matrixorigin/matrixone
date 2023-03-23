@@ -24,7 +24,6 @@ import (
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-	"unsafe"
 )
 
 // DN vector is different from CN vector by
@@ -140,10 +139,10 @@ func (vec *vector[T]) Slice() any {
 	return cnVector.MustFixedCol[T](vec.downstreamVector)
 }
 
-func (vec *vector[T]) Bytes() *Bytes {
-	//TODO: get rid of Bytes type
-	return MoVecToBytes(vec.downstreamVector)
-}
+//func (vec *vector[T]) Bytes() *Bytes {
+//	//TODO: get rid of Bytes type
+//	return MoVecToBytes(vec.downstreamVector)
+//}
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	// 1. Nullable Flag [1 byte]
@@ -236,86 +235,81 @@ func (vec *vector[T]) Allocated() int {
 	return vec.downstreamVector.Size()
 }
 
-// ResetWithData is used by CloneWithBuffer to create a shallow copy of the srcVector.
-// When the shallowCopy undergoes an append, we allocate mpool memory. So we need isOwner flag.
-func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
+//// ResetWithData is used by CloneWithBuffer to create a shallow copy of the srcVector.
+//// When the shallowCopy undergoes an append, we allocate mpool memory. So we need isOwner flag.
+//func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
+//
+//	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
+//	if nulls != nil {
+//		cnNulls.Add(newDownstream.GetNulls(), nulls.ToArray()...)
+//	}
+//
+//	vec.releaseDownstream()
+//	vec.downstreamVector = newDownstream
+//}
 
-	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
-	if nulls != nil {
-		cnNulls.Add(newDownstream.GetNulls(), nulls.ToArray()...)
-	}
-
-	vec.releaseDownstream()
-	vec.downstreamVector = newDownstream
-}
-
-func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
-	if typ.IsVarlen() {
-		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage, true)
-	} else {
-		mov, _ = cnVector.FromDNVector(typ, nil, bs.Storage, true)
-	}
-	return mov
-}
+//func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
+//	if typ.IsVarlen() {
+//		mov, _ = cnVector.FromDNVector(typ, bs.Header, bs.Storage, true)
+//	} else {
+//		mov, _ = cnVector.FromDNVector(typ, nil, bs.Storage, true)
+//	}
+//	return mov
+//}
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
 func (vec *vector[T]) tryPromoting() {
 
 	if !vec.isOwner {
-		src := vec.Bytes()
-
-		// deep copy
-		newDownstream, _ := newDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
-		cnNulls.Add(newDownstream.GetNulls(), vec.downstreamVector.GetNulls().ToArray()...)
-
-		vec.downstreamVector = newDownstream
+		newCnVector, _ := vec.downstreamVector.Dup(vec.mpool)
+		vec.downstreamVector = newCnVector
 		vec.isOwner = true
 	}
 }
 
-func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*cnVector.Vector, error) {
-
-	var mov *cnVector.Vector
-	if typ.IsVarlen() {
-
-		// 1. Mpool Allocate Header
-		var header []types.Varlena
-		headerByteArr := bs.HeaderBuf()
-
-		if len(headerByteArr) > 0 {
-			headerAllocated, err := pool.Alloc(len(headerByteArr))
-			if err != nil {
-				return nil, err
-			}
-			copy(headerAllocated, headerByteArr)
-
-			sz := typ.TypeSize()
-			header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&headerAllocated[0])), len(headerAllocated)/sz)
-		}
-
-		// 2. Mpool Allocate Storage
-		storageByteArr := bs.StorageBuf()
-		storageAllocated, err := pool.Alloc(len(storageByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(storageAllocated, storageByteArr)
-
-		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated, false)
-	} else {
-
-		// 1. Mpool Allocate Storage
-		storageByteArr := bs.StorageBuf()
-		storageAllocated, err := pool.Alloc(len(storageByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(storageAllocated, storageByteArr)
-
-		mov, _ = cnVector.FromDNVector(typ, nil, storageAllocated, false)
-	}
-	return mov, nil
-}
+//func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*cnVector.Vector, error) {
+//
+//	var mov *cnVector.Vector
+//	if typ.IsVarlen() {
+//
+//		// 1. Mpool Allocate Header
+//		var header []types.Varlena
+//		headerByteArr := bs.HeaderBuf()
+//
+//		if len(headerByteArr) > 0 {
+//			headerAllocated, err := pool.Alloc(len(headerByteArr))
+//			if err != nil {
+//				return nil, err
+//			}
+//			copy(headerAllocated, headerByteArr)
+//
+//			sz := typ.TypeSize()
+//			header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&headerAllocated[0])), len(headerAllocated)/sz)
+//		}
+//
+//		// 2. Mpool Allocate Storage
+//		storageByteArr := bs.StorageBuf()
+//		storageAllocated, err := pool.Alloc(len(storageByteArr))
+//		if err != nil {
+//			return nil, err
+//		}
+//		copy(storageAllocated, storageByteArr)
+//
+//		mov, _ = cnVector.FromDNVector(typ, header, storageAllocated, false)
+//	} else {
+//
+//		// 1. Mpool Allocate Storage
+//		storageByteArr := bs.StorageBuf()
+//		storageAllocated, err := pool.Alloc(len(storageByteArr))
+//		if err != nil {
+//			return nil, err
+//		}
+//		copy(storageAllocated, storageByteArr)
+//
+//		mov, _ = cnVector.FromDNVector(typ, nil, storageAllocated, false)
+//	}
+//	return mov, nil
+//}
 
 func (vec *vector[T]) Window(offset, length int) Vector {
 
@@ -362,13 +356,19 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		return
 	}
 
-	// The downstream vector, ie CN vector needs isNull as argument.
-	// So, we can't directly call cn_vector.Append() without parsing the data.
-	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	// it into the current CnVectorAdapter via this function.
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(src.Get(i))
+	sels := make([]int32, srcLen)
+	for j := 0; j < srcLen; j++ {
+		sels[j] = int32(j) + int32(srcOff)
 	}
+	_ = vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
+
+	//// The downstream vector, ie CN vector needs isNull as argument.
+	//// So, we can't directly call cn_vector.Append() without parsing the data.
+	//// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	//// it into the current CnVectorAdapter via this function.
+	//for i := srcOff; i < srcOff+srcLen; i++ {
+	//	vec.Append(src.Get(i))
+	//}
 }
 
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
@@ -443,6 +443,14 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	// TODO: Not doing tryPromoting(). Is it ok XuPeng?
+	//TODO: Do you have any other suggestion for converting []uint32 to []int64 using uns
+	//var dels []int64
+	//for i := range deletes.ToArray() {
+	//	dels = append(dels, int64(i))
+	//}
+
+	vec.tryPromoting()
+
 	var sels []int64
 	vecLen := uint32(vec.Length())
 	for i := uint32(0); i < vecLen; i++ {
@@ -450,7 +458,8 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 			sels = append(sels, int64(i))
 		}
 	}
-	vec.downstreamVector.Shrink(sels)
+
+	vec.downstreamVector.Shrink(sels, false)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
@@ -458,6 +467,7 @@ func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 }
 
 func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
+	vec.isOwner = false
 	vec.downstreamVector = dsVec
 }
 

@@ -102,10 +102,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if p.blockBatch == nil {
 		p.blockBatch = &BlockBatch{}
 	}
-
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
-		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc {
+		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
 			var err error
 			//var ivec *fileservice.IOVector
 			var bats []*batch.Batch
@@ -148,28 +147,41 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
+			rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 			p.inserts = p.inserts[1:]
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
 				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			}
-			if _, err := b.Append(ctx, mp, bat); err != nil {
-				return nil, err
+			for i, vec := range b.Vecs {
+				srcVec := bat.Vecs[i]
+				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
+				for j := 0; j < bat.Length(); j++ {
+					if _, ok := p.deletes[rowIds[j]]; ok {
+						continue
+					}
+					if err := uf(vec, srcVec, int64(j)); err != nil {
+						return nil, err
+					}
+				}
+			}
+			for j := 0; j < bat.Length(); j++ {
+				if _, ok := p.deletes[rowIds[j]]; ok {
+					continue
+				}
+				b.Zs = append(b.Zs, int64(j))
 			}
 			return b, nil
 		}
 	}
-
 	const maxRows = 8192
-
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
 		b.Vecs[i] = vector.NewVec(p.typsMap[name])
 	}
 	rows := 0
-
 	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
 	for i, name := range b.Attrs {
 		if name == catalog.Row_ID {
@@ -178,27 +190,22 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 		}
 	}
-
 	for p.iter.Next() {
 		entry := p.iter.Entry()
-
 		if _, ok := p.deletes[entry.RowID]; ok {
 			continue
 		}
-
 		if p.skipBlocks != nil {
 			if _, ok := p.skipBlocks[entry.BlockID]; ok {
 				continue
 			}
 		}
-
 		if p.sourceBatchNameIndex == nil {
 			p.sourceBatchNameIndex = make(map[string]int)
 			for i, name := range entry.Batch.Attrs {
 				p.sourceBatchNameIndex[name] = i
 			}
 		}
-
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
 				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
@@ -212,19 +219,16 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				)
 			}
 		}
-
 		rows++
 		if rows == maxRows {
 			break
 		}
 	}
-
 	if rows > 0 {
 		b.SetZs(rows, mp)
 	}
 	if rows == 0 {
 		return nil, nil
 	}
-
 	return b, nil
 }

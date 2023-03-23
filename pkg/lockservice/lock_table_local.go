@@ -99,6 +99,10 @@ func (l *localLockTable) lock(
 		w.resetWait(l.bind.ServiceID)
 		offset = idx
 		result.Timestamp = v.ts
+		result.HasConflict = true
+		if !result.HasPrevCommit {
+			result.HasPrevCommit = !v.ts.IsEmpty()
+		}
 	}
 }
 

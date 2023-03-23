@@ -57,7 +57,7 @@ var (
 
 func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.T(exprs[0].Typ.Id).ToType(), lenList, nil)
+	vec, err := proc.AllocVectorOfRows(types.New(types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale), lenList, nil)
 	if err != nil {
 		panic(moerr.NewOOM(proc.Ctx))
 	}
@@ -150,7 +150,7 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
-		vec = vector.NewConstNull(types.T(expr.Typ.GetId()).ToType(), length, proc.Mp())
+		vec = vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), length, proc.Mp())
 	} else {
 		switch t.C.GetValue().(type) {
 		case *plan.Const_Bval:
@@ -223,7 +223,7 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var length = len(bat.Zs)
 	if length == 0 {
-		return vector.NewConstNull(types.T(expr.Typ.GetId()).ToType(), length, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), length, proc.Mp()), nil
 	}
 
 	e := expr.Expr
@@ -236,7 +236,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
-			vec.SetType(types.T(expr.Typ.GetId()).ToType())
+			vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
 		}
 		return vec, nil
 	case *plan.Expr_List:
@@ -326,7 +326,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	length := len(bat.Zs)
 	if length == 0 {
-		return vector.NewConstNull(types.T(expr.Typ.Id).ToType(), 1, proc.Mp()), nil
+		return vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), 1, proc.Mp()), nil
 	}
 
 	e := expr.Expr
@@ -339,7 +339,7 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
-			vec.SetType(types.T(expr.Typ.GetId()).ToType())
+			vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
 		}
 		return vec, nil
 	case *plan.Expr_F:

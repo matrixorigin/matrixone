@@ -168,11 +168,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 					} else {
-						for _, sel := range sels {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
-								return err
-							}
+						if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
 						}
 					}
 				}

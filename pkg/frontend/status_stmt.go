@@ -429,6 +429,16 @@ type AlterViewExecutor struct {
 	av *tree.AlterView
 }
 
+type CreateSequenceExecutor struct {
+	*statusStmtExecutor
+	cs *tree.CreateSequence
+}
+
+type DropSequenceExecutor struct {
+	*statusStmtExecutor
+	ds *tree.DropSequence
+}
+
 type DropViewExecutor struct {
 	*statusStmtExecutor
 	dv *tree.DropView

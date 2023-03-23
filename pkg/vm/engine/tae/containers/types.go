@@ -43,7 +43,7 @@ type Vector interface {
 
 	// Shallow Ops
 	ShallowGet(i int) any
-	ResetWithData(bs *Bytes, nulls *cnNulls.Nulls)
+	//ResetWithData(bs *Bytes, nulls *cnNulls.Nulls)
 	Window(offset, length int) Vector
 
 	GetDownstreamVector() *cnVector.Vector
@@ -69,7 +69,6 @@ type Vector interface {
 	HasNull() bool
 	NullMask() *cnNulls.Nulls
 
-	Bytes() *Bytes
 	Slice() any
 
 	Close()
