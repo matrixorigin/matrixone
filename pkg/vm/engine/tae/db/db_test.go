@@ -4044,7 +4044,6 @@ func TestBlockRead(t *testing.T) {
 		beforeDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b1.Close()
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
@@ -4053,14 +4052,12 @@ func TestBlockRead(t *testing.T) {
 		afterFirstDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b2.Close()
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b3.Close()
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
@@ -4072,7 +4069,6 @@ func TestBlockRead(t *testing.T) {
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b4.Close()
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
 
@@ -4085,7 +4081,6 @@ func TestBlockRead(t *testing.T) {
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b5.Close()
 	assert.Equal(t, 1, len(b5.Vecs))
 	assert.Equal(t, 16, b5.Vecs[0].Length())
 }
