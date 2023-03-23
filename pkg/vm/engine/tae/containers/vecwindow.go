@@ -156,13 +156,6 @@ func (win *vectorWindow[T]) PPString(num int) string {
 func (win *vectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
 }
-
-//func (win *vectorWindow[T]) Bytes() *Bytes {
-//	bs := win.ref.Bytes()
-//	bs = bs.Window(win.offset, win.length)
-//	return bs
-//}
-
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
 }
