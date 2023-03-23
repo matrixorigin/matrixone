@@ -29,21 +29,17 @@ type windowBase struct {
 	offset, length int
 }
 
-func (win *windowBase) IsView() bool                         { return true }
-func (win *windowBase) Update(i int, v any)                  { panic("cannot modify window") }
-func (win *windowBase) Delete(i int)                         { panic("cannot modify window") }
-func (win *windowBase) Compact(deletes *roaring.Bitmap)      { panic("cannot modify window") }
-func (win *windowBase) Append(v any)                         { panic("cannot modify window") }
-func (win *windowBase) AppendMany(vs ...any)                 { panic("cannot modify window") }
-func (win *windowBase) AppendNoNulls(s any)                  { panic("cannot modify window") }
-func (win *windowBase) Extend(o Vector)                      { panic("cannot modify window") }
-func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int)  { panic("cannot modify window") }
-func (win *windowBase) Length() int                          { return win.length }
-func (win *windowBase) Capacity() int                        { return win.length }
-func (win *windowBase) Allocated() int                       { return 0 }
-func (win *windowBase) DataWindow(offset, length int) []byte { panic("cannot window a window") }
-func (win *windowBase) Close()                               {}
-func (win *windowBase) ReadFrom(io.Reader) (int64, error)    { panic("cannot modify window") }
+func (win *windowBase) Update(i int, v any)                 { panic("cannot modify window") }
+func (win *windowBase) Delete(i int)                        { panic("cannot modify window") }
+func (win *windowBase) Compact(deletes *roaring.Bitmap)     { panic("cannot modify window") }
+func (win *windowBase) Append(v any)                        { panic("cannot modify window") }
+func (win *windowBase) AppendMany(vs ...any)                { panic("cannot modify window") }
+func (win *windowBase) Extend(o Vector)                     { panic("cannot modify window") }
+func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int) { panic("cannot modify window") }
+func (win *windowBase) Length() int                         { return win.length }
+func (win *windowBase) Allocated() int                      { return 0 }
+func (win *windowBase) Close()                              {}
+func (win *windowBase) ReadFrom(io.Reader) (int64, error)   { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
