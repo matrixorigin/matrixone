@@ -16,7 +16,6 @@ package containers
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,18 +24,6 @@ import (
 )
 
 // ### Shallow copy Functions
-
-func CloneWithBuffer(src Vector, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := Options{}
-	if len(allocator) > 0 {
-		opts.Allocator = common.DefaultAllocator
-	} else {
-		opts.Allocator = src.GetAllocator()
-	}
-	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
-	cloned.SetDownstreamVector(src.GetDownstreamVector())
-	return
-}
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	return vec.GetDownstreamVector()

@@ -34,9 +34,8 @@ import (
 type vector[T any] struct {
 	downstreamVector *cnVector.Vector
 
-	// isNullable mainly used in Equals() & CloneWithBuffer(). Note:
+	// isNullable mainly used in Equals() Note:
 	//1. We can't use cnVector.Nsp.Np to replace this flag, as this information will be lost in Marshalling/UnMarshalling.
-	//2. It is also used in CloneWithBuffer() to avoid Data Race caused by using HasNull()
 	isNullable bool
 
 	// Used in Append()
