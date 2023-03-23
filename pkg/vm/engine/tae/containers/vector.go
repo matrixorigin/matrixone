@@ -382,8 +382,10 @@ func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
 	vec.downstreamVector = dsVec
 }
 
-//Below functions are not used in critical path. Used mainly for testing
+/****** Below functions are not used in critical path. Used mainly for testing */
 
+// String value of vector
+// Deprecated: Only use for test functions
 func (vec *vector[T]) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
 
@@ -407,6 +409,9 @@ func (vec *vector[T]) String() string {
 
 	return s
 }
+
+// PPString Pretty Print
+// Deprecated: Only use for test functions
 func (vec *vector[T]) PPString(num int) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
@@ -437,17 +442,26 @@ func (vec *vector[T]) PPString(num int) string {
 	_, _ = w.WriteString(")]")
 	return w.String()
 }
+
+// AppendMany appends multiple values
+// Deprecated: Only use for test functions
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
 }
+
+// Delete Deletes an item from vector
+// Deprecated: Only use for test functions
 func (vec *vector[T]) Delete(delRowId int) {
+	//Only use for test functions
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
-func (vec *vector[T]) Equals(o Vector) bool {
 
+// Equals Compares two vectors
+// Deprecated: Only use for test functions
+func (vec *vector[T]) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
@@ -472,7 +486,7 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		}
 		var v T
 		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
+			if !bytes.Equal(vec.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal64); ok {
