@@ -83,6 +83,9 @@ func BlockReadInner(
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
 		columnBatch.Vecs[i], err = col.Dup(pool)
+		if err != nil {
+			return nil, err
+		}
 		if len(deleteRows) > 0 {
 			columnBatch.Vecs[i].Shrink(deleteRows, true)
 		}
@@ -128,11 +131,6 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	}
 	var rowIdVec containers.Vector
 	var bat *batch.Batch
-	defer func() {
-		if err != nil {
-
-		}
-	}()
 	if ok {
 		// generate rowIdVec
 		prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
