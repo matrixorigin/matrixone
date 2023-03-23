@@ -273,6 +273,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{"datname", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{"dat_createsql", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
@@ -561,14 +562,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			objects[tableName] = &ObjectRef{
-				Server:     0,
-				Db:         0,
-				Schema:     0,
-				Obj:        int64(tableIdx),
-				ServerName: "",
-				DbName:     "",
-				SchemaName: db,
-				ObjName:    tableName,
+				Server:       0,
+				Db:           0,
+				Schema:       0,
+				Obj:          int64(tableIdx),
+				ServerName:   "",
+				DbName:       "",
+				SchemaName:   db,
+				ObjName:      tableName,
+				PubAccountId: -1,
 			}
 
 			tableDef := &TableDef{

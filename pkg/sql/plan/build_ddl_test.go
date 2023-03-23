@@ -63,7 +63,7 @@ func TestBuildAlterView(t *testing.T) {
 		"db",
 	})
 	assert.NoError(t, err)
-	store["db.vx"] = arg{nil,
+	store["db.vx"] = arg{&plan.ObjectRef{},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel,
 			ViewSql: &plan.ViewDef{
@@ -108,6 +108,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(&plan.Stats{}).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)

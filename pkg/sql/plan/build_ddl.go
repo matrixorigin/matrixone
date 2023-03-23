@@ -884,9 +884,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
-	if obj.PubAccountId != -1 {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
-	}
+
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -913,6 +911,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		//non-sys account can not drop the cluster table
 		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+		}
+
+		if obj.PubAccountId != -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
 
 		dropTable.TableId = tableDef.TblId

@@ -377,7 +377,6 @@ func TestSingleSQL(t *testing.T) {
 // test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
 	// should pass
 	sqls := []string{
 		"SELECT '1900-01-01 00:00:00' + INTERVAL 2147483648 SECOND",
