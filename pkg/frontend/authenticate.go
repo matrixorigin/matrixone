@@ -3023,7 +3023,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	var erArray []ExecResult
 	var databases map[string]int8
 	var dbSql, prefix string
-	var sqlsForDropDatabases []string
+	var sqlsForDropDatabases = make([]string, 0, 5)
 
 	var deleteCtx context.Context
 	var accountId int64
