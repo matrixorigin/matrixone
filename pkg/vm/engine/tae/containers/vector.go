@@ -349,16 +349,8 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 	return
 }
 
-// TODO: --- Need advise on the below functions
-
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: Not doing tryCoW(). Is it ok XuPeng?
-	//TODO: Do you have any other suggestion for converting []uint32 to []int64 using uns
-	//var dels []int64
-	//for i := range deletes.ToArray() {
-	//	dels = append(dels, int64(i))
-	//}
-
+	// TODO: doing tryCoW(). Is it ok XuPeng?
 	vec.tryCoW()
 
 	var sels []int64
@@ -370,6 +362,16 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	}
 
 	vec.downstreamVector.Shrink(sels, false)
+
+	//TODO: use dels as argument once fixed.
+	//var dels []int64
+	//itr := deletes.Iterator()
+	//for itr.HasNext() {
+	//	r := itr.Next()
+	//	dels = append(dels, int64(r))
+	//}
+	//
+	//vec.downstreamVector.Shrink(dels, true)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
