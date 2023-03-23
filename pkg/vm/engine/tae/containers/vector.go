@@ -359,28 +359,17 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: doing tryCoW(). Is it ok XuPeng?
+	// TODO: doing tryCoW() before mutation. Is it ok XuPeng?
 	vec.tryCoW()
 
-	var sels []int64
-	vecLen := uint32(vec.Length())
-	for i := uint32(0); i < vecLen; i++ {
-		if !deletes.Contains(i) {
-			sels = append(sels, int64(i))
-		}
+	var dels []int64
+	itr := deletes.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		dels = append(dels, int64(r))
 	}
 
-	vec.downstreamVector.Shrink(sels, false)
-
-	//TODO: use dels as argument once fixed.
-	//var dels []int64
-	//itr := deletes.Iterator()
-	//for itr.HasNext() {
-	//	r := itr.Next()
-	//	dels = append(dels, int64(r))
-	//}
-	//
-	//vec.downstreamVector.Shrink(dels, true)
+	vec.downstreamVector.Shrink(dels, true)
 }
 
 func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
