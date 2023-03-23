@@ -234,3 +234,7 @@ message MetadataCkp {
     Batch      bat = 3;
 };
 
+// Int64Map mainly used in unit test
+message Int64Map {
+    map<int64, int64> m = 1;
+}
