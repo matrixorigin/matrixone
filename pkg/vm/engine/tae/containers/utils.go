@@ -75,10 +75,9 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 // ### Deep copy Functions
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
-	//TODO: XuPeng. Need your help here. Should we do alloc from mpool or just copy()?
-	// @Long can this be implemented in CN vector?
-	// FIXME: Dup(nil) should work here.
-	a, _ := vec.GetDownstreamVector().Dup(vec.GetAllocator())
+	//TODO: can be updated if Dup(nil) is supported by CN vector.
+	end := vec.Length()
+	a, _ := vec.GetDownstreamVector().CloneWindow(0, end, nil)
 	return a
 
 	//movec.FromDNVector()
