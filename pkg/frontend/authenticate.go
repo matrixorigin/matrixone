@@ -3016,6 +3016,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	var err error
 	var sql, db, table string
 	var erArray []ExecResult
+	var databases map[string]int8
+	var dbSql, prefix string
+	var sqlsForDropDatabases []string
 
 	var deleteCtx context.Context
 	var accountId int64
@@ -3066,95 +3069,96 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		hasAccount = false
 	}
 
+	if !hasAccount {
+		goto handleFailed
+	}
+
 	//drop tables of the tenant
-	if hasAccount {
-		//NOTE!!!: single DDL drop statement per single transaction
-		//SWITCH TO THE CONTEXT of the deleted context
-		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+	//NOTE!!!: single DDL drop statement per single transaction
+	//SWITCH TO THE CONTEXT of the deleted context
+	deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
 
-		//step 2 : drop table mo_user
-		//step 3 : drop table mo_role
-		//step 4 : drop table mo_user_grant
-		//step 5 : drop table mo_role_grant
-		//step 6 : drop table mo_role_privs
-		//step 7 : drop table mo_user_defined_function
-		//step 8 : drop table mo_mysql_compatbility_mode
-		//step 9 : drop table %!%mo_increment_columns
-		for _, sql = range getSqlForDropAccount() {
-			err = bh.Exec(deleteCtx, sql)
-			if err != nil {
-				goto handleFailed
-			}
-		}
-
-		// delete all publications
-
-		err = bh.Exec(deleteCtx, deleteMoPubsSql)
-
+	//step 2 : drop table mo_user
+	//step 3 : drop table mo_role
+	//step 4 : drop table mo_user_grant
+	//step 5 : drop table mo_role_grant
+	//step 6 : drop table mo_role_privs
+	//step 7 : drop table mo_user_defined_function
+	//step 8 : drop table mo_mysql_compatbility_mode
+	//step 9 : drop table %!%mo_increment_columns
+	for _, sql = range getSqlForDropAccount() {
+		err = bh.Exec(deleteCtx, sql)
 		if err != nil {
 			goto handleFailed
 		}
+	}
 
-		//drop databases created by user
-		databases := make(map[string]int8)
-		dbSql := "show databases;"
-		bh.ClearExecResultSet()
-		err = bh.Exec(deleteCtx, dbSql)
+	// delete all publications
+
+	err = bh.Exec(deleteCtx, deleteMoPubsSql)
+
+	if err != nil {
+		goto handleFailed
+	}
+
+	//drop databases created by user
+	databases = make(map[string]int8)
+	dbSql = "show databases;"
+	bh.ClearExecResultSet()
+	err = bh.Exec(deleteCtx, dbSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		db, err = erArray[0].GetString(ctx, i, 0)
 		if err != nil {
 			goto handleFailed
 		}
+		databases[db] = 0
+	}
 
-		erArray, err = getResultSet(ctx, bh)
+	prefix = "drop database if exists "
+
+	for db = range databases {
+		if db == "mo_catalog" {
+			continue
+		}
+		bb := &bytes.Buffer{}
+		bb.WriteString(prefix)
+		//handle the database annotated by '`'
+		if db != strings.ToLower(db) {
+			bb.WriteString("`")
+			bb.WriteString(db)
+			bb.WriteString("`")
+		} else {
+			bb.WriteString(db)
+		}
+		bb.WriteString(";")
+		sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
+	}
+
+	for _, sql = range sqlsForDropDatabases {
+		err = bh.Exec(deleteCtx, sql)
 		if err != nil {
 			goto handleFailed
 		}
+	}
+	//  drop table mo_pubs
+	err = bh.Exec(deleteCtx, dropMoPubsSql)
+	if err != nil {
+		goto handleFailed
+	}
 
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			db, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				goto handleFailed
-			}
-			databases[db] = 0
-		}
-
-		var sqlsForDropDatabases []string
-		prefix := "drop database if exists "
-
-		for db = range databases {
-			if db == "mo_catalog" {
-				continue
-			}
-			bb := &bytes.Buffer{}
-			bb.WriteString(prefix)
-			//handle the database annotated by '`'
-			if db != strings.ToLower(db) {
-				bb.WriteString("`")
-				bb.WriteString(db)
-				bb.WriteString("`")
-			} else {
-				bb.WriteString(db)
-			}
-			bb.WriteString(";")
-			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
-		}
-
-		for _, sql = range sqlsForDropDatabases {
-			err = bh.Exec(deleteCtx, sql)
-			if err != nil {
-				goto handleFailed
-			}
-		}
-		//  drop table mo_pubs
-		err = bh.Exec(deleteCtx, dropMoPubsSql)
-		if err != nil {
-			goto handleFailed
-		}
-
-		// drop autoIcr table
-		err = bh.Exec(deleteCtx, dropAutoIcrColSql)
-		if err != nil {
-			goto handleFailed
-		}
+	// drop autoIcr table
+	err = bh.Exec(deleteCtx, dropAutoIcrColSql)
+	if err != nil {
+		goto handleFailed
 	}
 
 	//step 1 : delete the account in the mo_account of the sys account
@@ -6213,6 +6217,13 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	if err != nil {
 		return err
 	}
+
+	if ca.AuthOption.IdentifiedType.Typ == tree.AccountIdentifiedByPassword {
+		if len(ca.AuthOption.IdentifiedType.Str) == 0 {
+			return moerr.NewInternalError(ctx, "password is empty string")
+		}
+	}
+
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
