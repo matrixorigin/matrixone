@@ -97,10 +97,14 @@ func (vec *vector[T]) Append(v any) {
 	vec.tryCoW()
 
 	_, isNull := v.(types.Null)
+	var err error
 	if isNull {
-		_ = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
+		err = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
 	} else {
-		_ = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
+		err = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
+	}
+	if err != nil {
+		panic(err)
 	}
 }
 
@@ -261,7 +265,11 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-	cloned.downstreamVector, _ = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
+	var err error
+	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
+	if err != nil {
+		panic(err)
+	}
 	cloned.isOwner = true
 
 	return cloned
@@ -276,8 +284,10 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	_ = vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
-
+	err := vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
