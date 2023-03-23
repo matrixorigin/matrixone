@@ -1,0 +1,600 @@
+DROP DATABASE IF EXISTS TEST01;
+CREATE DATABASE TEST01;
+show CREATE DATABASE test01;
+Database    Create Database
+test01    CREATE DATABASE `test01`
+DROP DATABASE test01;
+DROP DATABASE IF EXISTS test02;
+CREATE DATABASE test02;
+show CREATE DATABASE TEST02;
+Database    Create Database
+test02    CREATE DATABASE `test02`
+DROP DATABASE test02;
+DROP DATABASE IF EXISTS mysql_TEST;
+CREATE DATABASE mysql_TEST;
+show CREATE DATABASE mysql_TEST;
+Database    Create Database
+mysql_test    CREATE DATABASE `mysql_test`
+DROP DATABASE mysql_TEST;
+DROP DATABASE IF EXISTS test03;
+DROP TABLE IF EXISTS t1;
+CREATE DATABASE test03;
+USE test03;
+CREATE TEMPORARY TABLE t1(a float);
+INSERT INTO T1 VALUES(213823.12);
+INSERT INTO t1 VALUES(-45412.38920);
+SELECT * FROM t1;
+a
+213823.12
+-45412.39
+DROP TABLE T1;
+drop table IF EXISTS table01;
+CREATE external table table01(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='/data/weilu/10000000_20_columns_load_data.csv'};
+SELECT * FROM Table01 LIMIT 10;
+clo1    clo2    clo3    clo4    clo5    clo6    clo7    clo8    col9    col10    col11    col12    col13    col14    col15    col16    col17    col18    col19    col20
+-78    29462    -1795575930    8006525728099143260    131    7277    4209408583    15118372629492436090    4.9107    2.5032    =VWXYZabcdefghigklmnopqrstuv    3633-12-02    4794-09-01 23:59:59    2034-11-15 00:00:00    true    553.58    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrs    F,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrst    QR.STU-_+=VWXYZabcdefghigklmnopqrstuv    -_+=VWXYZabcdefghigklmnopqrstuvwxyz012345678
+104    24839    1180995668    -1641263666183319716    27    63988    1232651631    15822434463926584538    0.8091    5.6875    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwx    9734-06-22    1078-08-08 23:59:59    2004-10-16 00:00:00    false    720.47    +=VWXYZabcdefghigkl    TU-_+=VWXYZabcdefghigklmnopqrstuv    ;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklm
+91    -29633    567861696    2897846107213093348    87    41506    2745824367    11231936477342253447    2.9398    3.5246    .STU-_+=VWXYZabcdefghigklmno    6373-04-02    7099-11-11 00:00:00    1991-01-27 23:59:59    true    362.84    -_+=VWXYZabcdefghigklmnopqrstuvwx    .STU-_+=VWXYZabcdefghigklmnopqr    PQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopq
+-64    -2624    828394532    3577272392115971127    234    56684    2816280807    11445878758388709087    9.7989    2.3232    DEF,GHI,G;KL/MN?OPQR.STU-_+=VW    2543-11-28    2165-07-28 23:59:59    1971-07-24 23:59:59    false    930.09    STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012345    TU-_+=VW    F,GHI,G;KL/MN?OPQR.STU-_+=VWXYZab    QR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01
+52    -27264    -1089479566    -8289527749019099619    40    3543    834810526    16527335157027648023    1.3928    0.8197    ?OPQR.STU-_+=    5061-07-04    3046-08-15 23:59:59    1986-10-01 23:59:59    false    704.32    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    N?OPQR.STU-_+=VWXYZ    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012345
+48    -20452    -596586341    2706294009872677566    75    23034    627560448    5947146077526421397    8.9527    6.5449    GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmno    2414-04-14    6403-06-29 00:00:00    2001-03-23 00:00:00    false    426.20    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123456    STU-_+=VWXYZabcdef    KL/MN?OPQR.STU-_+=VWXY    QR.STU-_+=VWXYZabcdefg
+122    -21074    197914579    4555403964928730457    105    19280    1077269952    17444346995571183077    4.1654    8.8795    OPQR.STU-_+=VWXYZabcdefghig    3161-03-10    1450-09-15 23:59:59    1974-01-11 23:59:59    false    903.81    ;KL/MN?OPQR.STU-_+=VWXYZa    .STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123    G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrst    N?OPQR.STU-_+=VWXYZabcdefghi
+-58    -18442    1536156579    4393313169200513397    140    32346    2097619354    7426166995555475239    1.0538    5.2196    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghig    3068-02-07    7317-04-14 00:00:00    1977-06-17 23:59:59    true    792.02    KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwx    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZa    ?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01    .STU-_+=VW
+-86    9982    655224355    -698387359759409399    21    54976    3000487915    8593386903663700396    8.6471    0.1934    BCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01    6028-06-11    8961-07-28 00:00:00    1971-03-24 23:59:59    false    697.56    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnop    GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy    .STU-_+=VWXYZabcdefg    U-_+=VWXYZabcdefghigklm
+106    -5249    -2018627997    -733102989529721586    203    34690    1637091285    16875927530036899902    3.7639    6.0838    _+=VWXYZabcdefg    2872-09-20    9484-05-08 00:00:00    2003-03-22 00:00:00    false    484.88    MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123    ,GHI,G;KL/MN?OPQR.STU-_+=    CDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvw    DEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghig
+SELECT Clo1 FROM table01 LIMIT 10;
+clo1
+-78
+104
+91
+-64
+52
+48
+122
+-58
+-86
+106
+DROP table table01;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+show CREATE TABLE t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`),\nKEY `word` (`word`)\n)
+INSERT INTO t1 VALUES (1, 'a');
+INSERT INTO t1 VALUES (2, 'b');
+INSERT INTO t1 VALUES (3, 'c');
+INSERT INTO T1 VALUES (4, 'd');
+SELECT * FROM t1;
+id    word
+1    a
+2    b
+3    c
+4    d
+SELECT * FROM T1;
+id    word
+1    a
+2    b
+3    c
+4    d
+SELECT T1.id FROM T1 LIMIT 1;
+id
+1
+SELECT T1.id FROM t1 LIMIT 1;
+id
+1
+SELECT id FROM T1;
+id
+1
+2
+3
+4
+select ID FROM t1;
+id
+1
+2
+3
+4
+SELECT Id FROM t1;
+id
+1
+2
+3
+4
+SELECT COUNT(*) FROM t1;
+count(*)
+4
+SELECT COUNT(*) FROM T1;
+count(*)
+4
+SELECT COUNT(t1.id) FROM t1;
+count(t1.id)
+4
+SELECT COUNT(T1.Id) FROM t1;
+count(t1.id)
+4
+SELECT * FROM t1 WHERE Id = 2;
+id    word
+2    b
+DROP TABLE IF EXISTS t2;
+CREATE table t2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+INSERT INTO T2 SELECT * from T1;
+SELECT * FROM T2;
+id    word
+1    a
+2    b
+3    c
+4    d
+DROP TABLE t1;
+DROP TABLE IF EXISTS t2;
+DROP TABLE IF EXISTS t3;
+CREATE TABLE T2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+CREATE TABLE t3(id int primary key, Word varchar(40) NOT NULL);
+show CREATE TABLE t2;
+Table    Create Table
+t2    CREATE TABLE `t2` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`),\nKEY `word` (`word`)\n)
+show CREATE TABLE t3;
+Table    Create Table
+t3    CREATE TABLE `t3` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`)\n)
+INSERT INTO T2 VALUES (1, 'a');
+INSERT INTO t2 VALUES (2, 'b');
+INSERT INTO t2 VALUES (3, 'c');
+INSERT INTO T2 VALUES (4, 'd');
+INSERT INTO t3 VALUES (1,'match');
+DELETE FROM t2 WHERE id = 1;
+DELETE FROM T2 WHERE ID = 2;
+SELECT * FROM T2;
+id    word
+3    c
+4    d
+SELECT * FROM t3;
+id    word
+1    match
+SELECT T2.id FROM T2 LIMIT 1;
+id
+3
+SELECT Id, WORD FROM t2;
+id    word
+3    c
+4    d
+SELECT * FROM t3 WHERE WORD = 'match';
+id    word
+1    match
+SELECT t3.id AS t3_ID FROM T3 LIMIT 1;
+t3_ID
+1
+SELECT t3.ID AS t3_ID FROM t3 LIMIT 1;
+t3_ID
+1
+SELECT * FROM t2 left join t3 ON (test.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+id    word    id    word
+DROP TABLE t2;
+DROP TABLE t3;
+DROP TABLE IF EXISTS t4;
+DROP TABLE IF EXISTS t5;
+CREATE TABLE t4(a int primary key,b varchar(5));
+CREATE TABLE t5(a int ,b varchar(5), C int, foreign key(C) references t4(a));
+show CREATE TABLE t4;
+Table    Create Table
+t4    CREATE TABLE `t4` (\n`a` INT NOT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+show CREATE TABLE T5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+DROP table t5;
+DROP table t4;
+DROP USER IF EXISTS user_name;
+CREATE USER user_name IDENTIFIED BY '123456';
+SELECT * FROM mo_catalog.mo_user;
+user_id    user_host    user_name    authentication_string    status    created_time    expired_time    login_type    creator    owner    default_role
+4    localhost    user_name    123456    unlock    2023-03-23 06:15:32    null    PASSWORD    1    0    1
+0    localhost    root    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+1    localhost    dump    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+SELECT User_id,USER_HOST,user_NAME FROM mo_catalog.mo_user;
+user_id    user_host    user_name
+4    localhost    user_name
+0    localhost    root
+1    localhost    dump
+CREATE USER USER_NAME IDENTIFIED BY '123456';
+internal error: the user user_name exists
+SELECT * FROM mo_catalog.mo_user;
+user_id    user_host    user_name    authentication_string    status    created_time    expired_time    login_type    creator    owner    default_role
+4    localhost    user_name    123456    unlock    2023-03-23 06:15:32    null    PASSWORD    1    0    1
+0    localhost    root    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+1    localhost    dump    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+CREATE USER USER_name IDENTIFIED BY '123456';
+internal error: the user user_name exists
+SELECT * FROM mo_catalog.mo_user;
+user_id    user_host    user_name    authentication_string    status    created_time    expired_time    login_type    creator    owner    default_role
+4    localhost    user_name    123456    unlock    2023-03-23 06:15:32    null    PASSWORD    1    0    1
+0    localhost    root    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+1    localhost    dump    111    unlock    2023-03-23 02:01:28    null    PASSWORD    0    0    0
+DROP USER user_name;
+DROP DATABASE test03;
+DROP database IF EXISTS test03;
+create database test03;
+use test03;
+create table t6 (a int);
+INSERT INTO t6 VALUES(1);
+INSERT INTO t6 VALUES(24845615);
+INSERT INTO T6 VALUES(-289173);
+select T6.a from test03.T6;
+a
+1
+24845615
+-289173
+select t6.a from test03.T6;
+a
+1
+24845615
+-289173
+select test03.t6.a from TEST03.t6;
+a
+1
+24845615
+-289173
+select TEST03.t6.a from TEST03.t6;
+a
+1
+24845615
+-289173
+select TEST03.T6.a from TEST03.T6;
+a
+1
+24845615
+-289173
+select TEST03.T6.a from T6;
+a
+1
+24845615
+-289173
+select TEST03.t6.a from TEST03.t6;
+a
+1
+24845615
+-289173
+DROP TABLE t6;
+DROP TABLE IF EXISTS t7;
+DROP TABLE IF EXISTS t8;
+create table t7 (a int);
+create table t8 (a int);
+INSERT INTO t7 VALUES(1);
+INSERT INTO t8 VALUES(1);
+update t7 as p1, t8 as p2 SET p1.a=1,p2.a=1 where p1.a=p2.a;
+update t7 as P1, t8 as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
+SELECT * FROM t7;
+a
+10
+SELECT * FROM t8;
+a
+100
+DROP TABLE t7;
+DROP TABLE t8;
+DROP DATABASE IF EXISTS test04;
+CREATE DATABASE test04;
+USE test04;
+DROP DATABASE IF EXISTS t9;
+DROP DATABASE IF EXISTS t10;
+CREATE TABLE t9 (a int);
+CREATE TABLE t10(a int);
+INSERT INTO t9 VALUES(100);
+INSERT INTO t10 VALUES(1000);
+SELECT t9.a AS a,t10.A as B from t9,t10;
+a    B
+100    1000
+DROP TABLE t9;
+DROP TABLE t10;
+DROP TABLE if EXISTS t10;
+create table t10(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into t10 values(1,"Abby", 24);
+insert into t10 values(2,"Bob", 25);
+create unique index idx on t10(name);
+select * from t10;
+id    name    age
+1    Abby    24
+2    Bob    25
+show CREATE TABLE t10;
+Table    Create Table
+t10    CREATE TABLE `t10` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nUNIQUE KEY `idx` (`name`)\n)
+DROP TABLE t10;
+DROP table IF EXISTS t11;
+CREATE table t11(col1 int PRIMARY KEY,col2 CHAR,col3 float);
+INSERT INTO t11 VALUES(1,'a',898021.8392);
+INSERT INTO t11 VALUES(2, NULL, 213145.45);
+select * from t11;
+col1    col2    col3
+1    a    898021.8
+2    null    213145.45
+show CREATE table t11;
+Table    Create Table
+t11    CREATE TABLE `t11` (\n`col1` INT NOT NULL,\n`col2` CHAR(1) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+DROP TABLE t11;
+DROP TABLE IF EXISTS t12;
+CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
+CREATE INDEX ABc ON t12(col2);
+select * from t12;
+col1    col2    col3
+show CREATE table t12;
+Table    Create Table
+t12    CREATE TABLE `t12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\nKEY `abc` (`col2`)\n)
+DROP TABLE t12;
+DROP ACCOUNT IF EXISTS tenant_test;
+CREATE ACCOUNT tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
+ALTER ACCOUNT tenant_TEST comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+CREATE ACCOUNT tenant_TEST admin_name = 'root' identified by '111' open comment 'tenant_test';
+internal error: the tenant tenant_test exists
+CREATE ACCOUNT TENANT_TEST admin_name = 'root' identified by '111' open comment 'tenant_test';
+internal error: the tenant tenant_test exists
+DROP ACCOUNT IF EXISTS TENANT_TEST;
+SELECT * FROM mo_catalog.mo_account;
+account_id    account_name    status    created_time    comments    suspended_time
+0    sys    open    2023-03-23 02:01:28    system account    null
+DROP ROLE IF EXISTS rolex;
+CREATE ROLE rolex;
+CREATE ROLE Rolex;
+internal error: the role rolex exists
+CREATE ROLE ROLEX;
+internal error: the role rolex exists
+SELECT * FROM mo_catalog.mo_role;
+role_id    role_name    creator    owner    created_time    comments
+4    rolex    1    0    2023-03-23 06:15:35
+0    moadmin    0    0    2023-03-23 02:01:28
+1    public    0    0    2023-03-23 02:01:28
+DROP TABLE IF EXISTS t12;
+DROP TABLE IF EXISTS t13;
+DROP view IF EXISTS view1;
+CREATE TABLE t12(a INTEGER);
+INSERT INTO t12 VALUES (1),(2);
+CREATE TABLE t13(a INTEGER);
+INSERT INTO t13 VALUES (1);
+CREATE VIEW view1 AS SELECT t12.a, t13.a AS b FROM t12 LEFT JOIN t13 USING(a);
+CREATE VIEW VIEW1 AS SELECT t12.a, t13.a AS b FROM t12 LEFT JOIN t13 USING(a);
+table view1 already exists
+DROP VIEW view1;
+DROP TABLE t12;
+DROP TABLE t13;
+DROP TABLE IF EXISTS TaB;
+DROP VIEW IF EXISTS vie;
+CREATE TABLE TaB(Field int);
+CREATE VIEW ViE AS SELECT * FROM TAb;
+show CREATE TABLE VIe;
+View    Create View
+vie    CREATE VIEW ViE AS SELECT * FROM TAb;
+DROP VIEW vie;
+DROP table TAB;
+DROP TABLE IF EXISTS t13;
+DROP VIEW IF EXISTS view01;
+CREATE TABLE t13 (a int);
+INSERT INTO t13 VALUES(1),(2),(3),(4);
+CREATE VIEW view01 AS SELECT * FROM t13;
+ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1;
+show CREATE TABLE vieW01;
+View    Create View
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1;
+SELECT * FROM view01;
+a
+1
+DROP view view01;
+drop table t13;
+DROP DATABASE test03;
+DROP DATABASE IF EXISTS `TEST01`;
+CREATE DATABASE `TEST01`;
+show CREATE DATABASE `test01`;
+Database    Create Database
+test01    CREATE DATABASE `test01`
+DROP DATABASE `test01`;
+DROP DATABASE IF EXISTS `test02`;
+CREATE DATABASE `test02`;
+show CREATE DATABASE `TEST02`;
+Database    Create Database
+test02    CREATE DATABASE `test02`
+DROP DATABASE `test02`;
+DROP DATABASE IF EXISTS `mysql_TEST`;
+CREATE DATABASE `mysql_TEST`;
+show CREATE DATABASE `mysql_TEST`;
+Database    Create Database
+mysql_test    CREATE DATABASE `mysql_test`
+DROP DATABASE `mysql_TEST`;
+DROP DATABASE IF EXISTS `test05`;
+CREATE DATABASE `test05`;
+use `Test05`;
+CREATE TABLE `t11`(aa float);
+INSERT INTO `t11` VALUES(12.322);
+INSERT INTO `T11` VALUES(-56.23);
+SELECT * FROM `t11`;
+aa
+12.322
+-56.23
+DROP table t11;
+DROP TABLE IF EXISTS `t12`;
+create table `t12` (a int);
+INSERT INTO `t12` VALUES(1);
+INSERT INTO `t12` VALUES(24845615);
+INSERT INTO `T12` VALUES(-289173);
+select `T12`.a from `test05`.T12;
+a
+1
+24845615
+-289173
+select `t12`.a from `test05`.T12;
+a
+1
+24845615
+-289173
+select test05.t12.a from `TEST05`.t12;
+a
+1
+24845615
+-289173
+select `TEST05`.t12.a from TEST05.t12;
+a
+1
+24845615
+-289173
+select TEST05.T12.a from TEST05.`T12`;
+a
+1
+24845615
+-289173
+select TEST05.T12.a from `T12`;
+a
+1
+24845615
+-289173
+select TEST05.t12.a from `TEST05`.t12;
+a
+1
+24845615
+-289173
+DROP TABLE t12;
+DROP DATABASE TEST05;
+DROP DATABASE IF EXISTS `test06`;
+CREATE DATABASE `test06`;
+USE test06;
+DROP DATABASE IF EXISTS `t13`;
+DROP DATABASE IF EXISTS `t14`;
+CREATE TABLE `t13` (a int);
+CREATE TABLE `t14` (a int);
+INSERT INTO `t13` VALUES(100);
+INSERT INTO `t14` VALUES(1000);
+SELECT `t13`.a AS a,`t14`.A as B from `t13`,`t14`;
+a    B
+100    1000
+DROP TABLE `t13`;
+DROP TABLE `t14`;
+DROP TABLE IF EXISTS `t15`;
+DROP TABLE IF EXISTS `t16`;
+create table `t15` (a int);
+create table `t16` (a int);
+INSERT INTO `t15` VALUES(1);
+INSERT INTO `t16` VALUES(1);
+update `t15` as p1, `t16` as p2 SET p1.a=1,P2.a=1 where p1.a=P2.a;
+update `t15` as P1, `t16` as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
+SELECT * FROM `t15`;
+a
+10
+SELECT * FROM `T16`;
+a
+100
+DROP TABLE `t15`;
+DROP TABLE `t16`;
+DROP TABLE if EXISTS `t17`;
+create table `t17`(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into `t17` values(1,"Abby", 24);
+insert into `t17` values(2,"Bob", 25);
+create unique index `Idx` on t17(name);
+select * from `t17`;
+id    name    age
+1    Abby    24
+2    Bob    25
+show CREATE TABLE `t17`;
+Table    Create Table
+t17    CREATE TABLE `t17` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nUNIQUE KEY `idx` (`name`)\n)
+DROP TABLE `t17`;
+DROP table IF EXISTS `t18`;
+CREATE table `t18`(col1 int PRIMARY KEY,col2 CHAR,col3 float);
+INSERT INTO `t18` VALUES(1,'a',898021.8392);
+INSERT INTO `t18` VALUES(2, NULL, 213145.45);
+select * from `t18`;
+col1    col2    col3
+1    a    898021.8
+2    null    213145.45
+show CREATE table `t18`;
+Table    Create Table
+t18    CREATE TABLE `t18` (\n`col1` INT NOT NULL,\n`col2` CHAR(1) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+DROP TABLE `t18`;
+DROP TABLE IF EXISTS `t19`;
+CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
+CREATE INDEX `ABc` ON t19(col2);
+select * from `t19`;
+col1    col2    col3
+show CREATE table `t19`;
+Table    Create Table
+t19    CREATE TABLE `t19` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\nKEY `abc` (`col2`)\n)
+DROP TABLE `t19`;
+DROP ACCOUNT IF EXISTS `tenant_test`;
+CREATE ACCOUNT `tenant_test` admin_name = 'root' identified by '111' open comment 'tenant_test';
+CREATE ACCOUNT `tenant_TEST` admin_name = 'root' identified by '111' open comment 'tenant_test';
+internal error: the tenant tenant_test exists
+CREATE ACCOUNT `TENANT_TEST` admin_name = 'root' identified by '111' open comment 'tenant_test';
+internal error: the tenant tenant_test exists
+SELECT * FROM `MO_catalog`.`mo_account`;
+account_id    account_name    status    created_time    comments    suspended_time
+6    tenant_test    open    2023-03-23 06:15:36    tenant_test    null
+0    sys    open    2023-03-23 02:01:28    system account    null
+DROP ACCOUNT `tenant_TEST`;
+DROP ROLE IF EXISTS `rolex`;
+CREATE ROLE `rolex`;
+CREATE ROLE `Rolex`;
+internal error: the role rolex exists
+CREATE ROLE `ROLEX`;
+internal error: the role rolex exists
+SELECT * FROM `mo_catalog`.`mo_role`;
+role_id    role_name    creator    owner    created_time    comments
+5    rolex    1    0    2023-03-23 06:15:36
+0    moadmin    0    0    2023-03-23 02:01:28
+1    public    0    0    2023-03-23 02:01:28
+DROP ROLE `Rolex`;
+DROP TABLE IF EXISTS `t20`;
+DROP TABLE IF EXISTS `t21`;
+DROP VIEW IF EXISTS `view1`;
+CREATE TABLE `t20`(a INTEGER);
+INSERT INTO `t20` VALUES (1),(2);
+CREATE TABLE `t21`(a INTEGER);
+INSERT INTO `t21` VALUES (1);
+CREATE VIEW `view1` AS SELECT t20.a, T21.a AS b FROM t20 LEFT JOIN t21 USING(a);
+CREATE VIEW `VIEW1` AS SELECT t20.a, t21.a AS b FROM t20 LEFT JOIN t21 USING(a);
+table view1 already exists
+SELECT * FROM `view1`;
+a    b
+1    1
+2    null
+DROP VIEW `view1`;
+DROP TABLE `t20`;
+DROP TABLE `t21`;
+DROP TABLE IF EXISTS `TaB`;
+DROP VIEW IF EXISTS `ViE`;
+CREATE TABLE `TaB`(Field int);
+INSERT INTO TAB VALUES(10);
+CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
+show CREATE TABLE `VIe`;
+View    Create View
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
+DROP view `VIE`;
+DROP table `TAB`;
+DROP TABLE IF EXISTS `t22`;
+DROP VIEW IF EXISTS `view01`;
+CREATE TABLE `t22` (a int);
+INSERT INTO `t22` VALUES(1),(2),(3),(4);
+CREATE VIEW `view01` AS SELECT * FROM `t22`;
+ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
+SELECT * FROM `view01`;
+a
+1
+DROP view `vieW01`;
+DROP DATABASE IF EXISTS `test03`;
+DROP TABLE IF EXISTS `t1`;
+CREATE DATABASE `test03`;
+USE `test03`;
+CREATE TEMPORARY TABLE `t1`(a float);
+INSERT INTO `T1` VALUES(213823.12);
+INSERT INTO `t1` VALUES(-45412.38920);
+SELECT * FROM `t1`;
+a
+-45412.39
+213823.12
+DROP TABLE `t1`;
+DROP table IF EXISTS `table02`;
+CREATE external table `table02`(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='/data/weilu/10000000_20_columns_load_data.csv'};
+SELECT * FROM `Table02` limit 10;
+clo1    clo2    clo3    clo4    clo5    clo6    clo7    clo8    col9    col10    col11    col12    col13    col14    col15    col16    col17    col18    col19    col20
+-78    29462    -1795575930    8006525728099143260    131    7277    4209408583    15118372629492436090    4.9107    2.5032    =VWXYZabcdefghigklmnopqrstuv    3633-12-02    4794-09-01 23:59:59    2034-11-15 00:00:00    true    553.58    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrs    F,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrst    QR.STU-_+=VWXYZabcdefghigklmnopqrstuv    -_+=VWXYZabcdefghigklmnopqrstuvwxyz012345678
+104    24839    1180995668    -1641263666183319716    27    63988    1232651631    15822434463926584538    0.8091    5.6875    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwx    9734-06-22    1078-08-08 23:59:59    2004-10-16 00:00:00    false    720.47    +=VWXYZabcdefghigkl    TU-_+=VWXYZabcdefghigklmnopqrstuv    ;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklm
+91    -29633    567861696    2897846107213093348    87    41506    2745824367    11231936477342253447    2.9398    3.5246    .STU-_+=VWXYZabcdefghigklmno    6373-04-02    7099-11-11 00:00:00    1991-01-27 23:59:59    true    362.84    -_+=VWXYZabcdefghigklmnopqrstuvwx    .STU-_+=VWXYZabcdefghigklmnopqr    PQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopq
+-64    -2624    828394532    3577272392115971127    234    56684    2816280807    11445878758388709087    9.7989    2.3232    DEF,GHI,G;KL/MN?OPQR.STU-_+=VW    2543-11-28    2165-07-28 23:59:59    1971-07-24 23:59:59    false    930.09    STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012345    TU-_+=VW    F,GHI,G;KL/MN?OPQR.STU-_+=VWXYZab    QR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01
+52    -27264    -1089479566    -8289527749019099619    40    3543    834810526    16527335157027648023    1.3928    0.8197    ?OPQR.STU-_+=    5061-07-04    3046-08-15 23:59:59    1986-10-01 23:59:59    false    704.32    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    N?OPQR.STU-_+=VWXYZ    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012345
+48    -20452    -596586341    2706294009872677566    75    23034    627560448    5947146077526421397    8.9527    6.5449    GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmno    2414-04-14    6403-06-29 00:00:00    2001-03-23 00:00:00    false    426.20    ABCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123456    STU-_+=VWXYZabcdef    KL/MN?OPQR.STU-_+=VWXY    QR.STU-_+=VWXYZabcdefg
+122    -21074    197914579    4555403964928730457    105    19280    1077269952    17444346995571183077    4.1654    8.8795    OPQR.STU-_+=VWXYZabcdefghig    3161-03-10    1450-09-15 23:59:59    1974-01-11 23:59:59    false    903.81    ;KL/MN?OPQR.STU-_+=VWXYZa    .STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123    G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrst    N?OPQR.STU-_+=VWXYZabcdefghi
+-58    -18442    1536156579    4393313169200513397    140    32346    2097619354    7426166995555475239    1.0538    5.2196    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghig    3068-02-07    7317-04-14 00:00:00    1977-06-17 23:59:59    true    792.02    KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwx    ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZa    ?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01    .STU-_+=VW
+-86    9982    655224355    -698387359759409399    21    54976    3000487915    8593386903663700396    8.6471    0.1934    BCDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz01    6028-06-11    8961-07-28 00:00:00    1971-03-24 23:59:59    false    697.56    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnop    GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy    .STU-_+=VWXYZabcdefg    U-_+=VWXYZabcdefghigklm
+106    -5249    -2018627997    -733102989529721586    203    34690    1637091285    16875927530036899902    3.7639    6.0838    _+=VWXYZabcdefg    2872-09-20    9484-05-08 00:00:00    2003-03-22 00:00:00    false    484.88    MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz0123    ,GHI,G;KL/MN?OPQR.STU-_+=    CDEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvw    DEF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghig
+drop table table02;
+DROP DATABASE `TEST03`;
