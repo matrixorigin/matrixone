@@ -15,11 +15,10 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -106,15 +105,24 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 	return
 }
 
-func handleRead[Req any, Resp any](
+func handleRead[
+	Req any, PReq interface {
+		types.ProtoUnmarshaler
+		*Req
+	},
+	Resp any, PResp interface {
+		types.ProtoMarshaler
+		*Resp
+	},
+](
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
 	payload []byte,
 	fn func(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req Req,
-		resp *Resp,
+		preq PReq,
+		presp PResp,
 	) (
 		err error,
 	),
@@ -123,30 +131,31 @@ func handleRead[Req any, Resp any](
 	err error,
 ) {
 
-	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	var preq PReq = new(Req)
+	if err := preq.Unmarshal(payload); err != nil {
 		return nil, err
 	}
 
-	var resp Resp
-	defer logReq("read", req, txnMeta, &resp, &err)()
+	var presp PResp = new(Resp)
+	defer logReq("read", preq, txnMeta, presp, &err)()
 	defer func() {
-		if closer, ok := (any)(resp).(io.Closer); ok {
+		if closer, ok := (any)(presp).(io.Closer); ok {
 			_ = closer.Close()
 		}
 	}()
 
-	err = fn(ctx, txnMeta, req, &resp)
+	err = fn(ctx, txnMeta, preq, presp)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data := make([]byte, presp.ProtoSize())
+	n, err := presp.MarshalToSizedBuffer(data)
+	if err != nil {
 		return nil, err
 	}
 	res = &readResult{
-		payload: buf.Bytes(),
+		payload: data[:n],
 	}
 
 	return res, nil

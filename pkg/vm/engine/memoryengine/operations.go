@@ -152,7 +152,7 @@ type CreateRelationReq struct {
 	DatabaseName string
 	Name         string
 	Type         RelationType
-	Defs         []engine.TableDef
+	Defs         []engine.TableDefPB
 }
 
 type CreateRelationResp struct {
@@ -204,7 +204,7 @@ type GetRelationsResp struct {
 
 type AddTableDefReq struct {
 	TableID ID
-	Def     engine.TableDef
+	Def     engine.TableDefPB
 
 	DatabaseName string
 	TableName    string
@@ -217,7 +217,7 @@ type DelTableDefReq struct {
 	TableID      ID
 	DatabaseName string
 	TableName    string
-	Def          engine.TableDef
+	Def          engine.TableDefPB
 }
 
 type DelTableDefResp struct {
@@ -239,7 +239,7 @@ type GetPrimaryKeysReq struct {
 }
 
 type GetPrimaryKeysResp struct {
-	Attrs []*engine.Attribute
+	Attrs []engine.Attribute
 }
 
 type GetTableDefsReq struct {
@@ -251,11 +251,11 @@ type GetTableColumnsReq struct {
 }
 
 type GetTableColumnsResp struct {
-	Attrs []*engine.Attribute
+	Attrs []engine.Attribute
 }
 
 type GetTableDefsResp struct {
-	Defs []engine.TableDef
+	Defs []engine.TableDefPB
 }
 
 type GetHiddenKeysReq struct {
@@ -263,7 +263,7 @@ type GetHiddenKeysReq struct {
 }
 
 type GetHiddenKeysResp struct {
-	Attrs []*engine.Attribute
+	Attrs []engine.Attribute
 }
 
 //type TruncateReq struct {

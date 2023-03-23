@@ -40,6 +40,12 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		return err
 	}
 
+	// convert interface based engine.TableDef to PB version engine.TableDefPB
+	pbDefs := make([]engine.TableDefPB, 0, len(defs))
+	for i := 0; i < len(defs); i++ {
+		pbDefs = append(pbDefs, defs[i].ToPBVersion())
+	}
+
 	_, err = DoTxnRequest[CreateRelationResp](
 		ctx,
 		d.txnOperator,
@@ -52,7 +58,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 			DatabaseName: d.name,
 			Type:         RelationTable,
 			Name:         strings.ToLower(relName),
-			Defs:         defs,
+			Defs:         pbDefs,
 		},
 	)
 	if err != nil {

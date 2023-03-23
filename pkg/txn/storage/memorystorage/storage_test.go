@@ -15,10 +15,7 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 	"time"
 
@@ -27,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -64,24 +62,28 @@ func testDatabase(
 
 	// open database
 	{
-		_, err := testRead[memoryengine.OpenDatabaseResp](
+		resp := &memoryengine.OpenDatabaseResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpOpenDatabase,
-			memoryengine.OpenDatabaseReq{
+			&memoryengine.OpenDatabaseReq{
 				Name: "foo",
 			},
+			resp,
 		)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB))
 	}
 
 	// create database
 	{
-		resp, err := testWrite[memoryengine.CreateDatabaseResp](
+		resp := &memoryengine.CreateDatabaseResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpCreateDatabase,
-			memoryengine.CreateDatabaseReq{
+			&memoryengine.CreateDatabaseReq{
 				Name: "foo",
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
@@ -89,10 +91,12 @@ func testDatabase(
 
 	// get databases
 	{
-		resp, err := testRead[memoryengine.GetDatabasesResp](
+		resp := &memoryengine.GetDatabasesResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpGetDatabases,
-			memoryengine.GetDatabasesReq{},
+			&memoryengine.GetDatabasesReq{},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resp.Names))
@@ -102,12 +106,14 @@ func testDatabase(
 	// open database
 	var dbID ID
 	{
-		resp, err := testRead[memoryengine.OpenDatabaseResp](
+		resp := &memoryengine.OpenDatabaseResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpOpenDatabase,
-			memoryengine.OpenDatabaseReq{
+			&memoryengine.OpenDatabaseReq{
 				Name: "foo",
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.ID)
@@ -116,21 +122,25 @@ func testDatabase(
 		// delete database
 		defer func() {
 			{
-				resp, err := testWrite[memoryengine.DeleteDatabaseResp](
+				resp := &memoryengine.DeleteDatabaseResp{}
+				err := testWrite(
 					ctx, t, s, txnMeta,
 					memoryengine.OpDeleteDatabase,
-					memoryengine.DeleteDatabaseReq{
+					&memoryengine.DeleteDatabaseReq{
 						Name: "foo",
 					},
+					resp,
 				)
 				assert.Nil(t, err)
 				assert.NotEmpty(t, resp.ID)
 			}
 			{
-				resp, err := testRead[memoryengine.GetDatabasesResp](
+				resp := &memoryengine.GetDatabasesResp{}
+				err := testRead(
 					ctx, t, s, txnMeta,
 					memoryengine.OpGetDatabases,
-					memoryengine.GetDatabasesReq{},
+					&memoryengine.GetDatabasesReq{},
+					resp,
 				)
 				assert.Nil(t, err)
 				for _, name := range resp.Names {
@@ -144,53 +154,61 @@ func testDatabase(
 
 	// open relation
 	{
-		_, err := testRead[memoryengine.OpenRelationResp](
+		resp := &memoryengine.OpenRelationResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpOpenRelation,
-			memoryengine.OpenRelationReq{
+			&memoryengine.OpenRelationReq{
 				DatabaseID: dbID,
 				Name:       "table",
 			},
+			resp,
 		)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	}
 
 	// create relation
 	{
-		resp, err := testWrite[memoryengine.CreateRelationResp](
-			ctx, t, s, txnMeta,
-			memoryengine.OpCreateRelation,
-			memoryengine.CreateRelationReq{
-				DatabaseID: dbID,
-				Name:       "table",
-				Type:       memoryengine.RelationTable,
-				Defs: []engine.TableDef{
-					&engine.AttributeDef{
-						Attr: engine.Attribute{
-							Name:    "a",
-							Type:    types.T_int64.ToType(),
-							Primary: true,
-						},
-					},
-					&engine.AttributeDef{
-						Attr: engine.Attribute{
-							Name:    "b",
-							Type:    types.T_int64.ToType(),
-							Primary: false,
-						},
-					},
-					&engine.ConstraintDef{
-						Cts: []engine.Constraint{
-							&engine.PrimaryKeyDef{
-								Pkey: &plan.PrimaryKeyDef{
-									PkeyColName: "a",
-									Names:       []string{"a"},
-								},
-							},
-						},
+		defA := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name:    "a",
+				Type:    types.T_int64.ToType(),
+				Primary: true,
+			},
+		}
+		defB := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name:    "b",
+				Type:    types.T_int64.ToType(),
+				Primary: false,
+			},
+		}
+		defC := &engine.ConstraintDef{
+			Cts: []engine.Constraint{
+				&engine.PrimaryKeyDef{
+					Pkey: &plan.PrimaryKeyDef{
+						PkeyColName: "a",
+						Names:       []string{"a"},
 					},
 				},
 			},
+		}
+
+		resp := &memoryengine.CreateRelationResp{}
+		err := testWrite(
+			ctx, t, s, txnMeta,
+			memoryengine.OpCreateRelation,
+			&memoryengine.CreateRelationReq{
+				DatabaseID: dbID,
+				Name:       "table",
+				Type:       memoryengine.RelationTable,
+				Defs: []engine.TableDefPB{
+					defA.ToPBVersion(),
+					defB.ToPBVersion(),
+					defC.ToPBVersion(),
+				},
+			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
@@ -198,12 +216,14 @@ func testDatabase(
 
 	// get relations
 	{
-		resp, err := testRead[memoryengine.GetRelationsResp](
+		resp := &memoryengine.GetRelationsResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpGetRelations,
-			memoryengine.GetRelationsReq{
+			&memoryengine.GetRelationsReq{
 				DatabaseID: dbID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resp.Names))
@@ -213,13 +233,15 @@ func testDatabase(
 	// open relation
 	var relID ID
 	{
-		resp, err := testRead[memoryengine.OpenRelationResp](
+		resp := &memoryengine.OpenRelationResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpOpenRelation,
-			memoryengine.OpenRelationReq{
+			&memoryengine.OpenRelationReq{
 				DatabaseID: dbID,
 				Name:       "table",
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.ID)
@@ -230,12 +252,14 @@ func testDatabase(
 
 	// get relation defs
 	{
-		resp, err := testRead[memoryengine.GetTableDefsResp](
+		resp := &memoryengine.GetTableDefsResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpGetTableDefs,
-			memoryengine.GetTableDefsReq{
+			&memoryengine.GetTableDefsReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.Equal(t, 3, len(resp.Defs))
@@ -265,13 +289,15 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		_, err := testWrite[memoryengine.WriteResp](
+		resp := &memoryengine.WriteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpWrite,
-			memoryengine.WriteReq{
+			&memoryengine.WriteReq{
 				TableID: relID,
 				Batch:   bat,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
@@ -279,25 +305,29 @@ func testDatabase(
 	// read
 	var iterID ID
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
 		iterID = resp.IterID
 	}
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b"},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
@@ -315,39 +345,45 @@ func testDatabase(
 				1,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
+		resp := &memoryengine.DeleteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDelete,
-			memoryengine.DeleteReq{
+			&memoryengine.DeleteReq{
 				TableID:    relID,
 				ColumnName: "a",
 				Vector:     colA,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
 		iterID = resp.IterID
 	}
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b"},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
@@ -365,39 +401,45 @@ func testDatabase(
 				8,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
+		resp := &memoryengine.DeleteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDelete,
-			memoryengine.DeleteReq{
+			&memoryengine.DeleteReq{
 				TableID:    relID,
 				ColumnName: "b",
 				Vector:     colB,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
 		iterID = resp.IterID
 	}
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b"},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
@@ -428,37 +470,43 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(1)
-		_, err := testWrite[memoryengine.WriteResp](
+		resp := &memoryengine.WriteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpWrite,
-			memoryengine.WriteReq{
+			&memoryengine.WriteReq{
 				TableID: relID,
 				Batch:   bat,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// delete relation
 	{
-		resp, err := testWrite[memoryengine.DeleteRelationResp](
+		resp := &memoryengine.DeleteRelationResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDeleteRelation,
-			memoryengine.DeleteRelationReq{
+			&memoryengine.DeleteRelationReq{
 				DatabaseID: dbID,
 				Name:       "table",
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
 	}
 	{
-		resp, err := testRead[memoryengine.GetRelationsResp](
+		resp := &memoryengine.GetRelationsResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpGetRelations,
-			memoryengine.GetRelationsReq{
+			&memoryengine.GetRelationsReq{
 				DatabaseID: dbID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(resp.Names))
@@ -466,28 +514,33 @@ func testDatabase(
 
 	// new relation without primary key
 	{
-		resp, err := testWrite[memoryengine.CreateRelationResp](
+		defA := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name: "a",
+				Type: types.T_int64.ToType(),
+			},
+		}
+		defB := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name: "b",
+				Type: types.T_int64.ToType(),
+			},
+		}
+
+		resp := &memoryengine.CreateRelationResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpCreateRelation,
-			memoryengine.CreateRelationReq{
+			&memoryengine.CreateRelationReq{
 				DatabaseID: dbID,
 				Name:       "table",
 				Type:       memoryengine.RelationTable,
-				Defs: []engine.TableDef{
-					&engine.AttributeDef{
-						Attr: engine.Attribute{
-							Name: "a",
-							Type: types.T_int64.ToType(),
-						},
-					},
-					&engine.AttributeDef{
-						Attr: engine.Attribute{
-							Name: "b",
-							Type: types.T_int64.ToType(),
-						},
-					},
+				Defs: []engine.TableDefPB{
+					defA.ToPBVersion(),
+					defB.ToPBVersion(),
 				},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
@@ -518,13 +571,15 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		_, err := testWrite[memoryengine.WriteResp](
+		resp := &memoryengine.WriteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpWrite,
-			memoryengine.WriteReq{
+			&memoryengine.WriteReq{
 				TableID: relID,
 				Batch:   bat,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
@@ -540,39 +595,45 @@ func testDatabase(
 				1,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
+		resp := &memoryengine.DeleteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDelete,
-			memoryengine.DeleteReq{
+			&memoryengine.DeleteReq{
 				TableID:    relID,
 				ColumnName: "a",
 				Vector:     colA,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
 		iterID = resp.IterID
 	}
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b"},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
@@ -590,26 +651,30 @@ func testDatabase(
 				8,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
+		resp := &memoryengine.DeleteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDelete,
-			memoryengine.DeleteReq{
+			&memoryengine.DeleteReq{
 				TableID:    relID,
 				ColumnName: "b",
 				Vector:     colB,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
@@ -617,13 +682,15 @@ func testDatabase(
 	}
 	var rowIDs *vector.Vector
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
@@ -633,39 +700,45 @@ func testDatabase(
 
 	// delete by row id
 	{
-		_, err := testWrite[memoryengine.DeleteResp](
+		resp := &memoryengine.DeleteResp{}
+		err := testWrite(
 			ctx, t, s, txnMeta,
 			memoryengine.OpDelete,
-			memoryengine.DeleteReq{
+			&memoryengine.DeleteReq{
 				TableID:    relID,
 				ColumnName: rowIDColumnName,
 				Vector:     rowIDs,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp, err := testRead[memoryengine.NewTableIterResp](
+		resp := &memoryengine.NewTableIterResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpNewTableIter,
-			memoryengine.NewTableIterReq{
+			&memoryengine.NewTableIterReq{
 				TableID: relID,
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
 		iterID = resp.IterID
 	}
 	{
-		resp, err := testRead[memoryengine.ReadResp](
+		resp := &memoryengine.ReadResp{}
+		err := testRead(
 			ctx, t, s, txnMeta,
 			memoryengine.OpRead,
-			memoryengine.ReadReq{
+			&memoryengine.ReadReq{
 				IterID:   iterID,
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
+			resp,
 		)
 		assert.Nil(t, err)
 		assert.Nil(t, resp.Batch)
@@ -689,23 +762,27 @@ func testDatabase(
 			},
 		}
 		{
-			resp, err := testWrite[memoryengine.CreateDatabaseResp](
+			resp := &memoryengine.CreateDatabaseResp{}
+			err := testWrite(
 				ctx, t, s, tx1,
 				memoryengine.OpCreateDatabase,
-				memoryengine.CreateDatabaseReq{
+				&memoryengine.CreateDatabaseReq{
 					Name: "bar",
 				},
+				resp,
 			)
 			assert.Nil(t, err)
 			assert.NotEmpty(t, resp.ID)
 		}
 		{
-			_, err := testWrite[memoryengine.CreateDatabaseResp](
+			resp := &memoryengine.CreateDatabaseResp{}
+			err := testWrite(
 				ctx, t, s, tx2,
 				memoryengine.OpCreateDatabase,
-				memoryengine.CreateDatabaseReq{
+				&memoryengine.CreateDatabaseReq{
 					Name: "bar",
 				},
+				resp,
 			)
 			assert.NotNil(t, err)
 		}
@@ -714,8 +791,8 @@ func testDatabase(
 }
 
 func testRead[
-	Resp any,
-	Req any,
+	Resp types.ProtoUnmarshaler,
+	Req types.ProtoMarshaler,
 ](
 	ctx context.Context,
 	t *testing.T,
@@ -723,31 +800,31 @@ func testRead[
 	txnMeta txn.TxnMeta,
 	op uint32,
 	req Req,
-) (
 	resp Resp,
-	err error,
-) {
+) error {
 
-	buf := new(bytes.Buffer)
-	err = gob.NewEncoder(buf).Encode(req)
-	assert.Nil(t, err)
-
-	res, err := s.Read(ctx, txnMeta, op, buf.Bytes())
+	buf := make([]byte, req.ProtoSize())
+	n, err := req.MarshalToSizedBuffer(buf)
 	if err != nil {
-		return
+		return err
 	}
+
+	res, err := s.Read(ctx, txnMeta, op, buf[:n])
+	if err != nil {
+		return err
+	}
+
 	data, err := res.Read()
-	assert.Nil(t, err)
+	if err != nil {
+		return err
+	}
 
-	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
-	assert.Nil(t, err)
-
-	return
+	return resp.Unmarshal(data)
 }
 
 func testWrite[
-	Resp any,
-	Req any,
+	Resp types.ProtoUnmarshaler,
+	Req types.ProtoMarshaler,
 ](
 	ctx context.Context,
 	t *testing.T,
@@ -755,22 +832,19 @@ func testWrite[
 	txnMeta txn.TxnMeta,
 	op uint32,
 	req Req,
-) (
 	resp Resp,
-	err error,
-) {
+) error {
 
-	buf := new(bytes.Buffer)
-	err = gob.NewEncoder(buf).Encode(req)
-	assert.Nil(t, err)
-
-	data, err := s.Write(ctx, txnMeta, op, buf.Bytes())
+	buf := make([]byte, req.ProtoSize())
+	n, err := req.MarshalToSizedBuffer(buf)
 	if err != nil {
-		return
+		return err
 	}
 
-	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
-	assert.Nil(t, err)
+	data, err := s.Write(ctx, txnMeta, op, buf[:n])
+	if err != nil {
+		return err
+	}
 
-	return
+	return resp.Unmarshal(data)
 }

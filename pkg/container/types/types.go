@@ -15,6 +15,7 @@
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,6 +103,54 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
+}
+
+func (t *Type) ProtoSize() int {
+	return 2*4 + 4*3
+}
+
+func (t *Type) MarshalTo(data []byte) (int, error) {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
+	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	binary.BigEndian.PutUint16(data[4:], uint16(t.dummy1))
+	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
+	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
+	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
+	return 20, nil
+}
+
+func (t *Type) Unmarshal(data []byte) error {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
+	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
+	t.dummy1 = uint8(binary.BigEndian.Uint16(data[4:]))
+	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
+	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
+	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
+	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+	return nil
+}
+
+func Int32ToUint32(x int32) uint32 {
+	ux := uint32(x) << 1
+	if x < 0 {
+		ux = ^ux
+	}
+	return ux
+}
+
+func Uint32ToInt32(ux uint32) int32 {
+	x := int32(ux >> 1)
+	if ux&1 != 0 {
+		x = ^x
+	}
+	return x
 }
 
 type Date int32

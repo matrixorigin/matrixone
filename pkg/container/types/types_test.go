@@ -23,6 +23,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntToUint(t *testing.T) {
+	require.Equal(t, int32(1), Uint32ToInt32(Int32ToUint32(1)))
+	require.Equal(t, int32(0), Uint32ToInt32(Int32ToUint32(0)))
+	require.Equal(t, int32(-1), Uint32ToInt32(Int32ToUint32(-1)))
+}
+
+func TestTypeMarshalAndUnmarshal(t *testing.T) {
+	typ := Type{
+		Oid:     T(1),
+		Charset: 2,
+		dummy1:  3,
+		dummy2:  4,
+		Size:    5,
+		Width:   6,
+		Scale:   -1,
+	}
+
+	size := typ.ProtoSize()
+	data := make([]byte, size)
+	n, err := typ.MarshalTo(data)
+	require.NoError(t, err)
+	require.Equal(t, size, n)
+
+	var ret Type
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, typ, ret)
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())

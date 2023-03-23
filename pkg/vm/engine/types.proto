@@ -1,0 +1,144 @@
+/*
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package engine;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "plan.proto";
+
+option (gogoproto.sizer_all)                = false;
+option (gogoproto.protosizer_all)           = true;
+option (gogoproto.goproto_enum_prefix_all)  = false;
+option (gogoproto.goproto_unrecognized_all) = false;
+option (gogoproto.goproto_unkeyed_all)      = false;
+option (gogoproto.goproto_sizecache_all)    = false;
+
+message CommentDef {
+    option (gogoproto.typedecl) = false;
+    string Comment              = 1;
+}
+
+message PartitionDef {
+    option (gogoproto.typedecl) = false;
+    string Partition            = 1;
+}
+
+message ViewDef {
+    option (gogoproto.typedecl) = false;
+    string View                 = 1;
+}
+
+message AttributeDef {
+    option (gogoproto.typedecl) = false;
+    Attribute Attr              = 1 [(gogoproto.nullable) = false];
+}
+
+message IndexTableDef {
+    option (gogoproto.typedecl) = false;
+    int32 Typ                   = 1 [(gogoproto.casttype) = "IndexT"];
+    repeated string ColNames    = 2;
+    string Name                 = 3;
+}
+
+message PropertiesDef {
+    option (gogoproto.typedecl)  = false;
+    repeated Property Properties = 1 [(gogoproto.nullable) = false];
+}
+
+message ClusterByDef {
+    option (gogoproto.typedecl) = false;
+    string Name                 = 1;
+}
+
+message ForeignKeyDef {
+    option (gogoproto.typedecl)       = false;
+    repeated plan.ForeignKeyDef Fkeys = 1;
+}
+
+message PrimaryKeyDef {
+    option (gogoproto.typedecl) = false;
+    plan.PrimaryKeyDef Pkey     = 1;
+}
+
+message RefChildTableDef {
+    option (gogoproto.typedecl) = false;
+    repeated uint64 Tables      = 1;
+}
+
+message IndexDef {
+    option (gogoproto.typedecl)    = false;
+    repeated plan.IndexDef Indexes = 1;
+}
+
+// PB version of ConstraintDef
+message ConstraintDefPB {
+    option (gogoproto.typedecl) = true;
+    repeated ConstraintPB Cts   = 1 [(gogoproto.nullable) = false];
+}
+
+// PB version of Constraint
+message ConstraintPB {
+    option (gogoproto.typedecl) = true;
+    oneof ct {
+        ForeignKeyDef ForeignKeyDef       = 1;
+        PrimaryKeyDef PrimaryKeyDef       = 2;
+        RefChildTableDef RefChildTableDef = 3;
+        IndexDef IndexDef                 = 4;
+    }
+}
+
+// PB version of TableDef
+message TableDefPB {
+    option (gogoproto.typedecl) = true;
+    oneof def {
+        CommentDef CommentDef           = 1;
+        PartitionDef PartitionDef       = 2;
+        ViewDef ViewDef                 = 3;
+        AttributeDef AttributeDef       = 4;
+        IndexTableDef IndexTableDef     = 5;
+        PropertiesDef PropertiesDef     = 6;
+        ClusterByDef ClusterByDef       = 7;
+        ConstraintDefPB ConstraintDefPB = 8;
+    }
+}
+
+message Property {
+    option (gogoproto.typedecl) = false;
+    string Key                  = 1;
+    string Value                = 2;
+}
+
+message Attribute {
+    option (gogoproto.typedecl) = false;
+    bool IsHidden               = 1;
+    bool IsRowId                = 2;
+    uint64 ID                   = 3;
+    string Name                 = 4;
+    uint32 Alg                  = 5 [(gogoproto.casttype) =
+                        "github.com/matrixorigin/matrixone/pkg/compress.T"];
+    bytes Type                  = 6 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    plan.Default Default   = 7;
+    plan.OnUpdate OnUpdate = 8;
+    bool Primary           = 9;
+    bool ClusterBy         = 10;
+    string Comment         = 11;
+    bool AutoIncrement     = 12;
+}

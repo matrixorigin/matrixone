@@ -293,6 +293,29 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeArea = false
 }
 
+// FIXME: return proto size directly
+func (v *Vector) ProtoSize() int {
+	data, err := v.MarshalBinary()
+	if err != nil {
+		panic("fail to marshal vector")
+	}
+	return len(data)
+}
+
+// FIXME: marshal to buf directly
+func (v *Vector) MarshalTo(data []byte) (int, error) {
+	buf, err := v.MarshalBinary()
+	if err != nil {
+		return 0, err
+	}
+	n := copy(data, buf)
+	return n, nil
+}
+
+func (v *Vector) Unmarshal(data []byte) error {
+	return v.UnmarshalBinary(data)
+}
+
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
 

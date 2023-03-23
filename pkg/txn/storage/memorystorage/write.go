@@ -15,10 +15,9 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -99,8 +98,14 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 }
 
 func handleWrite[
-	Req any,
-	Resp any,
+	Req any, PReq interface {
+		types.ProtoUnmarshaler
+		*Req
+	},
+	Resp any, PResp interface {
+		types.ProtoMarshaler
+		*Resp
+	},
 ](
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -108,8 +113,8 @@ func handleWrite[
 	fn func(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req Req,
-		resp *Resp,
+		preq PReq,
+		presp PResp,
 	) (
 		err error,
 	),
@@ -118,24 +123,25 @@ func handleWrite[
 	err error,
 ) {
 
-	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	var preq PReq = new(Req)
+	if err := preq.Unmarshal(payload); err != nil {
 		return nil, err
 	}
 
-	var resp Resp
-	defer logReq("write", req, meta, &resp, &err)()
+	var presp PResp = new(Resp)
+	defer logReq("write", preq, meta, presp, &err)()
 
-	err = fn(ctx, meta, req, &resp)
+	err = fn(ctx, meta, preq, presp)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data := make([]byte, presp.ProtoSize())
+	n, err := presp.MarshalToSizedBuffer(data)
+	if err != nil {
 		return nil, err
 	}
-	res = buf.Bytes()
+	res = data[:n]
 
 	return
 }

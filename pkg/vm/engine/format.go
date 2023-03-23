@@ -19,48 +19,48 @@ import (
 	"fmt"
 )
 
-func (node *AttributeDef) Format(buf *bytes.Buffer) {
-	node.Attr.Format(buf)
+func (def *AttributeDef) Format(buf *bytes.Buffer) {
+	def.Attr.Format(buf)
 }
 
-func (node *Attribute) Format(buf *bytes.Buffer) {
+func (def *Attribute) Format(buf *bytes.Buffer) {
 	buf.WriteString("`")
-	buf.WriteString(node.Name)
+	buf.WriteString(def.Name)
 	buf.WriteString("`")
 
 	buf.WriteByte(' ')
-	buf.WriteString(node.Type.String())
+	buf.WriteString(def.Type.String())
 
-	if node.Type.Width > 0 && node.Type.Scale > 0 {
+	if def.Type.Width > 0 && def.Type.Scale > 0 {
 		buf.WriteString("(")
-		str := fmt.Sprintf("%d", node.Type.Width)
+		str := fmt.Sprintf("%d", def.Type.Width)
 		buf.WriteString(str)
 		buf.WriteString(", ")
 		buf.WriteByte(')')
-	} else if node.Type.Width > 0 {
+	} else if def.Type.Width > 0 {
 		buf.WriteString("(")
-		str := fmt.Sprintf("%d", node.Type.Width)
+		str := fmt.Sprintf("%d", def.Type.Width)
 		buf.WriteString(str)
 		buf.WriteByte(')')
 	}
-	if node.Default.NullAbility {
+	if def.Default.NullAbility {
 		buf.WriteString(" NULL ")
 	}
-	val := node.Default.Expr.String()
+	val := def.Default.Expr.String()
 	if val != "" {
 		buf.WriteString(" DEFAULT ")
 		buf.WriteString(val)
 	}
 }
 
-func (node *IndexTableDef) Format(buf *bytes.Buffer) {
+func (def *IndexTableDef) Format(buf *bytes.Buffer) {
 	buf.WriteString("KEY")
 	buf.WriteString(" `")
-	buf.WriteString(node.Name)
+	buf.WriteString(def.Name)
 	buf.WriteString("`")
 
 	prefix := " ("
-	for _, c := range node.ColNames {
+	for _, c := range def.ColNames {
 		buf.WriteString(prefix)
 		buf.WriteString("`")
 		buf.WriteString(c)
@@ -70,5 +70,5 @@ func (node *IndexTableDef) Format(buf *bytes.Buffer) {
 	buf.WriteString(")")
 
 	buf.WriteString(" USING ")
-	buf.WriteString(node.Typ.ToString())
+	buf.WriteString(def.Typ.ToString())
 }

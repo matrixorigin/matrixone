@@ -39,6 +39,15 @@ const (
 	UuidSize       int = 16
 )
 
+type ProtoMarshaler interface {
+	ProtoSize() (n int)
+	MarshalToSizedBuffer(data []byte) (int, error)
+}
+
+type ProtoUnmarshaler interface {
+	Unmarshal(data []byte) error
+}
+
 func EncodeSliceWithCap[T any](v []T) []byte {
 	var t T
 	sz := int(unsafe.Sizeof(t))

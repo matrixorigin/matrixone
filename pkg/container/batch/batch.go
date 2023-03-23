@@ -33,6 +33,7 @@ import (
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
 		Ro:    ro,
+		Cnt:   1, // reference count, default is 1
 		Attrs: attrs,
 		Vecs:  make([]*vector.Vector, len(attrs)),
 	}
@@ -106,6 +107,29 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 	return types.Decode(data, info.Agg)
 }
 
+// FIXME: return proto size directly
+func (bat *Batch) ProtoSize() int {
+	data, err := bat.MarshalBinary()
+	if err != nil {
+		panic("fail to marshal batch")
+	}
+	return len(data)
+}
+
+// FIXME: marshal to buf directly
+func (bat *Batch) MarshalTo(data []byte) (int, error) {
+	buf, err := bat.MarshalBinary()
+	if err != nil {
+		return 0, err
+	}
+	n := copy(data, buf)
+	return n, nil
+}
+
+func (bat *Batch) Unmarshal(data []byte) error {
+	return bat.UnmarshalBinary(data)
+}
+
 func (bat *Batch) MarshalBinary() ([]byte, error) {
 	aggInfo := make([]aggInfo, len(bat.Aggs))
 	for i := range aggInfo {
@@ -132,9 +156,12 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
-	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
-	for i, info := range rbat.AggInfos {
-		bat.Aggs[i] = info.Agg
+	// initialize bat.Aggs only if necessary
+	if len(rbat.AggInfos) > 0 {
+		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+		for i, info := range rbat.AggInfos {
+			bat.Aggs[i] = info.Agg
+		}
 	}
 	return nil
 }
