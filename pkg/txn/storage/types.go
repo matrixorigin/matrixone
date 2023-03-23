@@ -59,7 +59,7 @@ type TxnStorage interface {
 	// of the transaction is logged to the LogService.
 	Committing(ctx context.Context, txnMeta txn.TxnMeta) error
 	// Commit commit the transaction. TxnStorage needs to do conflict locally.
-	Commit(ctx context.Context, txnMeta txn.TxnMeta) error
+	Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
 	// Rollback rollback the transaction.
 	Rollback(ctx context.Context, txnMeta txn.TxnMeta) error
 
