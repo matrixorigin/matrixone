@@ -346,3 +346,7 @@ func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.Se
 func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
 }
+
+func (o *testOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+	panic("should not call")
+}

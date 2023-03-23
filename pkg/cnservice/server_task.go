@@ -211,6 +211,7 @@ func (s *service) registerExecutorsLocked() {
 	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
+	pu.LockService = s.lockService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCache())

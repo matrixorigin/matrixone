@@ -274,3 +274,13 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestGossipAddressV2IsUsed(t *testing.T) {
+	cfg := Config{
+		GossipAddress:   "127.0.0.1:9001",
+		GossipAddressV2: "localhost:9002",
+	}
+	cfg.Fill()
+	assert.Equal(t, cfg.GossipAddress, cfg.GossipAddressV2)
+	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)
+}

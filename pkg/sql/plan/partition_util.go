@@ -25,15 +25,15 @@ import (
 )
 
 // add this code in buildListPartitionItem
-// return buildListPartitionItem(partitionBinder, partitionInfo, defs)
-func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, defs []*tree.Partition) error {
+// return buildListPartitionItem(partitionBinder, partitionDef, defs)
+func buildListPartitionItem(binder *PartitionBinder, partitionDef *plan.PartitionByDef, defs []*tree.Partition) error {
 	for _, def := range defs {
-		if partitionInfo.PartitionColumns != nil {
-			if err := checkListColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
+		if partitionDef.PartitionColumns != nil {
+			if err := checkListColumnsTypeAndValuesMatch(binder, partitionDef, def); err != nil {
 				return err
 			}
 		} else {
-			if err := checkListPartitionValuesIsInt(binder, def, partitionInfo); err != nil {
+			if err := checkListPartitionValuesIsInt(binder, def, partitionDef); err != nil {
 				return err
 			}
 		}
@@ -41,7 +41,7 @@ func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.Partiti
 	return nil
 }
 
-func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, partition *tree.Partition) error {
+func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 		exprs := valuesIn.ValueList
 
@@ -49,7 +49,7 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *
 		// create table ... partition by range columns (cols)
 		// partition p0 values less than (expr)
 		// check the type of cols[i] and expr is consistent.
-		colTypes := collectColumnsType(partitionInfo)
+		colTypes := collectColumnsType(partitionDef)
 		for _, colExpr := range exprs {
 			val, err := binder.BindExpr(colExpr, 0, true)
 			if err != nil {
@@ -182,15 +182,15 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 }
 
 // add this code in buildRangePartitionDefinitions
-// return buildRangePartitionDefinitionItem(partitionBinder, partitionInfo, defs)
-func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, defs []*tree.Partition) error {
+// return buildRangePartitionDefinitionItem(partitionBinder, partitionDef, defs)
+func buildRangePartitionItem(binder *PartitionBinder, partitionDef *plan.PartitionByDef, defs []*tree.Partition) error {
 	for _, def := range defs {
-		if partitionInfo.PartitionColumns != nil && len(partitionInfo.PartitionColumns.Columns) > 0 {
-			if err := checkRangeColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
+		if partitionDef.PartitionColumns != nil && len(partitionDef.PartitionColumns.Columns) > 0 {
+			if err := checkRangeColumnsTypeAndValuesMatch(binder, partitionDef, def); err != nil {
 				return err
 			}
 		} else {
-			if err := checkPartitionValuesIsInt(binder, def, partitionInfo); err != nil {
+			if err := checkPartitionValuesIsInt(binder, def, partitionDef); err != nil {
 				return err
 			}
 		}
@@ -198,14 +198,14 @@ func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.Partit
 	return nil
 }
 
-func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, partition *tree.Partition) error {
+func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLessThan.ValueList
 		// Validate() has already checked len(colNames) = len(exprs)
 		// create table ... partition by range columns (cols)
 		// partition p0 values less than (expr)
 		// check the type of cols[i] and expr is consistent.
-		colTypes := collectColumnsType(partitionInfo)
+		colTypes := collectColumnsType(partitionDef)
 		for i, colExpr := range exprs {
 			if _, ok1 := colExpr.(*tree.MaxValue); ok1 {
 				continue
@@ -313,17 +313,18 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 }
 
 // checkPartitionByList checks validity of list partition.
-func checkPartitionByList(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) error {
-	return checkListPartitionValue(partitionBinder, partitionInfo, tableDef)
+func checkPartitionByList(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) error {
+	return checkListPartitionValue(partitionBinder, partitionDef, tableDef)
 }
 
-func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) error {
+// check list expr ?
+func checkListPartitionValue(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) error {
 	//pi := tblInfo.Partition
 	ctx := partitionBinder.GetContext()
-	if len(partitionInfo.Partitions) == 0 {
+	if len(partitionDef.Partitions) == 0 {
 		return moerr.NewInternalError(ctx, "For %-.64s partitions each partition must be defined", "LIST")
 	}
-	expStrs, err := formatListPartitionValue(partitionBinder, partitionInfo, tableDef)
+	expStrs, err := formatListPartitionValue(partitionBinder, partitionDef, tableDef)
 	if err != nil {
 		return err
 	}
@@ -338,9 +339,10 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *pl
 	return nil
 }
 
-func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) ([]string, error) {
-	pi := partitionInfo
-	defs := partitionInfo.Partitions
+// construct list expr ?
+func formatListPartitionValue(binder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) ([]string, error) {
+	pi := partitionDef
+	defs := partitionDef.Partitions
 	if pi.PartitionColumns != nil {
 		for _, column := range pi.PartitionColumns.PartitionColumns {
 			colInfo := findColumnByName(column, tableDef)
@@ -373,10 +375,10 @@ func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.Parti
 	return exprStrs, nil
 }
 
-func collectColumnsType(partitionInfo *plan.PartitionByDef) []*Type {
-	if len(partitionInfo.PartitionColumns.Columns) > 0 {
-		colTypes := make([]*Type, 0, len(partitionInfo.PartitionColumns.Columns))
-		for _, col := range partitionInfo.PartitionColumns.Columns {
+func collectColumnsType(partitionDef *plan.PartitionByDef) []*Type {
+	if len(partitionDef.PartitionColumns.Columns) > 0 {
+		colTypes := make([]*Type, 0, len(partitionDef.PartitionColumns.Columns))
+		for _, col := range partitionDef.PartitionColumns.Columns {
 			colTypes = append(colTypes, col.Typ)
 		}
 		return colTypes

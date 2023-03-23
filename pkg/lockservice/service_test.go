@@ -683,7 +683,7 @@ func runLockServiceTestsWithLevel(
 			ServiceID:          v,
 			LockServiceAddress: address,
 		})
-		configs = append(configs, Config{ServiceID: v, ServiceAddress: address})
+		configs = append(configs, Config{ServiceID: v, ListenAddress: address})
 	}
 	cluster := clusterservice.NewMOCluster(
 		nil,
