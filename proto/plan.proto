@@ -866,7 +866,7 @@ message CreateTable {
 	repeated string fk_tables = 7;
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 8;
-	repeated TableDef partition_tables = 9;
+	repeated TableDef partition_tables = 9;// partition tables for partitions
 }
 
 message AlterTableDrop {
