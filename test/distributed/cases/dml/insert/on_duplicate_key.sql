@@ -65,13 +65,19 @@ delete from t1;
 insert into t1 values (1,1,1);
 insert into t1 values (1,1,2), (2,2,2) on duplicate key update c=values(c)+10;
 select * from t1;
-
+drop table t1;
+CREATE TABLE IF NOT EXISTS indup_00(`id` INT UNSIGNED,`act_name` VARCHAR(20) NOT NULL,`spu_id` VARCHAR(30) NOT NULL,`uv`  BIGINT NOT NULL,`update_time` date default '2020-10-10' COMMENT 'lastest time',unique key idx_act_name_spu_id (act_name,spu_id));
+insert into indup_00 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
+select * from indup_00 order by id;
+insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+select * from indup_00 order by id;
+drop table indup_00;
 CREATE TABLE IF NOT EXISTS indup(
-                                       col1 INT primary key,
-                                       col2 VARCHAR(20) NOT NULL,
-    col3 VARCHAR(30) NOT NULL,
-    col4 BIGINT default 30
-    );
+col1 INT primary key,
+col2 VARCHAR(20) NOT NULL,
+col3 VARCHAR(30) NOT NULL,
+col4 BIGINT default 30
+);
 insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
 select * from indup;
 insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;

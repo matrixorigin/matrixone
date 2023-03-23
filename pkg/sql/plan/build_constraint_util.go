@@ -562,7 +562,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// if insert with on duplicate key . need append a join node
 	// create table t1 (a int primary key, b int unique key, c int);
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.a, t1.b，c, t1.row_id from
+	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
 

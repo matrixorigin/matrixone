@@ -101,6 +101,21 @@ select * from t1;
 a    b    c
 1    1    12
 2    2    2
+drop table t1;
+CREATE TABLE IF NOT EXISTS indup_00(`id` INT UNSIGNED,`act_name` VARCHAR(20) NOT NULL,`spu_id` VARCHAR(30) NOT NULL,`uv`  BIGINT NOT NULL,`update_time` date default '2020-10-10' COMMENT 'lastest time',unique key idx_act_name_spu_id (act_name,spu_id));
+insert into indup_00 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
+select * from indup_00 order by id;
+id    act_name    spu_id    uv    update_time
+1    beijing    001    1    2021-01-03
+2    shanghai    002    2    2022-09-23
+3    guangzhou    003    3    2022-09-23
+insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+select * from indup_00 order by id;
+id    act_name    spu_id    uv    update_time
+1    beijing    001    1    2021-01-03
+2    shanghai    002    21    2022-09-23
+3    guangzhou    003    31    2022-09-23
+drop table indup_00;
 CREATE TABLE IF NOT EXISTS indup(
 col1 INT primary key,
 col2 VARCHAR(20) NOT NULL,
