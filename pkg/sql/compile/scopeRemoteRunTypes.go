@@ -213,6 +213,7 @@ func newMessageReceiverOnServer(
 		cnAddr:      cnAddr,
 		storeEngine: storeEngine,
 		fileService: fileService,
+		lockService: lockService,
 	}
 
 	switch m.GetCmd() {
@@ -226,11 +227,6 @@ func newMessageReceiverOnServer(
 
 	case pipeline.PipelineMessage:
 		var err error
-		receiver.cnInformation = cnInformation{
-			storeEngine: storeEngine,
-			fileService: fileService,
-			lockService: lockService,
-		}
 		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
 		if err != nil {
 			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
