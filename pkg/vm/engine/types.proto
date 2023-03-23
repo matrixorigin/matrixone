@@ -28,59 +28,59 @@ option (gogoproto.goproto_unkeyed_all)      = false;
 option (gogoproto.goproto_sizecache_all)    = false;
 
 message CommentDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     string Comment              = 1;
 }
 
 message PartitionDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     string Partition            = 1;
 }
 
 message ViewDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     string View                 = 1;
 }
 
 message AttributeDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     Attribute Attr              = 1 [(gogoproto.nullable) = false];
 }
 
 message IndexTableDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     int32 Typ                   = 1 [(gogoproto.casttype) = "IndexT"];
     repeated string ColNames    = 2;
     string Name                 = 3;
 }
 
 message PropertiesDef {
-    option (gogoproto.typedecl)  = false;
+    option (gogoproto.typedecl)  = true;
     repeated Property Properties = 1 [(gogoproto.nullable) = false];
 }
 
 message ClusterByDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     string Name                 = 1;
 }
 
 message ForeignKeyDef {
-    option (gogoproto.typedecl)       = false;
+    option (gogoproto.typedecl)       = true;
     repeated plan.ForeignKeyDef Fkeys = 1;
 }
 
 message PrimaryKeyDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     plan.PrimaryKeyDef Pkey     = 1;
 }
 
 message RefChildTableDef {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     repeated uint64 Tables      = 1;
 }
 
 message IndexDef {
-    option (gogoproto.typedecl)    = false;
+    option (gogoproto.typedecl)    = true;
     repeated plan.IndexDef Indexes = 1;
 }
 
@@ -117,7 +117,7 @@ message TableDefPB {
 }
 
 message Property {
-    option (gogoproto.typedecl) = false;
+    option (gogoproto.typedecl) = true;
     string Key                  = 1;
     string Value                = 2;
 }

@@ -40,6 +40,7 @@ type Node struct {
 }
 
 // Attribute is a column
+// NOTE: sync with Attribute within types.proto
 type Attribute struct {
 	// IsHide whether the attribute is hidden or not
 	IsHidden bool
@@ -67,29 +68,10 @@ type Attribute struct {
 	AutoIncrement bool
 }
 
-type PropertiesDef struct {
-	Properties []Property
-}
-
-type Property struct {
-	Key   string
-	Value string
-}
-
-type ClusterByDef struct {
-	Name string
-}
-
 type Statistics interface {
 	Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error)
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
-}
-
-type IndexTableDef struct {
-	Typ      IndexT
-	ColNames []string
-	Name     string
 }
 
 type IndexT int
@@ -110,38 +92,6 @@ const (
 	ZoneMap
 	BsiIndex
 )
-
-type AttributeDef struct {
-	Attr Attribute
-}
-
-type CommentDef struct {
-	Comment string
-}
-
-type PartitionDef struct {
-	Partition string
-}
-
-type ViewDef struct {
-	View string
-}
-
-type IndexDef struct {
-	Indexes []*plan.IndexDef
-}
-
-type ForeignKeyDef struct {
-	Fkeys []*plan.ForeignKeyDef
-}
-
-type PrimaryKeyDef struct {
-	Pkey *plan.PrimaryKeyDef
-}
-
-type RefChildTableDef struct {
-	Tables []uint64
-}
 
 type TableDef interface {
 	tableDef()
