@@ -513,7 +513,7 @@ func testFileService(
 		}
 		entries, err = fs.List(ctx, "qux/quux")
 		assert.Nil(t, err)
-		assert.Equal(t, len(entries), 0)
+		assert.Equal(t, 0, len(entries))
 
 	})
 
