@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,6 +46,7 @@ type cnInformation struct {
 	cnAddr      string
 	storeEngine engine.Engine
 	fileService fileservice.FileService
+	lockService lockservice.LockService
 }
 
 // processHelper records source process information to help
@@ -195,6 +197,7 @@ func newMessageReceiverOnServer(
 	messageAcquirer func() morpc.Message,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
+	lockService lockservice.LockService,
 	txnClient client.TxnClient) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
@@ -210,6 +213,7 @@ func newMessageReceiverOnServer(
 		cnAddr:      cnAddr,
 		storeEngine: storeEngine,
 		fileService: fileService,
+		lockService: lockService,
 	}
 
 	switch m.GetCmd() {
@@ -260,7 +264,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
-		cnInfo.fileService)
+		cnInfo.fileService,
+		cnInfo.lockService)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim

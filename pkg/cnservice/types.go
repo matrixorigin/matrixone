@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -39,8 +41,10 @@ import (
 )
 
 var (
-	defaultListenAddress     = "127.0.0.1:6002"
-	defaultLockListenAddress = "127.0.0.1:6003"
+	defaultListenAddress = "127.0.0.1:6002"
+	// TODO(fagongzi): make rc and pessimistic as default
+	defaultTxnIsolation = txn.TxnIsolation_SI
+	defaultTxnMode      = txn.TxnMode_Optimistic
 )
 
 type Service interface {
@@ -148,25 +152,16 @@ type Config struct {
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
 
-	LockService struct {
-		// ListenAddress lock service listen address for receiving lock requests
-		ListenAddress string `toml:"listen-address"`
-		// ServiceAddress service address for communication, if this address is not set, use
-		// ListenAddress as the communication address.
-		ServiceAddress string `toml:"service-address"`
-		// MaxFixedSliceSize lockservice uses fixedSlice to store all lock information, a pool
-		// of fixedSlice will be built internally, there are various specifications of fixexSlice,
-		// this value sets how big the maximum specification of FixedSlice is.
-		MaxFixedSliceSize toml.ByteSize `toml:"max-fixed-slice-size"`
-		// KeepBindDuration Maintain the period of the locktable bound to the current service
-		KeepBindDuration toml.Duration `toml:"keep-bind-duration"`
-		// KeepRemoteLockDuration how often to send a heartbeat to maintain a lock on a remote
-		// locktable.
-		KeepRemoteLockDuration toml.Duration `toml:"keep-remote-lock-duration"`
-		// RemoteLockTimeout how long does it take to receive a heartbeat that maintains the
-		// remote lock before releasing the lock
-		RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
-	} `toml:"lockservice"`
+	// LockService lockservice
+	LockService lockservice.Config `toml:"lockservice"`
+
+	// Txn txn config
+	Txn struct {
+		// Isolation txn isolation. SI or RC, default is SI
+		Isolation string `toml:"isolation"`
+		// Mode txn mode. optimistic or pessimistic, default is optimistic
+		Mode string `toml:"mode"`
+	} `toml:"txn"`
 }
 
 func (c *Config) Validate() error {
@@ -224,25 +219,27 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
-	if c.LockService.ListenAddress == "" {
-		c.LockService.ListenAddress = defaultLockListenAddress
+	if c.Txn.Isolation == "" {
+		c.Txn.Isolation = defaultTxnIsolation.String()
 	}
-	if c.LockService.ServiceAddress == "" {
-		c.LockService.ServiceAddress = c.LockService.ListenAddress
+	if !txn.ValidTxnIsolation(c.Txn.Isolation) {
+		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+	if !txn.ValidTxnMode(c.Txn.Mode) {
+		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
+	}
+	c.LockService.ServiceID = c.UUID
+	c.LockService.Validate()
 	return nil
 }
 
 func (c *Config) getLockServiceConfig() lockservice.Config {
-	return lockservice.Config{
-		ServiceID:              c.UUID,
-		ServiceAddress:         c.LockService.ListenAddress,
-		MaxFixedSliceSize:      c.LockService.MaxFixedSliceSize,
-		KeepBindDuration:       c.LockService.KeepBindDuration,
-		KeepRemoteLockDuration: c.LockService.KeepRemoteLockDuration,
-		RemoteLockTimeout:      c.LockService.RemoteLockTimeout,
-		RPC:                    c.RPC,
-	}
+	c.LockService.ServiceID = c.UUID
+	c.LockService.RPC = c.RPC
+	return c.LockService
 }
 
 type service struct {
@@ -257,6 +254,7 @@ type service struct {
 		cs morpc.ClientSession,
 		engine engine.Engine,
 		fService fileservice.FileService,
+		lockService lockservice.LockService,
 		cli client.TxnClient,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc

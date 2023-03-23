@@ -18,8 +18,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
@@ -36,7 +37,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	}
 	cfg.Fill()
 	service, err := NewService(cfg,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -63,4 +64,29 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 		ServiceAddresses: addr,
 	}
 	return service, ccfg, nil
+}
+
+func newFS() *fileservice.FileServices {
+	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	if err != nil {
+		panic(err)
+	}
+	s3, err := fileservice.NewMemoryFS(defines.SharedFileServiceName)
+	if err != nil {
+		panic(err)
+	}
+	etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName)
+	if err != nil {
+		panic(err)
+	}
+	fs, err := fileservice.NewFileServices(
+		"local",
+		local,
+		s3,
+		etl,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return fs
 }

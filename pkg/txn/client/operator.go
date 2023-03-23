@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -84,6 +85,13 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+// WithTxnLockService set txn lock service
+func WithTxnLockService(lockService lockservice.LockService) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.lockService = lockService
+	}
+}
+
 // WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
 // to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
@@ -107,6 +115,20 @@ func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
 	}
 }
 
+// WithTxnMode set txn mode
+func WithTxnMode(value txn.TxnMode) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.Mode = value
+	}
+}
+
+// WithTxnIsolation set txn isolation
+func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.Isolation = value
+	}
+}
+
 type txnOperator struct {
 	rt     runtime.Runtime
 	sender rpc.TxnSender
@@ -117,6 +139,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		lockService      lockservice.LockService
 	}
 
 	mu struct {
@@ -203,6 +226,18 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 	return snapshot.Marshal()
 }
 
+func (tc *txnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+	if tc.mu.txn.SnapshotTS.Less(ts) {
+		tc.mu.txn.SnapshotTS = ts
+	}
+	return nil
+}
+
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	if !tc.option.coordinator {
 		tc.rt.Logger().Fatal("apply snapshot on non-coordinator txn operator")
@@ -243,6 +278,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		if !has {
 			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
 		}
+	}
+	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
+		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
 	}
 	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
 	return nil
@@ -303,6 +341,10 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		return nil
 	}
 
+	if tc.needUnlockLocked() {
+		defer tc.unlock(ctx)
+	}
+
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
 		Method:          txn.TxnMethod_Rollback,
 		RollbackRequest: &txn.TxnRollbackRequest{},
@@ -322,6 +364,9 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
 
 	if err := tc.checkStatus(true); err != nil {
 		return err
@@ -371,7 +416,10 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			tc.mu.closed = true
 			tc.mu.Unlock()
 		}()
-		tc.mu.txn.LockTables = tc.mu.lockTables
+		if tc.needUnlockLocked() {
+			tc.mu.txn.LockTables = tc.mu.lockTables
+			defer tc.unlock(ctx)
+		}
 	}
 
 	if err := tc.validate(ctx, commit); err != nil {
@@ -528,6 +576,21 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		return nil, err
 	}
 	util.LogTxnReceivedResponses(tc.rt.Logger(), result.Responses)
+
+	if len(result.Responses) == 0 {
+		return result, nil
+	}
+
+	// update commit timestamp
+	resp := result.Responses[len(result.Responses)-1]
+	if resp.Txn == nil {
+		return result, nil
+	}
+	if !locked {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+	}
+	tc.mu.txn.CommitTS = resp.Txn.CommitTS
 	return result, nil
 }
 
@@ -670,4 +733,23 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 	}
 	result.Responses = values
 	return result, nil
+}
+
+func (tc *txnOperator) unlock(ctx context.Context) {
+	if err := tc.option.lockService.Unlock(
+		ctx,
+		tc.mu.txn.ID,
+		tc.mu.txn.CommitTS); err != nil {
+		tc.rt.Logger().Error("failed to unlock txn",
+			util.TxnField(tc.mu.txn),
+			zap.Error(err))
+	}
+}
+
+func (tc *txnOperator) needUnlockLocked() bool {
+	if tc.mu.txn.Mode ==
+		txn.TxnMode_Optimistic {
+		return false
+	}
+	return tc.option.lockService != nil
 }
