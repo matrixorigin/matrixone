@@ -17,3 +17,12 @@ create sequence `序列`;
 select nextval('序列');
 nextval(序列)
 1
+select nextval('s1'), currval('s1');
+nextval(s1)    nextval(s1)
+300    300
+create sequence s2;
+create table t1(a int);
+insert into t1 values(nextval('s2'));
+select * from t1;
+a
+1

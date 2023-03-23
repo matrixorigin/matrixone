@@ -8,3 +8,8 @@ drop table s1;
 show sequences;
 create sequence `序列`;
 select nextval('序列');
+select nextval('s1'), currval('s1');
+create sequence s2;
+create table t1(a int);
+insert into t1 values(nextval('s2'));
+select * from t1;
