@@ -21,7 +21,7 @@ type MutableFileService interface {
 	FileService
 
 	// NewMutator creates a new mutator
-	NewMutator(filePath string) (Mutator, error)
+	NewMutator(ctx context.Context, filePath string) (Mutator, error)
 }
 
 type Mutator interface {
