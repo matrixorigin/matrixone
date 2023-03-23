@@ -301,6 +301,10 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
 				AdminName: "root",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "123456",
+				},
 			},
 		})
 		convey.So(err, convey.ShouldBeNil)
