@@ -892,6 +892,9 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		if attrDef.Attr.IsHidden {
 			col.isHidden = 1
 		}
+		if attrDef.Attr.NotNull {
+			col.notNull = 1
+		}
 		if attrDef.Attr.AutoIncrement {
 			col.isAutoIncrement = 1
 		}

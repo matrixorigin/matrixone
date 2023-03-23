@@ -221,11 +221,11 @@ func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
-		ColId: uint64(attr.ID),
+		ColId: attr.ID,
 		Name:  attr.Name,
 		Typ: &plan.Type{
 			Id:          int32(attr.Type.Oid),
-			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
+			NotNullable: attr.NotNull,
 			Width:       attr.Type.Width,
 			Scale:       attr.Type.Scale,
 		},

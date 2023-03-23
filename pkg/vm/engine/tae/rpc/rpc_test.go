@@ -144,8 +144,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defs, err := moengine.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.NotNull = false
 			attrdef.Attr.Default = &plan.Default{
-				NullAbility: true,
 				Expr: &plan.Expr{
 					Expr: &plan.Expr_C{
 						C: &plan.Const{
@@ -334,8 +334,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	defs, err := moengine.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.NotNull = false
 			attrdef.Attr.Default = &plan.Default{
-				NullAbility: true,
 				Expr: &plan.Expr{
 					Expr: &plan.Expr_C{
 						C: &plan.Const{
@@ -616,8 +616,8 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defs, err := moengine.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.NotNull = false
 			attrdef.Attr.Default = &plan.Default{
-				NullAbility: true,
 				Expr: &plan.Expr{
 					Expr: &plan.Expr_C{
 						C: &plan.Const{
@@ -688,7 +688,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	rDefs, _ := tbHandle.TableDefs(ctx)
 	//assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 
@@ -849,8 +849,8 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
+	defs[0].(*engine.AttributeDef).Attr.NotNull = false
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -863,8 +863,8 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
+	defs[0].(*engine.AttributeDef).Attr.NotNull = true
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -922,7 +922,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	rDefs, _ := tbHandle.TableDefs(ctx)
 	assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	err = txn.Commit()
@@ -1135,8 +1135,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
+	defs[0].(*engine.AttributeDef).Attr.NotNull = false
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -1149,8 +1149,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
+	defs[1].(*engine.AttributeDef).Attr.NotNull = true
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -1207,7 +1207,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	rDefs, _ := tbHandle.TableDefs(ctx)
 	assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	err = txn.Commit()
@@ -1480,8 +1480,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
+	defs[0].(*engine.AttributeDef).Attr.NotNull = false
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -1494,8 +1494,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
+	defs[0].(*engine.AttributeDef).Attr.NotNull = true
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -1556,7 +1556,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		rDefs, _ := tbHandle.TableDefs(ctx)
 		assert.Equal(t, 3, len(rDefs))
 		rAttr := rDefs[0].(*engine.AttributeDef).Attr
-		assert.Equal(t, true, rAttr.Default.NullAbility)
+		assert.False(t, rAttr.NotNull)
 		rAttr = rDefs[1].(*engine.AttributeDef).Attr
 		assert.Equal(t, "expr2", rAttr.Default.OriginString)
 		err = txn.Commit()

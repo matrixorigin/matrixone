@@ -432,26 +432,16 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 	return info
 }
 
-func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
-	compNameMap := make(map[string]struct{})
-
-	// judge whether the table contains composite primary key
-	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-		for _, name := range tableDef.Pkey.Names {
-			compNameMap[name] = struct{}{}
-		}
-	}
-
-	for j := range tmpBat.Vecs {
-		nsp := tmpBat.Vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
-			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
-		}
-		if _, ok := compNameMap[tmpBat.Attrs[j]]; ok {
-			if nulls.Any(nsp) {
-				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
-			}
+func BatchDataNotNullCheck(bat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
+	for j := range bat.Vecs {
+		nsp := bat.Vecs[j].GetNulls()
+		if colNotNull(tableDef.Cols[j]) && nulls.Any(nsp) {
+			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", bat.Attrs[j]))
 		}
 	}
 	return nil
+}
+
+func colNotNull(colDef *plan.ColDef) bool {
+	return colDef.NotNull || colDef.Primary
 }

@@ -228,9 +228,6 @@ message ColDef {
 message Default {
 	Expr expr = 1;
 	string origin_string = 2;
-
-	// XXX: Deprecated and to be removed soon.
-	bool null_ability = 3;
 }
 
 message OnUpdate {

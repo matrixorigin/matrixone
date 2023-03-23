@@ -1238,20 +1238,14 @@ func TestReplay10(t *testing.T) {
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
 
-	schema.ColDefs[1].Default, _ = types.Encode(&plan.Default{
-		NullAbility: false,
-		Expr:        &plan.Expr{},
-	})
+	schema.ColDefs[1].NullAbility = false
+	schema.ColDefs[1].Default, _ = types.Encode(&plan.Default{Expr: &plan.Expr{}})
 	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: &plan.Expr{},
 	})
-	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
-		NullAbility: true,
-		Expr:        nil,
-	})
-	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
-		Expr: nil,
-	})
+	schema.ColDefs[2].NullAbility = false
+	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{Expr: nil})
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{Expr: nil})
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
@@ -1283,7 +1277,9 @@ func TestReplay10(t *testing.T) {
 	u2 := &plan.OnUpdate{}
 	assert.NoError(t, types.Decode(schema1.ColDefs[2].OnUpdate, u2))
 	assert.Nil(t, u2.Expr)
-	assert.True(t, d2.NullAbility)
+
+	assert.True(t, schema1.ColDefs[1].NullAbility)
+	assert.True(t, schema1.ColDefs[2].NullAbility)
 }
 
 // create db,tbl,seg,blk

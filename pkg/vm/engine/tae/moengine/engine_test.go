@@ -66,7 +66,6 @@ func TestEngine(t *testing.T) {
 	defs, err := SchemaToDefs(schema)
 	assert.NoError(t, err)
 	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -79,8 +78,8 @@ func TestEngine(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
+	defs[5].(*engine.AttributeDef).Attr.NotNull = false
 	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -93,6 +92,7 @@ func TestEngine(t *testing.T) {
 		},
 		OriginString: "expr2",
 	}
+	defs[6].(*engine.AttributeDef).Attr.NotNull = true
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
@@ -104,9 +104,9 @@ func TestEngine(t *testing.T) {
 	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 15, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
-	assert.Equal(t, false, rAttr.Default.NullAbility)
+	assert.True(t, rAttr.NotNull)
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
@@ -174,7 +174,6 @@ func TestEngineAllType(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 12)
 	defs, err := SchemaToDefs(schema)
 	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -187,8 +186,8 @@ func TestEngineAllType(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
+	defs[5].(*engine.AttributeDef).Attr.NotNull = false
 	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -201,6 +200,7 @@ func TestEngineAllType(t *testing.T) {
 		},
 		OriginString: "expr2",
 	}
+	defs[6].(*engine.AttributeDef).Attr.NotNull = true
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
@@ -212,7 +212,7 @@ func TestEngineAllType(t *testing.T) {
 	rDefs, _ := rel.TableDefs(ctx)
 	assert.Equal(t, 20, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	basebat := catalog.MockBatch(schema, 100)
@@ -401,7 +401,6 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 	ctx := context.TODO()
 	defs, err := SchemaToDefs(schema)
 	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -414,8 +413,8 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 		},
 		OriginString: "expr1",
 	}
+	defs[5].(*engine.AttributeDef).Attr.NotNull = false
 	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
 				C: &plan.Const{
@@ -428,6 +427,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 		},
 		OriginString: "expr2",
 	}
+	defs[6].(*engine.AttributeDef).Attr.NotNull = true
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, name, defs)
 	assert.Nil(t, err)
@@ -441,9 +441,9 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 		assert.Equal(t, defs[i], def)
 	}
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
-	assert.Equal(t, true, rAttr.Default.NullAbility)
+	assert.False(t, rAttr.NotNull)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
-	assert.Equal(t, false, rAttr.Default.NullAbility)
+	assert.True(t, rAttr.NotNull)
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()

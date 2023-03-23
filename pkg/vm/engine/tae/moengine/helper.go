@@ -77,6 +77,7 @@ func AttrFromColDef(col *catalog.ColDef) (attrs *engine.Attribute, err error) {
 		Comment:       col.Comment,
 		Default:       defaultVal,
 		OnUpdate:      onUpdate,
+		NotNull:       !col.NullAbility,
 		AutoIncrement: col.IsAutoIncrement(),
 		ClusterBy:     col.IsClusterBy(),
 	}

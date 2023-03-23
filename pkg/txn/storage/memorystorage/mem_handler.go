@@ -211,7 +211,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			ID:         id,
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
-			Nullable:   def.Attr.Default != nil && def.Attr.Default.NullAbility,
+			Nullable:   !def.Attr.NotNull,
 			Attribute:  def.Attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -380,9 +380,8 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 		IsRowId:  true,
 		Name:     rowIDColumnName,
 		Type:     types.T_Rowid.ToType(),
-		Default: &plan.Default{
-			NullAbility: false,
-		},
+		NotNull:  true,
+		Default:  &plan.Default{},
 	})
 
 	// insert relation attributes
@@ -408,7 +407,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			ID:         id,
 			RelationID: row.ID,
 			Order:      i + 1,
-			Nullable:   attr.Default != nil && attr.Default.NullAbility,
+			Nullable:   !attr.NotNull,
 			Attribute:  attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {

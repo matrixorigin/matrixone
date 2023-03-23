@@ -55,7 +55,8 @@ func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDe
 			Name:    name,
 			Primary: isPrimary,
 			Alg:     compress.Lz4,
-			Default: &plan.Default{NullAbility: true},
+			NotNull: false,
+			Default: &plan.Default{},
 		},
 	}
 }

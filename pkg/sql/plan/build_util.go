@@ -191,7 +191,6 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 
 	if expr == nil {
 		return &plan.Default{
-			NullAbility:  nullAbility,
 			Expr:         nil,
 			OriginString: "",
 		}, nil
@@ -225,7 +224,6 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
-		NullAbility:  nullAbility,
 		Expr:         newExpr,
 		OriginString: fmtCtx.String(),
 	}, nil
@@ -382,7 +380,7 @@ func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierL
 }
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
+	if d.NotNull && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
 	}
 	if d.Default.Expr == nil {

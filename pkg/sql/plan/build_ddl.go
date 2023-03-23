@@ -45,11 +45,11 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Name:    strings.ToLower(query.Headings[idx]),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     expr.Typ,
+			NotNull: false,
 			Default: &plan.Default{
-				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -150,41 +150,34 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			break
 		}
 		cols[i] = &plan.ColDef{
-			Name: Sequence_cols_name[i],
-			Alg:  plan.CompressType_Lz4,
-			Typ:  typ,
+			Name:    Sequence_cols_name[i],
+			Alg:     plan.CompressType_Lz4,
+			Typ:     typ,
+			NotNull: false,
 			Default: &plan.Default{
-				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
 		}
 	}
 	cols[4] = &plan.ColDef{
-		Name: Sequence_cols_name[4],
-		Alg:  plan.CompressType_Lz4,
-		Typ: &plan.Type{
-			Id:    int32(types.T_int64),
-			Width: 0,
-			Scale: 0,
-		},
+		Name:    Sequence_cols_name[4],
+		Alg:     plan.CompressType_Lz4,
+		Typ:     &plan.Type{Id: int32(types.T_int64)},
+		NotNull: false,
 		Default: &plan.Default{
-			NullAbility:  true,
+
 			Expr:         nil,
 			OriginString: "",
 		},
 	}
 	for i := 5; i <= 6; i++ {
 		cols[i] = &plan.ColDef{
-			Name: Sequence_cols_name[i],
-			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
-				Id:    int32(types.T_bool),
-				Width: 0,
-				Scale: 0,
-			},
+			Name:    Sequence_cols_name[i],
+			Alg:     plan.CompressType_Lz4,
+			Typ:     &plan.Type{Id: int32(types.T_bool)},
+			NotNull: false,
 			Default: &plan.Default{
-				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -629,7 +622,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						NotNullable: true,
 					},
 				},
-				NullAbility: false,
 			},
 			Comment: "the account_id added by the mo",
 		}
@@ -666,8 +658,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,
 				},
+				NotNull: true,
 				Default: &plan.Default{
-					NullAbility:  false,
 					Expr:         nil,
 					OriginString: "",
 				},
@@ -683,7 +675,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Pkey = pkeyDef
 		}
 		for _, primaryKey := range primaryKeys {
-			colMap[primaryKey].Default.NullAbility = false
 			colMap[primaryKey].NotNull = true
 		}
 	}
@@ -723,8 +714,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,
 				},
+				NotNull: false,
 				Default: &plan.Default{
-					NullAbility:  true,
 					Expr:         nil,
 					OriginString: "",
 				},
@@ -923,8 +914,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
 					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
+				NotNull: true,
 				Default: &plan.Default{
-					NullAbility:  false,
 					Expr:         nil,
 					OriginString: "",
 				},
@@ -943,8 +934,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,
 				},
+				NotNull: true,
 				Default: &plan.Default{
-					NullAbility:  false,
 					Expr:         nil,
 					OriginString: "",
 				},
@@ -957,11 +948,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
-				Name: catalog.IndexTablePrimaryColName,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  colMap[pkeyName].Typ,
+				Name:    catalog.IndexTablePrimaryColName,
+				Alg:     plan.CompressType_Lz4,
+				Typ:     colMap[pkeyName].Typ,
+				NotNull: true,
 				Default: &plan.Default{
-					NullAbility:  false,
 					Expr:         nil,
 					OriginString: "",
 				},

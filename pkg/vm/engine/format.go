@@ -43,7 +43,7 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 		buf.WriteString(str)
 		buf.WriteByte(')')
 	}
-	if node.Default.NullAbility {
+	if !node.NotNull {
 		buf.WriteString(" NULL ")
 	}
 	val := node.Default.Expr.String()

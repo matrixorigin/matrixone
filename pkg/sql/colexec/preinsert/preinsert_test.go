@@ -133,9 +133,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
 				{Name: "int64_column_primary", Primary: true, Typ: i64typ,
-					Default: &plan.Default{
-						NullAbility: false,
-					},
+					NotNull: true,
 				},
 			},
 		},

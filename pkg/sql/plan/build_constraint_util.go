@@ -840,8 +840,7 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	}
 
-	if (col.Primary && !col.Typ.AutoIncr) ||
-		(col.Default != nil && !col.Default.NullAbility) {
+	if (col.Primary && !col.Typ.AutoIncr) || col.NotNull {
 		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	}
 

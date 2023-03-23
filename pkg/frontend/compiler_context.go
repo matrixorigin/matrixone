@@ -383,7 +383,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					Scale:       attr.Attr.Type.Scale,
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
-					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					NotNullable: attr.Attr.NotNull,
 				},
 				Primary:   attr.Attr.Primary,
 				Default:   attr.Attr.Default,

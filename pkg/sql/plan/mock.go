@@ -549,9 +549,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Name:    col.Name,
 					Primary: idx == 0,
 					Pkidx:   1,
-					Default: &plan.Default{
-						NullAbility: col.Nullable,
-					},
+					NotNull: !col.Nullable,
+					Default: &plan.Default{},
 				})
 			}
 

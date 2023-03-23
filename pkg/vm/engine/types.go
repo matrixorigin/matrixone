@@ -57,6 +57,8 @@ type Attribute struct {
 	Default *plan.Default
 	// to update col when define in create table
 	OnUpdate *plan.OnUpdate
+	// NotNull is not null
+	NotNull bool
 	// Primary is primary key or not
 	Primary bool
 	// Clusterby means sort by this column

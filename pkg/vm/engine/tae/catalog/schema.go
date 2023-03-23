@@ -477,13 +477,13 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		Hidden:        attr.IsHidden,
 		SortIdx:       -1,
 		Comment:       attr.Comment,
+		NullAbility:   !attr.NotNull,
 		AutoIncrement: attr.AutoIncrement,
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
 	}
 	if attr.Default != nil {
-		def.NullAbility = attr.Default.NullAbility
 		if def.Default, err = types.Encode(attr.Default); err != nil {
 			return nil, err
 		}

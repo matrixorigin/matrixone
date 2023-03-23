@@ -117,7 +117,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		// col.Default must be not nil
 		if len(col.Default.OriginString) > 0 {
 			nullOrNot = "DEFAULT " + col.Default.OriginString
-		} else if col.Default.NullAbility {
+		} else if !col.NotNull {
 			nullOrNot = "DEFAULT NULL"
 		}
 

@@ -379,7 +379,6 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 		return nil
 	}
 	return &plan.Default{
-		NullAbility:  def.NullAbility,
 		Expr:         DeepCopyExpr(def.Expr),
 		OriginString: def.OriginString,
 	}

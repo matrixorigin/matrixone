@@ -70,9 +70,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 					}
 					colDef := r.tableDef.Cols[r.colIdxs[i]]
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-					if colDef.Default != nil {
-						r.colNulls[i] = colDef.Default.NullAbility
-					}
+					r.colNulls[i] = !colDef.NotNull
 				}
 			}
 		} else {
@@ -136,9 +134,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
 					colDef := r.tableDef.Cols[r.colIdxs[i]]
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-					if colDef.Default != nil {
-						r.colNulls[i] = colDef.Default.NullAbility
-					}
+					r.colNulls[i] = !colDef.NotNull
 				}
 			}
 		} else {
