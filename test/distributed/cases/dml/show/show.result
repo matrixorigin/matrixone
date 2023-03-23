@@ -219,6 +219,7 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
+mo_indexes
 mo_user
 mo_account
 mo_role

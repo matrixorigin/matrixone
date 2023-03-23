@@ -738,7 +738,7 @@ func TestTcl(t *testing.T) {
 }
 
 func TestDdl(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(true)
 	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
@@ -871,6 +871,54 @@ func TestResultColumns(t *testing.T) {
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		// "UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		// "DELETE FROM NATION",
+		//"create database db_name",
+		//"drop database tpch",
+		//"create table tbl_name (b int unsigned, c char(20))",
+		//"drop table nation",
+	}
+	for _, sql := range returnNilSQL {
+		columns := getColumns(sql)
+		if columns != nil {
+			t.Fatalf("sql:%+v, return columns should be nil", sql)
+		}
+	}
+
+	returnColumnsSQL := map[string]string{
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
+		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
+		"show variables":            "Variable_name,Value",
+		"show create database tpch": "Database,Create Database",
+		"show create table nation":  "Table,Create Table",
+		"show databases":            "Database",
+		"show tables":               "Tables_in_tpch",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Extra,Comment",
+	}
+	for sql, colsStr := range returnColumnsSQL {
+		cols := strings.Split(colsStr, ",")
+		columns := getColumns(sql)
+		if len(columns) != len(cols) {
+			t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+		}
+		for idx, col := range cols {
+			// now ast always change col_name to lower string. will be fixed soon
+			if !strings.EqualFold(columns[idx].Name, col) {
+				t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+			}
+		}
+	}
+}
+
+func TestResultColumns2(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	getColumns := func(sql string) []*ColDef {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("sql %s build plan error:%+v", sql, err)
+		}
+		return GetResultColumnsFromPlan(logicPlan)
+	}
+
+	returnNilSQL := []string{
 		"create database db_name",
 		"drop database tpch",
 		"create table tbl_name (b int unsigned, c char(20))",
