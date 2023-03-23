@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,7 +29,7 @@ func TestBatch1a(t *testing.T) {
 	vecTypes := types.MockColTypes(4)[2:] // int32, int64
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
-	opts := containers.Options{}
+	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, nullable, opts)
 	bat.Vecs[0].Append(int32(1))
@@ -65,7 +64,7 @@ func TestBatch1b(t *testing.T) {
 	vecTypes := types.MockColTypes(14)[12:] // Varchar, Char
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
-	opts := containers.Options{}
+	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, nullable, opts)
 	bat.Vecs[0].Append([]byte("a"))

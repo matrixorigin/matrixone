@@ -20,13 +20,13 @@ import (
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"io"
 )
 
-type Options = containers.Options
-type Bytes = stl.Bytes
+type Options struct {
+	Capacity  int
+	Allocator *mpool.MPool
+}
 
 type ItOp = func(v any, row int) error
 
@@ -43,7 +43,6 @@ type Vector interface {
 
 	// Shallow Ops
 	ShallowGet(i int) any
-	//ResetWithData(bs *Bytes, nulls *cnNulls.Nulls)
 	Window(offset, length int) Vector
 
 	GetDownstreamVector() *cnVector.Vector

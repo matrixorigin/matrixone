@@ -18,12 +18,10 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 )
 
@@ -46,12 +44,6 @@ func (win *windowBase) Allocated() int                       { return 0 }
 func (win *windowBase) DataWindow(offset, length int) []byte { panic("cannot window a window") }
 func (win *windowBase) Close()                               {}
 func (win *windowBase) ReadFrom(io.Reader) (int64, error)    { panic("cannot modify window") }
-
-func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error {
-	panic("cannot modify window")
-}
-func (win *windowBase) Reset()                                  { panic("cannot modify window") }
-func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
