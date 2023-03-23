@@ -141,7 +141,7 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 }
 
 // ### Bytes Functions
-
+//TODO: Will remove all the commented code after ensure that DN vector is stable.
 //func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 //	bs := stl.NewFixedTypeBytes[T]()
 //	if v.Length() == 0 {
