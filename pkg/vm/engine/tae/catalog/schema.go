@@ -675,7 +675,7 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
 			colName := fmt.Sprintf("%s%d", prefix, i)
-			_ = schema.AppendPKCol(colName, types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			_ = schema.AppendPKCol(colName, types.T_int32.ToType(), 0)
 			pkConstraint := &engine.PrimaryKeyDef{
 				Pkey: &plan.PrimaryKeyDef{
 					PkeyColName: colName,
@@ -684,7 +684,7 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			}
 			constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 		} else {
-			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.T_int32.ToType())
 		}
 	}
 	schema.Constraint, _ = constraintDef.MarshalBinary()

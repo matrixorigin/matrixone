@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -207,7 +206,7 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 		} else {
 			ctr.unionFlag = makeFlagsOne(n)
 		}
-		err := vector.UnionBatch(bat1.Vecs[i], bat2.Vecs[i], 0, n, ctr.unionFlag, proc.Mp())
+		err := bat1.Vecs[i].UnionBatch(bat2.Vecs[i], 0, n, ctr.unionFlag, proc.Mp())
 		if err != nil {
 			return err
 		}

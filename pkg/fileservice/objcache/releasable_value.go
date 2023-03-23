@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,13 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnimpl
+package objcache
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+type Releasable interface {
+	Release()
+}
 
-const (
-	TxnEntryCreateDatabase txnif.TxnEntryType = iota
-	TxnEntryDropDatabase
-	TxnEntryCretaeTable
-	TxnEntryDropTable
-)
+type ReleasableValue[T any] struct {
+	Value       T
+	releaseFunc func()
+}
+
+func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
+	return ReleasableValue[T]{
+		Value:       v,
+		releaseFunc: releaseFunc,
+	}
+}
+
+func (r ReleasableValue[T]) Release() {
+	r.releaseFunc()
+}
+
+var _ Releasable = NewReleasableValue(42, func() {})

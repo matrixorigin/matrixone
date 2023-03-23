@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/pierrec/lz4"

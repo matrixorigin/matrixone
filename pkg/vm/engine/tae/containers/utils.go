@@ -15,13 +15,11 @@
 package containers
 
 import (
-	"bytes"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,49 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
-
-func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
-	it := mask.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		vec.Update(int(row), vals[row])
-	}
-}
-
-func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
-	buffer.Reset()
-	size := bs.Size()
-	if buffer.Cap() < size {
-		buffer.Grow(size)
-	}
-	nbs := stl.NewBytesWithTypeSize(bs.TypeSize)
-	buf := buffer.Bytes()[:size]
-	copy(buf, bs.StorageBuf())
-	copy(buf[bs.StorageSize():], bs.HeaderBuf())
-
-	nbs.SetStorageBuf(buf[:bs.StorageSize()])
-	nbs.SetHeaderBuf(buf[bs.StorageSize():bs.Size()])
-	return nbs
-}
-
-func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
-	opts := Options{}
-	// XXX what does the following test mean?
-	if len(allocator) > 0 {
-		opts.Allocator = common.DefaultAllocator
-	} else {
-		opts.Allocator = src.GetAllocator()
-	}
-	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
-	bs := src.Bytes()
-	var nulls *roaring64.Bitmap
-	if src.HasNull() {
-		nulls = src.NullMask().Clone()
-	}
-	nbs := FillBufferWithBytes(bs, buffer)
-	cloned.ResetWithData(nbs, nulls)
-	return
-}
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
@@ -247,8 +202,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window := movec.NewVec(*bat.Vecs[j].GetType())
-				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
+				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
 				newBat.Vecs[j] = window
 			}
 			bats = append(bats, newBat)
@@ -276,8 +230,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window := movec.NewVec(*bat.Vecs[j].GetType())
-			movec.Window(bat.Vecs[j], start, start+row, window)
+			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
 			newBat.Vecs[j] = window
 		}
 		start += row

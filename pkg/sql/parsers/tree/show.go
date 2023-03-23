@@ -307,6 +307,27 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 func (node *ShowGrants) GetStatementType() string { return "Show Grants" }
 func (node *ShowGrants) GetQueryType() string     { return QueryTypeOth }
 
+// SHOW SEQUENCES statement.
+type ShowSequences struct {
+	showImpl
+	DBName string
+	Where  *Where
+}
+
+func (node *ShowSequences) Format(ctx *FmtCtx) {
+	ctx.WriteString("show sequences")
+	if node.DBName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DBName)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowSequences) GetStatementType() string { return "Show Sequences" }
+func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
+
 // SHOW TABLES statement.
 type ShowTables struct {
 	showImpl
@@ -714,3 +735,30 @@ func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
 }
 func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
 func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
+
+type ShowTableSize struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableSize) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table size")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
+func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
+	return &ShowTableSize{
+		Table:  table,
+		DbName: dbname,
+	}
+}

@@ -15,11 +15,9 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
-	"net"
 	"sync"
 	"sync/atomic"
 
@@ -141,7 +139,6 @@ func (resp *Response) SetCategory(category int) {
 }
 
 type Protocol interface {
-	profile
 	IsEstablished() bool
 
 	SetEstablished()
@@ -156,7 +153,7 @@ type Protocol interface {
 	ConnectionID() uint32
 
 	// Peer gets the address [Host:Port,Host:Port] of the client and the server
-	Peer() (string, string, string, string)
+	Peer() string
 
 	GetDatabaseName() string
 
@@ -170,7 +167,7 @@ type Protocol interface {
 
 	SetSequenceID(value uint8)
 
-	GetConciseProfile() string
+	GetDebugString() string
 
 	GetTcpConnection() goetty.IOSession
 
@@ -211,8 +208,6 @@ type ProtocolImpl struct {
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
 	sequenceId atomic.Uint32
-
-	profiles [8]string
 }
 
 func (pi *ProtocolImpl) setQuit(b bool) bool {
@@ -227,53 +222,17 @@ func (pi *ProtocolImpl) SetSequenceID(value uint8) {
 	pi.sequenceId.Store(uint32(value))
 }
 
-func (pi *ProtocolImpl) makeProfile(profileTyp profileType) {
-	var mask profileType
-	var profile string
-	for i := uint8(0); i < 8; i++ {
-		mask = 1 << i
-		switch mask & profileTyp {
-		case profileTypeConnectionWithId:
-			if pi.tcpConn != nil {
-				profile = fmt.Sprintf("connectionId %d", pi.connectionID)
-			}
-		case profileTypeConnectionWithIp:
-			if pi.tcpConn != nil {
-				client := pi.tcpConn.RemoteAddress()
-				profile = "client " + client
-			}
-		default:
-			profile = ""
-		}
-		pi.profiles[i] = profile
+func (pi *ProtocolImpl) getDebugStringUnsafe() string {
+	if pi.tcpConn != nil {
+		return fmt.Sprintf("connectionId %d|%s", pi.connectionID, pi.tcpConn.RemoteAddress())
 	}
+	return ""
 }
 
-func (pi *ProtocolImpl) getProfile(profileTyp profileType) string {
-	var mask profileType
-	sb := bytes.Buffer{}
-	for i := uint8(0); i < 8; i++ {
-		mask = 1 << i
-		if mask&profileTyp != 0 {
-			if sb.Len() != 0 {
-				sb.WriteByte(' ')
-			}
-			sb.WriteString(pi.profiles[i])
-		}
-	}
-	return sb.String()
-}
-
-func (pi *ProtocolImpl) MakeProfile() {
+func (pi *ProtocolImpl) GetDebugString() string {
 	pi.m.Lock()
 	defer pi.m.Unlock()
-	pi.makeProfile(profileTypeAll)
-}
-
-func (pi *ProtocolImpl) GetConciseProfile() string {
-	pi.m.Lock()
-	defer pi.m.Unlock()
-	return pi.getProfile(profileTypeConcise)
+	return pi.getDebugStringUnsafe()
 }
 
 func (pi *ProtocolImpl) GetSalt() []byte {
@@ -287,7 +246,7 @@ func (pi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetEstablished() {
-	logDebugf(pi.GetConciseProfile(), "SWITCH ESTABLISHED to true")
+	logDebugf(pi.GetDebugString(), "SWITCH ESTABLISHED to true")
 	pi.established.Store(true)
 }
 
@@ -337,28 +296,12 @@ func (pi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
 	return pi.tcpConn
 }
 
-func (pi *ProtocolImpl) Peer() (string, string, string, string) {
+func (pi *ProtocolImpl) Peer() string {
 	tcp := pi.GetTcpConnection()
 	if tcp == nil {
-		return "", "", "", ""
+		return ""
 	}
-	addr := tcp.RemoteAddress()
-	rawConn := tcp.RawConn()
-	var local net.Addr
-	if rawConn != nil {
-		local = rawConn.LocalAddr()
-	}
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Errorf("get peer host:port failed. error:%v ", err)
-		return "failed", "0", "", ""
-	}
-	localHost, localPort, err := net.SplitHostPort(local.String())
-	if err != nil {
-		logutil.Errorf("get peer host:port failed. error:%v ", err)
-		return "failed", "0", "failed", "0"
-	}
-	return host, port, localHost, localPort
+	return tcp.RemoteAddress()
 }
 
 func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
@@ -470,7 +413,7 @@ func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
 	return fp.ioses
 }
 
-func (fp *FakeProtocol) GetConciseProfile() string {
+func (fp *FakeProtocol) GetDebugString() string {
 	return "fake protocol"
 }
 
@@ -479,13 +422,6 @@ func (fp *FakeProtocol) GetSequenceId() uint8 {
 }
 
 func (fp *FakeProtocol) SetSequenceID(value uint8) {
-}
-
-func (fp *FakeProtocol) makeProfile(profileTyp profileType) {
-}
-
-func (fp *FakeProtocol) getProfile(profileTyp profileType) string {
-	return ""
 }
 
 func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
@@ -548,8 +484,8 @@ func (fp *FakeProtocol) ConnectionID() uint32 {
 	return fakeConnectionID
 }
 
-func (fp *FakeProtocol) Peer() (string, string, string, string) {
-	return "", "", "", ""
+func (fp *FakeProtocol) Peer() string {
+	return ""
 }
 
 func (fp *FakeProtocol) GetDatabaseName() string {

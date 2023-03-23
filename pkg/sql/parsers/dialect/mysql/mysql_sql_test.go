@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
-		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+		input:  "select 1 + 1",
+		output: "select 1 + 1",
 	}
 )
 
@@ -1959,6 +1959,10 @@ var (
 			output: "UnLock Tables",
 		},
 		{
+			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+		},
+		{
 			input: "alter table tbl1 drop column col1",
 		},
 		{
@@ -2039,6 +2043,26 @@ var (
 		},
 		{
 			input: "show subscriptions",
+		},
+		{
+			input:  "insert into tbl values ($$this is a dollar-quoted string$$)",
+			output: "insert into tbl values (this is a dollar-quoted string)",
+		},
+		{
+			input:  "select $tag$this is a dollar-quoted string$tag$",
+			output: "select this is a dollar-quoted string",
+		},
+		{
+			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
+			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+		},
+		{
+			input:  "show table_size from test",
+			output: "show table size from test",
+		},
+		{
+			input:  "show table_size from mo_role from mo_catalog",
+			output: "show table size from mo_role from mo_catalog",
 		},
 	}
 )

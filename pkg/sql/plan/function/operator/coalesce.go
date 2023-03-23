@@ -23,95 +23,95 @@ import (
 
 var (
 	CoalesceUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[uint8](vs, proc, types.Type{Oid: types.T_uint8})
+		return coalesceGeneral[uint8](vs, proc, types.T_uint8.ToType())
 	}
 
 	CoalesceUint16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[uint16](vs, proc, types.Type{Oid: types.T_uint16})
+		return coalesceGeneral[uint16](vs, proc, types.T_uint16.ToType())
 	}
 
 	CoalesceUint32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[uint32](vs, proc, types.Type{Oid: types.T_uint32})
+		return coalesceGeneral[uint32](vs, proc, types.T_uint32.ToType())
 	}
 
 	CoalesceUint64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[uint64](vs, proc, types.Type{Oid: types.T_uint64})
+		return coalesceGeneral[uint64](vs, proc, types.T_uint64.ToType())
 	}
 
 	CoalesceInt8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[int8](vs, proc, types.Type{Oid: types.T_int8})
+		return coalesceGeneral[int8](vs, proc, types.T_int8.ToType())
 	}
 
 	CoalesceInt16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[int16](vs, proc, types.Type{Oid: types.T_int16})
+		return coalesceGeneral[int16](vs, proc, types.T_int16.ToType())
 	}
 
 	CoalesceInt32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[int32](vs, proc, types.Type{Oid: types.T_int32})
+		return coalesceGeneral[int32](vs, proc, types.T_int32.ToType())
 	}
 
 	CoalesceInt64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[int64](vs, proc, types.Type{Oid: types.T_int64})
+		return coalesceGeneral[int64](vs, proc, types.T_int64.ToType())
 	}
 
 	CoalesceFloat32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[float32](vs, proc, types.Type{Oid: types.T_float32})
+		return coalesceGeneral[float32](vs, proc, types.T_float32.ToType())
 	}
 
 	CoalesceFloat64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[float64](vs, proc, types.Type{Oid: types.T_float64})
+		return coalesceGeneral[float64](vs, proc, types.T_float64.ToType())
 	}
 
 	CoalesceBool = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[bool](vs, proc, types.Type{Oid: types.T_bool})
+		return coalesceGeneral[bool](vs, proc, types.T_bool.ToType())
 	}
 
 	CoalesceDate = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
+		return coalesceGeneral[types.Date](vs, proc, types.T_date.ToType())
 	}
 
 	CoalesceTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+		return coalesceGeneral[types.Time](vs, proc, types.T_time.ToType())
 	}
 
 	CoalesceDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
+		return coalesceGeneral[types.Datetime](vs, proc, types.T_datetime.ToType())
 	}
 
 	CoalesceVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+		return coalesceString(vs, proc, types.T_varchar.ToType())
 	}
 
 	CoalesceChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_char})
+		return coalesceString(vs, proc, types.T_char.ToType())
 	}
 
 	CoalesceJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_json.ToType().Oid})
+		return coalesceString(vs, proc, types.T_json.ToType())
 	}
 
 	CoalesceBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_blob.ToType().Oid})
+		return coalesceString(vs, proc, types.T_blob.ToType())
 	}
 
 	CoalesceText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceString(vs, proc, types.Type{Oid: types.T_text.ToType().Oid})
+		return coalesceString(vs, proc, types.T_text.ToType())
 	}
 
 	CoalesceDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Decimal64](vs, proc, types.Type{Oid: types.T_decimal64})
+		return coalesceGeneral[types.Decimal64](vs, proc, types.T_decimal64.ToType())
 	}
 
 	CoalesceDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
+		return coalesceGeneral[types.Decimal128](vs, proc, types.T_decimal128.ToType())
 	}
 
 	CoalesceTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+		return coalesceGeneral[types.Timestamp](vs, proc, types.T_timestamp.ToType())
 	}
 
 	CoalesceUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-		return coalesceGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
+		return coalesceGeneral[types.Uuid](vs, proc, types.T_uuid.ToType())
 	}
 )
 

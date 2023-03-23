@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"sync"
 	"testing"
 	"time"
@@ -407,12 +406,10 @@ func TestTxn6(t *testing.T) {
 			_, err = rel.GetValueByFilter(filter, 3)
 			assert.Error(t, err)
 
-			var buffer bytes.Buffer
 			it := rel.MakeBlockIt()
 			for it.Valid() {
-				buffer.Reset()
 				blk := it.GetBlock()
-				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &buffer)
+				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name)
 				assert.Nil(t, err)
 				defer view.Close()
 				assert.NotEqual(t, bats[0].Length(), view.Length())
@@ -504,13 +501,13 @@ func TestMergeBlocks1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			defer view.Close()
 			if view.DeleteMask != nil {
 				t.Log(view.DeleteMask.String())
 			}
-			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil)
+			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx())
 			defer pkView.Close()
 			for i := 0; i < pkView.Length(); i++ {
 				pkv := pkView.GetValue(i)
@@ -604,7 +601,7 @@ func TestCompaction1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
@@ -626,7 +623,7 @@ func TestCompaction1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
@@ -670,7 +667,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
@@ -685,7 +682,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
@@ -736,7 +733,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
@@ -751,7 +748,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
+			view, _ := blk.GetColumnDataById(3)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())

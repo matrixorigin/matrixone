@@ -22,7 +22,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalfill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -98,26 +99,32 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 	c.ctx = ctx
 }
 
-// Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
-// A scope is an execution unit.
+// Compile is the entrance of the compute-execute-layer.
+// It generates a scope (logic pipeline) for a query plan.
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+
+	// session info and callback function to write back query result.
+	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
 	c.u = u
-	c.ctx = c.proc.Ctx
 	c.fill = fill
+
+	// get execute related information
+	// about ap or tp, what and how many compute resource we can use.
 	c.info = plan2.GetExecTypeFromPlan(pn)
-	// build scope for a single sql
-	s, err := c.compileScope(c.proc.Ctx, pn)
+
+	// generate logic pipeline for query.
+	c.scope, err = c.compileScope(ctx, pn)
 	if err != nil {
 		return err
 	}
-	c.scope = s
-	c.scope.Plan = pn
+	if len(c.scope.NodeInfo.Addr) == 0 {
+		c.scope.NodeInfo.Addr = c.addr
+	}
 	return nil
 }
 
@@ -184,6 +191,10 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.AlterTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case DropSequence:
+		return c.scope.DropSequence(c)
+	case CreateSequence:
+		return c.scope.CreateSequence(c)
 	case CreateIndex:
 		return c.scope.CreateIndex(c)
 	case DropIndex:
@@ -221,7 +232,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		return c.compileQuery(ctx, qry.Query)
+		s, err := c.compileQuery(ctx, qry.Query)
+		if err != nil {
+			return nil, err
+		}
+		s.Plan = pn
+		return s, nil
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
@@ -254,9 +270,19 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Magic: DropTable,
 				Plan:  pn,
 			}, nil
+		case plan.DataDefinition_DROP_SEQUENCE:
+			return &Scope{
+				Magic: DropSequence,
+				Plan:  pn,
+			}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
 			return &Scope{
 				Magic: TruncateTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_SEQUENCE:
+			return &Scope{
+				Magic: CreateSequence,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
@@ -284,7 +310,10 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 
 func (c *Compile) cnListStrategy() {
 	if len(c.cnList) == 0 {
-		c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+		c.cnList = append(c.cnList, engine.Node{
+			Addr: c.addr,
+			Mcpu: c.NumCPU(),
+		})
 	} else if len(c.cnList) > c.info.CnNumbers {
 		c.cnList = c.cnList[:c.info.CnNumbers]
 	}
@@ -313,20 +342,34 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
 			} else {
 				c.cnListStrategy()
 			}
 		} else {
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
 			} else {
-				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+				c.cnList = engine.Nodes{engine.Node{
+					Addr: c.addr,
+					Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+				}
 			}
 		}
 	default:
 		if blkNum < MinBlockNum {
-			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			c.cnList = engine.Nodes{engine.Node{
+				Addr: c.addr,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+			}
 		} else {
 			c.cnListStrategy()
 		}
@@ -475,6 +518,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		ds.DataSource = &Source{Bat: bat}
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
 		node := plan2.DeepCopyNode(n)
@@ -482,7 +526,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
+		ss2 := c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
+		return ss2, nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
 		if err != nil {
@@ -636,6 +681,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 
 func (c *Compile) constructScopeForExternal() *Scope {
 	ds := &Scope{Magic: Normal}
+	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.NumCPU()}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
@@ -663,7 +709,7 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
-	mcpu := c.cnList[0].Mcpu
+	mcpu := c.NumCPU()
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
@@ -740,6 +786,11 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	tag := len(fileList) % mcpu
 	index := 0
 	currentFirstFlag := c.anal.isFirst
+	/*ss2 := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss2[i] = c.constructLoadMergeScope()
+	}*/
+	mcpu = 1
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructScopeForExternal()
@@ -761,10 +812,19 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			IsFirst: currentFirstFlag,
 			Arg:     constructExternal(n, param, c.ctx, fileListTmp, fileSize, offset),
 		})
+		/*_, arg := constructDispatchLocalAndRemote(0, ss, c.addr, ss[0].Proc)
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: arg,
+		})*/
 		if param.Parallel {
 			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
 		}
 	}
+	/*ss2[0].PreScopes = append(ss2[0].PreScopes, ss[0])
+	c.anal.isFirst = false
+	return ss2, nil*/
 	c.anal.isFirst = false
 	return ss, nil
 }
@@ -907,7 +967,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
-						Size:     attr.Attr.Type.Size,
 						Scale:    attr.Attr.Type.Scale,
 						AutoIncr: attr.Attr.AutoIncrement,
 					},
@@ -1407,6 +1466,10 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
+		NodeInfo: engine.Node{
+			Addr: c.addr,
+			Mcpu: c.NumCPU(),
+		},
 	}
 	cnt := 0
 	for _, s := range ss {
@@ -1550,8 +1613,8 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 //}
 
 func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-	len := len(ss)
-	rs := make([]*Scope, len)
+	length := len(ss)
+	rs := make([]*Scope, length)
 	idx := 0
 	for i := range ss {
 		if ss[i].IsEnd {
@@ -1721,24 +1784,46 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			return nil, err
 		}
 
+		// if temporary table, just scan at local cn.
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
 			return nil, err
 		}
-		c.isTemporaryScan = true
-	}
-	if c.isTemporaryScan {
-		c.isTemporaryScan = false
-		for i := 0; i < len(c.cnList); i++ {
-			c.cnList[i].Addr = ""
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: 1,
+			},
 		}
 	}
+
 	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
 	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
+
+	// some log for finding a bug.
+	tblId := rel.GetTableID(ctx)
+	expectedLen := len(ranges)
+	logutil.Infof("cn generateNodes-1, tbl %d ranges is %d", tblId, expectedLen)
+	defer func() {
+		if expectedLen != 0 {
+			sum := 0
+			for i := range nodes {
+				sum += len(nodes[i].Data)
+			}
+			if sum != expectedLen {
+				logutil.Errorf("cn generateNodes-2, tbl %d, need %d, but %d", tblId, expectedLen, sum)
+			}
+		}
+	}()
+
+	// If ranges == 0, it's temporary table ?
+	// XXX the code is too confused. should be removed once we remove the memory-engine.
 	if len(ranges) == 0 {
+		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
@@ -1750,14 +1835,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
+
+	// In fact, the first element of Ranges is always a memory table.
 	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
 				Rel:  rel,
 				Mcpu: 1,
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
 				Rel:  rel,
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
@@ -1765,16 +1854,34 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
 		ranges = ranges[1:]
 	}
+
+	// 1. If the length of cn list is 1, query is small or just one cn now.
+	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
+	// Both these queries only needs to be executed on the current cn.
 	if len(ranges) == 0 {
 		return nodes, nil
 	}
+	if len(c.cnList) == 1 {
+		if len(nodes) == 0 {
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+			})
+		}
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes, nil
+	}
+
+	// determines which blocks should be read by each cn node.
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			if isSameCN(c.addr, c.cnList[j].Addr) {
+			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
+						Addr: c.addr,
 						Rel:  rel,
 						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 					})
@@ -1790,10 +1897,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		} else {
-			if isSameCN(c.addr, c.cnList[j].Addr) {
+			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Rel:  rel,
+						Addr: c.addr,
 						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
@@ -1841,12 +1949,7 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:   types.T(typ.Id),
-		Size:  typ.Size,
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
 // Update the specific scopes's instruction to true
@@ -1868,8 +1971,18 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
-	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-	//return addr == currentCNAddr
+	// just a defensive judgment. In fact, we shouldn't have received such data.
+	parts1 := strings.Split(addr, ":")
+	if len(parts1) != 2 {
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		return true
+	}
+	parts2 := strings.Split(addr, ":")
+	if len(parts2) != 2 {
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		return true
+	}
+	return parts1[0] == parts2[0]
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {

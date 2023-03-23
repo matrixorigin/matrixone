@@ -199,7 +199,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+					if err := c.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
 						btc.Clean(proc.Mp())
 						return false, err
 					}

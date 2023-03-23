@@ -1,4 +1,5 @@
 // Copyright 2021 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,7 +23,7 @@ import (
 
 func TestResponseSize(t *testing.T) {
 	maxMessageSize := 1024
-	pool := NewSegmentPool(maxMessageSize)
+	pool := NewLogtailServerSegmentPool(maxMessageSize)
 
 	/* --- Fetch a segment --- */
 	prev := pool.Acquire()

@@ -227,6 +227,7 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
+mo_pubs
 mo_database
 mo_tables
 mo_columns

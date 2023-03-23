@@ -17,14 +17,15 @@ package cnclient
 import (
 	"context"
 	"sync"
-
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"go.uber.org/zap"
 )
 
 // client each node will hold only one client.
@@ -49,9 +50,10 @@ func IsCNClientReady() bool {
 }
 
 type CNClient struct {
-	ready  bool
-	config *ClientConfig
-	client morpc.RPCClient
+	localServiceAddress string
+	ready               bool
+	config              *ClientConfig
+	client              morpc.RPCClient
 
 	// pool for send message
 	requestPool *sync.Pool
@@ -62,6 +64,12 @@ func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Messa
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
+	if backend == c.localServiceAddress {
+		runtime.ProcessLevelRuntime().Logger().
+			Fatal("remote run pipeline in local",
+				zap.String("local-address", c.localServiceAddress),
+				zap.String("remote-address", backend))
+	}
 	return c.client.NewStream(backend, true)
 }
 
@@ -101,7 +109,9 @@ var (
 )
 
 // TODO: Here it needs to be refactored together with Runtime
-func NewCNClient(cfg *ClientConfig) error {
+func NewCNClient(
+	localServiceAddress string,
+	cfg *ClientConfig) error {
 	lock.Lock()
 	defer lock.Unlock()
 	if client != nil {
@@ -110,7 +120,7 @@ func NewCNClient(cfg *ClientConfig) error {
 
 	var err error
 	cfg.Fill()
-	client = &CNClient{config: cfg}
+	client = &CNClient{config: cfg, localServiceAddress: localServiceAddress}
 	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
 	codec := morpc.NewMessageCodec(client.acquireMessage,

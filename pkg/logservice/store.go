@@ -456,7 +456,7 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 
 func (l *store) cnAllocateID(ctx context.Context,
 	req pb.CNAllocateID) (uint64, error) {
-	cmd := hakeeper.GetGetIDCmd(req.Batch)
+	cmd := hakeeper.GetAllocateIDCmd(req)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {

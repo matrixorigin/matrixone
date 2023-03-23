@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memcachepolicy
+package txnbase
 
-type Releasable interface {
-	Release()
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+
+type heartbeatStore struct {
+	NoopTxnStore
 }
 
-type ReleasableValue[T any] struct {
-	Value       T
-	releaseFunc func()
+func (store *heartbeatStore) IsReadonly() bool {
+	return false
 }
 
-func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
-	return ReleasableValue[T]{
-		Value:       v,
-		releaseFunc: releaseFunc,
-	}
+func (store *heartbeatStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Heartbeat
 }
-
-func (r ReleasableValue[T]) Release() {
-	r.releaseFunc()
-}
-
-var _ Releasable = NewReleasableValue(42, func() {})

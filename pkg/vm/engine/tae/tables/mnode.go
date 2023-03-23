@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -123,15 +122,9 @@ func (node *memoryNode) GetColumnDataWindow(
 	from uint32,
 	to uint32,
 	colIdx int,
-	buffer *bytes.Buffer,
 ) (vec containers.Vector, err error) {
 	data := node.data.Vecs[colIdx]
-	if buffer != nil {
-		data = data.Window(int(from), int(to-from))
-		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
-	} else {
-		vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
-	}
+	vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
 	return
 }
 
@@ -180,16 +173,8 @@ func (node *memoryNode) ApplyAppend(
 	from = int(node.data.Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		if def.IsPhyAddr() {
-			continue
-		}
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
-	}
-	if err = node.FillPhyAddrColumn(
-		uint32(from),
-		uint32(bat.Length())); err != nil {
-		return
 	}
 	return
 }

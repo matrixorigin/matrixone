@@ -333,10 +333,7 @@ func (e *Engine) tryToGetTableLogTail(
 			return err
 		}
 		// poll until table was subscribed.
-		for {
-			if e.subscribed.getTableSubscribe(dbId, tblId) {
-				break
-			}
+		for !e.subscribed.getTableSubscribe(dbId, tblId) {
 			time.Sleep(periodToCheckTableSubscribeSucceed)
 		}
 	}
@@ -609,9 +606,9 @@ func updatePartitionOfPush(
 
 	key := e.catalog.GetTableById(dbId, tblId)
 
-	state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
-
 	if lazyLoad {
+		state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
+
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
 			key.PrimaryIdx,
