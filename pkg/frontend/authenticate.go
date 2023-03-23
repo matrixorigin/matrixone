@@ -2751,6 +2751,12 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		tenantInfo  *TenantInfo
 	)
 
+	tenantInfo = ses.GetTenantInfo()
+
+	if !tenantInfo.IsAdminRole() {
+		return moerr.NewInternalError(ctx, "only admin can create publication")
+	}
+
 	allAccount = len(cp.Accounts) == 0
 	if !allAccount {
 		accts := make([]string, 0, len(cp.Accounts))
@@ -2800,7 +2806,6 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
-	tenantInfo = ses.GetTenantInfo()
 	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		goto handleFailed

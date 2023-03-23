@@ -194,3 +194,4 @@ drop account acc1;
 drop account acc2;
 drop publication sys_pub_1;
 drop database sys_db_1;
+drop database sub2;
