@@ -27,13 +27,6 @@ import (
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	return vec.GetDownstreamVector()
-	//bs := vec.Bytes()
-	//
-	//mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage, true)
-	//cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-	//
-	////mov.SetOriginal(true)
-
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -66,48 +59,6 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	end := vec.Length()
 	a, _ := vec.GetDownstreamVector().CloneWindow(0, end, nil)
 	return a
-
-	//movec.FromDNVector()
-	//bs := vec.Bytes()
-	//typ := vec.GetType()
-	//
-	//if vec.GetType().IsVarlen() {
-	//	var header []types.Varlena
-	//	if bs.AsWindow {
-	//		header = make([]types.Varlena, bs.WinLength)
-	//		copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
-	//	} else {
-	//		header = make([]types.Varlena, len(bs.Header))
-	//		copy(header, bs.Header)
-	//	}
-	//	storage := make([]byte, len(bs.Storage))
-	//	if len(storage) > 0 {
-	//		copy(storage, bs.Storage)
-	//	}
-	//
-	//	mov, _ = movec.FromDNVector(typ, header, storage, true)
-	//	//} else if vec.GetType().IsTuple() {
-	//	//	mov = movec.NewVector(vec.GetType())
-	//	//	cnt := types.DecodeInt32(bs.Storage)
-	//	//	if cnt != 0 {
-	//	//		if err := types.Decode(bs.Storage, &mov.Col); err != nil {
-	//	//			panic(any(err))
-	//	//		}
-	//	//	}
-	//} else {
-	//	data := make([]byte, len(bs.Storage))
-	//	if len(data) > 0 {
-	//		copy(data, bs.Storage)
-	//	}
-	//	mov, _ = movec.FromDNVector(typ, nil, data, true)
-	//}
-	//
-	//if vec.HasNull() {
-	//	cnNulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
-	//	//mov.GetNulls().Np = vec.NullMask()
-	//}
-	//
-	//return mov
 }
 
 func CopyToMoVecs(vecs []Vector) []*movec.Vector {
@@ -125,74 +76,6 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 	}
 	return ret
 }
-
-// ### Bytes Functions
-//TODO: Will remove all the commented code after ensure that DN vector is stable.
-//func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
-//	bs := stl.NewFixedTypeBytes[T]()
-//	if v.Length() == 0 {
-//		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-//	} else {
-//		bs.Storage = types.EncodeSlice(movec.MustFixedCol[T](v))
-//	}
-//	return bs
-//}
-//
-//func MoVecToBytes(v *movec.Vector) *Bytes {
-//	var bs *Bytes
-//
-//	switch v.GetType().Oid {
-//	case types.T_bool:
-//		bs = movecToBytes[bool](v)
-//	case types.T_int8:
-//		bs = movecToBytes[int8](v)
-//	case types.T_int16:
-//		bs = movecToBytes[int16](v)
-//	case types.T_int32:
-//		bs = movecToBytes[int32](v)
-//	case types.T_int64:
-//		bs = movecToBytes[int64](v)
-//	case types.T_uint8:
-//		bs = movecToBytes[uint8](v)
-//	case types.T_uint16:
-//		bs = movecToBytes[uint16](v)
-//	case types.T_uint32:
-//		bs = movecToBytes[uint32](v)
-//	case types.T_uint64:
-//		bs = movecToBytes[uint64](v)
-//	case types.T_float32:
-//		bs = movecToBytes[float32](v)
-//	case types.T_float64:
-//		bs = movecToBytes[float64](v)
-//	case types.T_date:
-//		bs = movecToBytes[types.Date](v)
-//	case types.T_time:
-//		bs = movecToBytes[types.Time](v)
-//	case types.T_datetime:
-//		bs = movecToBytes[types.Datetime](v)
-//	case types.T_timestamp:
-//		bs = movecToBytes[types.Timestamp](v)
-//	case types.T_decimal64:
-//		bs = movecToBytes[types.Decimal64](v)
-//	case types.T_decimal128:
-//		bs = movecToBytes[types.Decimal128](v)
-//	case types.T_uuid:
-//		bs = movecToBytes[types.Uuid](v)
-//	case types.T_TS:
-//		bs = movecToBytes[types.TS](v)
-//	case types.T_Rowid:
-//		bs = movecToBytes[types.Rowid](v)
-//	case types.T_char, types.T_varchar, types.T_json,
-//		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-//		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
-//		if v.Length() > 0 {
-//			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
-//		}
-//	default:
-//		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
-//	}
-//	return bs
-//}
 
 // ### Get Functions
 
@@ -264,7 +147,10 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		movec.SetFixedAt(vec, int(row), v.(T))
+		err := movec.SetFixedAt(vec, int(row), v.(T))
+		if err != nil {
+			panic(err)
+		}
 		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
 			vec.GetNulls().Np.Remove(uint64(row))
 		}
@@ -276,7 +162,10 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
+		err := movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
+		if err != nil {
+			panic(err)
+		}
 		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
 			vec.GetNulls().Np.Remove(uint64(row))
 		}

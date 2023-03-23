@@ -295,7 +295,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 	if !vec.HasNull() {
 		var v T
 		if _, ok := any(v).([]byte); !ok {
-			// Optimization for :- Vectors which are 1. not nullable & 2. not byte[]
+			// Optimization for :- Vectors which are 1. not containing nulls & 2. not byte[]
 			slice := vec.Slice().([]T)
 			slice = slice[offset+bias : offset+length+bias]
 			if sels == nil || sels.IsEmpty() {
@@ -359,7 +359,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: doing tryCoW() before mutation. Is it ok XuPeng?
+	// TODO: doing tryCoW() before mutation. Is it ok?
 	vec.tryCoW()
 
 	var dels []int64
