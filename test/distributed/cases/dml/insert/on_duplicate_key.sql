@@ -65,3 +65,14 @@ delete from t1;
 insert into t1 values (1,1,1);
 insert into t1 values (1,1,2), (2,2,2) on duplicate key update c=values(c)+10;
 select * from t1;
+
+CREATE TABLE IF NOT EXISTS indup(
+                                       col1 INT primary key,
+                                       col2 VARCHAR(20) NOT NULL,
+    col3 VARCHAR(30) NOT NULL,
+    col4 BIGINT default 30
+    );
+insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+select * from indup;
+insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
+select * from indup;
