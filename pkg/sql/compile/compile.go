@@ -383,15 +383,15 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		})
 
 		if pkIdx, ok := getPKIdx(insertNode.InsertCtx.TableDef); ok {
-			dedupScope, err := buildGroupDedupScope(c, pkIdx, insertNode.InsertCtx.TableDef.Cols[pkIdx])
+			groupCheckScope, err := buildGroupDedupScope(c, pkIdx, insertNode.InsertCtx.TableDef.Cols[pkIdx])
 			if err != nil {
 				return nil, err
 			}
-			rs.PreScopes = append(rs.PreScopes, dedupScope)
+			rs.PreScopes = append(rs.PreScopes, groupCheckScope)
 			rs.appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
 				Idx: c.anal.curr,
-				Arg: constructDispatchLocal(true, dedupScope.Proc.Reg.MergeReceivers),
+				Arg: constructDispatchLocal(true, groupCheckScope.Proc.Reg.MergeReceivers),
 			})
 		}
 

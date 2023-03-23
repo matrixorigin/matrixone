@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -138,4 +139,33 @@ func buildGroupDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, 
 		},
 	})
 	return groupDedupScope, nil
+}
+
+func buildJoinDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, error) {
+	joinDedupScope := &Scope{
+		Magic:        Merge,
+		Instructions: make([]vm.Instruction, 0, 3),
+		Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+	}
+
+	joinDedupScope.appendInstruction(vm.Instruction{
+		Op:  vm.Merge,
+		Idx: c.anal.curr,
+		Arg: &merge.Argument{},
+	})
+
+	joinDedupScope.appendInstruction(vm.Instruction{
+		Op:  vm.Semi,
+		Idx: c.anal.curr,
+		Arg: &semi.Argument{
+			Ibucket:    0,
+			Nbucket:    0,
+			Result:     nil,
+			Typs:       nil,
+			Cond:       nil,
+			Conditions: nil,
+		},
+	})
+
+	return joinDedupScope, nil
 }
