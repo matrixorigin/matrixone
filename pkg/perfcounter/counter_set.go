@@ -29,12 +29,20 @@ type CounterSet struct {
 	}
 
 	Cache struct {
-		Read     stats.Counter
-		Hit      stats.Counter
-		MemRead  stats.Counter
-		MemHit   stats.Counter
-		DiskRead stats.Counter
-		DiskHit  stats.Counter
+		Read   stats.Counter
+		Hit    stats.Counter
+		Memory struct {
+			Read stats.Counter
+			Hit  stats.Counter
+		}
+		Disk struct {
+			Read           stats.Counter
+			Hit            stats.Counter
+			GetFileContent stats.Counter
+			SetFileContent stats.Counter
+			OpenFile       stats.Counter
+			StatFile       stats.Counter
+		}
 	}
 
 	FileWithChecksum struct {
