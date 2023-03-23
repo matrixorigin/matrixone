@@ -107,11 +107,15 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 
 func handleRead[
 	Req any, PReq interface {
+		// anonymous constraint
 		types.ProtoUnmarshaler
+		// make Req convertible to its pointer type
 		*Req
 	},
 	Resp any, PResp interface {
+		// anonymous constraint
 		types.ProtoMarshaler
+		// make Resp convertible to its pointer type
 		*Resp
 	},
 ](

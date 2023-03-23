@@ -99,11 +99,15 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 
 func handleWrite[
 	Req any, PReq interface {
+		// anonymous constraint
 		types.ProtoUnmarshaler
+		// make Req convertible to its pointer type
 		*Req
 	},
 	Resp any, PResp interface {
+		// anonymous constraint
 		types.ProtoMarshaler
+		// make Resp convertible to its pointer type
 		*Resp
 	},
 ](

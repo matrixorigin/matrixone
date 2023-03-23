@@ -116,6 +116,7 @@ type Response interface {
 //	AffectedRows int64
 //}
 
+// NOTE: sync with ReadResp within operations.proto
 type ReadResp struct {
 	Batch *batch.Batch
 
