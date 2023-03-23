@@ -25,7 +25,7 @@ select account, statement from system.statement_info where statement = 'insert i
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
 
 -- case: fix issue 8168, with syntax error
-select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('/*issue_8168*/use query_tae_table', 'select syntax error stmt');
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt');
 
 -- clean
 drop account `query_tae_table`;
