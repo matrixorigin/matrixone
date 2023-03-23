@@ -158,7 +158,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			}
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
-			if originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
 				// append row_id to deleteBatch
