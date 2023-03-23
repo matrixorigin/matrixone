@@ -454,7 +454,6 @@ func (vec *vector[T]) AppendMany(vs ...any) {
 // Delete Deletes an item from vector
 // Deprecated: Only use for test functions
 func (vec *vector[T]) Delete(delRowId int) {
-	//Only use for test functions
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
