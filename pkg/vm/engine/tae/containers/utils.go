@@ -43,15 +43,6 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	return vec
 }
 
-func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
-	bat := NewBatch()
-	for i, attr := range b.Attrs {
-		v := NewVectorWithSharedMemory(b.Vecs[i], false)
-		bat.AddVector(attr, v)
-	}
-	return bat
-}
-
 // ### Deep copy Functions
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
@@ -78,13 +69,6 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 }
 
 // ### Get Functions
-
-func GetValue(col *movec.Vector, row uint32) any {
-	if col.GetNulls().Np != nil && col.GetNulls().Np.Contains(uint64(row)) {
-		return types.Null{}
-	}
-	return getNonNullValue(col, row)
-}
 
 // getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
 func getNonNullValue(col *movec.Vector, row uint32) any {
@@ -223,7 +207,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	}
 }
 
-// ### Misc Functions
+// ### Only used in testcases
 
 func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	if cnt == 1 {
@@ -271,4 +255,20 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		bats = append(bats, newBat)
 	}
 	return bats
+}
+
+func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
+	bat := NewBatch()
+	for i, attr := range b.Attrs {
+		v := NewVectorWithSharedMemory(b.Vecs[i], false)
+		bat.AddVector(attr, v)
+	}
+	return bat
+}
+
+func GetValue(col *movec.Vector, row uint32) any {
+	if col.GetNulls().Np != nil && col.GetNulls().Np.Contains(uint64(row)) {
+		return types.Null{}
+	}
+	return getNonNullValue(col, row)
 }
