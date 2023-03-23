@@ -360,7 +360,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 					}
 				}
 			} else {
-				err = vector.CopyConst(toVec, fromVec, batLen, proc.Mp())
+				err = toVec.UnionMulti(fromVec, 0, batLen, proc.Mp())
 				if err != nil {
 					updateBatch.Clean(proc.Mp())
 					return nil, err

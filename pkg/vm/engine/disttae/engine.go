@@ -435,6 +435,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
 	}
+	err := txn.DumpBatch(true)
+	if err != nil {
+		return err
+	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
 		return err

@@ -42,8 +42,8 @@ set net_write_timeout = 60;
 show variables like 'net_write_timeout';
 
 -- system_time_zone, this is a system variable, read only
-show variables like 'system%';
-show variables like 'system_time_zone';
+show variables where variable_name like 'system%' and variable_name != 'system_time_zone';
+select @@system_time_zone != '';
 
 -- transaction_isolation, enum type
 show variables like 'trans%';
