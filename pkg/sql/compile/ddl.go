@@ -89,6 +89,9 @@ func (s *Scope) AlterView(c *Compile) error {
 		}
 		return err
 	}
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "subscription database does not support alter view")
+	}
 	tblName := qry.GetTableDef().GetName()
 	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		if qry.GetIfExists() {
@@ -126,6 +129,9 @@ func (s *Scope) AlterTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "subscription database does not support alter table")
 	}
 	tblName := qry.GetTableDef().GetName()
 	rel, err := dbSource.Relation(c.ctx, tblName)
@@ -253,6 +259,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewNoDB(c.ctx)
 		}
 		return err
+	}
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "subscription database does not support create table")
 	}
 	tblName := qry.GetTableDef().GetName()
 	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
@@ -386,6 +395,9 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 	// check in EntireEngine.TempEngine
 	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if tmpDBSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot create temporary table in subscription database")
+	}
 	if err != nil {
 		return err
 	}
@@ -439,6 +451,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+	if d.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot create index in subscription database")
 	}
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
@@ -535,6 +550,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+	if d.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot drop index in subscription database")
 	}
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
@@ -732,6 +750,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot truncate table in subscription database")
+	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
@@ -837,6 +858,10 @@ func (s *Scope) DropSequence(c *Compile) error {
 		}
 		return err
 	}
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot drop sequence in subscription database")
+	}
+
 	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		if qry.GetIfExists() {
@@ -869,6 +894,10 @@ func (s *Scope) DropTable(c *Compile) error {
 			return nil
 		}
 		return err
+	}
+
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannot drop table in subscription database")
 	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
@@ -1073,6 +1102,10 @@ func (s *Scope) CreateSequence(c *Compile) error {
 			return moerr.NewNoDB(c.ctx)
 		}
 		return err
+	}
+
+	if dbSource.IsSubscription(c.ctx) {
+		return moerr.NewInternalError(c.ctx, "cannt create table in subscription database")
 	}
 
 	tblName := qry.GetTableDef().GetName()
