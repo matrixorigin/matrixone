@@ -338,6 +338,9 @@ func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timest
 		return timestamp.Timestamp{}, nil
 	}
 
+	if txnMeta.CommitTS.IsEmpty() {
+		txnMeta.CommitTS, _ = kv.clock.Now()
+	}
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
 	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), writeKeys) {
 		return timestamp.Timestamp{}, moerr.NewTxnWriteConflictNoCtx("")
@@ -353,7 +356,7 @@ func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timest
 		panic(fmt.Sprintf("commit with invalid status: %s", txnMeta.Status))
 	}
 	log.Txn.Status = txn.TxnStatus_Committed
-	log.Txn.CommitTS, _ = kv.clock.Now()
+	log.Txn.CommitTS = txnMeta.CommitTS
 	lsn, err := kv.saveLog(log)
 	if err != nil {
 		return timestamp.Timestamp{}, err
