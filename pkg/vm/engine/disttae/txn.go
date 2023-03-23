@@ -165,10 +165,6 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	txn.Unlock()
-	if !((offset > 0 && size >= colexec.WriteS3Threshold) || txn.workspaceSize >= colexec.WriteS3Threshold ||
-		(force && txn.workspaceSize >= colexec.TagS3Size)) {
-		return nil
-	}
 	for key := range mp {
 		s3Writer, tbl, err := txn.getS3Writer(key)
 		if err != nil {
