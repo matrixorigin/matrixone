@@ -162,6 +162,7 @@ func buildDNConfig(
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getDnListenAddress(index),
 	}
+	cfg.ServiceAddress = cfg.ListenAddress
 	cfg.LogtailServer.ListenAddress = address.getDnLogtailAddress(index)
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()

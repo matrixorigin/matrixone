@@ -43,6 +43,7 @@ func (m *LogRecord) Payload() []byte {
 // NewRSMState creates a new HAKeeperRSMState instance.
 func NewRSMState() HAKeeperRSMState {
 	return HAKeeperRSMState{
+		NextIDByKey:      make(map[string]uint64),
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
 		CNState:          NewCNState(),

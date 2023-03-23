@@ -249,6 +249,7 @@ type service struct {
 	logger         *zap.Logger
 	server         morpc.RPCServer
 	requestHandler func(ctx context.Context,
+		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,
 		engine engine.Engine,

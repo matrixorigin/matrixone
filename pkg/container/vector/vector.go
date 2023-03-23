@@ -456,53 +456,49 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		return toConstVector[bool](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]bool)[row], length, mp)
 	case types.T_int8:
-		return toConstVector[int8](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]int8)[row], length, mp)
 	case types.T_int16:
-		return toConstVector[int16](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]int16)[row], length, mp)
 	case types.T_int32:
-		return toConstVector[int32](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]int32)[row], length, mp)
 	case types.T_int64:
-		return toConstVector[int64](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]int64)[row], length, mp)
 	case types.T_uint8:
-		return toConstVector[uint8](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]uint8)[row], length, mp)
 	case types.T_uint16:
-		return toConstVector[uint16](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]uint16)[row], length, mp)
 	case types.T_uint32:
-		return toConstVector[uint32](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]uint32)[row], length, mp)
 	case types.T_uint64:
-		return toConstVector[uint64](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]uint64)[row], length, mp)
 	case types.T_float32:
-		return toConstVector[float32](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]float32)[row], length, mp)
 	case types.T_float64:
-		return toConstVector[float64](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]float64)[row], length, mp)
 	case types.T_date:
-		return toConstVector[types.Date](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Date)[row], length, mp)
 	case types.T_datetime:
-		return toConstVector[types.Datetime](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Datetime)[row], length, mp)
 	case types.T_time:
-		return toConstVector[types.Time](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Time)[row], length, mp)
 	case types.T_timestamp:
-		return toConstVector[types.Timestamp](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Timestamp)[row], length, mp)
 	case types.T_decimal64:
-		return toConstVector[types.Decimal64](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Decimal64)[row], length, mp)
 	case types.T_decimal128:
-		return toConstVector[types.Decimal128](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Decimal128)[row], length, mp)
 	case types.T_uuid:
-		return toConstVector[types.Uuid](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Uuid)[row], length, mp)
 	case types.T_TS:
-		return toConstVector[types.TS](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.TS)[row], length, mp)
 	case types.T_Rowid:
-		return toConstVector[types.Rowid](v, row, length, mp)
+		return NewConstFixed(v.typ, v.col.([]types.Rowid)[row], length, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
 	}
 	return nil
-}
-
-func toConstVector[T types.FixedSizeT](v *Vector, row, length int, mp *mpool.MPool) *Vector {
-	return NewConstFixed(v.typ, v.col.([]T)[row], length, mp)
 }
 
 // PreExtend use to expand the capacity of the vector
@@ -1461,6 +1457,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	ws := v.col.([]T)[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	v.nsp = nulls.Filter(v.nsp, sels, false)
+	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
 	} else {
@@ -1482,92 +1479,6 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 	return fmt.Sprintf("%v-%s", col, v.nsp)
 }
 
-func CopyConst(toVec, fromVec *Vector, length int, mp *mpool.MPool) error {
-	typ := fromVec.GetType()
-	switch typ.Oid {
-	case types.T_bool:
-		item := MustFixedCol[bool](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_int8:
-		item := MustFixedCol[int8](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_int16:
-		item := MustFixedCol[int16](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_int32:
-		item := MustFixedCol[int32](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_int64:
-		item := MustFixedCol[int64](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_uint8:
-		item := MustFixedCol[uint8](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_uint16:
-		item := MustFixedCol[uint16](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_uint32:
-		item := MustFixedCol[uint32](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_uint64:
-		item := MustFixedCol[uint64](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_float32:
-		item := MustFixedCol[float32](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_float64:
-		item := MustFixedCol[float64](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-		item := MustBytesCol(fromVec)[0]
-		appendMultiBytes(toVec, item, false, length, mp)
-
-	case types.T_date:
-		item := MustFixedCol[types.Date](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_datetime:
-		item := MustFixedCol[types.Datetime](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_time:
-		item := MustFixedCol[types.Time](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_timestamp:
-		item := MustFixedCol[types.Timestamp](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_decimal64:
-		item := MustFixedCol[types.Decimal64](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_decimal128:
-		item := MustFixedCol[types.Decimal128](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	case types.T_uuid:
-		item := MustFixedCol[types.Uuid](fromVec)[0]
-		AppendMultiFixed(toVec, item, false, length, mp)
-
-	default:
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vec %v can not copy", fromVec))
-	}
-
-	return nil
-}
-
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	w := NewVec(v.typ)
@@ -1582,6 +1493,8 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
 		}
+		w.cantFreeData = true
+		w.cantFreeArea = true
 	} else {
 		err := w.PreExtend(end-start, mp)
 		if err != nil {

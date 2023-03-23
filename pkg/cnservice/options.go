@@ -45,6 +45,7 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 
 // WithMessageHandle setup message handle
 func WithMessageHandle(f func(ctx context.Context,
+	cnAddr string,
 	message morpc.Message,
 	cs morpc.ClientSession,
 	engine engine.Engine,

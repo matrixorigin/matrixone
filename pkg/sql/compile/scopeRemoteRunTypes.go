@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,6 +43,7 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
+	cnAddr      string
 	storeEngine engine.Engine
 	fileService fileservice.FileService
 	lockService lockservice.LockService
@@ -191,6 +191,7 @@ type messageReceiverOnServer struct {
 
 func newMessageReceiverOnServer(
 	ctx context.Context,
+	cnAddr string,
 	m *pipeline.Message,
 	cs morpc.ClientSession,
 	messageAcquirer func() morpc.Message,
@@ -207,6 +208,11 @@ func newMessageReceiverOnServer(
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
 		sequence:        0,
+	}
+	receiver.cnInformation = cnInformation{
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
 	}
 
 	switch m.GetCmd() {
@@ -280,7 +286,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc: proc,
 		e:    cnInfo.storeEngine,
 		anal: &anaylze{},
-		addr: colexec.CnAddr,
+		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.ctx = c.proc.Ctx
