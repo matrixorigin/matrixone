@@ -82,6 +82,21 @@ func (f *FileServices) List(ctx context.Context, dirPath string) ([]DirEntry, er
 	return fs.List(ctx, dirPath)
 }
 
+func (f *FileServices) Preload(ctx context.Context, dirPath string) error {
+	path, err := ParsePathAtService(dirPath, "")
+	if err != nil {
+		return err
+	}
+	if path.Service == "" {
+		path.Service = f.defaultName
+	}
+	fs, err := Get[FileService](f, path.Service)
+	if err != nil {
+		return err
+	}
+	return fs.Preload(ctx, dirPath)
+}
+
 func (f *FileServices) Name() string {
 	return f.defaultName
 }
