@@ -95,7 +95,7 @@ func (vec *vector[T]) Length() int {
 }
 
 func (vec *vector[T]) Append(v any) {
-	vec.tryPromoting()
+	vec.tryCoW()
 
 	_, isNull := v.(types.Null)
 	if isNull {
@@ -131,7 +131,7 @@ func (vec *vector[T]) Extend(src Vector) {
 
 func (vec *vector[T]) Update(i int, v any) {
 	//TODO: Upon update, we promote the memory.
-	vec.tryPromoting()
+	vec.tryCoW()
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
 
@@ -258,7 +258,7 @@ func (vec *vector[T]) Allocated() int {
 //}
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
-func (vec *vector[T]) tryPromoting() {
+func (vec *vector[T]) tryCoW() {
 
 	if !vec.isOwner {
 		newCnVector, _ := vec.downstreamVector.Dup(vec.mpool)
@@ -442,14 +442,14 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 // TODO: --- Need advise on the below functions
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: Not doing tryPromoting(). Is it ok XuPeng?
+	// TODO: Not doing tryCoW(). Is it ok XuPeng?
 	//TODO: Do you have any other suggestion for converting []uint32 to []int64 using uns
 	//var dels []int64
 	//for i := range deletes.ToArray() {
 	//	dels = append(dels, int64(i))
 	//}
 
-	vec.tryPromoting()
+	vec.tryCoW()
 
 	var sels []int64
 	vecLen := uint32(vec.Length())
