@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// test return one line
 func TestGitVersion(t *testing.T) {
 	proc := testutil.NewProc()
 	res, err := GitVersion([]*vector.Vector{}, proc)
