@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 )
 
@@ -29,113 +31,34 @@ type windowBase struct {
 	offset, length int
 }
 
-func (win *windowBase) Update(i int, v any)                 { panic("cannot modify window") }
-func (win *windowBase) Delete(i int)                        { panic("cannot modify window") }
-func (win *windowBase) Compact(deletes *roaring.Bitmap)     { panic("cannot modify window") }
-func (win *windowBase) Append(v any)                        { panic("cannot modify window") }
-func (win *windowBase) AppendMany(vs ...any)                { panic("cannot modify window") }
-func (win *windowBase) Extend(o Vector)                     { panic("cannot modify window") }
-func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int) { panic("cannot modify window") }
-func (win *windowBase) Length() int                         { return win.length }
-func (win *windowBase) Allocated() int                      { return 0 }
-func (win *windowBase) Close()                              {}
-func (win *windowBase) ReadFrom(io.Reader) (int64, error)   { panic("cannot modify window") }
+func (win *windowBase) IsView() bool                         { return true }
+func (win *windowBase) Update(i int, v any)                  { panic("cannot modify window") }
+func (win *windowBase) Delete(i int)                         { panic("cannot modify window") }
+func (win *windowBase) Compact(deletes *roaring.Bitmap)      { panic("cannot modify window") }
+func (win *windowBase) Append(v any)                         { panic("cannot modify window") }
+func (win *windowBase) AppendMany(vs ...any)                 { panic("cannot modify window") }
+func (win *windowBase) AppendNoNulls(s any)                  { panic("cannot modify window") }
+func (win *windowBase) Extend(o Vector)                      { panic("cannot modify window") }
+func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int)  { panic("cannot modify window") }
+func (win *windowBase) Length() int                          { return win.length }
+func (win *windowBase) Capacity() int                        { return win.length }
+func (win *windowBase) Allocated() int                       { return 0 }
+func (win *windowBase) DataWindow(offset, length int) []byte { panic("cannot window a window") }
+func (win *windowBase) Close()                               {}
+func (win *windowBase) ReadFrom(io.Reader) (int64, error)    { panic("cannot modify window") }
 
-//func (win *windowBase) ResetWithData(*Bytes, *cnNulls.Nulls) { panic("cannot modify window") }
+func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error {
+	panic("cannot modify window")
+}
+func (win *windowBase) Reset()                                  { panic("cannot modify window") }
+func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
 	ref *vector[T]
 }
 
-func (win *vectorWindow[T]) Nullable() bool {
-	return win.ref.Nullable()
-}
-
-func (win *vectorWindow[T]) IsNull(i int) bool {
-	return win.ref.IsNull(i + win.offset)
-}
-
-func (win *vectorWindow[T]) HasNull() bool {
-	return win.ref.HasNull()
-}
-
-func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
-	mask := win.ref.NullMask()
-	if win.offset == 0 || mask == nil {
-		return mask
-	}
-	return cnNulls.Range(mask, uint64(win.offset), uint64(win.offset+win.length), 0, cnNulls.NewWithSize(0))
-}
-
-func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
-	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
-	return res
-}
-
-//func (win *vectorWindow[T]) Bytes() *Bytes {
-//	bs := win.ref.Bytes()
-//	bs = bs.Window(win.offset, win.length)
-//	return bs
-//}
-
-func (win *vectorWindow[T]) Slice() any {
-	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
-}
-
-func (win *vectorWindow[T]) GetAllocator() *mpool.MPool {
-	return win.ref.GetAllocator()
-}
-
-func (win *vectorWindow[T]) GetType() types.Type {
-	return win.ref.GetType()
-}
-
-func (win *vectorWindow[T]) String() string {
-	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
-	return s
-}
-
-func (win *vectorWindow[T]) PPString(num int) string {
-	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.PPString(num))
-	return s
-}
-func (win *vectorWindow[T]) Get(i int) any {
-	return win.ref.Get(i + win.offset)
-}
-
-func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
-	return win.ref.ShallowGet(i + win.offset)
-}
-
-func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
-}
-
-func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
-	if offset+length > win.length {
-		panic("bad param")
-	}
-	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
-}
-
-func (win *vectorWindow[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
-	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
-}
-
-func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	if offset+length > win.length {
-		panic("bad param")
-	}
-	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
-}
-
-func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
-}
-
 func (win *vectorWindow[T]) Equals(o Vector) bool {
-
 	if win.Length() != o.Length() {
 		return false
 	}
@@ -196,6 +119,73 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 	return true
 
 }
+
+func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
+}
+func (win *vectorWindow[T]) Get(i int) (v any) {
+	return win.ref.Get(i + win.offset)
+}
+func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
+	return win.ref.ShallowGet(i + win.offset)
+}
+
+func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
+func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
+func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
+	mask := win.ref.NullMask()
+	if win.offset == 0 || mask == nil {
+		return mask
+	}
+	return cnNulls.Range(mask, uint64(win.offset), uint64(win.offset+win.length), 0, cnNulls.NewWithSize(0))
+}
+
+func (win *vectorWindow[T]) IsNull(i int) bool {
+	return win.ref.IsNull(i + win.offset)
+}
+func (win *vectorWindow[T]) GetAllocator() *mpool.MPool { return win.ref.GetAllocator() }
+func (win *vectorWindow[T]) GetType() types.Type        { return win.ref.GetType() }
+func (win *vectorWindow[T]) String() string {
+	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
+	return s
+}
+func (win *vectorWindow[T]) PPString(num int) string {
+	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.PPString(num))
+	return s
+}
+func (win *vectorWindow[T]) Slice() any {
+	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
+}
+
+//func (win *vectorWindow[T]) Bytes() *Bytes {
+//	bs := win.ref.Bytes()
+//	bs = bs.Window(win.offset, win.length)
+//	return bs
+//}
+
+func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
+}
+
+func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	if offset+length > win.length {
+		panic("bad param")
+	}
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
+}
+
+func (win *vectorWindow[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
+}
+
+func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	if offset+length > win.length {
+		panic("bad param")
+	}
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
+}
+
+func (win *vectorWindow[T]) WriteTo(w io.Writer) (n int64, err error) { panic("implement me") }
 func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	if offset+length > win.length {
 		panic("bad window param")
@@ -209,8 +199,9 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (win *vectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
-	panic("not implemented")
+func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
+	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
+	return res
 }
 
 func (win *vectorWindow[T]) SetDownstreamVector(vec *cnVector.Vector) {
