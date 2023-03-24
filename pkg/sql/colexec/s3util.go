@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -456,10 +457,10 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 }
 
 func (w *S3Writer) generateWriter(proc *process.Process) error {
-	segId, err := Srv.GenerateSegment()
-	if err != nil {
-		return err
-	}
+	// Use uuid as segment id
+	// TODO: multiple 64m file in one segment
+	id := common.NewSegmentid()
+	segId := common.NewObjectName(&id, 0)
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err

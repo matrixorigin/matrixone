@@ -500,66 +500,6 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.DBBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	x, err := e.acInfo.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += x
-	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
-		return
-	}
-	var sn int
-	sn, err = w.Write([]byte(e.name))
-	if err != nil {
-		return
-	}
-	n += int64(sn) + 2
-	if err = binary.Write(w, binary.BigEndian, uint16(len(e.createSql))); err != nil {
-		return
-	}
-	sn, err = w.Write([]byte(e.createSql))
-	n += int64(sn) + 2
-	return
-}
-
-func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = e.DBBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	x, err := e.acInfo.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += x
-	size := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
-		return
-	}
-	n += 2
-	buf := make([]byte, size)
-	if _, err = r.Read(buf); err != nil {
-		return
-	}
-	n += int64(size)
-	e.name = string(buf)
-
-	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
-		return
-	}
-	n += 2
-	buf = make([]byte, size)
-	if _, err = r.Read(buf); err != nil {
-		return
-	}
-	n += int64(size)
-	e.createSql = string(buf)
-	return
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()
