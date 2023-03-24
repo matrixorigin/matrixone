@@ -125,11 +125,9 @@ func (txn *Transaction) WriteBatch(
 	})
 	txn.Unlock()
 
-	/* dead code now
 	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
 		return err
 	}
-	*/
 
 	return nil
 }

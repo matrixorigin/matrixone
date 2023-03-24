@@ -313,12 +313,6 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-// hasConflict used to detect if a transaction on a cn is in conflict,
-// currently an empty implementation, assuming all transactions on a cn are conflict free
-func (e *Engine) hasConflict(txn *Transaction) bool {
-	return false
-}
-
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
 	proc := process.New(
@@ -400,9 +394,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	defer e.delTransaction(txn)
 	if txn.readOnly {
 		return nil
-	}
-	if e.hasConflict(txn) {
-		return moerr.NewTxnWriteConflictNoCtx("write conflict")
 	}
 	err := txn.DumpBatch(true, 0)
 	if err != nil {

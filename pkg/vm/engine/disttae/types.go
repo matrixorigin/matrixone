@@ -172,15 +172,15 @@ type tableMeta struct {
 
 // txnTable represents an opened table in a transaction
 type txnTable struct {
-	tableId    uint64
-	tableName  string
-	dnList     []int
-	db         *txnDatabase
-	meta       *tableMeta
-	parts      []*PartitionState
-	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
+	tableId   uint64
+	tableName string
+	dnList    []int
+	db        *txnDatabase
+	meta      *tableMeta
+	parts     []*PartitionState
+	//	insertExpr *plan.Expr
+	defs     []engine.TableDef
+	tableDef *plan.TableDef
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
