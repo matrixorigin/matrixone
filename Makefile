@@ -20,7 +20,7 @@
 # make
 #
 # To re-build MO -
-#	
+#
 #	make clean
 #	make config
 #	make build
@@ -31,12 +31,12 @@
 # make config
 # make debug
 #
-# To run static checks - 
-# 
+# To run static checks -
+#
 # make install-static-check-tools
 # make static-check
 #
-# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module. 
+# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
 # make vendor
 #
 
@@ -53,6 +53,7 @@ BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
 MO_VERSION=$(shell git describe --always --tags $(shell git rev-list --tags --max-count=1))
+GO_MODULE=$(shell go list -m)
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -66,12 +67,12 @@ all: build
 
 
 ###############################################################################
-# build vendor directory 
+# build vendor directory
 ###############################################################################
 
 VENDOR_DIRECTORY := ./vendor
 .PHONY: vendor-build
-vendor-build: 
+vendor-build:
 	$(info [go mod vendor])
 	@go mod vendor
 
@@ -93,18 +94,18 @@ generate-pb:
 # Generate protobuf files
 .PHONY: pb
 pb: vendor-build generate-pb fmt
-	$(info all protos are generated) 
+	$(info all protos are generated)
 
 ###############################################################################
 # build mo-service
 ###############################################################################
 
-RACE_OPT := 
-DEBUG_OPT := 
+RACE_OPT :=
+DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
 GO=$(CGO_OPTS) $(GOBIN)
-GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.CommitID=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.Version=$(MO_VERSION)'"
+GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 
 .PHONY: cgo
 cgo:
@@ -135,7 +136,7 @@ debug: build
 ###############################################################################
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
-.PHONY: ut 
+.PHONY: ut
 ut: config cgo
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
