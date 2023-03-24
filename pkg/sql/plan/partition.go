@@ -461,21 +461,6 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 	return caseWhenExpr, nil
 }
 
-// The permitted data types are shown in the following list:
-// All integer types
-// DATE and DATETIME
-// CHAR, VARCHAR, BINARY, and VARBINARY
-// See https://dev.mysql.com/doc/mysql-partitioning-excerpt/5.7/en/partitioning-columns.html
-func checkColumnsPartitionType(partitionBinder *PartitionBinder, columnNames []string, columnPlanExprs []*plan.Expr) error {
-	for i, planexpr := range columnPlanExprs {
-		t := types.T(planexpr.Typ.Id)
-		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
-			return moerr.NewSyntaxError(partitionBinder.GetContext(), "type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
-		}
-	}
-	return nil
-}
-
 // check partition expression type (const?, integer?)
 func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef, partitionDef *plan.PartitionByDef) error {
 	if partitionDef.PartitionExpr != nil && partitionDef.PartitionExpr.Expr != nil {
