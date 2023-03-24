@@ -2578,7 +2578,9 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		newCtx                                                   context.Context
 		subs                                                     *plan.SubscriptionMeta
 	)
+
 	tenantInfo = ses.GetTenantInfo()
+
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	//get pubAccountId from publication info
 	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
@@ -2701,7 +2703,7 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 
-	if accName == tenantInfo.GetTenant() {
+	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
 		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
 	}
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)

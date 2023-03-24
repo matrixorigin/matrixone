@@ -243,7 +243,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 		}
 		dropSequence.Table = ""
 	}
-	if obj.PubAccountId != -1 {
+	if obj != nil && obj.PubAccountId != -1 {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop sequence in subscription database")
 	}
 
