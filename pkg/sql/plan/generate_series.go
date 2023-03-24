@@ -21,19 +21,19 @@ import (
 )
 
 var (
-	gsColDefs = [2][]*plan.ColDef{}
+	GSColDefs = [2][]*plan.ColDef{}
 )
 
 func init() {
 	retTyp := types.T_int64.ToType()
-	gsColDefs[0] = []*plan.ColDef{
+	GSColDefs[0] = []*plan.ColDef{
 		{
 			Name: "result",
 			Typ:  makePlan2Type(&retTyp),
 		},
 	}
 	retTyp = types.T_datetime.ToType()
-	gsColDefs[1] = []*plan.ColDef{
+	GSColDefs[1] = []*plan.ColDef{
 		{
 			Name: "result",
 			Typ:  makePlan2Type(&retTyp),
@@ -57,7 +57,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			TblFunc: &plan.TableFunction{
 				Name: "generate_series",
 			},
-			Cols: gsColDefs[retsIdx],
+			Cols: GSColDefs[retsIdx],
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		Children:        []int32{childId},

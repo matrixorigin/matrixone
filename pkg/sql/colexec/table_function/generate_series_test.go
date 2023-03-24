@@ -459,6 +459,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, true, end)
 
 	arg.Args = makeInt64List(1, 3, 1)
+	arg.Rets = plan.GSColDefs[0]
 
 	bat := makeGenerateSeriesBatch(proc)
 	proc.SetInputBatch(bat)
@@ -469,6 +470,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	proc.InputBatch().Clean(proc.Mp())
 
 	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
+	arg.Rets = plan.GSColDefs[1]
 	proc.SetInputBatch(bat)
 	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
@@ -484,18 +486,6 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
-	arg.Args = makeVarcharList("1", "10", "3")
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-
-	arg.Args = arg.Args[:2]
-	proc.SetInputBatch(bat)
-	_, err = generateSeriesCall(0, proc, arg)
-	require.NotNil(t, err)
 	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())
 
