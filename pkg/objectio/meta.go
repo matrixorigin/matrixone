@@ -122,8 +122,8 @@ type ColumnMeta struct {
 	location    Extent
 	zoneMap     ZoneMap
 	bloomFilter Extent
-	dummy       [32]byte
-	checksum    uint32
+	//dummy       [32]byte
+	checksum uint32
 }
 
 func (cm *ColumnMeta) GetType() uint8 {
@@ -150,51 +150,51 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 	return cm.bloomFilter
 }
 
-func (cb *ColumnMeta) Marshal() []byte {
+func (cm *ColumnMeta) Marshal() []byte {
 	var buffer bytes.Buffer
-	buffer.Write(types.EncodeFixed[uint8](cb.typ))
-	buffer.Write(types.EncodeFixed[uint8](cb.alg))
-	buffer.Write(types.EncodeFixed[uint16](cb.idx))
-	buffer.Write(cb.location.Marshal())
+	buffer.Write(types.EncodeFixed[uint8](cm.typ))
+	buffer.Write(types.EncodeFixed[uint8](cm.alg))
+	buffer.Write(types.EncodeFixed[uint16](cm.idx))
+	buffer.Write(cm.location.Marshal())
 	var buf []byte
-	if cb.zoneMap.data == nil {
+	if cm.zoneMap.data == nil {
 		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
-		cb.zoneMap.data = buf
+		cm.zoneMap.data = buf
 	}
-	buffer.Write(cb.zoneMap.data.([]byte))
-	buffer.Write(cb.bloomFilter.Marshal())
+	buffer.Write(cm.zoneMap.data.([]byte))
+	buffer.Write(cm.bloomFilter.Marshal())
 	dummy := make([]byte, 32)
 	buffer.Write(dummy)
-	buffer.Write(types.EncodeFixed[uint32](cb.checksum))
+	buffer.Write(types.EncodeFixed[uint32](cm.checksum))
 	return buffer.Bytes()
 }
 
-func (cb *ColumnMeta) Unmarshal(data []byte) error {
-	cb.typ = types.DecodeUint8(data[:1])
+func (cm *ColumnMeta) Unmarshal(data []byte) error {
+	cm.typ = types.DecodeUint8(data[:1])
 	data = data[1:]
-	cb.alg = types.DecodeUint8(data[:1])
+	cm.alg = types.DecodeUint8(data[:1])
 	data = data[1:]
-	cb.idx = types.DecodeUint16(data[:2])
+	cm.idx = types.DecodeUint16(data[:2])
 	data = data[2:]
-	cb.location.Unmarshal(data)
+	cm.location.Unmarshal(data)
 	data = data[ExtentSize:]
-	cb.zoneMap.idx = cb.idx
-	t := types.T(cb.typ).ToType()
-	if err := cb.zoneMap.Unmarshal(data[:64], t); err != nil {
+	cm.zoneMap.idx = cm.idx
+	t := types.T(cm.typ).ToType()
+	if err := cm.zoneMap.Unmarshal(data[:64], t); err != nil {
 		return err
 	}
 	data = data[64:]
-	cb.bloomFilter.Unmarshal(data)
+	cm.bloomFilter.Unmarshal(data)
 	// 32 skip dummy
 	data = data[ExtentSize+32:]
-	cb.checksum = types.DecodeUint32(data[:4])
+	cm.checksum = types.DecodeUint32(data[:4])
 	return nil
 }
 
 type Header struct {
 	magic   uint64
 	version uint16
-	dummy   [22]byte
+	//dummy   [22]byte
 }
 
 type Footer struct {
@@ -209,7 +209,6 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	f.blockCount = types.DecodeUint32(footer[:4])
 	footer = footer[4:]
 	f.magic = types.DecodeUint64(footer[:8])
-	footer = footer[8:]
 	if f.magic != uint64(Magic) {
 		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
 	}
