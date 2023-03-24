@@ -3182,11 +3182,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		}
 	}
 
-	//step 11: drop mo_catalog.mo_indexes under general tenant
-	err = bh.Exec(deleteCtx, dropMoIndexes)
-	if err != nil {
-		goto handleFailed
-	}
 	//  drop table mo_pubs
 	err = bh.Exec(deleteCtx, dropMoPubsSql)
 	if err != nil {
@@ -3195,6 +3190,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 
 	// drop autoIcr table
 	err = bh.Exec(deleteCtx, dropAutoIcrColSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 11: drop mo_catalog.mo_indexes under general tenant
+	err = bh.Exec(deleteCtx, dropMoIndexes)
 	if err != nil {
 		goto handleFailed
 	}

@@ -162,7 +162,7 @@ func TestBuildLockTables(t *testing.T) {
 	sql3 := "lock tables t1 read, t1 write"
 
 	store["db.t1"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
@@ -206,7 +206,7 @@ func TestBuildLockTables(t *testing.T) {
 	assert.Error(t, err)
 
 	store["db.t2"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
