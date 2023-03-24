@@ -25,8 +25,8 @@ INSERT INTO T1 VALUES(213823.12);
 INSERT INTO t1 VALUES(-45412.38920);
 SELECT * FROM t1;
 a
--45412.39
 213823.12
+-45412.39
 DROP TABLE T1;
 drop table IF EXISTS table01;
 CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
@@ -158,27 +158,32 @@ DROP TABLE t3;
 DROP TABLE IF EXISTS t4;
 DROP TABLE IF EXISTS t5;
 CREATE TABLE t4(a int primary key,b varchar(5));
-CREATE TABLE t5(a int ,b varchar(5), C int, foreign key(C) references t4(a));
+CREATE TABLE t5(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+ALTER table t5 DROP FOREIGN KEY fC;
+ALTER table t5 ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE t4;
 Table    Create Table
 t4    CREATE TABLE `t4` (\n`a` INT NOT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
 show CREATE TABLE T5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table t5;
 DROP table t4;
-DROP USER IF EXISTS user_name;
-CREATE USER user_name IDENTIFIED BY '123456';
-CREATE USER USER_NAME IDENTIFIED BY '123456';
-internal error: the user user_name exists
-CREATE USER USER_name IDENTIFIED BY '123456';
-internal error: the user user_name exists
+DROP USER IF EXISTS u_name;
+CREATE USER u_name IDENTIFIED BY '123456';
+CREATE USER U_NAME IDENTIFIED BY '123456';
+internal error: the user u_name exists
+CREATE USER U_name IDENTIFIED BY '123456';
+internal error: the user u_name exists
+SELECT user_host,user_name,status FROM mo_catalog.mo_user WHERE user_name = 'U_name';
+user_host    user_name    status
 SELECT user_host,user_name,status FROM mo_catalog.mo_user;
 user_host    user_name    status
-localhost    user_name    unlock
+localhost    u_name    unlock
 localhost    root    unlock
 localhost    dump    unlock
 DROP USER user_name;
+internal error: there is no user user_name
 DROP DATABASE test03;
 DROP database IF EXISTS test03;
 create database test03;
@@ -282,11 +287,12 @@ DROP TABLE t11;
 DROP TABLE IF EXISTS t12;
 CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX ABc ON t12(col2);
+DROP INDEX abc on t12;
 select * from t12;
 col1    col2    col3
 show CREATE table t12;
 Table    Create Table
-t12    CREATE TABLE `t12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\nKEY `abc` (`col2`)\n)
+t12    CREATE TABLE `t12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL\n)
 DROP TABLE t12;
 DROP ACCOUNT IF EXISTS tenant_test;
 CREATE ACCOUNT tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -307,9 +313,12 @@ CREATE ROLE ROLEX;
 internal error: the role rolex exists
 SELECT role_name,COmments FROM mo_catalog.mo_role;
 role_name    comments
-rolex
-moadmin
-public
+rolex    
+moadmin    
+public    
+SELECT role_name,COmments FROM mo_catalog.mo_role WHERE role_name = 'Rolex';
+role_name    comments
+DROP ROLE rolex;
 DROP SEQUENCE IF EXISTS SEQ;
 CREATE SEQUENCE SEQ increment 100 start 30;
 CREATE SEQUENCE seq increment 100 start 30;
@@ -348,13 +357,18 @@ DROP VIEW IF EXISTS view01;
 CREATE TABLE t13 (a int);
 INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
-ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1;
+ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
 View    Create View
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1;
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 SELECT * FROM view01;
 a
 1
+2
+SELECT * FROM vieW01 WHERE A = 1 OR a = 2;
+a
+1
+2
 DROP view view01;
 drop table t13;
 drop database test04;
@@ -498,11 +512,12 @@ DROP TABLE `t18`;
 DROP TABLE IF EXISTS `t19`;
 CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX `ABc` ON t19(col2);
+DROP INDEX `abc` ON t19;
 select * from `t19`;
 col1    col2    col3
 show CREATE table `t19`;
 Table    Create Table
-t19    CREATE TABLE `t19` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\nKEY `abc` (`col2`)\n)
+t19    CREATE TABLE `t19` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL\n)
 DROP TABLE `t19`;
 DROP ACCOUNT IF EXISTS `tenant_test`;
 CREATE ACCOUNT `tenant_test` admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -523,9 +538,11 @@ CREATE ROLE `ROLEX`;
 internal error: the role rolex exists
 SELECT role_name,comments FROM `mo_catalog`.`mo_role`;
 role_name    comments
-rolex
-moadmin
-public
+rolex    
+moadmin    
+public    
+SELECT role_name,COmments FROM `mo_catalog`.`mo_role` WHERE `role_name` = 'Rolex';
+role_name    comments
 DROP ROLE `Rolex`;
 DROP USER IF EXISTS `user_name`;
 CREATE USER `user_name` IDENTIFIED BY '123456';
@@ -535,9 +552,12 @@ CREATE USER `USER_name` IDENTIFIED BY '123456';
 internal error: the user user_name exists
 SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user`;
 user_host    user_name    status
+localhost    u_name    unlock
 localhost    user_name    unlock
 localhost    root    unlock
 localhost    dump    unlock
+SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user` WHERE user_name = 'User_name';
+user_host    user_name    status
 DROP USER `user_name`;
 DROP DATABASE `test06`;
 DROP TABLE IF EXISTS `t20`;
@@ -589,6 +609,8 @@ ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
 invalid view '.view01'
 SELECT * FROM `view01`;
 SQL parser error: table "view01" does not exist
+SELECT * FROM `view01` WHERE A = 1;
+SQL parser error: table "view01" does not exist
 DROP view `vieW01`;
 invalid view '.view01'
 DROP DATABASE IF EXISTS `test07`;
@@ -607,6 +629,24 @@ SQL parser error: table "t1" does not exist
 DROP TABLE `t1`;
 no such table .t1
 DROP DATABASE `TEST07`;
+DROP TABLE IF EXISTS `t4`;
+DROP TABLE IF EXISTS `t5`;
+CREATE TABLE `t4`(a int primary key,b varchar(5));
+not connect to a database
+CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+no such table .t4
+ALTER table `t5` DROP FOREIGN KEY fC;
+no such table .t5
+ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
+no such table .t5
+show CREATE TABLE `t4`;
+no such table .t4
+show CREATE TABLE `T5`;
+no such table .t5
+DROP table `t5`;
+no such table .t5
+DROP table `t4`;
+no such table .t4
 DROP DATABASE IF EXISTS `test08`;
 CREATE DATABASE `test08`;
 use  `test08`;
