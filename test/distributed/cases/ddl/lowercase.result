@@ -25,8 +25,8 @@ INSERT INTO T1 VALUES(213823.12);
 INSERT INTO t1 VALUES(-45412.38920);
 SELECT * FROM t1;
 a
-213823.12
 -45412.39
+213823.12
 DROP TABLE T1;
 drop table IF EXISTS table01;
 CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
@@ -182,8 +182,7 @@ user_host    user_name    status
 localhost    u_name    unlock
 localhost    root    unlock
 localhost    dump    unlock
-DROP USER user_name;
-internal error: there is no user user_name
+DROP USER u_name;
 DROP DATABASE test03;
 DROP database IF EXISTS test03;
 create database test03;
@@ -552,7 +551,6 @@ CREATE USER `USER_name` IDENTIFIED BY '123456';
 internal error: the user user_name exists
 SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user`;
 user_host    user_name    status
-localhost    u_name    unlock
 localhost    user_name    unlock
 localhost    root    unlock
 localhost    dump    unlock
