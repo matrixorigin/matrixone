@@ -46,6 +46,7 @@ delete from mo_catalog.mo_role_grant;
 delete from mo_catalog.mo_role_privs;
 delete from mo_catalog.mo_database;
 delete from mo_catalog.mo_columns;
+delete from mo_catalog.mo_indexes;
 
 --内置数据库不能删除
 drop database information_schema;
@@ -71,6 +72,21 @@ drop role if exists accountadmin;
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 -- @session
 
+create table tb1(
+deptno int unsigned,
+dname varchar(15),
+loc varchar(50),
+unique key(deptno)
+);
+select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+
+--accountadmin删除/回收,切换到普通account验证
+create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+-- @session:id=2&user=accx11:admin&password=123456
+select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+-- @session
+
 drop account if exists account1;
 drop account if exists inner_account;
+drop account if exists accx11;
 drop role if exists revoke_role_1;

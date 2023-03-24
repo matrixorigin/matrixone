@@ -240,6 +240,10 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
+func (m *MemoryFS) Preload(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():

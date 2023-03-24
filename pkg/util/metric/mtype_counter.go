@@ -142,11 +142,14 @@ func (c *ratecounter) Write(out *dto.Metric) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.mu.prevT.IsZero() {
-		out.Counter = &dto.Counter{Value: &zeroValue}
-	} else if c.mu.doAvg {
-		rate := (val - c.mu.prevV) / instant.Sub(c.mu.prevT).Seconds()
-		out.Counter = &dto.Counter{Value: &rate}
+
+	if c.mu.doAvg {
+		if c.mu.prevT.IsZero() {
+			out.Counter = &dto.Counter{Value: &zeroValue}
+		} else {
+			rate := (val - c.mu.prevV) / instant.Sub(c.mu.prevT).Seconds()
+			out.Counter = &dto.Counter{Value: &rate}
+		}
 	} else {
 		rate := val - c.mu.prevV
 		out.Counter = &dto.Counter{Value: &rate}
