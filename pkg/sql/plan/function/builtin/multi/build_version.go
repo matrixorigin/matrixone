@@ -27,7 +27,7 @@ var buildTime = func() types.Timestamp {
 	if version.BuildTime == "" {
 		return 0
 	}
-	t, err := time.Parse(time.UnixDate, version.BuildTime)
+	t, err := time.Parse(time.RFC3339, version.BuildTime)
 	if err != nil {
 		panic(err)
 	}
