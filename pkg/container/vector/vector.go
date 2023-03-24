@@ -357,8 +357,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	dataLen := types.DecodeUint32(data[:4])
 	data = data[4:]
 	if dataLen > 0 {
-		v.data = make([]byte, dataLen)
-		copy(v.data, data[:dataLen])
+		v.data = data[:dataLen]
 		v.setupColFromData()
 		data = data[dataLen:]
 	}
@@ -367,8 +366,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	areaLen := types.DecodeUint32(data[:4])
 	data = data[4:]
 	if areaLen > 0 {
-		v.area = make([]byte, areaLen)
-		copy(v.area, data[:areaLen])
+		v.area = data[:areaLen]
 		data = data[areaLen:]
 	}
 
@@ -389,7 +387,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
+func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	var err error
 	// read class
 	v.class = int(data[0])
