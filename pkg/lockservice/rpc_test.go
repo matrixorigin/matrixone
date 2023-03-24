@@ -30,10 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	testSockets = "unix:///tmp/lockservice.sock"
-)
-
 func TestRPCSend(t *testing.T) {
 	runRPCTests(
 		t,

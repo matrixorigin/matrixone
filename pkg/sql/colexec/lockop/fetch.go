@@ -83,8 +83,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchDecimal128Rows
 	case types.T_uuid:
 		return fetchUUIDRows
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		return fetchVarlenaRows
+	case types.T_char, types.T_varchar:
+		return fetchBytesRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
@@ -96,7 +96,12 @@ func fetchBoolRows(
 	tp types.Type,
 	max int,
 	lockTabel bool) ([][]byte, lock.Granularity) {
-	return [][]byte{{0}, {1}},
+	fn := func(v bool) []byte {
+		parker.Reset()
+		parker.EncodeBool(v)
+		return parker.Bytes()
+	}
+	return [][]byte{fn(false), fn(true)},
 		lock.Granularity_Range
 }
 
@@ -512,7 +517,7 @@ func fetchUUIDRows(
 		})
 }
 
-func fetchVarlenaRows(
+func fetchBytesRows(
 	vec *vector.Vector,
 	parker *types.Packer,
 	tp types.Type,
@@ -531,21 +536,21 @@ func fetchVarlenaRows(
 	}
 
 	n := vec.Length()
-	data, area := vector.MustVarlenaRawData(vec)
+	data := vector.MustBytesCol(vec)
 	if n == 1 {
-		return [][]byte{fn(data[0].GetByteSlice(area))},
+		return [][]byte{fn(data[0])},
 			lock.Granularity_Row
 	}
 	size := n * int(tp.Width)
 	if size > max {
 		return [][]byte{
-				fn(data[0].GetByteSlice(area)),
-				fn(data[n-1].GetByteSlice(area))},
+				fn(data[0]),
+				fn(data[n-1])},
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
 	for _, v := range data {
-		rows = append(rows, fn(v.GetByteSlice(area)))
+		rows = append(rows, fn(v))
 	}
 	return rows, lock.Granularity_Row
 }
