@@ -612,12 +612,12 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 				return
 			}
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByPK(
+			if err = tbl.DedupSnapByPK(
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
 				return
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
-			if err = tbl.DedupByPK(
+			if err = tbl.DedupSnapByPK(
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
 				return
 			}
@@ -633,23 +633,49 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	zm []dataio.Index,
 	metaLocs []string) (err error) {
 	var pkVecs []containers.Vector
+	defer func() {
+		for _, v := range pkVecs {
+			v.Close()
+		}
+	}()
 	if tbl.schema.HasPK() {
 		skip := tbl.store.txn.GetPKDedupSkip()
 		if skip == txnif.PKDedupSkipNone {
 			//TODO::parallel load pk.
+			for _, loc := range metaLocs {
+				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
+				if err != nil {
+					return err
+				}
+				_, id, _, _, err := blockio.DecodeLocation(loc)
+				if err != nil {
+					return err
+				}
+				bats, err := reader.LoadColumns(
+					context.Background(),
+					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					[]uint32{id},
+					nil,
+				)
+				if err != nil {
+					return err
+				}
+				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+				pkVecs = append(pkVecs, vec)
+			}
 			for _, v := range pkVecs {
 				//do PK deduplication check against txn's work space.
 				if err = tbl.DedupWorkSpace(v); err != nil {
 					return
 				}
-			}
-			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByMetaLocs(metaLocs); err != nil {
-				return
+				//do PK deduplication check against txn's snapshot data.
+				if err = tbl.DedupSnapByPK(v); err != nil {
+					return
+				}
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByMetaLocs(metaLocs); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(metaLocs); err != nil {
 				return
 			}
 		}
@@ -881,10 +907,10 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	return
 }
 
-// DedupByPK 1. checks whether these primary keys are exist in the list of block
+// DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
+func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	for it.Valid() {
@@ -911,10 +937,10 @@ func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
 	return
 }
 
-// DedupByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
+// DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupByMetaLocs(metaLocs []string) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
@@ -1175,7 +1201,7 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		}
 	}
 	//Check whether primary key is duplicated in txn's snapshot data.
-	err = tbl.DedupByPK(key)
+	err = tbl.DedupSnapByPK(key)
 	return
 }
 
