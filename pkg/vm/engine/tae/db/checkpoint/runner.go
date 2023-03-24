@@ -16,12 +16,13 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -644,7 +645,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64, force bool) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -702,8 +703,8 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	}
 	logutil.Debugf(entry.String())
 	visitor := new(common.BaseTreeVisitor)
-	visitor.BlockFn = func(force bool) func(uint64, uint64, uint64, uint64) error {
-		return func(dbID, tableID, segmentID, id uint64) (err error) {
+	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
+		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
 			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
 		}
 	}(force)

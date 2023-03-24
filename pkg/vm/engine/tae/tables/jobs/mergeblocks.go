@@ -47,9 +47,6 @@ var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler
 }
 
 var MergeBlocksIntoSegmentTaskFctory = func(mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
-	if toSegEntry == nil {
-		panic(tasks.ErrBadTaskRequestPara)
-	}
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, scheduler)
 	}
@@ -91,11 +88,11 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 		return
 	}
 	for _, meta := range mergedBlks {
-		seg, err := task.rel.GetSegment(meta.GetSegment().GetID())
+		seg, err := task.rel.GetSegment(meta.GetSegment().ID)
 		if err != nil {
 			return nil, err
 		}
-		blk, err := seg.GetBlock(meta.GetID())
+		blk, err := seg.GetBlock(meta.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -149,18 +146,18 @@ func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, 
 func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	blks := ""
 	for _, blk := range task.mergedBlks {
-		blks = fmt.Sprintf("%s%d,", blks, blk.GetID())
+		blks = fmt.Sprintf("%s%s,", blks, blk.ID.String())
 	}
 	enc.AddString("from-blks", blks)
 	segs := ""
 	for _, seg := range task.mergedSegs {
-		segs = fmt.Sprintf("%s%d,", segs, seg.GetID())
+		segs = fmt.Sprintf("%s%s,", segs, seg.ID.ToString())
 	}
 	enc.AddString("from-segs", segs)
 
 	toblks := ""
 	for _, blk := range task.createdBlks {
-		toblks = fmt.Sprintf("%s%d,", toblks, blk.GetID())
+		toblks = fmt.Sprintf("%s%s,", toblks, blk.ID.String())
 	}
 	if toblks != "" {
 		enc.AddString("to-blks", toblks)
@@ -168,7 +165,7 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 
 	tosegs := ""
 	for _, seg := range task.createdSegs {
-		tosegs = fmt.Sprintf("%s%d,", tosegs, seg.GetID())
+		tosegs = fmt.Sprintf("%s%s,", tosegs, seg.ID.ToString())
 	}
 	if tosegs != "" {
 		enc.AddString("to-segs", tosegs)
@@ -189,9 +186,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		task.toSegEntry.SetSorted()
 		task.createdSegs = append(task.createdSegs, task.toSegEntry)
 	} else {
-		if toSegEntry, err = task.rel.GetSegment(task.toSegEntry.GetID()); err != nil {
-			return
-		}
+		panic("warning: merge to a existing segment")
+		// if toSegEntry, err = task.rel.GetSegment(task.toSegEntry.ID); err != nil {
+		// 	return
+		// }
 	}
 
 	schema := task.mergedBlks[0].GetSchema()
@@ -266,10 +264,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Flush sort key it correlates to only one column
 	batchs := make([]*containers.Batch, 0)
 	blockHandles := make([]handle.Block, 0)
-	for _, vec := range vecs {
+	for i, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
-		blk, err = toSegEntry.CreateNonAppendableBlock()
+		blk, err = toSegEntry.CreateNonAppendableBlock(
+			new(common.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
 		}
@@ -313,7 +312,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	name := blockio.EncodeObjectName()
+	name := common.NewObjectName(&task.toSegEntry.ID, 0)
 	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
 	if err != nil {
 		return err
@@ -338,7 +337,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err != nil {
 			return
 		}
-		err = blockHandles[i].UpdateMetaLoc(metaLoc)
+		if err = blockHandles[i].UpdateMetaLoc(metaLoc); err != nil {
+			return err
+		}
 	}
 	for _, blk := range task.createdBlks {
 		if err = blk.GetBlockData().Init(); err != nil {
@@ -348,12 +349,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
-		if err = seg.SoftDeleteBlock(compacted.Fingerprint().BlockID); err != nil {
+		if err = seg.SoftDeleteBlock(compacted.ID()); err != nil {
 			return err
 		}
 	}
 	for _, entry := range task.mergedSegs {
-		if err = task.rel.SoftDeleteSegment(entry.GetID()); err != nil {
+		if err = task.rel.SoftDeleteSegment(entry.ID); err != nil {
 			return err
 		}
 	}

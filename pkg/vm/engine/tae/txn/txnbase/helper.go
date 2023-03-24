@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
-	IDSize = 8 + 8 + 8 + 4 + 2 + 1
+	IDSize = 8 + types.UuidSize + types.BlockidSize + 4 + 2 + 1
 )
 
 func MarshalID(id *common.ID) []byte {
@@ -31,10 +32,10 @@ func MarshalID(id *common.ID) []byte {
 	if err = binary.Write(&w, binary.BigEndian, id.TableID); err != nil {
 		panic(err)
 	}
-	if err = binary.Write(&w, binary.BigEndian, id.SegmentID); err != nil {
+	if _, err = w.Write(id.SegmentID[:]); err != nil {
 		panic(err)
 	}
-	if err = binary.Write(&w, binary.BigEndian, id.BlockID); err != nil {
+	if _, err = w.Write(id.BlockID[:]); err != nil {
 		panic(err)
 	}
 	if err = binary.Write(&w, binary.BigEndian, id.PartID); err != nil {
@@ -56,10 +57,10 @@ func UnmarshalID(buf []byte) *common.ID {
 	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
 		panic(err)
 	}
-	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+	if _, err = r.Read(id.SegmentID[:]); err != nil {
 		panic(err)
 	}
-	if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
+	if _, err = r.Read(id.BlockID[:]); err != nil {
 		panic(err)
 	}
 	if err = binary.Read(r, binary.BigEndian, &id.PartID); err != nil {
