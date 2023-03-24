@@ -122,8 +122,8 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
-		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
+		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
+		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		id := common.ID{
 			SegmentID: sid,
@@ -137,14 +137,14 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(uint64)
+		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
-			BlockID:   rowIDToU64(blkID),
+			BlockID:   blkID.GetBlockid(),
 			PartID:    uint32(dbid),
 		}
 		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
@@ -171,10 +171,6 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	}
 }
 
-func rowIDToU64(rowID types.Rowid) uint64 {
-	return types.DecodeUint64(rowID[:8])
-}
-
 func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	files := make(map[string]bool)
 	for i := 0; i < bats[DeleteFile].Length(); i++ {
@@ -184,8 +180,8 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
 		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
-		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
-		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
+		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(types.Uuid)
+		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(types.Blockid)
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		if files[name] {
 			continue
@@ -201,8 +197,8 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	for i := 0; i < bats[DeleteBlock].Length(); i++ {
 		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
 		tid := bats[DeleteBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
-		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(uint64)
-		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(uint64)
+		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(types.Uuid)
+		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(types.Blockid)
 		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		if files[name] {
 			continue
