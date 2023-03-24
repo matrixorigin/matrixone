@@ -31,7 +31,6 @@ type ObjectReader struct {
 	ReaderOptions
 }
 
-const ExtentTypeSize = 4 * 3
 const ExtentsLength = 20
 const FooterSize = 8 + 4
 
@@ -171,7 +170,7 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 
 	// I don't know how many blocks there are in the object,
 	// read "ExtentsLength" blocks by default
-	size := int64(FooterSize + ExtentsLength*ExtentTypeSize)
+	size := int64(FooterSize + ExtentsLength*ExtentSize)
 	if size > fileSize {
 		size = fileSize
 	}
@@ -180,7 +179,7 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 		return nil, err
 	}
 	if len(footer.extents) == 0 {
-		size = int64(FooterSize + footer.blockCount*ExtentTypeSize)
+		size = int64(FooterSize + footer.blockCount*ExtentSize)
 		footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
 		if err != nil {
 			return nil, err

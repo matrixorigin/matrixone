@@ -118,10 +118,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	metaLen := 0
 	start := 0
 	for _, block := range w.blocks {
-		meta, err := block.(*Block).MarshalMeta()
-		if err != nil {
-			return nil, err
-		}
+		meta := block.(*Block).MarshalMeta()
 		offset, length, err := w.buffer.Write(meta)
 		if err != nil {
 			return nil, err
@@ -130,6 +127,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 			start = offset
 		}
 		metaLen += length
+		buf.Write(types.EncodeFixed[uint32](block.GetID()))
 		buf.Write(types.EncodeFixed[uint32](uint32(offset)))
 		buf.Write(types.EncodeFixed[uint32](uint32(length)))
 		buf.Write(types.EncodeFixed[uint32](uint32(length)))

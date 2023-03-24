@@ -15,8 +15,7 @@
 package objectio
 
 import (
-	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unsafe"
 )
 
 type Extent struct {
@@ -46,16 +45,12 @@ func (ex Extent) Length() uint32 { return ex.length }
 func (ex Extent) OriginSize() uint32 { return ex.originSize }
 
 func (ex Extent) Marshal() []byte {
-	var buffer bytes.Buffer
-	buffer.Write(types.EncodeFixed[uint32](ex.offset))
-	buffer.Write(types.EncodeFixed[uint32](ex.length))
-	buffer.Write(types.EncodeFixed[uint32](ex.originSize))
-	return buffer.Bytes()
+	return unsafe.Slice((*byte)(unsafe.Pointer(&ex)), ExtentSize)
 }
 func (ex *Extent) Unmarshal(data []byte) {
-	ex.offset = types.DecodeUint32(data[:4])
-	data = data[4:]
-	ex.length = types.DecodeUint32(data[:4])
-	data = data[4:]
-	ex.originSize = types.DecodeUint32(data[:4])
+	e := *(*Extent)(unsafe.Pointer(&data[0]))
+	ex.id = e.id
+	ex.offset = e.offset
+	ex.length = e.length
+	ex.originSize = e.originSize
 }

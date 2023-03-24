@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unsafe"
 )
 
 const HeaderSize = 64
-const ColumnMetaSize = 128
+const ColumnMetaSize = 136
+const ExtentSize = 16
 
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
@@ -79,26 +81,17 @@ func (bh *BlockHeader) GetColumnCount() uint16 {
 }
 
 func (bh *BlockHeader) Marshal() []byte {
-	var buffer bytes.Buffer
-	buffer.Write(types.EncodeFixed[uint64](bh.tableId))
-	buffer.Write(types.EncodeFixed[uint64](bh.segmentId))
-	buffer.Write(types.EncodeFixed[uint64](bh.blockId))
-	buffer.Write(types.EncodeFixed[uint16](bh.columnCount))
-	buffer.Write(make([]byte, 34))
-	buffer.Write(types.EncodeFixed[uint32](bh.checksum))
-	return buffer.Bytes()
+	return unsafe.Slice((*byte)(unsafe.Pointer(bh)), HeaderSize)
 }
 
 func (bh *BlockHeader) Unmarshal(data []byte) {
-	bh.tableId = types.DecodeUint64(data[:8])
-	data = data[8:]
-	bh.segmentId = types.DecodeUint64(data[:8])
-	data = data[8:]
-	bh.blockId = types.DecodeUint64(data[:8])
-	data = data[8:]
-	bh.columnCount = types.DecodeUint16(data[:2])
-	data = data[2+34:]
-	bh.checksum = types.DecodeUint32(data[:4])
+	h := *(*BlockHeader)(unsafe.Pointer(&data[0]))
+	bh.tableId = h.tableId
+	bh.segmentId = h.segmentId
+	bh.blockId = h.blockId
+	bh.columnCount = h.columnCount
+	bh.dummy = h.dummy
+	bh.checksum = h.checksum
 }
 
 // +---------------------------------------------------------------------------------------------------------------+
@@ -184,7 +177,7 @@ func (cb *ColumnMeta) Unmarshal(data []byte) error {
 	cb.idx = types.DecodeUint16(data[:2])
 	data = data[2:]
 	cb.location.Unmarshal(data)
-	data = data[12:]
+	data = data[ExtentSize:]
 	cb.zoneMap.idx = cb.idx
 	t := types.T(cb.typ).ToType()
 	if err := cb.zoneMap.Unmarshal(data[:64], t); err != nil {
@@ -193,7 +186,7 @@ func (cb *ColumnMeta) Unmarshal(data []byte) error {
 	data = data[64:]
 	cb.bloomFilter.Unmarshal(data)
 	// 32 skip dummy
-	data = data[12+32:]
+	data = data[ExtentSize+32:]
 	cb.checksum = types.DecodeUint32(data[:4])
 	return nil
 }
@@ -220,17 +213,17 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	if f.magic != uint64(Magic) {
 		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
 	}
-	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
+	if f.blockCount*ExtentSize+FooterSize > uint32(len(data)) {
 		return nil
 	} else {
 		f.extents = make([]Extent, f.blockCount)
 	}
-	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
+	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentSize):]
 	size := uint32(0)
 	for i := 0; i < int(f.blockCount); i++ {
-		f.extents[i].id = uint32(i)
 		f.extents[i].Unmarshal(extents)
-		extents = extents[12:]
+		f.extents[i].id = uint32(i)
+		extents = extents[ExtentSize:]
 		size += f.extents[i].originSize
 	}
 

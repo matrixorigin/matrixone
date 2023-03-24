@@ -91,7 +91,7 @@ func (b *Block) GetColumnCount() uint16 {
 	return b.header.columnCount
 }
 
-func (b *Block) MarshalMeta() ([]byte, error) {
+func (b *Block) MarshalMeta() []byte {
 	var (
 		buffer bytes.Buffer
 	)
@@ -101,7 +101,7 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	for _, column := range b.columns {
 		buffer.Write(column.MarshalMeta())
 	}
-	return buffer.Bytes(), nil
+	return buffer.Bytes()
 }
 
 func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
