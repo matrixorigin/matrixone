@@ -417,7 +417,7 @@ func (w *S3Writer) MergeBlock(idx int, length int, proc *process.Process, cacheO
 		}
 	} else {
 		lastBatch := w.tableBatches[idx][length-1]
-		lastBatch.Shrink(w.sels[stopIdx+1:])
+		lastBatch.Shrink(w.sels[stopIdx+1 : lastBatch.Length()])
 		w.tableBatches[idx] = w.tableBatches[idx][:0]
 		w.tableBatches[idx] = append(w.tableBatches[idx], lastBatch)
 		w.tableBatchSizes[idx] = uint64(lastBatch.Size())
