@@ -142,8 +142,8 @@ func (d *deletableSegBuilder) hintNonDropBlock() {
 
 func (d *deletableSegBuilder) push(entry *catalog.SegmentEntry) {
 	isAppendable := entry.IsAppendable()
-	if isAppendable && d.maxSegId < entry.ID {
-		d.maxSegId = entry.ID
+	if isAppendable && d.maxSegId < entry.SortHint {
+		d.maxSegId = entry.SortHint
 	}
 	if d.segHasNonDropBlk {
 		return
@@ -158,8 +158,8 @@ func (d *deletableSegBuilder) push(entry *catalog.SegmentEntry) {
 
 // copy out segment entries expect the one with max segment id.
 func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
-	sort.Slice(d.segCandids, func(i, j int) bool { return d.segCandids[i].ID < d.segCandids[j].ID })
-	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].ID == d.maxSegId {
+	sort.Slice(d.segCandids, func(i, j int) bool { return d.segCandids[i].SortHint < d.segCandids[j].SortHint })
+	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].SortHint == d.maxSegId {
 		d.segCandids = d.segCandids[:last]
 	}
 	if len(d.segCandids) == 0 && len(d.nsegCandids) == 0 {
