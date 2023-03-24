@@ -324,6 +324,7 @@ func init() {
 		"quarter":                  QUARTER,
 		"quick":                    QUICK,
 		"range":                    RANGE,
+		"rank":                     RANK,
 		"read":                     READ,
 		"reads":                    UNUSED,
 		"redundant":                REDUNDANT,

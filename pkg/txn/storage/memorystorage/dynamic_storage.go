@@ -59,10 +59,10 @@ func (d *DynamicStorage) Close(ctx context.Context) error {
 	return storage.Close(ctx)
 }
 
-func (d *DynamicStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+func (d *DynamicStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	storage, err := d.get(ctx)
 	if err != nil {
-		return err
+		return timestamp.Timestamp{}, err
 	}
 	return storage.Commit(ctx, txnMeta)
 }

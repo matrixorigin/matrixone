@@ -369,7 +369,7 @@ import (
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
-%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
+%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -484,6 +484,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
+%type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
@@ -554,7 +555,7 @@ import (
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
-%type <windowSpec> window_spec_opt
+%type <windowSpec> window_spec_opt window_spec
 %type <windowFrame> window_frame window_frame_opt
 %type <windowFrameBound> window_frame_bound
 %type <windowFrameUnit> window_frame_unit
@@ -6474,6 +6475,20 @@ simple_expr:
     {
         $$ = $1
     }
+|   function_call_window
+    {
+        $$ = $1
+    }
+
+function_call_window:
+	RANK '(' ')' window_spec
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            WindowSpec: $4,
+        }
+    }
 
 else_opt:
     {
@@ -6762,7 +6777,10 @@ window_spec_opt:
     {
         $$ = nil
     }
-|   OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
+|	window_spec
+
+window_spec:
+    OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
     {
         $$ = &tree.WindowSpec{
             PartitionBy: $3,

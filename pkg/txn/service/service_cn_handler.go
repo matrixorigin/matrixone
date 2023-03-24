@@ -230,16 +230,17 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	// fast path: write in only one DNShard.
 	if len(newTxn.DNShards) == 1 {
-		newTxn.CommitTS, _ = s.rt.Clock().Now()
-		txnCtx.updateTxnLocked(newTxn)
-
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
-		// TODO(fagongzi): commmit need return commit ts
-		if err := s.storage.Commit(ctx, newTxn); err != nil {
+
+		commitTS, err := s.storage.Commit(ctx, newTxn)
+		if err != nil {
 			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
 			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
 			changeStatus(txn.TxnStatus_Aborted)
 		} else {
+			newTxn.CommitTS = commitTS
+			txnCtx.updateTxnLocked(newTxn)
+
 			changeStatus(txn.TxnStatus_Committed)
 			util.LogTxn1PCCommitCompleted(s.logger, newTxn)
 		}
@@ -438,7 +439,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
-			if err := s.storage.Commit(ctx, txnMeta); err != nil {
+			if _, err := s.storage.Commit(ctx, txnMeta); err != nil {
 				s.logger.Fatal("commit failed after prepared",
 					util.TxnIDFieldWithID(txnMeta.ID),
 					zap.Error(err))

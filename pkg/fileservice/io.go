@@ -43,3 +43,18 @@ func (c *countingReader) Read(data []byte) (int, error) {
 	c.N += int64(n)
 	return n, err
 }
+
+type writeCloser struct {
+	w         io.Writer
+	closeFunc func() error
+}
+
+var _ io.WriteCloser = new(writeCloser)
+
+func (r *writeCloser) Write(data []byte) (int, error) {
+	return r.w.Write(data)
+}
+
+func (r *writeCloser) Close() error {
+	return r.closeFunc()
+}
