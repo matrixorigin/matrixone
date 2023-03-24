@@ -50,7 +50,7 @@ func TestBuildAlterView(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	store["db.v"] = arg{nil,
+	store["db.v"] = arg{&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel,
 			ViewSql: &plan.ViewDef{
@@ -72,7 +72,7 @@ func TestBuildAlterView(t *testing.T) {
 	}
 
 	store["db.a"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
@@ -87,7 +87,7 @@ func TestBuildAlterView(t *testing.T) {
 			},
 		}}
 
-	store["db.verror"] = arg{nil,
+	store["db.verror"] = arg{&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel},
 	}
