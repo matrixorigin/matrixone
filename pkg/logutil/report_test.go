@@ -16,12 +16,16 @@ package logutil
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 )
+
+var reportMux sync.Mutex
 
 func TestNoop(t *testing.T) {
 	require.Equal(t, zap.String("span", "{}"), noopContextField(context.Background()))
@@ -32,6 +36,8 @@ func TestNoop(t *testing.T) {
 }
 
 func TestReport(t *testing.T) {
+	reportMux.Lock()
+	defer reportMux.Unlock()
 	type fields struct {
 		Level      string
 		Format     string
@@ -71,8 +77,10 @@ func TestReport(t *testing.T) {
 		},
 	}
 
-	//zapReporter.Store(reportZapFunc(func(encoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	//}))
+	zapReporter.Store(reportZapFunc(func(encoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
+		buffer, err := encoder.EncodeEntry(entry, fields)
+		return buffer, err
+	}))
 	for _, tt := range tests {
 
 		t.Run(tt.name, func(t *testing.T) {

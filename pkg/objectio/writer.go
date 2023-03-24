@@ -179,9 +179,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 // Sync is for testing
 func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	w.buffer.SetDataOptions(items...)
+	// if a compact task is rollbacked, it may leave a written file in fs
+	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
-	if err != nil {
-		return err
+	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+		if err = w.object.fs.Delete(ctx, w.name); err != nil {
+			return err
+		}
+		return w.object.fs.Write(ctx, w.buffer.GetData())
 	}
 	return err
 }
