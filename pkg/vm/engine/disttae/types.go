@@ -143,8 +143,9 @@ type Entry struct {
 	// blockName for s3 file
 	fileName string
 	// update or delete tuples
-	bat     *batch.Batch
-	dnStore DNStore
+	bat       *batch.Batch
+	dnStore   DNStore
+	pkChkByDN int8
 }
 
 // txnDatabase represents an opened database in a transaction
