@@ -136,6 +136,27 @@ func TestRateCounterVec(t *testing.T) {
 	assert.InDelta(t, 8.6, c2v, 0.05)
 }
 
+func TestRateCounterVec_notDoAvg(t *testing.T) {
+	factory := newRateCounterVec(CounterOpts{
+		Subsystem: "test",
+		Name:      "rate_counter",
+	}, []string{"zzz", "aaa"}, false)
+
+	require.Panics(t, func() { factory.WithLabelValues("12") })
+
+	inReg := prom.NewRegistry()
+	inReg.MustRegister(factory)
+
+	factory.WithLabelValues("1", "2").Inc()
+
+	mf, err := inReg.Gather()
+	assert.NoError(t, err)
+	assert.Equal(t, len(mf), 1)
+	assert.Equal(t, len(mf[0].Metric), 1)
+	// output the raw data.
+	assert.InDelta(t, 1.0, mf[0].Metric[0].Counter.GetValue(), 0.005)
+}
+
 func TestOrigCounter(t *testing.T) {
 	opts := CounterOpts{
 		Subsystem: "test",
