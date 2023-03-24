@@ -18,22 +18,22 @@ t1
 t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO        null
-name    VARCHAR(10)    YES        null
-str    CHAR(10)    YES        null
+id    INT(32)    NO        null        
+str    CHAR(10)    YES        null        
+name    VARCHAR(10)    YES        null        
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references
-name    VARCHAR(10)    null    YES        null        select,insert,update,references
-str    CHAR(10)    null    YES        null        select,insert,update,references
+id    INT(32)    null    NO        null        select,insert,update,references    
+str    CHAR(10)    null    YES        null        select,insert,update,references    
+name    VARCHAR(10)    null    YES        null        select,insert,update,references    
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references
-name    VARCHAR(10)    null    YES        null        select,insert,update,references
-str    CHAR(10)    null    YES        null        select,insert,update,references
+id    INT(32)    null    NO        null        select,insert,update,references    
+str    CHAR(10)    null    YES        null        select,insert,update,references    
+name    VARCHAR(10)    null    YES        null        select,insert,update,references    
 show full columns from t1 where Field ='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references
+id    INT(32)    null    NO        null        select,insert,update,references    
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen
@@ -45,10 +45,10 @@ create database test01;
 use test01;
 show columns from test02.t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    TINYINT(8)    YES        null
-b    SMALLINT(16)    YES        null
-c    INT(32)    YES        null
-d    BIGINT(64)    YES        null
+a    TINYINT(8)    YES        null        
+b    SMALLINT(16)    YES        null        
+c    INT(32)    YES        null        
+d    BIGINT(64)    YES        null        
 create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
@@ -137,10 +137,10 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 Grants for user1@localhost
+GRANT connect ON account  `user1`@`localhost`
 GRANT table all ON table *.* `user1`@`localhost`
 GRANT create table ON database *.* `user1`@`localhost`
 GRANT drop table ON database *.* `user1`@`localhost`
-GRANT connect ON account  `user1`@`localhost`
 drop user user1;
 drop role role1;
 create database if not exists test03;
@@ -230,14 +230,14 @@ mo_user_defined_function
 mo_mysql_compatbility_mode
 mo_pubs
 mo_database
-mo_tables
 mo_columns
+mo_tables
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-11
+13
 show column_number from mo_database;
 Number of columns in mo_database
-8
+9
 show column_number from hdjshdj;
 no such table mo_catalog.hdjshdj
 drop database if exists test01;
@@ -321,10 +321,7 @@ USE test;
 DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
-show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
-show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 DROP TABLE show_01;
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
@@ -333,11 +330,9 @@ u1 varchar(16) NOT NULL default '',
 PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
-show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
-show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
-show_02    1    PRIMARY    1    __mo_cpkey_col    A    0    NULL    NULL    NO            YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                    YES    NULL
+show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                    YES    NULL
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -346,10 +341,8 @@ show CREATE table show_03;
 Table    Create Table
 show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
-show_03    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
-show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+show_03    0    x    1    a    A    0    NULL    NULL    YES            x    YES    NULL
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -357,10 +350,9 @@ Table    Create Table
 show_04    CREATE TABLE `show_04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`)\n)
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_04    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
-show_04    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
-show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+show_04    0    a    1    a    A    0    NULL    NULL    YES                YES    NULL
+show_04    1    b    1    b    A    0    NULL    NULL    YES                YES    NULL
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;
@@ -369,25 +361,72 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES        null
-c    INT(32)    YES        null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES        null        
+c    INT(32)    YES        null        
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    NO    PRI    null
-c    INT(32)    YES        null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    NO    PRI    null        
+c    INT(32)    YES        null        
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    NO    PRI    null
-c    INT(32)    NO    PRI    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    NO    PRI    null        
+c    INT(32)    NO    PRI    null        
+drop table t3;
+drop database test;
+DROP DATABASE test;
+Can't drop database 'test'; database doesn't exist
+create database test;
+use test;
+drop table if exists t1;
+CREATE TABLE t1 (
+col1 INT NOT NULL PRIMARY KEY,
+col2 DATE NOT NULL,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+INDEX (col2,col3)
+);
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    1    col2    1    col2    A    0    NULL    NULL                    YES    NULL
+t1    1    col2    2    col3    A    0    NULL    NULL                    YES    NULL
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+drop table t1;
+drop table if exists t2;
+CREATE TABLE t2 (
+col1 INT NOT NULL PRIMARY KEY,
+col2 DATE NOT NULL UNIQUE KEY,
+col3 INT NOT NULL,
+col4 INT NOT NULL
+);
+show index from t2;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t2    0    col2    1    col2    A    0    NULL    NULL                    YES    NULL
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+drop table t2;
+drop table if exists t3;
+CREATE TABLE t3 (
+col1 INT NOT NULL PRIMARY KEY,
+col2 DATE NOT NULL,
+col3 INT NOT NULL,
+col4 INT NOT NULL,
+UNIQUE KEY (col1),
+UNIQUE KEY (col1, col3)
+);
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t3    0    col1    1    col1    A    0    NULL    NULL                    YES    NULL
+t3    0    col1_2    1    col1    A    0    NULL    NULL                    YES    NULL
+t3    0    col1_2    2    col3    A    0    NULL    NULL                    YES    NULL
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
 drop table t3;
 drop database test;
 drop database if exists test;

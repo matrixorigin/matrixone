@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -41,7 +42,7 @@ func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.Se
 func (t *delSegTask) String() string {
 	segs := "DelSeg:"
 	for _, seg := range t.delSegs {
-		segs = fmt.Sprintf("%s%d,", segs, seg.GetID())
+		segs = fmt.Sprintf("%s%s,", segs, seg.ID.ToString())
 	}
 	return segs
 }
@@ -60,7 +61,7 @@ func (t *delSegTask) Execute() (err error) {
 		return
 	}
 	for _, entry := range t.delSegs {
-		if err = rel.SoftDeleteSegment(entry.GetID()); err != nil {
+		if err = rel.SoftDeleteSegment(entry.ID); err != nil {
 			return
 		}
 	}

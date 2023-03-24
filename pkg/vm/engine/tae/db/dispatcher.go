@@ -25,13 +25,14 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 	if oldScope.TableID != newScope.TableID {
 		return
 	}
-	if oldScope.SegmentID != newScope.SegmentID {
-		if oldScope.SegmentID != 0 && newScope.SegmentID != 0 {
-			return
-		}
-		return tasks.ErrScheduleScopeConflict
+	if oldScope.SegmentID != newScope.SegmentID &&
+		!common.IsEmptySegid(&oldScope.SegmentID) &&
+		!common.IsEmptySegid(&newScope.SegmentID) {
+		return
 	}
-	if oldScope.BlockID != newScope.BlockID && oldScope.BlockID != 0 && newScope.BlockID != 0 {
+	if oldScope.BlockID != newScope.BlockID &&
+		!common.IsEmptyBlkid(&oldScope.BlockID) &&
+		!common.IsEmptyBlkid(&newScope.BlockID) {
 		return
 	}
 	return tasks.ErrScheduleScopeConflict

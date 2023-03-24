@@ -182,7 +182,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		}
 		toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, newOffset)
 		toId := entry.createdBlks[toPos].AsCommonID()
-		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+		prefix := toId.BlockID[:]
 		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
 		page.Train(toRow, rowid)
 	}

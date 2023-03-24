@@ -143,8 +143,9 @@ type Entry struct {
 	// blockName for s3 file
 	fileName string
 	// update or delete tuples
-	bat     *batch.Batch
-	dnStore DNStore
+	bat       *batch.Batch
+	dnStore   DNStore
+	pkChkByDN int8
 }
 
 // txnDatabase represents an opened database in a transaction
@@ -198,7 +199,7 @@ type txnTable struct {
 
 	updated bool
 	// use for skip rows
-	skipBlocks map[uint64]uint8
+	skipBlocks map[types.Blockid]uint8
 }
 
 type column struct {

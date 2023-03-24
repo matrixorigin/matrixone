@@ -36,7 +36,7 @@ type PartitionReader struct {
 	typsMap              map[string]types.Type
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
-	skipBlocks           map[uint64]uint8
+	skipBlocks           map[types.Blockid]uint8
 	iter                 partitionStateIter
 	sourceBatchNameIndex map[string]int
 
