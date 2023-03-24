@@ -84,7 +84,7 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	case types.T_uuid:
 		return fetchUUIDRows
 	case types.T_char, types.T_varchar:
-		return fetchBytesRows
+		return fetchVarlenaRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
@@ -517,7 +517,7 @@ func fetchUUIDRows(
 		})
 }
 
-func fetchBytesRows(
+func fetchVarlenaRows(
 	vec *vector.Vector,
 	parker *types.Packer,
 	tp types.Type,
@@ -536,21 +536,21 @@ func fetchBytesRows(
 	}
 
 	n := vec.Length()
-	data := vector.MustBytesCol(vec)
+	data, area := vector.MustVarlenaRawData(vec)
 	if n == 1 {
-		return [][]byte{fn(data[0])},
+		return [][]byte{fn(data[0].GetByteSlice(area))},
 			lock.Granularity_Row
 	}
 	size := n * int(tp.Width)
 	if size > max {
 		return [][]byte{
-				fn(data[0]),
-				fn(data[n-1])},
+				fn(data[0].GetByteSlice(area)),
+				fn(data[n-1].GetByteSlice(area))},
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
-	for _, v := range data {
-		rows = append(rows, fn(v))
+	for idx := range data {
+		rows = append(rows, fn(data[idx].GetByteSlice(area)))
 	}
 	return rows, lock.Granularity_Row
 }
