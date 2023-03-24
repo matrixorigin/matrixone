@@ -98,17 +98,20 @@ DROP TABLE t3;
 DROP TABLE IF EXISTS t4;
 DROP TABLE IF EXISTS t5;
 CREATE TABLE t4(a int primary key,b varchar(5));
-CREATE TABLE t5(a int ,b varchar(5), C int, foreign key(C) references t4(a));
+CREATE TABLE t5(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+ALTER table t5 DROP FOREIGN KEY fC;
+ALTER table t5 ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE t4;
 show CREATE TABLE T5;
 DROP table t5;
 DROP table t4;
 
 -- create USER
-DROP USER IF EXISTS user_name;
-CREATE USER user_name IDENTIFIED BY '123456';
-CREATE USER USER_NAME IDENTIFIED BY '123456';
-CREATE USER USER_name IDENTIFIED BY '123456';
+DROP USER IF EXISTS u_name;
+CREATE USER u_name IDENTIFIED BY '123456';
+CREATE USER U_NAME IDENTIFIED BY '123456';
+CREATE USER U_name IDENTIFIED BY '123456';
+SELECT user_host,user_name,status FROM mo_catalog.mo_user WHERE user_name = 'U_name';
 SELECT user_host,user_name,status FROM mo_catalog.mo_user;
 DROP USER user_name;
 DROP DATABASE test03;
@@ -180,6 +183,7 @@ DROP TABLE t11;
 DROP TABLE IF EXISTS t12;
 CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX ABc ON t12(col2);
+DROP INDEX abc on t12;
 select * from t12;
 show CREATE table t12;
 DROP TABLE t12;
@@ -200,6 +204,8 @@ CREATE ROLE rolex;
 CREATE ROLE Rolex;
 CREATE ROLE ROLEX;
 SELECT role_name,COmments FROM mo_catalog.mo_role;
+SELECT role_name,COmments FROM mo_catalog.mo_role WHERE role_name = 'Rolex';
+DROP ROLE rolex;
 
 -- create sequence
 DROP SEQUENCE IF EXISTS SEQ;
@@ -238,9 +244,10 @@ DROP VIEW IF EXISTS view01;
 CREATE TABLE t13 (a int);
 INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
-ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1;
+ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
 SELECT * FROM view01;
+SELECT * FROM vieW01 WHERE A = 1 OR a = 2;
 DROP view view01;
 drop table t13;
 drop database test04;
@@ -346,6 +353,7 @@ DROP TABLE `t18`;
 DROP TABLE IF EXISTS `t19`;
 CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX `ABc` ON t19(col2);
+DROP INDEX `abc` ON t19;
 select * from `t19`;
 show CREATE table `t19`;
 DROP TABLE `t19`;
@@ -365,6 +373,7 @@ CREATE ROLE `rolex`;
 CREATE ROLE `Rolex`;
 CREATE ROLE `ROLEX`;
 SELECT role_name,comments FROM `mo_catalog`.`mo_role`;
+SELECT role_name,COmments FROM `mo_catalog`.`mo_role` WHERE `role_name` = 'Rolex';
 DROP ROLE `Rolex`;
 
 -- create USER
@@ -373,6 +382,7 @@ CREATE USER `user_name` IDENTIFIED BY '123456';
 CREATE USER `USER_NAME` IDENTIFIED BY '123456';
 CREATE USER `USER_name` IDENTIFIED BY '123456';
 SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user`;
+SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user` WHERE user_name = 'User_name';
 DROP USER `user_name`;
 DROP DATABASE `test06`;
 
@@ -409,6 +419,7 @@ INSERT INTO `t22` VALUES(1),(2),(3),(4);
 CREATE VIEW `view01` AS SELECT * FROM `t22`;
 ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
 SELECT * FROM `view01`;
+SELECT * FROM `view01` WHERE A = 1;
 DROP view `vieW01`;
 
 -- TEMPORARY table
@@ -423,6 +434,18 @@ SELECT * FROM `t1`;
 DROP TABLE `t1`;
 DROP DATABASE `TEST07`;
 
+-- foreign key
+DROP TABLE IF EXISTS `t4`;
+DROP TABLE IF EXISTS `t5`;
+CREATE TABLE `t4`(a int primary key,b varchar(5));
+CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+ALTER table `t5` DROP FOREIGN KEY fC;
+ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
+show CREATE TABLE `t4`;
+show CREATE TABLE `T5`;
+DROP table `t5`;
+DROP table `t4`;
+
 -- external table
 DROP DATABASE IF EXISTS `test08`;
 CREATE DATABASE `test08`;
@@ -432,4 +455,3 @@ CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resourc
 SELECT * FROM `Table02`;
 drop table table02;
 DROP DATABASE `TEST08`;
-
