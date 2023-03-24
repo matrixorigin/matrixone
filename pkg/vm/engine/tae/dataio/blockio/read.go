@@ -16,9 +16,10 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -77,8 +78,8 @@ func BlockReadInner(
 		}
 		deleteRows = recordDeletes(deleteBatch, ts)
 		logutil.Infof(
-			"blockread %d read delete %d: base %s filter out %v\n",
-			info.BlockID, deleteBatch.Length(), ts.ToString(), len(deleteRows))
+			"blockread %s read delete %d: base %s filter out %v\n",
+			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
@@ -133,7 +134,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	var bat *batch.Batch
 	if ok {
 		// generate rowIdVec
-		prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
+		prefix := info.BlockID[:]
 		rowIdVec, err = model.PreparePhyAddrDataWithPool(
 			types.T_Rowid.ToType(),
 			prefix,
@@ -199,8 +200,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			}
 		}
 		logutil.Infof(
-			"blockread %d scan filter cost %v: base %s filter out %v\n ",
-			info.BlockID, time.Since(t0), ts.ToString(), len(deleteRows))
+			"blockread %s scan filter cost %v: base %s filter out %v\n ",
+			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
 		return nil
 	}
 
@@ -239,7 +240,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		return nil
 	}
 	// record visible delete rows
-	deleteRows := bitmap.New(0)
+	deleteRows := nulls.NewWithSize(0)
 	for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
 		if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
 			continue
@@ -249,10 +250,10 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		}
 		rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
 		_, _, row := model.DecodePhyAddrKey(rowid)
-		deleteRows.Add(uint64(row))
+		nulls.Add(deleteRows, uint64(row))
 	}
 	var rows []int64
-	itr := deleteRows.Iterator()
+	itr := deleteRows.Np.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, int64(r))

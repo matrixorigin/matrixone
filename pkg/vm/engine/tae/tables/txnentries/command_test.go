@@ -27,8 +27,10 @@ import (
 func TestCompactBlockCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	from := &common.ID{TableID: 1, SegmentID: 2, BlockID: 3}
-	to := &common.ID{TableID: 1, SegmentID: 3, BlockID: 1}
+	sid1 := common.NewSegmentid()
+	sid2 := common.NewSegmentid()
+	from := &common.ID{TableID: 1, SegmentID: sid1, BlockID: common.NewBlockid(&sid1, 1, 0)}
+	to := &common.ID{TableID: 1, SegmentID: sid2, BlockID: common.NewBlockid(&sid2, 3, 0)}
 	cmd := newCompactBlockCmd(from, to, nil, 0)
 
 	var w bytes.Buffer
@@ -57,10 +59,14 @@ func checkIDIsEqual(t *testing.T, id1, id2 *common.ID) {
 func TestMergeBlocksCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	droppedSegs := []*common.ID{{TableID: 1, SegmentID: 2}, {TableID: 1, SegmentID: 2}}
-	createdSegs := []*common.ID{{TableID: 1, SegmentID: 3}}
-	droppedBlks := []*common.ID{{TableID: 1, SegmentID: 2, BlockID: 3}, {TableID: 1, SegmentID: 2, BlockID: 4}}
-	createdBlks := []*common.ID{{TableID: 1, SegmentID: 3, BlockID: 1}}
+	droppedSid := common.NewSegmentid()
+	createdSid := common.NewSegmentid()
+	droppedSegs := []*common.ID{{TableID: 1, SegmentID: droppedSid}, {TableID: 1, SegmentID: droppedSid}}
+	createdSegs := []*common.ID{{TableID: 1, SegmentID: createdSid}}
+	droppedBlks := []*common.ID{
+		{TableID: 1, SegmentID: droppedSid, BlockID: common.NewBlockid(&droppedSid, 3, 0)},
+		{TableID: 1, SegmentID: droppedSid, BlockID: common.NewBlockid(&droppedSid, 4, 0)}}
+	createdBlks := []*common.ID{{TableID: 1, SegmentID: createdSid, BlockID: common.NewBlockid(&createdSid, 1, 0)}}
 	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
 	fromAddr := []uint32{40000, 40000, 40000, 42}
 	toAddr := []uint32{40000, 40000, 242}

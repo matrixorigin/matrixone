@@ -74,7 +74,7 @@ func (node *memoryNode) initIndexes(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
-	logutil.Infof("Releasing Memorynode BLK-%d", node.block.meta.ID)
+	logutil.Infof("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
 	for i, index := range node.indexes {

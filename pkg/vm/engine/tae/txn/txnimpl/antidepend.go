@@ -46,18 +46,18 @@ func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
 type warChecker struct {
 	txn         txnif.AsyncTxn
 	catalog     *catalog.Catalog
-	conflictSet map[uint64]bool
-	readSet     map[uint64]*catalog.BlockEntry
-	cache       map[uint64]*catalog.BlockEntry
+	conflictSet map[types.Blockid]bool
+	readSet     map[types.Blockid]*catalog.BlockEntry
+	cache       map[types.Blockid]*catalog.BlockEntry
 }
 
 func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	checker := &warChecker{
 		txn:         txn,
 		catalog:     c,
-		conflictSet: make(map[uint64]bool),
-		readSet:     make(map[uint64]*catalog.BlockEntry),
-		cache:       make(map[uint64]*catalog.BlockEntry),
+		conflictSet: make(map[types.Blockid]bool),
+		readSet:     make(map[types.Blockid]*catalog.BlockEntry),
+		cache:       make(map[types.Blockid]*catalog.BlockEntry),
 	}
 	return checker
 }
@@ -65,8 +65,8 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 func (checker *warChecker) CacheGet(
 	dbID uint64,
 	tableID uint64,
-	segmentID uint64,
-	blockID uint64) (block *catalog.BlockEntry, err error) {
+	segmentID types.Uuid,
+	blockID types.Blockid) (block *catalog.BlockEntry, err error) {
 	block = checker.cacheGet(blockID)
 	if block != nil {
 		return
@@ -94,8 +94,8 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	segmentID uint64,
-	blockID uint64) {
+	segmentID types.Uuid,
+	blockID types.Blockid) {
 	block, err := checker.CacheGet(dbID, tableID, segmentID, blockID)
 	if err != nil {
 		panic(err)
@@ -103,7 +103,7 @@ func (checker *warChecker) InsertByID(
 	checker.Insert(block)
 }
 
-func (checker *warChecker) cacheGet(id uint64) *catalog.BlockEntry {
+func (checker *warChecker) cacheGet(id types.Blockid) *catalog.BlockEntry {
 	return checker.cache[id]
 }
 func (checker *warChecker) Cache(block *catalog.BlockEntry) {
@@ -147,7 +147,7 @@ func (checker *warChecker) Delete(id *common.ID) {
 	delete(checker.readSet, id.BlockID)
 }
 
-func (checker *warChecker) HasConflict(id uint64) (y bool) {
+func (checker *warChecker) HasConflict(id types.Blockid) (y bool) {
 	_, y = checker.conflictSet[id]
 	return
 }
