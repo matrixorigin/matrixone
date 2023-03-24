@@ -53,6 +53,7 @@ show column_number from mo_user_defined_function;
 show column_number from mo_tables;
 show column_number from mo_database;
 show column_number from mo_columns;
+show column_number from mo_indexes;
 
 use system_metrics;
 show column_number from metric;

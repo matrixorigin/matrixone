@@ -20,6 +20,7 @@ grant connect on account * to r1;
 use mo_catalog;
 show tables;
 tables_in_mo_catalog
+mo_indexes
 mo_user
 mo_account
 mo_role
