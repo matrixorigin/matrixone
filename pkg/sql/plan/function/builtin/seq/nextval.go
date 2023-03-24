@@ -107,7 +107,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
-	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from %s.%s", db, tblname))
+	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
@@ -240,7 +240,7 @@ func advanceSeq[T constraints.Integer](lsn, minv, maxv, incrv T,
 }
 
 func setSeq[T constraints.Integer](proc *process.Process, setv T, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set last_seq_num = %d", db, tbl, setv))
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +256,7 @@ func setSeq[T constraints.Integer](proc *process.Process, setv T, rel engine.Rel
 
 func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relation, lsn T, db, tbl string) (string, error) {
 	// Set is called to true.
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set is_called = true", db, tbl))
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set is_called = true", db, tbl))
 	if err != nil {
 		return "", err
 	}
