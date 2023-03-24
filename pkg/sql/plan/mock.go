@@ -352,6 +352,24 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_indexes"] = &Schema{
+		cols: []col{
+			{"id", types.T_uint64, false, 100, 0},
+			{"table_id", types.T_uint64, false, 100, 0},
+			{"database_id", types.T_uint64, false, 100, 0},
+			{"name", types.T_varchar, false, 64, 0},
+			{"type", types.T_varchar, false, 11, 0},
+			{"is_visible", types.T_int8, false, 50, 0},
+			{"hidden", types.T_int8, false, 50, 0},
+			{"comment", types.T_varchar, false, 2048, 0},
+			{"column_name", types.T_varchar, false, 256, 0},
+			{"ordinal_position", types.T_uint32, false, 50, 0},
+			{"options", types.T_text, true, 50, 0},
+			{"index_table_name", types.T_varchar, true, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
 	//---------------------------------------------constraint test schema---------------------------------------------------------
 	/*
 		create table emp(
@@ -682,6 +700,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 func (m *MockCompilerContext) DatabaseExists(name string) bool {
 	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
+}
+
+func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	return 0, nil
 }
 
 func (m *MockCompilerContext) DefaultDatabase() string {

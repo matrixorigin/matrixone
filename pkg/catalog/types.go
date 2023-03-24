@@ -62,6 +62,11 @@ const (
 )
 
 const (
+	// Non-hard-coded data dictionary table
+	MO_INDEXES = "mo_indexes"
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"

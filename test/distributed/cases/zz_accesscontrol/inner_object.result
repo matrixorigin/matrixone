@@ -28,21 +28,21 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show columns from mo_tables;
 Field    Type    Null    Key    Default    Extra    Comment
-viewdef    BLOB(0)    YES        null
-relpersistence    VARCHAR(5000)    YES        null
-creator    INT UNSIGNED(0)    YES        null
-partitioned    BLOB(0)    YES        null
-account_id    INT UNSIGNED(0)    YES        null
-reldatabase_id    BIGINT UNSIGNED(0)    YES        null
-relkind    VARCHAR(5000)    YES        null
-rel_comment    VARCHAR(5000)    YES        null
-relname    VARCHAR(5000)    YES        null
-rel_createsql    TEXT(0)    YES        null
-created_time    TIMESTAMP(0)    YES        null
-owner    INT UNSIGNED(0)    YES        null
-constraint    VARCHAR(5000)    YES        null
-reldatabase    VARCHAR(5000)    YES        null
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null
+rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
+relname    VARCHAR(5000)    YES        null        
+reldatabase    VARCHAR(5000)    YES        null        
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
+relpersistence    VARCHAR(5000)    YES        null        
+relkind    VARCHAR(5000)    YES        null        
+rel_comment    VARCHAR(5000)    YES        null        
+rel_createsql    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES        null        
+partitioned    BLOB(0)    YES        null        
+viewdef    BLOB(0)    YES        null        
+constraint    VARCHAR(5000)    YES        null        
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system;
@@ -69,13 +69,13 @@ public
 create database account_db;
 use account_db;
 show tables;
-tables_in_account_db
+Tables_in_account_db
 create table a(col int);
 show create table a;
 Table    Create Table
 a    CREATE TABLE `a` (\n`col` INT DEFAULT NULL\n)
 show tables;
-tables_in_account_db
+Tables_in_account_db
 a
 show databases;
 Database
@@ -102,6 +102,8 @@ internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_database;
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_columns;
+internal error: do not have privilege to execute the statement
+delete from mo_catalog.mo_indexes;
 internal error: do not have privilege to execute the statement
 drop database information_schema;
 internal error: do not have privilege to execute the statement
@@ -133,6 +135,19 @@ internal error: can not delete the role accountadmin
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 role_name
 accountadmin
+create table tb1(
+deptno int unsigned,
+dname varchar(15),
+loc varchar(50),
+unique key(deptno)
+);
+select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
+deptno    UNIQUE    deptno    1    0        deptno    1    null
+create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
 drop account if exists account1;
 drop account if exists inner_account;
+drop account if exists accx11;
 drop role if exists revoke_role_1;

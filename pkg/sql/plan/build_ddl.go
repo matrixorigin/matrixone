@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"strconv"
 	"strings"
 
@@ -1105,6 +1106,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
+	var attachedPlan *plan.Plan
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
@@ -1157,6 +1159,16 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				}
 			}
 		}
+
+		// Check whether the table definition contains index constraints
+		if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
+			var err error
+			attachedPlan, err = buildDeleteIndexMetaPlan("", tableDef.TblId, 0, DROP_TABLE, ctx)
+			//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1167,7 +1179,44 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
+}
+
+type DeleteIndexMode int
+
+const (
+	DROP_INDEX DeleteIndexMode = iota
+	DROP_TABLE
+	DROP_DATABASE
+)
+
+var (
+	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+)
+
+// Build a plan to delete index metadata
+func buildDeleteIndexMetaPlan(indexName string, tblId uint64, databaseId uint64, mode DeleteIndexMode, ctx CompilerContext) (*Plan, error) {
+	var sql string
+	switch mode {
+	case DROP_INDEX:
+		sql = fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tblId, indexName)
+	case DROP_TABLE:
+		sql = fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tblId)
+	case DROP_DATABASE:
+		sql = fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
+	}
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return nil, err
+	}
+	if deleteStmt, ok := stmt.(*tree.Delete); ok {
+		return buildDelete(deleteStmt, ctx)
+	} else {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not delete syntax tree")
+	}
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
@@ -1233,6 +1282,19 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		Database: string(stmt.Name),
 	}
 
+	var attachedPlan *Plan
+	if ctx.DatabaseExists(string(stmt.Name)) {
+		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
+		if err != nil {
+			return nil, err
+		}
+		attachedPlan, err = buildDeleteIndexMetaPlan("", 0, databaseId, DROP_DATABASE, ctx)
+		//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1242,6 +1304,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1348,8 +1411,16 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 
+	var attachedPlan *plan.Plan
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+	} else {
+		var err error
+		attachedPlan, err = buildDeleteIndexMetaPlan(dropIndex.IndexName, tableDef.TblId, 0, DROP_INDEX, ctx)
+		//attachedPlan, err = buildDeleteIndexMetadataPlan(tableDef, dropIndex.IndexName, ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -1361,6 +1432,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
 }
 
