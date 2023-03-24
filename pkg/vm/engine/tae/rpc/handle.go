@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -828,7 +827,7 @@ func (h *Handle) HandleWrite(
 		req.TableName, req.DatabaseId, req.DatabaseName,
 		txn.String(),
 	)
-	logutil.Debugf("[precommit] write batch: %s\n", debugMoBatch(req.Batch))
+	logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
 	defer func() {
 		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
 	}()
@@ -906,88 +905,6 @@ func (h *Handle) HandleUpdateConstraint(
 	tbl.UpdateConstraintWithBin(ctx, cstr)
 
 	return nil
-}
-
-func vec2Str[T any](vec []T, v *vector.Vector) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", v.Length()))
-	first := true
-	for i := 0; i < len(vec); i++ {
-		if !first {
-			_ = w.WriteByte(',')
-		}
-		if v.GetNulls().Contains(uint64(i)) {
-			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), types.Null{}))
-		} else {
-			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), vec[i]))
-		}
-		first = false
-	}
-	return w.String()
-}
-
-func moVec2String(v *vector.Vector, printN int) string {
-	switch v.GetType().Oid {
-	case types.T_bool:
-		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
-	case types.T_int8:
-		return vec2Str(vector.MustFixedCol[int8](v)[:printN], v)
-	case types.T_int16:
-		return vec2Str(vector.MustFixedCol[int16](v)[:printN], v)
-	case types.T_int32:
-		return vec2Str(vector.MustFixedCol[int32](v)[:printN], v)
-	case types.T_int64:
-		return vec2Str(vector.MustFixedCol[int64](v)[:printN], v)
-	case types.T_uint8:
-		return vec2Str(vector.MustFixedCol[uint8](v)[:printN], v)
-	case types.T_uint16:
-		return vec2Str(vector.MustFixedCol[uint16](v)[:printN], v)
-	case types.T_uint32:
-		return vec2Str(vector.MustFixedCol[uint32](v)[:printN], v)
-	case types.T_uint64:
-		return vec2Str(vector.MustFixedCol[uint64](v)[:printN], v)
-	case types.T_float32:
-		return vec2Str(vector.MustFixedCol[float32](v)[:printN], v)
-	case types.T_float64:
-		return vec2Str(vector.MustFixedCol[float64](v)[:printN], v)
-	case types.T_date:
-		return vec2Str(vector.MustFixedCol[types.Date](v)[:printN], v)
-	case types.T_datetime:
-		return vec2Str(vector.MustFixedCol[types.Datetime](v)[:printN], v)
-	case types.T_time:
-		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
-	case types.T_timestamp:
-		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
-	case types.T_decimal64:
-		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
-	case types.T_decimal128:
-		return vec2Str(vector.MustFixedCol[types.Decimal128](v)[:printN], v)
-	case types.T_uuid:
-		return vec2Str(vector.MustFixedCol[types.Uuid](v)[:printN], v)
-	case types.T_TS:
-		return vec2Str(vector.MustFixedCol[types.TS](v)[:printN], v)
-	case types.T_Rowid:
-		return vec2Str(vector.MustFixedCol[types.Rowid](v)[:printN], v)
-	}
-	if v.GetType().IsVarlen() {
-		return vec2Str(vector.MustBytesCol(v)[:printN], v)
-	}
-	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
-}
-
-func debugMoBatch(moBat *batch.Batch) string {
-	if !logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		return "not debug level"
-	}
-	printN := moBat.Length()
-	if printN > logtail.PrintN {
-		printN = logtail.PrintN
-	}
-	buf := new(bytes.Buffer)
-	for i, vec := range moBat.Vecs {
-		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, printN))
-	}
-	return buf.String()
 }
 
 func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {

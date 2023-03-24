@@ -15,8 +15,11 @@
 package tables
 
 import (
+	"strings"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -59,6 +62,11 @@ func (node *persistedNode) init() {
 	pkIdx := -1
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
+	}
+	metaloc := node.block.meta.GetMetaLoc()
+	info := strings.Split(metaloc, ":")
+	if len(info) < 2 {
+		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
 	}
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
