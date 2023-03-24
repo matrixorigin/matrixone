@@ -16,14 +16,15 @@ package memoryengine
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 )
 
 type CompilerContext struct {
@@ -81,6 +82,18 @@ func (c *CompilerContext) DatabaseExists(name string) bool {
 		c.txnOp,
 	)
 	return err == nil
+}
+
+func (c *CompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	database, err := c.engine.Database(c.ctx, dbName, c.txnOp)
+	if err != nil {
+		return 0, err
+	}
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(c.ctx), 10, 64)
+	if err != nil {
+		return 0, moerr.NewInternalError(c.ctx, "The databaseid of '%s' is not a valid number", dbName)
+	}
+	return databaseId, nil
 }
 
 func (c *CompilerContext) DefaultDatabase() string {

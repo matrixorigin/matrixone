@@ -72,11 +72,11 @@ func NewCompactBlockTask(
 	if err != nil {
 		return
 	}
-	seg, err := rel.GetSegment(meta.GetSegment().GetID())
+	seg, err := rel.GetSegment(meta.GetSegment().ID)
 	if err != nil {
 		return
 	}
-	task.compacted, err = seg.GetBlock(meta.GetID())
+	task.compacted, err = seg.GetBlock(meta.ID)
 	if err != nil {
 		return
 	}
@@ -156,7 +156,9 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 
 	if !empty {
-		task.createAndFlushNewBlock(seg, preparer, deletes)
+		if _, err = task.createAndFlushNewBlock(seg, preparer, deletes); err != nil {
+			return
+		}
 	}
 
 	table := task.meta.GetSegment().GetTable()
@@ -257,12 +259,13 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	preparer *model.PreparedCompactedBlockData,
 	deletes *containers.Batch,
 ) (newBlk handle.Block, err error) {
-	newBlk, err = seg.CreateNonAppendableBlock()
+	newBlk, err = seg.CreateNonAppendableBlock(nil)
 	if err != nil {
 		return
 	}
 	task.created = newBlk
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
+	id := newMeta.ID
 	newBlkData := newMeta.GetBlockData()
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
@@ -275,6 +278,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {
+		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
 	metaLoc, err := blockio.EncodeLocation(
@@ -284,6 +288,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err != nil {
 		return
 	}
+	logutil.Infof("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}

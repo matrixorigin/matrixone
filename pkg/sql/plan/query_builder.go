@@ -2202,23 +2202,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		var extraFilters []*plan.Expr
-		for _, filter := range cantPushdownChild {
-			switch exprImpl := filter.Expr.(type) {
-			case *plan.Expr_F:
-				if exprImpl.F.Func.ObjName == "or" {
-					keys := checkDNF(filter)
-					for _, key := range keys {
-						extraFilter := walkThroughDNF(builder.GetContext(), filter, key)
-						if extraFilter != nil {
-							extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
-						}
-					}
-				}
-			}
-		}
-		builder.pushdownFilters(node.Children[0], extraFilters, separateNonEquiConds)
-
 		if len(cantPushdownChild) > 0 {
 			node.Children[0] = childID
 			node.FilterList = cantPushdownChild
@@ -2306,6 +2289,29 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 
 			node.OnList = newOnList
+		}
+
+		if !separateNonEquiConds {
+			var extraFilters []*plan.Expr
+			for i, filter := range filters {
+				if joinSides[i] != JoinSideBoth {
+					continue
+				}
+				switch exprImpl := filter.Expr.(type) {
+				case *plan.Expr_F:
+					if exprImpl.F.Func.ObjName == "or" {
+						keys := checkDNF(filter)
+						for _, key := range keys {
+							extraFilter := walkThroughDNF(builder.GetContext(), filter, key)
+							if extraFilter != nil {
+								extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
+								joinSides = append(joinSides, getJoinSide(extraFilter, leftTags, rightTags, markTag))
+							}
+						}
+					}
+				}
+			}
+			filters = append(filters, extraFilters...)
 		}
 
 		for i, filter := range filters {

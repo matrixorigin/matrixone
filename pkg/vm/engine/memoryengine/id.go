@@ -56,6 +56,7 @@ func (i ID) ToRowID() types.Rowid {
 
 type IDGenerator interface {
 	NewID(context.Context) (ID, error)
+	NewIDByKey(ctx context.Context, key string) (ID, error)
 }
 
 type randomIDGenerator struct{}
@@ -76,11 +77,18 @@ func (r *randomIDGenerator) NewID(_ context.Context) (ID, error) {
 	return ID(ts<<n + atomic.AddInt64(&idCounter, 1)%(1<<n)), nil
 }
 
+func (r *randomIDGenerator) NewIDByKey(_ context.Context, _ string) (ID, error) {
+	ts := time.Now().Unix()
+	n := bits.LeadingZeros(uint(ts))
+	return ID(ts<<n + atomic.AddInt64(&idCounter, 1)%(1<<n)), nil
+}
+
 var RandomIDGenerator = new(randomIDGenerator)
 
 type hakeeperIDGenerator interface {
 	// both CNHAKeeperClient and DNHAKeeperClient has this method
 	AllocateID(ctx context.Context) (uint64, error)
+	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
 type HakeeperIDGenerator struct {
@@ -101,6 +109,16 @@ func (h *HakeeperIDGenerator) NewID(ctx context.Context) (ID, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	id, err := h.generator.AllocateID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return ID(id), nil
+}
+
+func (h *HakeeperIDGenerator) NewIDByKey(ctx context.Context, key string) (ID, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	id, err := h.generator.AllocateIDByKey(ctx, key)
 	if err != nil {
 		return 0, err
 	}

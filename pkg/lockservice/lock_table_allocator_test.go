@@ -206,6 +206,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			runtime.WithClock(clock.NewHLCClock(func() int64 {
 				return time.Now().UTC().UnixNano()
 			}, 0))))
+		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
@@ -233,6 +234,7 @@ func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
 	fn func(*lockTableAllocator)) {
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(testSockets[7:]))
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	cluster := clusterservice.NewMOCluster(

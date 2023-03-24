@@ -79,7 +79,7 @@ func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 
 func (s *StorageTxnOperator) Commit(ctx context.Context) error {
 	for _, storage := range s.storages {
-		if err := storage.Commit(ctx, s.meta); err != nil {
+		if _, err := storage.Commit(ctx, s.meta); err != nil {
 			return err
 		}
 	}
