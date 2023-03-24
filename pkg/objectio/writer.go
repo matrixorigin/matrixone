@@ -17,7 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -58,15 +58,9 @@ func (w *ObjectWriter) WriteHeader() error {
 		header bytes.Buffer
 	)
 	h := Header{magic: Magic, version: Version}
-	if err = binary.Write(&header, endian, h.magic); err != nil {
-		return err
-	}
-	if err = binary.Write(&header, endian, h.version); err != nil {
-		return err
-	}
-	if err = binary.Write(&header, endian, h.dummy); err != nil {
-		return err
-	}
+	header.Write(types.EncodeFixed[uint64](h.magic))
+	header.Write(types.EncodeFixed[uint16](h.version))
+	header.Write(make([]byte, 22))
 	_, _, err = w.buffer.Write(header.Bytes())
 	return err
 }
@@ -90,14 +84,14 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		block.(*Block).columns[i].(*ColumnBlock).meta.location = Extent{
+		block.(*Block).columns[i].meta.location = Extent{
 			id:         uint32(block.GetMeta().header.blockId),
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(originSize),
 		}
-		block.(*Block).columns[i].(*ColumnBlock).meta.alg = compress.Lz4
-		block.(*Block).columns[i].(*ColumnBlock).meta.typ = uint8(vec.GetType().Oid)
+		block.(*Block).columns[i].meta.alg = compress.Lz4
+		block.(*Block).columns[i].meta.typ = uint8(vec.GetType().Oid)
 	}
 	return block, nil
 }
@@ -124,10 +118,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	metaLen := 0
 	start := 0
 	for _, block := range w.blocks {
-		meta, err := block.(*Block).MarshalMeta()
-		if err != nil {
-			return nil, err
-		}
+		meta := block.(*Block).MarshalMeta()
 		offset, length, err := w.buffer.Write(meta)
 		if err != nil {
 			return nil, err
@@ -136,22 +127,13 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 			start = offset
 		}
 		metaLen += length
-		if err = binary.Write(&buf, endian, uint32(offset)); err != nil {
-			return nil, err
-		}
-		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
-			return nil, err
-		}
-		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
-			return nil, err
-		}
+		buf.Write(types.EncodeFixed[uint32](block.GetID()))
+		buf.Write(types.EncodeFixed[uint32](uint32(offset)))
+		buf.Write(types.EncodeFixed[uint32](uint32(length)))
+		buf.Write(types.EncodeFixed[uint32](uint32(length)))
 	}
-	if err = binary.Write(&buf, endian, uint32(len(w.blocks))); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buf, endian, uint64(Magic)); err != nil {
-		return nil, err
-	}
+	buf.Write(types.EncodeFixed[uint32](uint32(len(w.blocks))))
+	buf.Write(types.EncodeFixed[uint64](uint64(Magic)))
 	_, _, err = w.buffer.Write(buf.Bytes())
 	if err != nil {
 		return nil, err

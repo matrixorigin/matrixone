@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -173,6 +174,62 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "test index 0", string(index.(*BloomFilter).data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
+
+}
+
+func TestNewObjectReader(t *testing.T) {
+	t.Skip("use debug")
+	dir := InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	id := 1
+	name := fmt.Sprintf("%d.blk", id)
+	mp := mpool.MustNewZero()
+	bat := newBatch(mp)
+	defer bat.Clean(mp)
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c, nil)
+	assert.Nil(t, err)
+
+	objectWriter, err := NewObjectWriter(name, service)
+	assert.Nil(t, err)
+	fd, err := objectWriter.Write(bat)
+	assert.Nil(t, err)
+	for i := range bat.Vecs {
+		buf := fmt.Sprintf("test index %d", i)
+		index := NewBloomFilter(uint16(i), 0, []byte(buf))
+		err = objectWriter.WriteIndex(fd, index)
+		assert.Nil(t, err)
+
+		zbuf := make([]byte, 64)
+		zbuf[31] = 1
+		zbuf[63] = 10
+		index, err = NewZoneMap(uint16(i), zbuf)
+		assert.Nil(t, err)
+		err = objectWriter.WriteIndex(fd, index)
+		assert.Nil(t, err)
+	}
+	_, err = objectWriter.Write(bat)
+	assert.Nil(t, err)
+	ts := time.Now()
+	option := WriteOptions{
+		Type: WriteTS,
+		Val:  ts,
+	}
+	blocks, err := objectWriter.WriteEnd(context.Background(), option)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(blocks))
+	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	now := time.Now()
+	var ext Extent
+	buf := blocks[0].(*Block).MarshalMeta()
+	for i := 0; i < 1000000; i++ {
+		blocks[0].(*Block).UnmarshalMeta(buf, nil)
+	}
+	logutil.Infof("marshal&unmarshal: %v, ext: %v", time.Since(now), ext)
 
 }
 
