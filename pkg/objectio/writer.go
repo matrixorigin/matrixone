@@ -84,14 +84,14 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		block.(*Block).columns[i].(*ColumnBlock).meta.location = Extent{
+		block.(*Block).columns[i].meta.location = Extent{
 			id:         uint32(block.GetMeta().header.blockId),
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(originSize),
 		}
-		block.(*Block).columns[i].(*ColumnBlock).meta.alg = compress.Lz4
-		block.(*Block).columns[i].(*ColumnBlock).meta.typ = uint8(vec.GetType().Oid)
+		block.(*Block).columns[i].meta.alg = compress.Lz4
+		block.(*Block).columns[i].meta.typ = uint8(vec.GetType().Oid)
 	}
 	return block, nil
 }

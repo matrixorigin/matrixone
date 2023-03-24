@@ -32,7 +32,7 @@ type ColumnBlock struct {
 	object *Object
 }
 
-func NewColumnBlock(idx uint16, object *Object) ColumnObject {
+func NewColumnBlock(idx uint16, object *Object) *ColumnBlock {
 	meta := &ColumnMeta{
 		idx:         idx,
 		zoneMap:     ZoneMap{},

@@ -29,7 +29,7 @@ type Block struct {
 	header BlockHeader
 
 	// columns is the vector in the batch
-	columns []ColumnObject
+	columns []*ColumnBlock
 
 	// object is a container that can store multiple blocks,
 	// using a fileservice file storage
@@ -49,7 +49,7 @@ func NewBlock(colCnt uint16, object *Object, name string) BlockObject {
 	block := &Block{
 		header:  header,
 		object:  object,
-		columns: make([]ColumnObject, colCnt),
+		columns: make([]*ColumnBlock, colCnt),
 		name:    name,
 	}
 	for i := range block.columns {
@@ -62,7 +62,7 @@ func (b *Block) GetExtent() Extent {
 	return b.extent
 }
 
-func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
+func (b *Block) GetColumn(idx uint16) (*ColumnBlock, error) {
 	if idx >= uint16(len(b.columns)) {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %v, column count: %d",
@@ -111,10 +111,10 @@ func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc)
 	b.header.Unmarshal(data)
 	size += HeaderSize
 	data = data[HeaderSize:]
-	b.columns = make([]ColumnObject, b.header.columnCount)
+	b.columns = make([]*ColumnBlock, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
-		b.columns[i].(*ColumnBlock).meta.zoneMap = ZoneMap{
+		b.columns[i].meta.zoneMap = ZoneMap{
 			idx:           uint16(i),
 			unmarshalFunc: ZMUnmarshalFunc,
 		}
