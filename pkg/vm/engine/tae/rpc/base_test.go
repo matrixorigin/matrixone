@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,7 +67,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 	return err
 }
 
-func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) error {
+func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
 	//2PC
 	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
@@ -129,7 +130,7 @@ func (h *mockHandle) handleCmds(
 				return
 			}
 		case CmdCommit:
-			if err = h.HandleCommit(ctx, txn); err != nil {
+			if _, err = h.HandleCommit(ctx, txn); err != nil {
 				return
 			}
 		case CmdRollback:

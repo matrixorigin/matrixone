@@ -2404,6 +2404,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -2471,6 +2472,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 			case *tree.Update:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			case *tree.DropTable, *tree.DropIndex:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2481,6 +2484,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		case *tree.DropTable, *tree.DropIndex:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
