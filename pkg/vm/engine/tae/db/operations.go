@@ -181,6 +181,14 @@ const (
 	EntryDelete EntryType = 1
 )
 
+type PKCheckType int32
+
+const (
+	//PKCheckDisable do not check uniqueness of PK against txn's workspace.
+	PKCheckDisable PKCheckType = 0
+	PKCheckEnable  PKCheckType = 1
+)
+
 type LocationKey struct{}
 
 // writeReq responds to entry
@@ -192,6 +200,8 @@ type WriteReq struct {
 	TableName    string
 	Schema       *catalog2.Schema
 	Batch        *batch.Batch
+	//DN need do PK check against txn's workspace,if PkCheck is 1.
+	PkCheck PKCheckType
 	//S3 object file name
 	FileName string
 	MetaLocs []string

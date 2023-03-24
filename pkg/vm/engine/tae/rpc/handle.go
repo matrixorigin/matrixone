@@ -653,6 +653,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -821,8 +822,9 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-
+	if req.PkCheck == db.PKCheckDisable {
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	}
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
 		req.Type, req.TableID,
 		req.TableName, req.DatabaseId, req.DatabaseName,

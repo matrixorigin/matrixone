@@ -41,7 +41,9 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
 	}
 
-	if _, err := ctx.GetSubscriptionMeta(stmt.Name); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(stmt.Name); err != nil {
+		return nil, err
+	} else if sub != nil {
 		accountId := ctx.GetAccountId()
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
@@ -505,6 +507,9 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
@@ -521,9 +526,7 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
 	}
 
-	p, err := returnByRewriteSQL(ctx, sql, ddlType)
-	ctx.SetQueryingSubscription(nil)
-	return p, err
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
@@ -867,14 +870,12 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
 	if obj.PubAccountId != -1 {
 		sub := &SubscriptionMeta{
 			AccountId: obj.PubAccountId,
 		}
-		accountId = uint32(obj.PubAccountId)
 		dbName = obj.SchemaName
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -882,17 +883,13 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
-	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
-	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
-
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+	sql := "select `tcl`.`att_relname` as `Table`, if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, `idx`.`name` as `Key_name`, `idx`.`ordinal_position` as `Seq_in_index`, `idx`.`column_name` as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, '' as 'Index_type', '' as `Comment`, `idx`.`comment` as `Index_comment`, if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) where `tcl`.`att_database` = '%s' AND `tcl`.`att_relname` = '%s';"
+	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
 	}
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, showIndexSql, ddlType)
 }
 
 // TODO: Improve SQL. Currently, Lack of the mata of grants
