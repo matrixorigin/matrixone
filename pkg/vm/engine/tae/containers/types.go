@@ -45,8 +45,8 @@ type Vector interface {
 	ShallowGet(i int) any
 	Window(offset, length int) Vector
 
-	GetDownstreamVector() *cnVector.Vector
-	SetDownstreamVector(vec *cnVector.Vector)
+	getDownstreamVector() *cnVector.Vector
+	setDownstreamVector(vec *cnVector.Vector)
 
 	Update(i int, v any)
 	Compact(*roaring.Bitmap)

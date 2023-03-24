@@ -180,12 +180,12 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
+func (win *vectorWindow[T]) getDownstreamVector() *cnVector.Vector {
 	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
 	return res
 }
 
-func (win *vectorWindow[T]) SetDownstreamVector(vec *cnVector.Vector) {
+func (win *vectorWindow[T]) setDownstreamVector(vec *cnVector.Vector) {
 	// Windows are read only
 	panic("cannot modify window")
 }

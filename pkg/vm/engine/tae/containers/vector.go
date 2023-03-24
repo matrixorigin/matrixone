@@ -284,7 +284,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	err := vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
+	err := vec.downstreamVector.Union(src.getDownstreamVector(), sels, vec.GetAllocator())
 	if err != nil {
 		panic(err)
 	}
@@ -359,7 +359,6 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
-	// TODO: doing tryCoW() before mutation. Is it ok?
 	vec.tryCoW()
 
 	var dels []int64
@@ -372,11 +371,11 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	vec.downstreamVector.Shrink(dels, true)
 }
 
-func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
+func (vec *vector[T]) getDownstreamVector() *cnVector.Vector {
 	return vec.downstreamVector
 }
 
-func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
+func (vec *vector[T]) setDownstreamVector(dsVec *cnVector.Vector) {
 	vec.isOwner = false
 	vec.downstreamVector = dsVec
 }

@@ -26,7 +26,7 @@ import (
 // ### Shallow copy Functions
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	return vec.GetDownstreamVector()
+	return vec.getDownstreamVector()
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -39,7 +39,7 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(*v.GetType(), nullable)
-	vec.SetDownstreamVector(v)
+	vec.setDownstreamVector(v)
 	return vec
 }
 
@@ -48,7 +48,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
 	end := vec.Length()
-	a, _ := vec.GetDownstreamVector().CloneWindow(0, end, nil)
+	a, _ := vec.getDownstreamVector().CloneWindow(0, end, nil)
 	return a
 }
 
