@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -92,6 +93,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
 
 	msg, ok := message.(*pipeline.Message)
@@ -104,7 +106,7 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
+	err := cnMessageHandle(receiver, aicm)
 	if err != nil {
 		return receiver.sendError(err)
 	}
@@ -123,7 +125,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 }
 
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer) error {
+func cnMessageHandle(receiver messageReceiverOnServer, aicm *defines.AutoIncrCacheManager) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		var ch chan process.WrapCs
@@ -149,7 +151,7 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		return nil
 
 	case pipeline.PipelineMessage:
-		c := receiver.newCompile()
+		c := receiver.newCompile(aicm)
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -252,7 +253,7 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() *Compile {
+func (receiver *messageReceiverOnServer) newCompile(aicm *defines.AutoIncrCacheManager) *Compile {
 	// compile is almost surely wanting a small or middle pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
@@ -265,7 +266,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		cnInfo.fileService,
-		cnInfo.lockService)
+		cnInfo.lockService,
+		aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim

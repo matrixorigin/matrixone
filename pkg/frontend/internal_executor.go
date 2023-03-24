@@ -52,25 +52,25 @@ type internalMiniExec interface {
 
 type internalExecutor struct {
 	sync.Mutex
-	proto          *internalProtocol
-	executor       internalMiniExec // MySqlCmdExecutor struct impls miniExec
-	pu             *config.ParameterUnit
-	baseSessOpts   ie.SessionOverrideOptions
-	autoIncrCaches defines.AutoIncrCaches
+	proto        *internalProtocol
+	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
+	pu           *config.ParameterUnit
+	baseSessOpts ie.SessionOverrideOptions
+	aicm         *defines.AutoIncrCacheManager
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor(), autoIncrCaches)
+func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), aicm)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
-		proto:          proto,
-		executor:       inner,
-		pu:             pu,
-		baseSessOpts:   ie.NewOptsBuilder().Finish(),
-		autoIncrCaches: autoIncrCaches,
+		proto:        proto,
+		executor:     inner,
+		pu:           pu,
+		baseSessOpts: ie.NewOptsBuilder().Finish(),
+		aicm:         aicm,
 	}
 	return ret
 }
@@ -171,12 +171,9 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
-
-	// Set AutoIncrCache for this session.
-	sess.SetAutoIncrCaches(ie.autoIncrCaches)
 
 	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	sess.SetTenantInfo(t)
