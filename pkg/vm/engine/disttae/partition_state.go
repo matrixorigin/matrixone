@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/tidwall/btree"
 )
 
@@ -48,7 +49,7 @@ type PartitionState struct {
 
 // RowEntry represents a version of a row
 type RowEntry struct {
-	BlockID uint64 // we need to iter by block id, so put it first to allow faster iteration
+	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
 	RowID   types.Rowid
 	Time    types.TS
 
@@ -61,10 +62,11 @@ type RowEntry struct {
 
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
-	if r.BlockID < than.BlockID {
+	cmp := r.BlockID.Compare(than.BlockID)
+	if cmp < 0 {
 		return true
 	}
-	if than.BlockID < r.BlockID {
+	if cmp > 0 {
 		return false
 	}
 	// asc
@@ -92,13 +94,7 @@ type BlockEntry struct {
 }
 
 func (b BlockEntry) Less(than BlockEntry) bool {
-	if b.BlockID < than.BlockID {
-		return true
-	}
-	if than.BlockID < b.BlockID {
-		return false
-	}
-	return false
+	return b.BlockID.Compare(than.BlockID) < 0
 }
 
 func (b *BlockEntry) Visible(ts types.TS) bool {
@@ -111,7 +107,7 @@ type PrimaryIndexEntry struct {
 	RowEntryID int64
 
 	// fields for validating
-	BlockID uint64
+	BlockID types.Blockid
 	RowID   types.Rowid
 }
 
@@ -150,7 +146,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	iter := p.Rows.Iter()
 	defer iter.Release()
 
-	blockID := blockIDFromRowID(rowID)
+	blockID := rowID.GetBlockid()
 	for ok := iter.Seek(RowEntry{
 		BlockID: blockID,
 		RowID:   rowID,
@@ -230,7 +226,7 @@ func (p *PartitionState) HandleRowsInsert(
 	for i, rowID := range rowIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
-			blockID := blockIDFromRowID(rowID)
+			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
@@ -286,7 +282,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	for i, rowID := range rowIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
-			blockID := blockIDFromRowID(rowID)
+			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
@@ -318,13 +314,13 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	defer task.End()
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
-	blockIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[2]))
+	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
 	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
 	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
 	metaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[5]))
 	deltaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[6]))
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
-	segmentIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
+	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
@@ -347,7 +343,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			if location := deltaLocationVector[i]; location != "" {
 				entry.DeltaLoc = location
 			}
-			if id := segmentIDVector[i]; id > 0 {
+			if id := segmentIDVector[i]; common.IsEmptySegid(&id) {
 				entry.SegmentID = id
 			}
 			entry.Sorted = sortedStateVector[i]
@@ -405,7 +401,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
-		blockID := types.DecodeUint64(rowID[:8])
+		blockID := rowID.GetBlockid()
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{

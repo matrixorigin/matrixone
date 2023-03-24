@@ -34,8 +34,8 @@ func TestCompactBlockCmd(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
-	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
 
 	controller := NewMVCCHandle(blk)
 
