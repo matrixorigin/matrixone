@@ -16,11 +16,9 @@ package types
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"math/bits"
-	"runtime/debug"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var Pow10 = [20]uint64{
@@ -1616,7 +1614,6 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	n := int32(0)
 	y, n, err = Parse128(x)
 	if err != nil {
-		debug.PrintStack()
 		err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s(%d,%d)", x, width, scale)
 		return
 	}

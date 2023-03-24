@@ -320,7 +320,7 @@ func committingTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int6
 
 func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, errCode uint16) {
 	wTxn.CommitTS = newTimestamp(ts)
-	e := s.Commit(context.TODO(), *wTxn)
+	_, e := s.Commit(context.TODO(), *wTxn)
 	assert.True(t, moerr.IsMoErrCode(e, errCode))
 	wTxn.Status = txn.TxnStatus_Committed
 }

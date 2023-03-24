@@ -54,8 +54,13 @@ func SplitSqlBySemicolon(sql string) []string {
 		for scanner.Pos < len(sql) && typ != ';' {
 			typ, _ = scanner.Scan()
 		}
-		ret = append(ret, sql[lastEnd:scanner.Pos-1])
-		lastEnd = scanner.Pos
+		if typ == ';' {
+			ret = append(ret, sql[lastEnd:scanner.Pos-1])
+			lastEnd = scanner.Pos
+		} else {
+			ret = append(ret, sql[lastEnd:scanner.Pos])
+			return ret
+		}
 	}
 	return ret
 }

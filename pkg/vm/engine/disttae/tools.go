@@ -647,13 +647,17 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 }
 */
 
-func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes [][]Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
+	v := ctx.Value(defines.PkCheckByDN{})
 	for i := range writes {
 		for _, e := range writes[i] {
 			if e.bat.Length() == 0 {
 				continue
+			}
+			if v != nil {
+				e.pkChkByDN = v.(int8)
 			}
 			pe, err := toPBEntry(e)
 			if err != nil {
@@ -731,6 +735,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
+		PkCheckByDn:  int32(e.pkChkByDN),
 	}, nil
 }
 

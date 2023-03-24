@@ -106,6 +106,9 @@ Number of columns in mo_database
 show column_number from mo_columns;
 Number of columns in mo_columns
 22
+show column_number from mo_indexes;
+Number of columns in mo_indexes
+12
 use system_metrics;
 show column_number from metric;
 Number of columns in metric

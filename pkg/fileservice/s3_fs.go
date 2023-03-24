@@ -23,6 +23,7 @@ import (
 	"math"
 	stdhttp "net/http"
 	"net/url"
+	"os"
 	pathpkg "path"
 	"sort"
 	"strings"
@@ -51,9 +52,10 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	asyncUpdate bool
+	memCache              *MemCache
+	diskCache             *DiskCache
+	asyncUpdate           bool
+	writeDiskCacheOnWrite bool
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
@@ -341,7 +343,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	return s.write(ctx, vector)
 }
 
-func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -362,8 +364,32 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 		size = int64(last.Offset + last.Size)
 	}
 
+	// reader
+	var r io.Reader
+	if s.writeDiskCacheOnWrite && s.diskCache != nil {
+		// also write to disk cache
+		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
+		if err != nil {
+			return err
+		}
+		defer closeW()
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = done()
+		}()
+		r = io.TeeReader(
+			newIOEntriesReader(ctx, vector.Entries),
+			w,
+		)
+
+	} else {
+		r = newIOEntriesReader(ctx, vector.Entries)
+	}
+
 	// put
-	content, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
+	content, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -467,6 +493,30 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	getReader := func(ctx context.Context, readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
+
+		// try to load from disk cache
+		if s.diskCache != nil {
+			r, err := s.diskCache.GetFileContent(ctx, vector.FilePath, min)
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+				os.IsNotExist(err) {
+				err = nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			if r != nil {
+				// cache hit
+				if readToEnd {
+					return r, nil
+				} else {
+					return &readCloser{
+						r:         io.LimitReader(r, max-min),
+						closeFunc: r.Close,
+					}, nil
+				}
+			}
+		}
+
 		if readToEnd {
 			rang := fmt.Sprintf("bytes=%d-", min)
 			output, err := s.s3GetObject(
@@ -650,6 +700,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		vector.Entries[i] = entry
 	}
 
+	return nil
+}
+
+func (s *S3FS) Preload(ctx context.Context, filePath string) error {
+	if s.diskCache != nil {
+		err := s.diskCache.SetFileContent(ctx, filePath, s.read)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -87,6 +87,18 @@ func (s *subPathFS) List(ctx context.Context, dirPath string) ([]DirEntry, error
 	return entries, nil
 }
 
+func (s *subPathFS) Preload(ctx context.Context, filePath string) error {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return err
+	}
+	err = s.upstream.Preload(ctx, p)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {
 	if len(filePaths) == 0 {
 		return nil

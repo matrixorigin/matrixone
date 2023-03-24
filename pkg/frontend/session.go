@@ -349,7 +349,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
@@ -1268,6 +1269,7 @@ const (
 	TXN_DEFAULT QueryType = iota
 	TXN_DELETE
 	TXN_UPDATE
+	TXN_DROP
 )
 
 func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {

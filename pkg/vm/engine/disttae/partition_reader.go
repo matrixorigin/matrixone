@@ -170,7 +170,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				if _, ok := p.deletes[rowIds[j]]; ok {
 					continue
 				}
-				b.Zs = append(b.Zs, int64(j))
+				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
 			return b, nil
 		}

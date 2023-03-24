@@ -89,6 +89,8 @@ type CompilerContext interface {
 	GetAccountId() uint32
 	// GetContext get raw context.Context
 	GetContext() context.Context
+	// GetDatabaseId Get database id
+	GetDatabaseId(dbName string) (uint64, error)
 
 	GetProcess() *process.Process
 
