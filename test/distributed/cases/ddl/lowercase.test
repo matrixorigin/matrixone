@@ -113,7 +113,7 @@ CREATE USER U_NAME IDENTIFIED BY '123456';
 CREATE USER U_name IDENTIFIED BY '123456';
 SELECT user_host,user_name,status FROM mo_catalog.mo_user WHERE user_name = 'U_name';
 SELECT user_host,user_name,status FROM mo_catalog.mo_user;
-DROP USER user_name;
+DROP USER u_name;
 DROP DATABASE test03;
 
 -- Test all caps database name
