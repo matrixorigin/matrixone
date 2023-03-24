@@ -204,6 +204,8 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primaryKeyIndex int,
 	packer *types.Packer,
+) (
+	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
@@ -214,9 +216,8 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	var primaryKeyBytesSet [][]byte
 	if primaryKeyIndex >= 0 {
-		primaryKeyBytesSet = encodePrimaryKeyVector(
+		primaryKeys = encodePrimaryKeyVector(
 			batch.Vecs[2+primaryKeyIndex],
 			packer,
 		)
@@ -241,19 +242,20 @@ func (p *PartitionState) HandleRowsInsert(
 
 			entry.Batch = batch
 			entry.Offset = int64(i)
-			if i < len(primaryKeyBytesSet) {
-				entry.PrimaryIndexBytes = primaryKeyBytesSet[i]
+			if i < len(primaryKeys) {
+				entry.PrimaryIndexBytes = primaryKeys[i]
 			}
 
 			p.Rows.Set(entry)
 
-			if i < len(primaryKeyBytesSet) && len(primaryKeyBytesSet[i]) > 0 {
-				p.PrimaryIndex.Set(&PrimaryIndexEntry{
-					Bytes:      primaryKeyBytesSet[i],
+			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
+				entry := &PrimaryIndexEntry{
+					Bytes:      primaryKeys[i],
 					RowEntryID: entry.ID,
 					BlockID:    blockID,
 					RowID:      rowID,
-				})
+				}
+				p.PrimaryIndex.Set(entry)
 			}
 
 		})
@@ -266,6 +268,8 @@ func (p *PartitionState) HandleRowsInsert(
 		c.DistTAE.Logtail.InsertRows.Add(numInserted)
 		c.DistTAE.Logtail.ActiveRows.Add(numInserted)
 	})
+
+	return
 }
 
 func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch) {
