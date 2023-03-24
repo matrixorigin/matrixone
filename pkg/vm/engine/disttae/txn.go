@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -125,9 +123,11 @@ func (txn *Transaction) WriteBatch(
 	})
 	txn.Unlock()
 
-	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
-		return err
-	}
+	/*
+		if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
+			return err
+		}
+	*/
 
 	return nil
 }
@@ -231,6 +231,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	return -1, attrs, tbl, nil
 }
 
+/*
 func (txn *Transaction) checkPrimaryKey(
 	typ int,
 	primaryIdx int,
@@ -313,6 +314,7 @@ func (txn *Transaction) checkPrimaryKey(
 
 	return nil
 }
+*/
 
 func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
 	txn.localTS = txn.localTS.Next()
