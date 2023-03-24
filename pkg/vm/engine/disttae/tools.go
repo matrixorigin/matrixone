@@ -646,20 +646,26 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 }
 */
 
-func genWriteReqs(writes []Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes [][]Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
-	for _, e := range writes {
-		if e.bat.Length() == 0 {
-			continue
-		}
-		pe, err := toPBEntry(e)
-		if err != nil {
-			return nil, err
-		}
-		mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
-		if _, ok := mq[e.dnStore.ServiceID]; !ok {
-			mq[e.dnStore.ServiceID] = e.dnStore
+	v := ctx.Value(defines.PkCheckByDN{})
+	for i := range writes {
+		for _, e := range writes[i] {
+			if e.bat.Length() == 0 {
+				continue
+			}
+			if v != nil {
+				e.pkChkByDN = v.(int8)
+			}
+			pe, err := toPBEntry(e)
+			if err != nil {
+				return nil, err
+			}
+			mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
+			if _, ok := mq[e.dnStore.ServiceID]; !ok {
+				mq[e.dnStore.ServiceID] = e.dnStore
+			}
 		}
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
@@ -728,6 +734,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
+		PkCheckByDn:  int32(e.pkChkByDN),
 	}, nil
 }
 

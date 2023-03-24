@@ -12,6 +12,7 @@ account_id    relname    relkind
 0    mo_account    r
 0    mo_columns    r
 0    mo_database    r
+0    mo_indexes    r
 0    mo_mysql_compatbility_mode    r
 0    mo_pubs    r
 0    mo_role    r

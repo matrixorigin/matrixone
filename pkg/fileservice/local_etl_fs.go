@@ -324,6 +324,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
+func (l *LocalETLFS) Preload(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():
@@ -535,7 +539,7 @@ func (l *LocalETLFS) ETLCompatible() {}
 
 var _ MutableFileService = new(LocalETLFS)
 
-func (l *LocalETLFS) NewMutator(filePath string) (Mutator, error) {
+func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err

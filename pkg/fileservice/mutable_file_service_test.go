@@ -39,7 +39,7 @@ func testMutableFileService(
 	})
 	assert.Nil(t, err)
 
-	mutator, err := fs.NewMutator("foo")
+	mutator, err := fs.NewMutator(ctx, "foo")
 	assert.Nil(t, err)
 	defer func() {
 		assert.Nil(t, mutator.Close())

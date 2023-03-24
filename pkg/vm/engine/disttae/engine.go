@@ -266,6 +266,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	return
 }
 
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.idGen.AllocateIDByKey(ctx, key)
+}
+
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	var db *txnDatabase
 
@@ -399,7 +403,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
-	reqs, err := genWriteReqs(txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes)
 	if err != nil {
 		return err
 	}

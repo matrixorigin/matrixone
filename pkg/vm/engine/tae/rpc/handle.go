@@ -96,7 +96,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (err error) {
+	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
@@ -173,6 +173,7 @@ func (h *Handle) HandleCommit(
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
 	err = txn.Commit()
+	cts = txn.GetCommitTS().ToTimestamp()
 
 	//delete the txn's context.
 	h.mu.Lock()
@@ -651,6 +652,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -818,8 +820,9 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-
+	if req.PkCheck == db.PKCheckDisable {
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	}
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
 		req.Type, req.TableID,
 		req.TableName, req.DatabaseId, req.DatabaseName,
