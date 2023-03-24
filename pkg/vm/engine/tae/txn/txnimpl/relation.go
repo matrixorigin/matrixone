@@ -16,8 +16,10 @@ package txnimpl
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -174,7 +176,7 @@ func (h *txnRelation) AddBlksWithMetaLoc(
 	)
 }
 
-func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
+func (h *txnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
 	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
@@ -188,7 +190,7 @@ func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {
+func (h *txnRelation) SoftDeleteSegment(id types.Uuid) (err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
 	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)

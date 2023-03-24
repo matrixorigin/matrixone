@@ -16,9 +16,10 @@ package blockio
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -77,8 +78,8 @@ func BlockReadInner(
 		}
 		deleteRows = recordDeletes(deleteBatch, ts)
 		logutil.Infof(
-			"blockread %d read delete %d: base %s filter out %v\n",
-			info.BlockID, deleteBatch.Length(), ts.ToString(), len(deleteRows))
+			"blockread %s read delete %d: base %s filter out %v\n",
+			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
@@ -133,7 +134,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	var bat *batch.Batch
 	if ok {
 		// generate rowIdVec
-		prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
+		prefix := info.BlockID[:]
 		rowIdVec, err = model.PreparePhyAddrDataWithPool(
 			types.T_Rowid.ToType(),
 			prefix,
@@ -199,8 +200,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			}
 		}
 		logutil.Infof(
-			"blockread %d scan filter cost %v: base %s filter out %v\n ",
-			info.BlockID, time.Since(t0), ts.ToString(), len(deleteRows))
+			"blockread %s scan filter cost %v: base %s filter out %v\n ",
+			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
 		return nil
 	}
 
