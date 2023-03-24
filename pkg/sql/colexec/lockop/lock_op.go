@@ -257,3 +257,12 @@ func (arg *Argument) AddLockTarget(
 	})
 	return arg
 }
+
+// Free free mem
+func (arg *Argument) Free(
+	proc *process.Process,
+	pipelineFailed bool) {
+	if arg.parker != nil {
+		arg.parker.FreeMem()
+	}
+}

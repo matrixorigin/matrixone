@@ -127,11 +127,21 @@ func runLockOpTest(
 				txnOp,
 				nil,
 				services[0])
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+			defer func() {
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			}()
 
 			bat := &batch.Batch{
 				Zs:   make([]int64, len(tables)*2),
 				Vecs: make([]*vector.Vector, 0, len(tables)*2),
 			}
+			defer func() {
+				for _, vec := range bat.Vecs {
+					vec.Free(proc.Mp())
+				}
+			}()
+
 			offset := int32(0)
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
@@ -149,6 +159,7 @@ func runLockOpTest(
 			}
 			proc.SetInputBatch(bat)
 			fn(proc, arg)
+			arg.Free(proc, false)
 		},
 		nil,
 	)
