@@ -17,7 +17,6 @@ package txnimpl
 import (
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -60,13 +59,6 @@ func (blk *txnSysBlock) GetTotalChanges() int {
 		panic("not supported")
 	}
 	return blk.txnBlock.GetTotalChanges()
-}
-
-func (blk *txnSysBlock) BatchDedup(pks containers.Vector, invisibility *roaring.Bitmap) (err error) {
-	if blk.isSysTable() {
-		panic("not supported")
-	}
-	return blk.txnBlock.BatchDedup(pks, invisibility)
 }
 
 func (blk *txnSysBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {

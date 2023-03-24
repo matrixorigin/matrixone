@@ -72,7 +72,7 @@ var (
 		SegmentAttr_Sorted,
 	}
 	SegmentSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_bool, 0, 0),
 		types.New(types.T_bool, 0, 0),
@@ -179,7 +179,7 @@ var (
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
