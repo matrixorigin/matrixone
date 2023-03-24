@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -136,6 +137,7 @@ func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
 	opts ...ServerOption) {
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	assert.NoError(t, os.RemoveAll(testSockets[7:]))
 
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())

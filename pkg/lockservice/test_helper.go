@@ -26,10 +26,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var (
-	testSockets = "unix:///tmp/lockservice.sock"
-)
-
 // RunLockServicesForTest is used to start a lock table allocator and some
 // lock services for test
 func RunLockServicesForTest(
@@ -38,19 +34,16 @@ func RunLockServicesForTest(
 	lockTableBindTimeout time.Duration,
 	fn func(LockTableAllocator, []LockService),
 	adjustConfig func(*Config)) {
-
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
-	if err := os.RemoveAll(testSockets[:7]); err != nil {
-		panic(err)
-	}
-
 	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})
 	services := make([]LockService, 0, len(serviceIDs))
 
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
 	for _, v := range serviceIDs {
-		address := fmt.Sprintf("unix:///tmp/service-%s.sock", v)
+		address := fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
+			time.Now().Nanosecond(), v)
 		if err := os.RemoveAll(address[7:]); err != nil {
 			panic(err)
 		}
