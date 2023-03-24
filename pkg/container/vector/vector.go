@@ -602,6 +602,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.TS](v, sels, negate)
 	case types.T_Rowid:
 		shrinkFixed[types.Rowid](v, sels, negate)
+	case types.T_Blockid:
+		shrinkFixed[types.Blockid](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
