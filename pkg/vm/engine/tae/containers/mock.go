@@ -219,7 +219,10 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		for i := int32(1); i <= int32(rows); i++ {
 			vec.Append(types.BuildRowid(int64(i+1), int64(i)))
 		}
-
+	case types.T_Blockid:
+		for i := int32(1); i <= int32(rows); i++ {
+			vec.Append(types.BuildBlockid(int64(i+1), int64(i)))
+		}
 	default:
 		panic("not supported")
 	}

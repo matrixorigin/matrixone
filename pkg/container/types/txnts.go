@@ -326,10 +326,21 @@ func BuildRowid(a, b int64) (ret Rowid) {
 	return
 }
 
+// TODO: aptend, Kindly verify this
+func BuildBlockid(a, b int64) (ret Blockid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[0:8], EncodeInt64(&b))
+	return
+}
+
 func CompareTSTSAligned(a, b TS) int64 {
 	return int64(bytes.Compare(a[:], b[:]))
 }
 
 func CompareRowidRowidAligned(a, b Rowid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
+
+func CompareBlockidBlockidAligned(a, b Blockid) int64 {
 	return int64(bytes.Compare(a[:], b[:]))
 }

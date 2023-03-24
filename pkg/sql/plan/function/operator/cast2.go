@@ -400,6 +400,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, s, *toType, result, length)
+	case types.T_Blockid:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Blockid](from)
+		err = blockidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
@@ -1436,6 +1439,17 @@ func rowidToOthers(ctx context.Context,
 		return nil
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
+}
+
+func blockidToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Blockid],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	if toType.Oid == types.T_Blockid {
+		rs := vector.MustFunctionResult[types.Blockid](result)
+		rs.SetFromParameter(source)
+		return nil
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from blockid to %s", toType))
 }
 
 func jsonToOthers(ctx context.Context,
