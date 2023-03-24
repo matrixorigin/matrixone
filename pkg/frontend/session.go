@@ -1269,6 +1269,7 @@ const (
 	TXN_DEFAULT QueryType = iota
 	TXN_DELETE
 	TXN_UPDATE
+	TXN_DROP
 )
 
 func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -148,6 +149,32 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	}
 
 	return true
+}
+
+func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
+	if err != nil {
+		return 0, err
+	}
+	txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return 0, err
+	}
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	if sub != nil {
+		dbName = sub.DbName
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sub.AccountId))
+	}
+	database, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	if err != nil {
+		return 0, err
+	}
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
+	if err != nil {
+		return 0, moerr.NewInternalError(ses.GetRequestContext(), "The databaseid of '%s' is not a valid number", dbName)
+	}
+	return databaseId, nil
 }
 
 // getRelation returns the context (maybe updated) and the relation

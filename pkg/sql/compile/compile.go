@@ -243,9 +243,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropDatabase,
-				Plan:  pn,
+				Magic:         DropDatabase,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -263,9 +274,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropTable,
-				Plan:  pn,
+				Magic:         DropTable,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -288,9 +310,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropIndex,
-				Plan:  pn,
+				Magic:         DropIndex,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,

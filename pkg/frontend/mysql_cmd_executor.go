@@ -2413,12 +2413,22 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 		case *tree.DropDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -2486,6 +2496,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 			case *tree.Update:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			case *tree.DropTable, *tree.DropIndex:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2496,6 +2508,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		case *tree.DropTable, *tree.DropIndex:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {

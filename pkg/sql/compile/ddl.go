@@ -74,7 +74,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
-	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Drop the old view, and create the new view.
@@ -88,9 +99,6 @@ func (s *Scope) AlterView(c *Compile) error {
 			return nil
 		}
 		return err
-	}
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "subscription database does not support alter view")
 	}
 	tblName := qry.GetTableDef().GetName()
 	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
@@ -129,9 +137,6 @@ func (s *Scope) AlterTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
-	}
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "subscription database does not support alter table")
 	}
 	tblName := qry.GetTableDef().GetName()
 	rel, err := dbSource.Relation(c.ctx, tblName)
@@ -260,9 +265,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return err
 	}
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "subscription database does not support create table")
-	}
 	tblName := qry.GetTableDef().GetName()
 	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
 		if qry.GetIfNotExists() {
@@ -370,7 +372,24 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
+
+	if checkIndexInitializable(dbName, tblName) {
+		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
+		if err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func checkIndexInitializable(dbName string, tblName string) bool {
+	if dbName == "mo_task" {
+		return false
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
+		return false
+	}
+	return true
 }
 
 func (s *Scope) CreateTempTable(c *Compile) error {
@@ -395,9 +414,6 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 	// check in EntireEngine.TempEngine
 	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-	if tmpDBSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot create temporary table in subscription database")
-	}
 	if err != nil {
 		return err
 	}
@@ -451,9 +467,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
-	}
-	if d.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot create index in subscription database")
 	}
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
@@ -542,6 +555,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		// other situation is not supported now and check in plan
 	}
 
+	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -550,9 +567,6 @@ func (s *Scope) DropIndex(c *Compile) error {
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
-	}
-	if d.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot drop index in subscription database")
 	}
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
@@ -586,6 +600,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
+			return err
+		}
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
 			return err
 		}
 	}
@@ -750,9 +771,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot truncate table in subscription database")
-	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
@@ -858,9 +876,6 @@ func (s *Scope) DropSequence(c *Compile) error {
 		}
 		return err
 	}
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot drop sequence in subscription database")
-	}
 
 	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
@@ -894,10 +909,6 @@ func (s *Scope) DropTable(c *Compile) error {
 			return nil
 		}
 		return err
-	}
-
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannot drop table in subscription database")
 	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
@@ -936,6 +947,15 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
@@ -946,7 +966,19 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		}
+		return nil
 	}
 }
 
@@ -1102,10 +1134,6 @@ func (s *Scope) CreateSequence(c *Compile) error {
 			return moerr.NewNoDB(c.ctx)
 		}
 		return err
-	}
-
-	if dbSource.IsSubscription(c.ctx) {
-		return moerr.NewInternalError(c.ctx, "cannt create table in subscription database")
 	}
 
 	tblName := qry.GetTableDef().GetName()

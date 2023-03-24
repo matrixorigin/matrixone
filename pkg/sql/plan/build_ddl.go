@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"strconv"
 	"strings"
 
@@ -113,6 +114,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		createTable.Database = ""
 	} else {
 		createTable.Database = string(stmt.Name.SchemaName)
+	}
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
@@ -227,12 +233,15 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}
 	dropSequence.Table = string(stmt.Names[0].ObjectName)
 
-	_, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	obj, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
 	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
 		if !dropSequence.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
 		}
 		dropSequence.Table = ""
+	}
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop sequence in subscription database")
 	}
 
 	return &Plan{
@@ -259,6 +268,12 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 		createSequence.Database = ctx.DefaultDatabase()
 	} else {
 		createSequence.Database = string(stmt.Name.SchemaName)
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
 	}
 
 	err := buildSequenceTableDef(stmt, ctx, createSequence)
@@ -292,6 +307,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.Database = ctx.DefaultDatabase()
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")
 	}
 
 	// set tableDef
@@ -1070,6 +1091,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
+		if obj.PubAccountId != -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
+		}
+
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
@@ -1078,9 +1103,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				}
 			}
 		}
-	}
-	if obj.PubAccountId != -1 {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
 	}
 
 	return &Plan{
@@ -1108,6 +1130,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
+	var attachedPlan *plan.Plan
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 
 	if tableDef == nil {
@@ -1165,6 +1188,16 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				}
 			}
 		}
+
+		// Check whether the table definition contains index constraints
+		if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
+			var err error
+			attachedPlan, err = buildDeleteIndexMetaPlan("", tableDef.TblId, 0, DROP_TABLE, ctx)
+			//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1175,7 +1208,44 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
+}
+
+type DeleteIndexMode int
+
+const (
+	DROP_INDEX DeleteIndexMode = iota
+	DROP_TABLE
+	DROP_DATABASE
+)
+
+var (
+	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+)
+
+// Build a plan to delete index metadata
+func buildDeleteIndexMetaPlan(indexName string, tblId uint64, databaseId uint64, mode DeleteIndexMode, ctx CompilerContext) (*Plan, error) {
+	var sql string
+	switch mode {
+	case DROP_INDEX:
+		sql = fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tblId, indexName)
+	case DROP_TABLE:
+		sql = fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tblId)
+	case DROP_DATABASE:
+		sql = fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
+	}
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return nil, err
+	}
+	if deleteStmt, ok := stmt.(*tree.Delete); ok {
+		return buildDelete(deleteStmt, ctx)
+	} else {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not delete syntax tree")
+	}
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
@@ -1191,7 +1261,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -1199,6 +1269,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	} else {
 		if tableDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		if obj.PubAccountId != -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
 
@@ -1258,6 +1331,20 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 	} else if publishing {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
+
+	var attachedPlan *Plan
+	if ctx.DatabaseExists(string(stmt.Name)) {
+		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
+		if err != nil {
+			return nil, err
+		}
+		attachedPlan, err = buildDeleteIndexMetaPlan("", 0, databaseId, DROP_DATABASE, ctx)
+		//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1267,6 +1354,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1279,9 +1367,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check table
 	tableName := string(stmt.Table.ObjectName)
-	_, tableDef := ctx.Resolve(createIndex.Database, tableName)
+	obj, tableDef := ctx.Resolve(createIndex.Database, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
+	}
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
 	// check index
 	indexName := string(stmt.Name)
@@ -1356,9 +1447,13 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	// check table
 	dropIndex.Table = string(stmt.TableName.ObjectName)
-	_, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table)
+	obj, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
+	}
+
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
 	// check index
@@ -1373,8 +1468,16 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 
+	var attachedPlan *plan.Plan
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+	} else {
+		var err error
+		attachedPlan, err = buildDeleteIndexMetaPlan(dropIndex.IndexName, tableDef.TblId, 0, DROP_INDEX, ctx)
+		//attachedPlan, err = buildDeleteIndexMetadataPlan(tableDef, dropIndex.IndexName, ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -1386,6 +1489,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1409,7 +1513,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}
 
 	//step 1: check the view exists or not
-	_, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	obj, oldViewDef := ctx.Resolve(alterView.Database, viewName)
 	if oldViewDef == nil {
 		if !alterView.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(),
@@ -1417,6 +1521,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
+		if obj.PubAccountId != -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
+		}
 		if oldViewDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(),
 				alterView.Database,
@@ -1462,12 +1569,15 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(databaseName, tableName)
+	obj, tableDef := ctx.Resolve(databaseName, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
+	}
+	if obj.PubAccountId != -1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	alterTable.Database = databaseName
 	alterTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
@@ -1575,9 +1685,13 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		}
 
 		//check table whether exist
-		_, tableDef := ctx.Resolve(schemaName, tblName)
+		obj, tableDef := ctx.Resolve(schemaName, tblName)
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
+		}
+
+		if obj.PubAccountId != -1 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot lock table in subscription database")
 		}
 
 		// check the stmt whether locks the same table

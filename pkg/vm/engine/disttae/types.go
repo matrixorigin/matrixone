@@ -57,6 +57,8 @@ type DNStore = metadata.DNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
+	// AllocateIDByKey allocate a globally unique ID by key.
+	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
 type Engine struct {

@@ -35,10 +35,10 @@ func (c *CounterLogExporter) Export() []zap.Field {
 
 	reads := c.counter.Cache.Read.SwapW(0)
 	hits := c.counter.Cache.Hit.SwapW(0)
-	memReads := c.counter.Cache.MemRead.SwapW(0)
-	memHits := c.counter.Cache.MemHit.SwapW(0)
-	diskReads := c.counter.Cache.DiskRead.SwapW(0)
-	diskHits := c.counter.Cache.DiskHit.SwapW(0)
+	memReads := c.counter.Cache.Memory.Read.SwapW(0)
+	memHits := c.counter.Cache.Memory.Hit.SwapW(0)
+	diskReads := c.counter.Cache.Disk.Read.SwapW(0)
+	diskHits := c.counter.Cache.Disk.Hit.SwapW(0)
 
 	fields = append(fields, zap.Any("reads", reads))
 	fields = append(fields, zap.Any("hits", hits))
