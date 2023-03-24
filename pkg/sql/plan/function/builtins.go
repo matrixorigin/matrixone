@@ -3014,6 +3014,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	BUILD_VERSION: {
+		Id:     BUILD_VERSION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{},
+				ReturnTyp: types.T_timestamp,
+				Fn:        multi.BuildVersion,
+			},
+		},
+	},
 
 	VALUES: {
 		Id:     VALUES,

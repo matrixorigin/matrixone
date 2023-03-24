@@ -293,6 +293,7 @@ const (
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
 	GIT_VERSION
+	BUILD_VERSION
 
 	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
 	VALUES
@@ -526,6 +527,7 @@ var functionIdRegister = map[string]int32{
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
 	"git_version":                    GIT_VERSION,
+	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
