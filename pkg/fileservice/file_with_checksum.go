@@ -15,20 +15,24 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 // FileWithChecksum maps file contents to blocks with checksum
 type FileWithChecksum[T FileLike] struct {
+	ctx              context.Context
 	underlying       T
 	blockSize        int
 	blockContentSize int
 	contentOffset    int64
+	perfCounterSets  []*perfcounter.CounterSet
 }
 
 const (
@@ -45,19 +49,29 @@ var (
 )
 
 func NewFileWithChecksum[T FileLike](
+	ctx context.Context,
 	underlying T,
 	blockContentSize int,
+	perfCounterSets []*perfcounter.CounterSet,
 ) *FileWithChecksum[T] {
 	return &FileWithChecksum[T]{
+		ctx:              ctx,
 		underlying:       underlying,
 		blockSize:        blockContentSize + _ChecksumSize,
 		blockContentSize: blockContentSize,
+		perfCounterSets:  perfCounterSets,
 	}
 }
 
 var _ FileLike = new(FileWithChecksum[*os.File])
 
 func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
+	defer func() {
+		perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+			c.FileWithChecksum.Read.Add(int64(n))
+		}, f.perfCounterSets...)
+	}()
+
 	for len(buf) > 0 {
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
 		var data []byte
@@ -92,6 +106,12 @@ func (f *FileWithChecksum[T]) Read(buf []byte) (n int, err error) {
 }
 
 func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
+	defer func() {
+		perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+			c.FileWithChecksum.Write.Add(int64(n))
+		}, f.perfCounterSets...)
+	}()
+
 	for len(buf) > 0 {
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
@@ -117,12 +137,20 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 		checksum := crc32.Checksum(data, crcTable)
 		checksumBytes := make([]byte, _ChecksumSize)
 		binary.LittleEndian.PutUint32(checksumBytes, checksum)
-		if _, err := f.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
+		if n, err := f.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
 			return n, err
+		} else {
+			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+				c.FileWithChecksum.UnderlyingWrite.Add(int64(n))
+			}, f.perfCounterSets...)
 		}
 
-		if _, err := f.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
+		if n, err := f.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
 			return n, err
+		} else {
+			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+				c.FileWithChecksum.UnderlyingWrite.Add(int64(n))
+			}, f.perfCounterSets...)
 		}
 
 		n += nBytes
@@ -195,6 +223,9 @@ func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, freeData fun
 	if err != nil && err != io.EOF {
 		return nil, nil, err
 	}
+	perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+		c.FileWithChecksum.UnderlyingRead.Add(int64(n))
+	}, f.perfCounterSets...)
 
 	if n < _ChecksumSize {
 		// empty
