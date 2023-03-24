@@ -14,6 +14,10 @@
 
 package objectio
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
 type Extent struct {
 	id         uint32
 	offset     uint32
@@ -39,3 +43,10 @@ func (ex Extent) Offset() uint32 { return ex.offset }
 func (ex Extent) Length() uint32 { return ex.length }
 
 func (ex Extent) OriginSize() uint32 { return ex.originSize }
+
+func (ex Extent) Marshal() []byte {
+	return types.EncodeSlice[Extent](ex)
+}
+func (ex Extent) Unmarshal(v []byte) Extent {
+	return types.DecodeSlice[Extent](v)
+}

@@ -143,6 +143,29 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+func (cb *ColumnBlock) UnmarshalMate(data []byte) {
+	cb.meta.typ = types.DecodeUint8(data[:1])
+	data = data[:1]
+	cb.meta.alg = types.DecodeUint8(data[:1])
+	data = data[:1]
+	cb.meta.idx = types.DecodeUint16(data[:2])
+	data = data[:2]
+	cb.meta.location.offset = types.DecodeUint32(data[:4])
+	data = data[:4]
+	cb.meta.location.length = types.DecodeUint32(data[:4])
+	data = data[:4]
+	cb.meta.location.originSize = types.DecodeUint32(data[:4])
+	data = data[:4]
+	cb.meta.bloomFilter.offset = types.DecodeUint32(data[:4])
+	data = data[:4]
+	cb.meta.bloomFilter.length = types.DecodeUint32(data[:4])
+	data = data[:4]
+	cb.meta.bloomFilter.originSize = types.DecodeUint32(data[:4])
+	// +32 skip dummy
+	data = data[:4+32]
+	cb.meta.checksum = types.DecodeUint32(data[:4])
+}
+
 func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	var err error
 	if err = binary.Read(cache, endian, &cb.meta.typ); err != nil {
