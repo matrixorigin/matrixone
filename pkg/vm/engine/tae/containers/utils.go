@@ -173,6 +173,8 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[types.TS](v)
 	case types.T_Rowid:
 		bs = movecToBytes[types.Rowid](v)
+	case types.T_Blockid:
+		bs = movecToBytes[types.Blockid](v)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)

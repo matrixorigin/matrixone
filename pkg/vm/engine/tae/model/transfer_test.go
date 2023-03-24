@@ -24,13 +24,14 @@ import (
 )
 
 func TestTransferPage(t *testing.T) {
+	sid := common.NewSegmentid()
 	src := common.ID{
-		BlockID: 1,
+		BlockID: common.NewBlockid(&sid, 1, 0),
 	}
 	dest := common.ID{
-		BlockID: 2,
+		BlockID: common.NewBlockid(&sid, 2, 0),
 	}
-	prefix := EncodeBlockKeyPrefix(0, dest.BlockID)
+	prefix := dest.BlockID[:]
 
 	memo1 := NewTransferHashPage(&src, time.Now())
 	assert.Zero(t, memo1.RefCount())
@@ -72,11 +73,12 @@ func TestTransferTable(t *testing.T) {
 	ttl := time.Minute
 	table := NewTransferTable[*TransferHashPage](ttl)
 	defer table.Close()
+	sid := common.NewSegmentid()
 
-	id1 := common.ID{BlockID: 1}
-	id2 := common.ID{BlockID: 2}
+	id1 := common.ID{BlockID: common.NewBlockid(&sid, 1, 0)}
+	id2 := common.ID{BlockID: common.NewBlockid(&sid, 2, 0)}
 
-	prefix := EncodeBlockKeyPrefix(id2.SegmentID, id2.BlockID)
+	prefix := id2.BlockID[:]
 
 	now := time.Now()
 	page1 := NewTransferHashPage(&id1, now)

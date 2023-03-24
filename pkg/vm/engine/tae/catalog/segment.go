@@ -33,27 +33,43 @@ import (
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 func compareSegmentFn(a, b *SegmentEntry) int {
-	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
+	if a.SortHint < b.SortHint {
+		return -1
+	} else if a.SortHint > b.SortHint {
+		return 1
+	}
+	return 0
 }
 
 type SegmentEntry struct {
 	*MetaBaseEntry
-	table   *TableEntry
-	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	table    *TableEntry
+	ID       types.Uuid
+	IsLocal  bool   // this segment is hold by a localsegment
+	SortHint uint64 // sort segment by create time, make iteration on segment determined
+	// used in appendable segment, bump this if creating a new block, and
+	// the block will be eventually flushed to a s3 file.
+	// for non-appendable segment, this field makes no sense, because if we
+	// decide to create a new non-appendable segment, its content is all set.
+	nextObjectIdx uint16
+	sorted        bool // deprecated
+
+	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
-	link    *common.GenericSortedDList[*BlockEntry]
-	state   EntryState
-	sorted  bool
+	link  *common.GenericSortedDList[*BlockEntry]
+	state EntryState
+
 	segData data.Segment
 }
 
-func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
-	id := table.GetDB().catalog.NextSegment()
+func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
+		SortHint:      table.GetDB().catalog.NextSegment(),
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		state:         state,
 	}
 	e.CreateWithTxn(txn)
@@ -67,33 +83,36 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		MetaBaseEntry: NewReplayMetaBaseEntry(),
 		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
 }
 
-func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
+func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            common.NewSegmentid(),
+		IsLocal:       true,
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		state:         ES_Appendable,
 	}
 	e.CreateWithTS(ts)
 	return e
 }
 
-func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
+func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		table:         table,
 		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		state:         ES_Appendable,
 	}
 	e.CreateWithTS(types.SystemDBTS)
-	var bid uint64
+	var bid types.Blockid
 	if table.schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
 	} else if table.schema.Name == SystemDBSchema.Name {
@@ -108,14 +127,51 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	return e
 }
 
-func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err error) {
+func (entry *SegmentEntry) WriteAddonInfo(w io.Writer) (n int64, err error) {
+	entry.RLock()
+	defer entry.RUnlock()
+	if err = binary.Write(w, binary.BigEndian, entry.SortHint); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, entry.IsLocal); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+func (entry *SegmentEntry) ReadAddonInfo(r io.Reader) (n int64, err error) {
+	//
+	// called during replay, no need to lock
+	//
+	if err = binary.Read(r, binary.BigEndian, &entry.SortHint); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &entry.IsLocal); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+func (entry *SegmentEntry) AddonInfoStringLocked() string {
+	sorted := "US"
+	if entry.sorted {
+		sorted = "S"
+	}
+	return fmt.Sprintf("%s/%d/%d", sorted, entry.SortHint, entry.nextObjectIdx)
+}
+
+func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
 // XXX API like this, why do we need the error?   Isn't blk is nil enough?
-func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
+func (entry *SegmentEntry) GetBlockEntryByIDLocked(id types.Blockid) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
 		err = moerr.GetOkExpectedEOB()
@@ -162,11 +218,7 @@ func (entry *SegmentEntry) StringLocked() string {
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	sorted := "-US"
-	if entry.sorted {
-		sorted = "-S"
-	}
-	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), sorted, id.String())
+	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), entry.AddonInfoStringLocked(), id.String())
 }
 
 func (entry *SegmentEntry) String() string {
@@ -182,15 +234,19 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 }
 
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
-	sorted := "-US"
-	if entry.sorted {
-		sorted = "-S"
-	}
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s%s]SEG[%d][C@%s,D@%s]",
-			entry.state.Repr(), sorted, entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
+			entry.state.Repr(),
+			entry.AddonInfoStringLocked(),
+			entry.ID.ToString(),
+			entry.GetCreatedAt().ToString(),
+			entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s%s]SEG%s", entry.state.Repr(), sorted, entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s-%s]SEG[%s]%s",
+		entry.state.Repr(),
+		entry.AddonInfoStringLocked(),
+		entry.ID.ToString(),
+		entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -271,28 +327,32 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	return
 }
 
-func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) (created *BlockEntry, err error) {
+func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory, opts *common.CreateBlockOpt) (created *BlockEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	created = NewBlockEntry(entry, txn, state, dataFactory)
+	var id types.Blockid
+	if opts != nil && opts.Id != nil {
+		id = common.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		if entry.nextObjectIdx <= opts.Id.Filen {
+			entry.nextObjectIdx = opts.Id.Filen + 1
+		}
+	} else {
+		id = common.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
+		entry.nextObjectIdx += 1
+	}
+	if _, ok := entry.entries[id]; ok {
+		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))
+	}
+	if opts != nil && opts.Loc != nil {
+		created = NewBlockEntryWithMeta(entry, id, txn, state, dataFactory, opts.Loc.Metaloc, opts.Loc.Deltaloc)
+	} else {
+		created = NewBlockEntry(entry, id, txn, state, dataFactory)
+	}
 	entry.AddEntryLocked(created)
 	return
 }
 
-func (entry *SegmentEntry) CreateBlockWithMeta(
-	txn txnif.AsyncTxn,
-	state EntryState,
-	dataFactory BlockDataFactory,
-	metaLoc string,
-	deltaLoc string) (created *BlockEntry, err error) {
-	entry.Lock()
-	defer entry.Unlock()
-	created = NewBlockEntryWithMeta(entry, txn, state, dataFactory, metaLoc, deltaLoc)
-	entry.AddEntryLocked(created)
-	return
-}
-
-func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
+func (entry *SegmentEntry) DropBlockEntry(id types.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
 	blk, err := entry.GetBlockEntryByID(id)
 	if err != nil {
 		return
@@ -321,13 +381,22 @@ func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.GenericSortedDListI
 
 func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	n := entry.link.Insert(block)
-	entry.entries[block.GetID()] = n
+	entry.entries[block.ID] = n
+}
+
+func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
+	// bump object idx during replaying.
+	objn, _ := block.ID.Offsets()
+	if objn >= entry.nextObjectIdx {
+		entry.nextObjectIdx = objn + 1
+	}
+	entry.AddEntryLocked(block)
 }
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   entry.GetTable().GetID(),
-		SegmentID: entry.GetID(),
+		SegmentID: entry.ID,
 	}
 }
 
@@ -343,11 +412,11 @@ func (entry *SegmentEntry) InitData(factory DataFactory) {
 func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData }
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
-	if n, ok := entry.entries[block.GetID()]; !ok {
+	if n, ok := entry.entries[block.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
-		delete(entry.entries, block.GetID())
+		delete(entry.entries, block.ID)
 	}
 	// block.blkData.Close()
 	// block.blkData = nil
@@ -372,37 +441,6 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	return
-}
-
-func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
-	sn := int64(0)
-	if sn, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
-		return
-	}
-	n = sn + 1
-	if err = binary.Write(w, binary.BigEndian, entry.sorted); err != nil {
-		return
-	}
-	n = sn + 1
-	return
-}
-
-func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &entry.state); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Read(r, binary.BigEndian, &entry.sorted); err != nil {
-		return
-	}
-	n += 1
 	return
 }
 

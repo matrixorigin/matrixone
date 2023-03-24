@@ -134,7 +134,7 @@ func (blk *block) BatchDedup(
 	precommit bool) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
+			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
 	ts := txn.GetStartTS()

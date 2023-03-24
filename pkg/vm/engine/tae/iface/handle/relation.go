@@ -15,8 +15,10 @@
 package handle
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -54,8 +56,8 @@ type Relation interface {
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment(is1PC bool) (Segment, error)
-	GetSegment(id uint64) (Segment, error)
-	SoftDeleteSegment(id uint64) (err error)
+	GetSegment(id types.Uuid) (Segment, error)
+	SoftDeleteSegment(id types.Uuid) (err error)
 
 	GetDB() (Database, error)
 }
