@@ -17,17 +17,18 @@ package multi
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGitVersion(t *testing.T) {
+func TestBuildVersion(t *testing.T) {
 	proc := testutil.NewProc()
-	res, err := GitVersion([]*vector.Vector{}, proc)
+	res, err := BuildVersion([]*vector.Vector{}, proc)
 	require.NoError(t, err)
 
-	got := vector.MustStrCol(res)
+	got := vector.MustFixedCol[types.Timestamp](res)
 	// build info not available on testing
-	require.Equal(t, []string{"unknown"}, got)
+	require.Equal(t, []types.Timestamp{0}, got)
 }

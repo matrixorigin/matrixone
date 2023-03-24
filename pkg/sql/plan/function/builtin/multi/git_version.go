@@ -15,28 +15,17 @@
 package multi
 
 import (
-	"runtime/debug"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var gitVersion = func() string {
-	revision := "unknown"
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return revision
-	}
-	for _, kv := range info.Settings {
-		if kv.Key == "vcs.revision" {
-			revision = kv.Value
-		}
-	}
-	return revision
-}()
-
 func GitVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtyp := types.T_varchar.ToType()
-	return vector.NewConstBytes(rtyp, []byte(gitVersion), 1, proc.Mp()), nil
+	s := "unknown"
+	if version.CommitID != "" {
+		s = version.CommitID
+	}
+	return vector.NewConstBytes(rtyp, []byte(s), 1, proc.Mp()), nil
 }

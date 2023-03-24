@@ -15,19 +15,26 @@
 package multi
 
 import (
-	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestGitVersion(t *testing.T) {
-	proc := testutil.NewProc()
-	res, err := GitVersion([]*vector.Vector{}, proc)
-	require.NoError(t, err)
+var buildTime = func() types.Timestamp {
+	if version.BuildTime == "" {
+		return 0
+	}
+	t, err := time.Parse(time.UnixDate, version.BuildTime)
+	if err != nil {
+		panic(err)
+	}
+	return types.UnixNanoToTimestamp(t.UnixNano())
+}
 
-	got := vector.MustStrCol(res)
-	// build info not available on testing
-	require.Equal(t, []string{"unknown"}, got)
+func BuildVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.T_timestamp.ToType()
+	return vector.NewConstFixed(rtyp, buildTime(), 1, proc.Mp()), nil
 }
