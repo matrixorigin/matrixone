@@ -114,6 +114,8 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:
 		return movec.GetFixedAt[types.Rowid](col, int(row))
+	case types.T_Blockid:
+		return movec.GetFixedAt[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return col.GetBytesAt(int(row))
 	default:
@@ -198,7 +200,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[types.TS](col, row, val)
 	case types.T_Rowid:
 		GenericUpdateFixedValue[types.Rowid](col, row, val)
-
+	case types.T_Blockid:
+		GenericUpdateFixedValue[types.Blockid](col, row, val)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		GenericUpdateBytes(col, row, val)

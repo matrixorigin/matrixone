@@ -1195,6 +1195,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.TS), false, mp)
 	case types.T_Rowid:
 		return appendOneFixed(vec, val.(types.Rowid), false, mp)
+	case types.T_Blockid:
+		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
