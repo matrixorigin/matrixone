@@ -1257,7 +1257,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
-		Default:           int8(1),
+		Default:           int8(0),
 	},
 }
 
