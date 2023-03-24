@@ -29,6 +29,10 @@ func TestBuildVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	got := vector.MustFixedCol[types.Timestamp](res)
-	// build info not available on testing
 	require.Equal(t, []types.Timestamp{0}, got)
+
+	t.Run("parseBuildTime", func(t *testing.T) {
+		ts := parseBuildTime("2023-03-24T21:55:01+08:00")
+		require.Equal(t, ts, types.Timestamp(63815262901000000))
+	})
 }

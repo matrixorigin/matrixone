@@ -23,18 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var buildTime = func() types.Timestamp {
-	if version.BuildTime == "" {
+var buildTime = parseBuildTime(version.BuildTime)
+
+func BuildVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.T_timestamp.ToType()
+	return vector.NewConstFixed(rtyp, buildTime, 1, proc.Mp()), nil
+}
+
+func parseBuildTime(s string) types.Timestamp {
+	if s == "" {
 		return 0
 	}
-	t, err := time.Parse(time.RFC3339, version.BuildTime)
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		panic(err)
 	}
 	return types.UnixNanoToTimestamp(t.UnixNano())
-}
-
-func BuildVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtyp := types.T_timestamp.ToType()
-	return vector.NewConstFixed(rtyp, buildTime(), 1, proc.Mp()), nil
 }
