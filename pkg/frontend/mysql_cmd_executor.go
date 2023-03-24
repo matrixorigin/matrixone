@@ -198,7 +198,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
-	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -241,7 +240,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Account:              tenant.GetTenant(),
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
+		Host:                 ses.protocol.Peer(),
 		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
@@ -265,9 +264,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
-	for _, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, sqlTypes []string, err error) context.Context {
+	retErr := moerr.NewParseError(ctx, err.Error())
+	sqlType := sqlTypes[0]
+	for i, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+		if i < len(sqlTypes) {
+			sqlType = sqlTypes[i]
+		}
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+		motrace.EndStatement(ctx, retErr, 0)
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -405,6 +410,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 func doUse(ctx context.Context, ses *Session, db string) error {
+	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
@@ -2245,7 +2251,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	if err != nil {
 		sql = removePrefixComment(sql)
 		sql = hideAccessKey(sql)
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3136,7 +3142,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr

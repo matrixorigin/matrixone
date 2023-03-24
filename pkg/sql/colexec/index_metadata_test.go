@@ -16,6 +16,9 @@ package colexec
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -29,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 //func TestDeleteIndexMetadata(t *testing.T) {
@@ -255,7 +256,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
@@ -359,7 +360,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
