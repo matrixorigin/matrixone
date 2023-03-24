@@ -15,25 +15,23 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 func compareBlockFn(a, b *BlockEntry) int {
-	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
+	return a.ID.Compare(b.ID)
 }
 
 type BlockEntry struct {
 	*MetaBaseEntry
+	ID      types.Blockid
 	segment *SegmentEntry
 	state   EntryState
 	blkData data.Block
@@ -45,30 +43,31 @@ func NewReplayBlockEntry() *BlockEntry {
 	}
 }
 
-func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
-	id := segment.GetTable().GetDB().catalog.NextBlock()
+func NewBlockEntry(segment *SegmentEntry, id types.Blockid, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		segment:       segment,
 		state:         state,
 	}
+	e.MetaBaseEntry.CreateWithTxn(txn)
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.MetaBaseEntry.CreateWithTxn(txn)
 	return e
 }
 
 func NewBlockEntryWithMeta(
 	segment *SegmentEntry,
+	id types.Blockid,
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory BlockDataFactory,
 	metaLoc string,
 	deltaLoc string) *BlockEntry {
-	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		segment:       segment,
 		state:         state,
 	}
@@ -79,9 +78,10 @@ func NewBlockEntryWithMeta(
 	return e
 }
 
-func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
+func NewStandaloneBlock(segment *SegmentEntry, id types.Blockid, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		segment:       segment,
 		state:         ES_Appendable,
 	}
@@ -91,12 +91,13 @@ func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEnt
 
 func NewStandaloneBlockWithLoc(
 	segment *SegmentEntry,
-	id uint64,
+	id types.Blockid,
 	ts types.TS,
 	metaLoc string,
 	delLoc string) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		segment:       segment,
 		state:         ES_NotAppendable,
 	}
@@ -104,9 +105,10 @@ func NewStandaloneBlockWithLoc(
 	return e
 }
 
-func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
+func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	e := &BlockEntry{
-		MetaBaseEntry: NewMetaBaseEntry(id),
+		MetaBaseEntry: NewMetaBaseEntry(),
+		ID:            id,
 		segment:       segment,
 		state:         ES_Appendable,
 	}
@@ -165,17 +167,17 @@ func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
 
 func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s]BLK[%d][C@%s,D@%s]",
-			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+		return fmt.Sprintf("[%s]BLK[%s][C@%s,D@%s]",
+			entry.state.Repr(), entry.ID.ShortString(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLK[%s]%s", entry.state.Repr(), entry.ID.String(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   entry.GetSegment().GetTable().GetID(),
-		SegmentID: entry.GetSegment().GetID(),
-		BlockID:   entry.GetID(),
+		SegmentID: entry.GetSegment().ID,
+		BlockID:   entry.ID,
 	}
 }
 
@@ -202,28 +204,9 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
-		return
-	}
-	n += 1
-	return
-}
-
-func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	err = binary.Read(r, binary.BigEndian, &entry.state)
-	n += 1
-	return
-}
-
 func (entry *BlockEntry) MakeKey() []byte {
-	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
+	prefix := entry.ID // copy id
+	return prefix[:]
 }
 
 // PrepareCompact is performance insensitive

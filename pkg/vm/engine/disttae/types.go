@@ -199,7 +199,7 @@ type txnTable struct {
 
 	updated bool
 	// use for skip rows
-	skipBlocks map[uint64]uint8
+	skipBlocks map[types.Blockid]uint8
 }
 
 type column struct {
