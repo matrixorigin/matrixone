@@ -15,12 +15,8 @@
 package objectio
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -94,123 +90,10 @@ func (cb *ColumnBlock) GetMeta() *ColumnMeta {
 	return cb.meta
 }
 
-func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
-	var (
-		err    error
-		buffer bytes.Buffer
-	)
-	if err = binary.Write(&buffer, endian, cb.meta.typ); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.alg); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.idx); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.location.Offset()); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.location.Length()); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
-		return nil, err
-	}
-	var buf []byte
-	if cb.meta.zoneMap.data == nil {
-		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
-		cb.meta.zoneMap.data = buf
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.data.([]byte)); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Offset()); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Length()); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.OriginSize()); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, cb.meta.dummy); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+func (cb *ColumnBlock) MarshalMeta() []byte {
+	return cb.meta.Marshal()
 }
 
-func (cb *ColumnBlock) UnmarshalMate(data []byte) {
-	cb.meta.typ = types.DecodeUint8(data[:1])
-	data = data[:1]
-	cb.meta.alg = types.DecodeUint8(data[:1])
-	data = data[:1]
-	cb.meta.idx = types.DecodeUint16(data[:2])
-	data = data[:2]
-	cb.meta.location.offset = types.DecodeUint32(data[:4])
-	data = data[:4]
-	cb.meta.location.length = types.DecodeUint32(data[:4])
-	data = data[:4]
-	cb.meta.location.originSize = types.DecodeUint32(data[:4])
-	data = data[:4]
-	cb.meta.bloomFilter.offset = types.DecodeUint32(data[:4])
-	data = data[:4]
-	cb.meta.bloomFilter.length = types.DecodeUint32(data[:4])
-	data = data[:4]
-	cb.meta.bloomFilter.originSize = types.DecodeUint32(data[:4])
-	// +32 skip dummy
-	data = data[:4+32]
-	cb.meta.checksum = types.DecodeUint32(data[:4])
-}
-
-func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
-	var err error
-	if err = binary.Read(cache, endian, &cb.meta.typ); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.alg); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.idx); err != nil {
-		return err
-	}
-	cb.meta.location = Extent{}
-	if err = binary.Read(cache, endian, &cb.meta.location.offset); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.location.length); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.location.originSize); err != nil {
-		return err
-	}
-	buf := make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
-	cb.meta.zoneMap.idx = cb.meta.idx
-	if err = binary.Read(cache, endian, &buf); err != nil {
-		return err
-	}
-	t := types.T(cb.meta.typ).ToType()
-	if err = cb.meta.zoneMap.Unmarshal(buf, t); err != nil {
-		return err
-	}
-	cb.meta.bloomFilter = Extent{}
-	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.offset); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.length); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.originSize); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.dummy); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.checksum); err != nil {
-		return err
-	}
-	return err
+func (cb *ColumnBlock) UnmarshalMate(data []byte) error {
+	return cb.meta.Unmarshal(data)
 }

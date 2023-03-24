@@ -17,7 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -58,15 +58,9 @@ func (w *ObjectWriter) WriteHeader() error {
 		header bytes.Buffer
 	)
 	h := Header{magic: Magic, version: Version}
-	if err = binary.Write(&header, endian, h.magic); err != nil {
-		return err
-	}
-	if err = binary.Write(&header, endian, h.version); err != nil {
-		return err
-	}
-	if err = binary.Write(&header, endian, h.dummy); err != nil {
-		return err
-	}
+	header.Write(types.EncodeFixed[uint64](h.magic))
+	header.Write(types.EncodeFixed[uint16](h.version))
+	header.Write(make([]byte, 22))
 	_, _, err = w.buffer.Write(header.Bytes())
 	return err
 }
@@ -136,22 +130,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 			start = offset
 		}
 		metaLen += length
-		if err = binary.Write(&buf, endian, uint32(offset)); err != nil {
-			return nil, err
-		}
-		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
-			return nil, err
-		}
-		if err = binary.Write(&buf, endian, uint32(length)); err != nil {
-			return nil, err
-		}
+		buf.Write(types.EncodeFixed[uint32](uint32(offset)))
+		buf.Write(types.EncodeFixed[uint32](uint32(length)))
+		buf.Write(types.EncodeFixed[uint32](uint32(length)))
 	}
-	if err = binary.Write(&buf, endian, uint32(len(w.blocks))); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buf, endian, uint64(Magic)); err != nil {
-		return nil, err
-	}
+	buf.Write(types.EncodeFixed[uint32](uint32(len(w.blocks))))
+	buf.Write(types.EncodeFixed[uint64](uint64(Magic)))
 	_, _, err = w.buffer.Write(buf.Bytes())
 	if err != nil {
 		return nil, err

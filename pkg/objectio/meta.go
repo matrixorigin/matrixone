@@ -16,8 +16,8 @@ package objectio
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const HeaderSize = 64
@@ -78,6 +78,29 @@ func (bh *BlockHeader) GetColumnCount() uint16 {
 	return bh.columnCount
 }
 
+func (bh *BlockHeader) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeFixed[uint64](bh.tableId))
+	buffer.Write(types.EncodeFixed[uint64](bh.segmentId))
+	buffer.Write(types.EncodeFixed[uint64](bh.blockId))
+	buffer.Write(types.EncodeFixed[uint16](bh.columnCount))
+	buffer.Write(make([]byte, 34))
+	buffer.Write(types.EncodeFixed[uint32](bh.checksum))
+	return buffer.Bytes()
+}
+
+func (bh *BlockHeader) Unmarshal(data []byte) {
+	bh.tableId = types.DecodeUint64(data[:8])
+	data = data[8:]
+	bh.segmentId = types.DecodeUint64(data[:8])
+	data = data[8:]
+	bh.blockId = types.DecodeUint64(data[:8])
+	data = data[8:]
+	bh.columnCount = types.DecodeUint16(data[:2])
+	data = data[2+34:]
+	bh.checksum = types.DecodeUint32(data[:4])
+}
+
 // +---------------------------------------------------------------------------------------------------------------+
 // |                                                    ColumnMeta                                                 |
 // +--------+-------+----------+--------+---------+--------+--------+------------+---------+----------+------------+
@@ -134,6 +157,47 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 	return cm.bloomFilter
 }
 
+func (cb *ColumnMeta) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeFixed[uint8](cb.typ))
+	buffer.Write(types.EncodeFixed[uint8](cb.alg))
+	buffer.Write(types.EncodeFixed[uint16](cb.idx))
+	buffer.Write(cb.location.Marshal())
+	var buf []byte
+	if cb.zoneMap.data == nil {
+		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
+		cb.zoneMap.data = buf
+	}
+	buffer.Write(cb.zoneMap.data.([]byte))
+	buffer.Write(cb.bloomFilter.Marshal())
+	dummy := make([]byte, 32)
+	buffer.Write(dummy)
+	buffer.Write(types.EncodeFixed[uint32](cb.checksum))
+	return buffer.Bytes()
+}
+
+func (cb *ColumnMeta) Unmarshal(data []byte) error {
+	cb.typ = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cb.alg = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cb.idx = types.DecodeUint16(data[:2])
+	data = data[2:]
+	cb.location.Unmarshal(data)
+	data = data[12:]
+	cb.zoneMap.idx = cb.idx
+	t := types.T(cb.typ).ToType()
+	if err := cb.zoneMap.Unmarshal(data[:64], t); err != nil {
+		return err
+	}
+	data = data[64:]
+	cb.bloomFilter.Unmarshal(data)
+	// 32 skip dummy
+	data = data[12+32:]
+	cb.checksum = types.DecodeUint32(data[:4])
+	return nil
+}
+
 type Header struct {
 	magic   uint64
 	version uint16
@@ -149,13 +213,10 @@ type Footer struct {
 func (f *Footer) UnMarshalFooter(data []byte) error {
 	var err error
 	footer := data[len(data)-FooterSize:]
-	FooterCache := bytes.NewBuffer(footer)
-	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
-		return err
-	}
-	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
-		return err
-	}
+	f.blockCount = types.DecodeUint32(footer[:4])
+	footer = footer[4:]
+	f.magic = types.DecodeUint64(footer[:8])
+	footer = footer[8:]
 	if f.magic != uint64(Magic) {
 		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
 	}
@@ -165,19 +226,11 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 		f.extents = make([]Extent, f.blockCount)
 	}
 	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
-	ExtentsCache := bytes.NewBuffer(extents)
 	size := uint32(0)
 	for i := 0; i < int(f.blockCount); i++ {
 		f.extents[i].id = uint32(i)
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
-			return err
-		}
+		f.extents[i].Unmarshal(extents)
+		extents = extents[12:]
 		size += f.extents[i].originSize
 	}
 

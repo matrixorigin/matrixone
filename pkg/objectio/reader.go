@@ -92,7 +92,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 					name:   r.name,
 				}
 				cache := data[size:dataLen]
-				unSize, err := block.UnMarshalMeta(cache, ZMUnmarshalFunc)
+				unSize, err := block.UnmarshalMeta(cache, ZMUnmarshalFunc)
 				if err != nil {
 					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
 					return nil, 0, err

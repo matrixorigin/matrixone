@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -104,8 +103,7 @@ type ColumnObject interface {
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
-}
 
-var (
-	endian = binary.LittleEndian
-)
+	MarshalMeta() []byte
+	UnmarshalMate(data []byte) error
+}

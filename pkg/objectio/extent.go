@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -45,8 +46,16 @@ func (ex Extent) Length() uint32 { return ex.length }
 func (ex Extent) OriginSize() uint32 { return ex.originSize }
 
 func (ex Extent) Marshal() []byte {
-	return types.EncodeSlice[Extent](ex)
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeFixed[uint32](ex.offset))
+	buffer.Write(types.EncodeFixed[uint32](ex.length))
+	buffer.Write(types.EncodeFixed[uint32](ex.originSize))
+	return buffer.Bytes()
 }
-func (ex Extent) Unmarshal(v []byte) Extent {
-	return types.DecodeSlice[Extent](v)
+func (ex *Extent) Unmarshal(data []byte) {
+	ex.offset = types.DecodeUint32(data[:4])
+	data = data[4:]
+	ex.length = types.DecodeUint32(data[:4])
+	data = data[4:]
+	ex.originSize = types.DecodeUint32(data[:4])
 }
