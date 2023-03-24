@@ -72,8 +72,10 @@ type PathBuilder interface {
 }
 
 type Path interface {
+	SetAccount(account string)
 	Table() string
 	Timestamp() []string
+	ToString() string
 }
 
 var _ Path = (*ETLPath)(nil)
@@ -81,6 +83,8 @@ var _ Path = (*ETLPath)(nil)
 type ETLPath struct {
 	// path raw data
 	path string
+	// elems parsed path elem
+	elems []string
 	// table parsed from path
 	table string
 	// filename
@@ -111,12 +115,12 @@ func NewETLPath(path string) *ETLPath {
 
 func (p *ETLPath) Parse(ctx context.Context) error {
 	// parse path => filename, table
-	elems := strings.Split(p.path, "/")
-	if len(elems) != PathElems {
+	p.elems = strings.Split(p.path, "/")
+	if len(p.elems) != PathElems {
 		return moerr.NewInternalError(ctx, "invalid etl path: %s", p.path)
 	}
-	p.filename = elems[PathIdxFilename]
-	p.table = elems[PathIdxTable]
+	p.filename = p.elems[PathIdxFilename]
+	p.table = p.elems[PathIdxTable]
 
 	// parse filename => fileType, timestamps
 	filename := strings.Trim(p.filename, CsvExtension)
@@ -141,6 +145,14 @@ func (p *ETLPath) Table() string {
 
 func (p *ETLPath) Timestamp() []string {
 	return p.timestamps
+}
+
+func (p *ETLPath) SetAccount(account string) {
+	p.elems[1] = account
+}
+
+func (p *ETLPath) ToString() string {
+	return path.Join(p.elems...)
 }
 
 type PathBuilderConfig struct {

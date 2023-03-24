@@ -166,7 +166,26 @@ func containColname(col string) bool {
 	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
 }
 
-func judgeContainColname(expr *plan.Expr) bool {
+func GetAccountPrefix(expr *plan.Expr) (bool, string) {
+
+	if expr_F, ok := expr.Expr.(*plan.Expr_F); ok {
+		//Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
+		f := expr_F.F
+		if f.Func.ObjName == "=" && len(f.Args) == 2 {
+			if colName, isCol := f.Args[0].Expr.(*plan.Expr_Col); isCol && colName.Col.Name == STATEMENT_ACCOUNT {
+				val, isConst := f.Args[0].Expr.(*plan.Expr_C)
+				str, isString := val.C.Value.(*plan.Const_Sval)
+				if isConst && isString {
+					return true, str.Sval
+				}
+			}
+		}
+	}
+
+	return false, ""
+}
+
+func JudgeContainColname(expr *plan.Expr) bool {
 	expr_F, ok := expr.Expr.(*plan.Expr_F)
 	if !ok {
 		return false
@@ -174,7 +193,7 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if expr_F.F.Func.ObjName == "or" {
 		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
-			flag = flag && judgeContainColname(expr_F.F.Args[i])
+			flag = flag && JudgeContainColname(expr_F.F.Args[i])
 		}
 		return flag
 	}
@@ -183,7 +202,7 @@ func judgeContainColname(expr *plan.Expr) bool {
 		return true
 	}
 	for _, arg := range expr_F.F.Args {
-		if judgeContainColname(arg) {
+		if JudgeContainColname(arg) {
 			return true
 		}
 	}
@@ -237,7 +256,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if judgeContainColname(node.FilterList[i]) {
+		if JudgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
 		} else {
 			filterList2 = append(filterList2, node.FilterList[i])

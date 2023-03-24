@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -758,6 +759,26 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
+
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, strings.ToLower(defines.ETLFileServiceName)+":") {
+		for i := 0; i < len(n.FilterList); i++ {
+			fl := n.FilterList[i]
+			if external.JudgeContainColname(fl) {
+				exist, account := external.GetAccountPrefix(fl)
+				if exist {
+					builder := table.NewAccountDatePathBuilder()
+					p, err := builder.ParsePath(ctx, filePath)
+					if err != nil {
+						continue
+					}
+					p.SetAccount(account)
+					param.Filepath = p.ToString()
+				}
+			}
+		}
+	}
+
 	var fileList []string
 	var fileSize []int64
 	if !param.Local {
