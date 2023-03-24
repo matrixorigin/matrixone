@@ -94,7 +94,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleInt(startVec, endVec, stepVec, generateInt32, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt32, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -102,7 +102,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleInt(startVec, endVec, stepVec, generateInt64, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt64, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -110,7 +110,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleDatetime(startVec, endVec, stepVec, proc, rbat)
+		err = handleDatetime(startVec, endVec, stepVec, -1, proc, rbat)
 	case types.T_varchar:
 		if stepVec == nil {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
@@ -133,7 +133,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), start, 1, proc.Mp())
 		endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), end, 1, proc.Mp())
 
-		err = handleDatetime(startVecTmp, endVecTmp, stepVec, proc, rbat)
+		err = handleDatetime(startVecTmp, endVecTmp, stepVec, scale, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -236,7 +236,7 @@ func generateInt64(ctx context.Context, start, end, step int64) ([]int64, error)
 	return res, nil
 }
 
-func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr string, scale int32) ([]types.Datetime, error) {
+func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr string) ([]types.Datetime, error) {
 	step, tp, err := genStep(ctx, stepStr)
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr st
 	return res, nil
 }
 
-func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(context.Context, T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
+func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(context.Context, T, T, T) ([]T, error), proc *process.Process, rbat *batch.Batch) error {
 	var (
 		start, end, step T
 	)
@@ -294,11 +294,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 		return err
 	}
 	for i := range res {
-		if toString {
-			err = vector.AppendBytes(rbat.Vecs[0], []byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
-		} else {
-			err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
-		}
+		err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -307,7 +303,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 	return nil
 }
 
-func handleDatetime(startVec, endVec, stepVec *vector.Vector, proc *process.Process, rbat *batch.Batch) error {
+func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc *process.Process, rbat *batch.Batch) error {
 	var (
 		start, end types.Datetime
 		step       string
@@ -321,12 +317,17 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, proc *process.Proc
 	}
 	stepSlice := vector.MustStrCol(stepVec)
 	step = stepSlice[0]
-	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.GetType().Scale)
+	res, err := generateDatetime(proc.Ctx, start, end, step)
 	if err != nil {
 		return err
 	}
 	for i := range res {
-		err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
+		if scale >= 0 {
+			err = vector.AppendBytes(rbat.Vecs[0], []byte(res[i].String2(scale)), false, proc.Mp())
+		} else {
+			err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
+		}
+
 		if err != nil {
 			return err
 		}

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	GSColDefs = [2][]*plan.ColDef{}
+	GSColDefs = [3][]*plan.ColDef{}
 )
 
 func init() {
@@ -39,14 +39,23 @@ func init() {
 			Typ:  makePlan2Type(&retTyp),
 		},
 	}
+	retTyp = types.T_varchar.ToType()
+	GSColDefs[2] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
 }
 
 func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) int32 {
 	var retsIdx int
 	if types.IsInteger(types.T(exprs[0].Typ.Id)) {
 		retsIdx = 0
-	} else {
+	} else if types.IsDateRelate(types.T(exprs[0].Typ.Id)) {
 		retsIdx = 1
+	} else {
+		retsIdx = 2
 	}
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,

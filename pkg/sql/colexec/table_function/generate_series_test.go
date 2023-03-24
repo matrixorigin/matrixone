@@ -393,7 +393,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		require.Nil(t, err)
 		end, err := types.ParseDatetime(kase.end, scale)
 		require.Nil(t, err)
-		res, err := generateDatetime(context.TODO(), start, end, kase.step, scale)
+		res, err := generateDatetime(context.TODO(), start, end, kase.step)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -479,6 +479,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	proc.InputBatch().Clean(proc.Mp())
 
 	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
+	arg.Rets = plan.GSColDefs[2]
 	proc.SetInputBatch(bat)
 	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
