@@ -6,3 +6,7 @@ create role 'foo"; drop table foo; select "1';
 internal error: invalid input
 alter database `foo"; drop table foo; select "1` set mysql_compatbility_mode = '{"lower_case_table_names": 1}';
 internal error: invalid input
+drop database `system";drop table system.statement_info;select "`;
+internal error: invalid input
+create database `drop database system";drop table system.statement_info;select "`;
+internal error: invalid input

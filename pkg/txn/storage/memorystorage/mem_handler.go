@@ -1303,13 +1303,13 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 	return nil
 }
 
-func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
+func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) (timestamp.Timestamp, error) {
 	tx := m.getTx(meta)
 	commitTS := meta.CommitTS
 	if err := tx.Commit(commitTS); err != nil {
-		return err
+		return timestamp.Timestamp{}, err
 	}
-	return nil
+	return commitTS, nil
 }
 
 func (m *MemHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta) error {

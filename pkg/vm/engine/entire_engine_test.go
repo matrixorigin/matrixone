@@ -54,6 +54,8 @@ type testEngine struct {
 	parent *testEntireEngine
 }
 
+var _ Engine = new(testEngine)
+
 type testOperator struct {
 }
 
@@ -305,6 +307,10 @@ func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tab
 
 func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error) {
 	return "", "", nil, nil
+}
+
+func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, nil
 }
 
 func newtestOperator() *testOperator {

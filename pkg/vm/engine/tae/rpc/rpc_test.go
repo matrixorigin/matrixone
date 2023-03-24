@@ -210,7 +210,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	assert.Nil(t, err)
 	//t.FailNow()
 	start := time.Now()
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	t.Logf("Commit 10w blocks spend: %d", time.Since(start).Microseconds())
 }
@@ -412,7 +412,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	//t.FailNow()
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	//check rows of "tbtest" which should has three blocks.
 	txnR, err := txnEngine.StartTxn(nil)
@@ -530,7 +530,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	//Now, the "tbtest" table has 20 rows left.
 	txnR, err = txnEngine.StartTxn(nil)
@@ -597,7 +597,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), createDbTxn)
+	_, err = handle.HandleCommit(context.TODO(), createDbTxn)
 	assert.Nil(t, err)
 
 	//start txn ,read "dbtest"'s ID
@@ -671,7 +671,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		},
 		new(api.SyncLogTailResp))
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), createTbTxn)
+	_, err = handle.HandleCommit(context.TODO(), createTbTxn)
 	assert.Nil(t, err)
 	//start txn ,read table ID
 	txn, err = txnEngine.StartTxn(nil)
@@ -715,7 +715,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 	// TODO:: Dml delete
 	//bat := batch.NewWithSize(1)
-	err = handle.HandleCommit(context.TODO(), insertTxn)
+	_, err = handle.HandleCommit(context.TODO(), insertTxn)
 	assert.NoError(t, err)
 	//TODO::DML:delete by primary key.
 	// physcial addr + primary key
@@ -770,7 +770,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), deleteTxn)
+	_, err = handle.HandleCommit(context.TODO(), deleteTxn)
 	assert.Nil(t, err)
 	//read, there should be 80 rows left.
 	txn, err = txnEngine.StartTxn(nil)
