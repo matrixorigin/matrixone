@@ -7677,7 +7677,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		}
 	}
 
-	for idx, _ := range kases {
+	for idx := range kases {
 		initData(idx)
 
 		bh := &backgroundExecTest{}
@@ -7688,7 +7688,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-		for i, _ := range kases[idx].sqls {
+		for i := range kases[idx].sqls {
 			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
 				Data:    kases[idx].datas[i],
 				Columns: columns[i],

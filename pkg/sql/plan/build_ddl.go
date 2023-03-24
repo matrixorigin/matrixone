@@ -115,6 +115,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	} else {
 		createTable.Database = string(stmt.Name.SchemaName)
 	}
+	if len(createTable.Database) == 0 {
+		createTable.Database = ctx.DefaultDatabase()
+	}
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
 		return nil, err
 	} else if sub != nil {
