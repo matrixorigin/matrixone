@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -83,7 +82,9 @@ func BlockReadInner(
 	}
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
-		columnBatch.Vecs[i], err = col.Dup(pool)
+		if col.GetType().Oid != types.T_Rowid {
+			columnBatch.Vecs[i], err = col.Dup(pool)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -117,6 +118,15 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, [
 	return found, uint16(idx), idxes
 }
 
+func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
+	col = vector.NewVec(typ)
+	for i := uint32(0); i < length; i++ {
+		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
+		vector.AppendFixed(col, rowid, false, pool)
+	}
+	return
+}
+
 func readBlockData(ctx context.Context, colIndexes []uint16,
 	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
@@ -130,12 +140,12 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	if err != nil {
 		return nil, deleteRows, err
 	}
-	var rowIdVec containers.Vector
+	var rowIdVec *vector.Vector
 	var bat *batch.Batch
 	if ok {
 		// generate rowIdVec
 		prefix := info.BlockID[:]
-		rowIdVec, err = model.PreparePhyAddrDataWithPool(
+		rowIdVec, err = preparePhyAddrData(
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
@@ -147,7 +157,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		}
 		defer func() {
 			if err != nil {
-				rowIdVec.Close()
+				rowIdVec.Free(m)
 			}
 		}()
 	}
@@ -156,7 +166,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if len(idxes) == 0 && ok {
 			// only read rowid column on non appendable block, return early
 			bat = batch.NewWithSize(0)
-			bat.Vecs = append(bat.Vecs, containers.UnmarshalToMoVec(rowIdVec))
+			bat.Vecs = append(bat.Vecs, rowIdVec)
 			return nil, nil
 		}
 		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, nil)
@@ -167,7 +177,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		bat = batch.NewWithSize(0)
 		for _, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
-				bat.Vecs = append(bat.Vecs, containers.UnmarshalToMoVec(rowIdVec))
+				bat.Vecs = append(bat.Vecs, rowIdVec)
 				continue
 			}
 			bat.Vecs = append(bat.Vecs, entry[0])
