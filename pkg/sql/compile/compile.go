@@ -272,9 +272,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: AlterTable,
-				Plan:  pn,
+				Magic:         AlterTable,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
 			var attachedScope *Scope

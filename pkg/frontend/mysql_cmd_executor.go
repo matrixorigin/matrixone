@@ -2480,6 +2480,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 			case *tree.DropTable, *tree.DropIndex:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
+			case *tree.AlterTable:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2492,6 +2494,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 		case *tree.DropTable, *tree.DropIndex:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
+		case *tree.AlterTable:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {

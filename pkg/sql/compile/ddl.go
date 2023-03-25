@@ -176,6 +176,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 								return err
 							}
 						}
+						// execute additional sql pipeline, currently, only delete operations are performed
+						if s.AttachedScope != nil {
+							_, err = s.AttachedScope.Delete(c)
+							if err != nil {
+								return err
+							}
+						}
 						break
 					}
 				}
@@ -184,6 +191,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
+			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
+			addIndex = indexDef
+			// build and update constraint def
+			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
+			if err != nil {
+				return err
+			}
 			// build and create index table
 			if act.AddIndex.IndexTableExist {
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
@@ -200,10 +214,14 @@ func (s *Scope) AlterTable(c *Compile) error {
 					return err
 				}
 			}
-			// build and update constraint def
-			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			addIndex = indexDef
 			// insert data into index table
+			// execute additional sql pipeline, currently, only delete operations are performed
+			//if s.AttachedScope != nil {
+			//	_, err = s.AttachedScope.Insert(c)
+			//	if err != nil {
+			//		return err
+			//	}
+			//}
 			if indexDef.Unique {
 				targetAttrs := getIndexColsFromOriginTable(oldDefs, indexDef.Parts)
 				ret, err := rel.Ranges(c.ctx, nil)
@@ -277,7 +295,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			if dropIndex != nil {
 				for i, idx := range t.Indexes {
 					if dropIndex.IndexName == idx.IndexName {
-						t.Indexes = append(t.Indexes[:i], t.Indexes[i:]...)
+						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
 					}
 				}
 			}
