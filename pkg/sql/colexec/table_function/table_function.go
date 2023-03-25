@@ -26,18 +26,35 @@ import (
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	tblArg := arg.(*Argument)
+	var (
+		f bool
+		e error
+	)
+
 	switch tblArg.Name {
 	case "unnest":
-		return unnestCall(idx, proc, tblArg)
+		f, e = unnestCall(idx, proc, tblArg)
 	case "generate_series":
-		return generateSeriesCall(idx, proc, tblArg)
+		f, e = generateSeriesCall(idx, proc, tblArg)
 	case "meta_scan":
-		return metaScanCall(idx, proc, tblArg)
+		f, e = metaScanCall(idx, proc, tblArg)
 	case "current_account":
-		return currentAccountCall(idx, proc, tblArg)
+		f, e = currentAccountCall(idx, proc, tblArg)
 	default:
 		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
+	if e != nil || f {
+		return f, e
+	}
+	if proc.InputBatch().VectorCount() != len(tblArg.Rets) {
+		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
+	}
+	for i := range tblArg.Rets {
+		if int32(proc.InputBatch().GetVector(int32(i)).GetType().Oid) != tblArg.Rets[i].Typ.Id {
+			return true, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
+		}
+	}
+	return f, e
 }
 
 func String(arg any, buf *bytes.Buffer) {
