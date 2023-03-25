@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
@@ -518,4 +519,36 @@ func BenchmarkVectorExtend(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		vec1.Extend(vec2)
 	}
+}
+
+func TestCloneCNVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec1 := movec.NewVec(types.T_int32.ToType())
+	movec.AppendFixed(vec1, int32(1), false, mp)
+	movec.AppendFixed(vec1, int32(2), true, mp)
+	movec.AppendFixed(vec1, int32(3), false, mp)
+	assert.False(t, vec1.NeedDup())
+
+	vec2 := CloneMOVec(vec1)
+	vec1.Free(mp)
+
+	t.Log(vec2.String())
+	assert.True(t, vec2.NeedDup())
+	assert.Equal(t, int32(1), movec.GetFixedAt[int32](vec2, 0))
+	assert.True(t, vec2.GetNulls().Contains(uint64(1)))
+	assert.Equal(t, int32(3), movec.GetFixedAt[int32](vec2, 2))
+
+	vec3 := movec.NewVec(types.T_char.ToType())
+	movec.AppendBytes(vec3, []byte("h"), false, mp)
+	movec.AppendBytes(vec3, []byte("xx"), true, mp)
+	movec.AppendBytes(vec3, []byte("uuu"), false, mp)
+	assert.False(t, vec3.NeedDup())
+
+	vec4 := CloneMOVec(vec3)
+	vec3.Free(mp)
+
+	assert.True(t, vec4.NeedDup())
+	assert.Equal(t, 1, len(vec4.GetBytesAt(0)))
+	assert.Equal(t, 3, len(vec4.GetBytesAt(2)))
+	assert.True(t, vec4.GetNulls().Contains(uint64(1)))
 }
