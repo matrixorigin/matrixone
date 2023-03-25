@@ -27,7 +27,7 @@ import (
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
-	state := NewPartitionState()
+	state := NewPartitionState(false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker(pool)
