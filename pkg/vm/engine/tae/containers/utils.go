@@ -45,6 +45,12 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 
 // ### Deep copy Functions
 
+func CloneMOVec(v *movec.Vector) *movec.Vector {
+	end := v.Length()
+	a, _ := v.CloneWindow(0, end, nil)
+	return a
+}
+
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
 	end := vec.Length()
