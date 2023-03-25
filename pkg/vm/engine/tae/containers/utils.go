@@ -131,8 +131,8 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 func CloneMOVec(v *movec.Vector) *movec.Vector {
 	typ := *v.GetType()
 	if typ.IsVarlen() {
-		data, area := movec.MustVarlenaRawData(v)
 		var header []types.Varlena
+		data, area := movec.MustVarlenaRawData(v)
 		header = make([]types.Varlena, len(data))
 		copy(header, data)
 		storage := make([]byte, len(area))
