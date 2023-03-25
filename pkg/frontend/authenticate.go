@@ -726,9 +726,27 @@ var (
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
 		catalog.AutoIncrTableName:    0,
+		"mo_indexes":                 0,
 		"mo_pubs":                    0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
+	// mo_indexes table does not have primary keys and index constraints, nor does it have self increasing columns,
+	createMoIndexesSql = `create table mo_indexes(
+				id 			bigint unsigned not null,
+				table_id 	bigint unsigned not null,
+				database_id bigint unsigned not null,
+				name 		varchar(64) not null,
+				type        varchar(11) not null,
+				is_visible  tinyint not null,
+				hidden      tinyint not null,
+				comment 	varchar(2048) not null,
+				column_name    varchar(256) not null,
+				ordinal_position  int unsigned  not null,
+				options     text,
+				index_table_name varchar(5000)
+			);`
+
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
@@ -840,6 +858,8 @@ var (
 		`drop table if exists mo_catalog.mo_pubs;`,
 		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
+
+	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
 		account_name,
@@ -2772,6 +2792,12 @@ handleFailed:
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	bh := ses.GetBackgroundExec(ctx)
+
+	//set backgroundHandler's default schema
+	if handler, ok := bh.(*BackgroundHandler); ok {
+		handler.ses.Session.txnCompileCtx.dbName = catalog.MO_CATALOG
+	}
+
 	defer bh.Close()
 	var err error
 	var sql, db, table string
@@ -2896,6 +2922,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 			if err != nil {
 				goto handleFailed
 			}
+		}
+
+		//step 11: drop mo_catalog.mo_indexes under general tenant
+		err = bh.Exec(deleteCtx, dropMoIndexes)
+		if err != nil {
+			goto handleFailed
 		}
 	}
 
@@ -4216,6 +4248,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.ShowSequences:
+		typs = append(typs, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
@@ -4233,6 +4267,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.CreateSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
@@ -4269,6 +4310,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if len(st.Names) != 0 {
+			dbName = string(st.Names[0].SchemaName)
+		}
+	case *tree.DropSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
@@ -5743,6 +5791,11 @@ func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) e
 		return err
 	}
 
+	bh.Exec(ctx, createMoIndexesSql)
+	if err != nil {
+		return err
+	}
+
 	err = bh.Exec(ctx, createAutoTableSql)
 	if err != nil {
 		return err
@@ -5984,6 +6037,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		err = bh.Exec(ctx, "commit;")
 		if err != nil {
 			goto handleFailed
+		}
+
+		err = bh.Exec(newTenantCtx, createMoIndexesSql)
+		if err != nil {
+			return err
 		}
 
 		err = bh.Exec(newTenantCtx, createAutoTableSql)

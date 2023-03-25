@@ -224,8 +224,6 @@ type TxnStore interface {
 	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
-	LogSegmentID(dbId, tid, sid uint64)
-	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
@@ -253,10 +251,9 @@ type TxnStore interface {
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
+	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlockWithMeta(dbId uint64, id *common.ID, metaLoc string, deltaLoc string) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
 	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
@@ -266,10 +263,27 @@ type TxnStore interface {
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
+	DoneWaitEvent(cnt int)
+	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+	ObserveTxn(
+		visitDatabase func(db any),
+		visitTable func(tbl any),
+		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		visitMetadata func(block any),
+		visitAppend func(bat any),
+		visitDelete func(deletes []uint32, prefix []byte))
+	GetTransactionType() TxnType
 }
+
+type TxnType int8
+
+const (
+	TxnType_Normal = iota
+	TxnType_Heartbeat
+)
 
 type TxnEntryType int16
 

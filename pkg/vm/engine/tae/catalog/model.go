@@ -32,18 +32,19 @@ const (
 	AttrCommitTs = "commit_time"
 	AttrAborted  = "aborted"
 
-	TenantSysID              = uint32(0)
-	SystemSegment_DB_ID      = uint64(101)
-	SystemSegment_Table_ID   = uint64(102)
-	SystemSegment_Columns_ID = uint64(103)
-	SystemBlock_DB_ID        = uint64(201)
-	SystemBlock_Table_ID     = uint64(202)
-	SystemBlock_Columns_ID   = uint64(203)
+	TenantSysID = uint32(0)
 )
 
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema
+
+var SystemSegment_DB_ID types.Uuid
+var SystemSegment_Table_ID types.Uuid
+var SystemSegment_Columns_ID types.Uuid
+var SystemBlock_DB_ID types.Blockid
+var SystemBlock_Table_ID types.Blockid
+var SystemBlock_Columns_ID types.Blockid
 
 const (
 	ModelSchemaName   = "_ModelSchema"
@@ -58,6 +59,14 @@ const (
 )
 
 func init() {
+
+	SystemSegment_DB_ID = types.Uuid{101}
+	SystemSegment_Table_ID = types.Uuid{102}
+	SystemSegment_Columns_ID = types.Uuid{103}
+	SystemBlock_DB_ID = types.Blockid{101}
+	SystemBlock_Table_ID = types.Blockid{102}
+	SystemBlock_Columns_ID = types.Blockid{103}
+
 	var err error
 	PhyAddrColumnType = types.T_Rowid.ToType()
 

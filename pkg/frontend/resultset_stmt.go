@@ -113,6 +113,11 @@ type ShowTablesExecutor struct {
 	st *tree.ShowTables
 }
 
+type ShowSequencesExecutor struct {
+	*resultSetStmtExecutor
+	ss *tree.ShowSequences
+}
+
 type ShowDatabasesExecutor struct {
 	*resultSetStmtExecutor
 	sd *tree.ShowDatabases

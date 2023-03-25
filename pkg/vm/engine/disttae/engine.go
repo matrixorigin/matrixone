@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -47,7 +46,6 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -267,6 +265,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	return
 }
 
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.idGen.AllocateIDByKey(ctx, key)
+}
+
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	var db *txnDatabase
 
@@ -355,9 +357,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
+		nil,
 	)
-	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
-	workspace.DisableHistory()
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -366,7 +367,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:        op.Txn(),
 		idGen:       e.idGen,
 		rowId:       [2]uint64{math.MaxUint64, 0},
-		workspace:   workspace,
 		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
@@ -439,7 +439,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
-	reqs, err := genWriteReqs(txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes)
 	if err != nil {
 		return err
 	}

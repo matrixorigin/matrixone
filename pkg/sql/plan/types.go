@@ -89,6 +89,8 @@ type CompilerContext interface {
 	GetAccountId() uint32
 	// GetContext get raw context.Context
 	GetContext() context.Context
+	// GetDatabaseId Get database id
+	GetDatabaseId(dbName string) (uint64, error)
 
 	GetProcess() *process.Process
 
@@ -287,6 +289,8 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
+
+var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 
 const (
 	NotFound      int32 = math.MaxInt32

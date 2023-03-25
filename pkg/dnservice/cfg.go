@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -52,8 +53,6 @@ var (
 	defaultLogtailCollectInterval     = 50 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 	defaultMaxLogtailFetchFailure     = 5
-
-	defaultKeepBindTimeout = time.Second * 10
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -135,17 +134,8 @@ type Config struct {
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
 
-	LockService struct {
-		// ListenAddress listening address for receiving external lock table allocator requests.
-		ListenAddress string `toml:"listen-address"`
-		// ServiceAddress service address for communication, if this address is not set, use
-		// LockListenAddress as the communication address.
-		ServiceAddress string `toml:"service-address"`
-		// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will continuously
-		// hold the bind, and if no hold request is received after the configured time, then all bindings for
-		// the service will fail.
-		KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
-	} `toml:"lockservice"`
+	// LockService lockservice config
+	LockService lockservice.Config `toml:"lockservice"`
 }
 
 func (c *Config) Validate() error {
@@ -167,9 +157,6 @@ func (c *Config) Validate() error {
 	}
 	if c.LockService.ServiceAddress == "" {
 		c.LockService.ServiceAddress = defaultLockServiceAddress
-	}
-	if c.LockService.KeepBindTimeout.Duration == 0 {
-		c.LockService.KeepBindTimeout.Duration = defaultKeepBindTimeout
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
@@ -234,5 +221,7 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
+	c.LockService.ServiceID = c.UUID
+	c.LockService.Validate()
 	return nil
 }

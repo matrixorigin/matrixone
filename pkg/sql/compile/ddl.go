@@ -17,17 +17,24 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -57,7 +64,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
-	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Drop the old view, and create the new view.
@@ -246,7 +264,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *engine.ForeignKeyDef:
 			for _, fkey := range t.Fkeys {
 				if _, ok := removeRefChildTbls[fkey.Name]; !ok {
-					newFkeys = append(newFkeys)
+					newFkeys = append(newFkeys, fkey)
 				}
 			}
 			t.Fkeys = newFkeys
@@ -439,7 +457,24 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
+
+	if checkIndexInitializable(dbName, tblName) {
+		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
+		if err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func checkIndexInitializable(dbName string, tblName string) bool {
+	if dbName == "mo_task" {
+		return false
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
+		return false
+	}
+	return true
 }
 
 func (s *Scope) CreateTempTable(c *Compile) error {
@@ -605,6 +640,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		// other situation is not supported now and check in plan
 	}
 
+	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -646,6 +685,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
+			return err
+		}
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
 			return err
 		}
 	}
@@ -901,6 +947,34 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	return nil
 }
 
+func (s *Scope) DropSequence(c *Compile) error {
+	qry := s.Plan.GetDdl().GetDropSequence()
+	dbName := qry.GetDatabase()
+	var dbSource engine.Database
+	var err error
+
+	tblName := qry.GetTable()
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+	var rel engine.Relation
+	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	// Delete the stored session value.
+	c.proc.SessionInfo.SeqDeleteKeys = append(c.proc.SessionInfo.SeqDeleteKeys, rel.GetTableID(c.ctx))
+
+	return dbSource.Delete(c.ctx, tblName)
+}
+
 func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 
@@ -957,6 +1031,15 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
@@ -967,7 +1050,19 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		}
+		return nil
 	}
 }
 
@@ -1100,62 +1195,353 @@ func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []strin
 	return keys
 }
 
-//func MakeIndexTableAndImportData(ctx context.Context, rel engine.Relation, dbSource engine.Database, AddIndex *plan.AlterTableAddIndex) error {
-//	DbName := AddIndex.DbName
-//	TableName := AddIndex.TableName
-//	// build and create index table
-//	if AddIndex.IndexTableExist {
-//		def := AddIndex.IndexInfo.GetIndexTables()[0]
-//		planCols := def.GetCols()
-//		exeCols := planColsToExeCols(planCols)
-//		exeDefs, err := planDefsToExeDefs(def)
-//		if err != nil {
-//			return err
-//		}
-//		if _, err := dbSource.Relation(ctx, def.Name); err == nil {
-//			return moerr.NewTableAlreadyExists(ctx, def.Name)
-//		}
-//		if err := dbSource.Create(ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-//			return err
-//		}
-//	}
-//	// build and update constraint def
-//	indexDef := AddIndex.IndexInfo.TableDef.Indexes[0]
-//	newIndexes = append(newIndexes, indexDef)
-//
-//	// TODO: implement by insert ... select ...
-//	// insert data into index table
-//	if indexDef.Unique {
-//		targetAttrs := getIndexColsFromOriginTable(oldDefs, indexDef.Parts)
-//		ret, err := rel.Ranges(ctx, nil)
-//		if err != nil {
-//			return err
-//		}
-//		rds, err := rel.NewReader(ctx, 1, nil, ret)
-//		if err != nil {
-//			return err
-//		}
-//		bat, err := rds[0].Read(ctx, targetAttrs, nil, proc.Mp())
-//		if err != nil {
-//			return err
-//		}
-//		err = rds[0].Close()
-//		if err != nil {
-//			return err
-//		}
-//
-//		if bat != nil {
-//			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, AddIndex.OriginTablePrimaryKey, c.proc)
-//			indexR, err := dbSource.Relation(c.ctx, indexDef.IndexTableName)
-//			if err != nil {
-//				return err
-//			}
-//			if cnt != 0 {
-//				if err := indexR.Write(c.ctx, indexBat); err != nil {
-//					return err
-//				}
-//			}
-//			indexBat.Clean(c.proc.Mp())
-//		}
-//	}
-//}
+func (s *Scope) CreateSequence(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateSequence()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if dbName == "" {
+			return moerr.NewNoDB(c.ctx)
+		}
+		return err
+	}
+
+	tblName := qry.GetTableDef().GetName()
+	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		// Just report table exists error.
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	}
+
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+
+	// Init the only row of sequence.
+	if rel, err := dbSource.Relation(c.ctx, tblName); err == nil {
+		if rel == nil {
+			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		}
+		bat, err := makeSequenceInitBatch(c.ctx, c.stmt.(*tree.CreateSequence), qry.GetTableDef(), c.proc)
+		defer func() {
+			if bat != nil {
+				bat.Clean(c.proc.Mp())
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		err = rel.Write(c.proc.Ctx, bat)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+/*
+Sequence table got 1 row and 7 columns(besides row_id).
+-----------------------------------------------------------------------------------
+last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_called |
+-----------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------
+*/
+func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
+	var bat batch.Batch
+	bat.Ro = true
+	bat.Cnt = 0
+	bat.Zs = make([]int64, 1)
+	bat.Zs[0] = 1
+	attrs := make([]string, len(plan2.Sequence_cols_name))
+	for i := range attrs {
+		attrs[i] = plan2.Sequence_cols_name[i]
+	}
+	bat.Attrs = attrs
+
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	sequence_cols_num := 7
+	vecs := make([]*vector.Vector, sequence_cols_num)
+
+	// Make sequence vecs.
+	switch typ.Oid {
+	case types.T_int16:
+		incr, minV, maxV, startN, err := makeSequenceParam[int16](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			if incr > 0 {
+				maxV = math.MaxInt16
+			} else {
+				maxV = -1
+			}
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = math.MinInt16
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_int32:
+		incr, minV, maxV, startN, err := makeSequenceParam[int32](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			if incr > 0 {
+				maxV = math.MaxInt32
+			} else {
+				maxV = -1
+			}
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = math.MinInt32
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_int64:
+		incr, minV, maxV, startN, err := makeSequenceParam[int64](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			if incr > 0 {
+				maxV = math.MaxInt64
+			} else {
+				maxV = -1
+			}
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = math.MinInt64
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint16:
+		incr, minV, maxV, startN, err := makeSequenceParam[uint16](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			maxV = math.MaxUint16
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = 0
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint32:
+		incr, minV, maxV, startN, err := makeSequenceParam[uint32](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			maxV = math.MaxUint32
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = 0
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint64:
+		incr, minV, maxV, startN, err := makeSequenceParam[uint64](typ, ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmt.MaxValue == nil {
+			maxV = math.MaxUint64
+		}
+		if stmt.MinValue == nil && incr < 0 {
+			minV = 0
+		}
+		if stmt.StartWith == nil {
+			if incr > 0 {
+				startN = minV
+			} else {
+				startN = maxV
+			}
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeSequenceVecs(vecs, stmt, typ, proc, incr, minV, maxV, startN)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewNotSupported(ctx, "Unsupported type for sequence")
+	}
+
+	bat.Vecs = vecs
+	return &bat, nil
+}
+
+func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) error {
+	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
+	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
+	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
+	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
+	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
+	if stmt.Cycle {
+		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	} else {
+		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	}
+	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return nil
+}
+
+func makeSequenceParam[T constraints.Integer](typ types.Type, ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
+	var minValue, maxValue, startNum T
+	incrNum := int64(1)
+	if stmt.IncrementBy != nil {
+		switch stmt.IncrementBy.Num.(type) {
+		case uint64:
+			return 0, 0, 0, 0, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
+		}
+		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
+	}
+	if incrNum == 0 {
+		return 0, 0, 0, 0, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
+	}
+
+	if stmt.MinValue == nil {
+		if incrNum > 0 {
+			minValue = 1
+		} else {
+			// Value here is wrong.
+			// We will get real value later.
+			minValue = 0
+		}
+	} else {
+		minValue = getValue[T](stmt.MinValue.Minus, stmt.MinValue.Num)
+	}
+
+	if stmt.MaxValue == nil {
+		// Value here is wrong.
+		// We will get real value later.
+		maxValue = 0
+	} else {
+		maxValue = getValue[T](stmt.MaxValue.Minus, stmt.MaxValue.Num)
+	}
+
+	if stmt.StartWith == nil {
+		// The value may be wrong.
+		if incrNum > 0 {
+			startNum = minValue
+		} else {
+			startNum = maxValue
+		}
+	} else {
+		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
+	}
+
+	return incrNum, minValue, maxValue, startNum, nil
+}
+
+// Checkout values.
+func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
+	if maxValue < minValue {
+		return moerr.NewInvalidInput(ctx, "Max value of sequence must be bigger than min value of it")
+	}
+	if startNum < minValue || startNum > maxValue {
+		return moerr.NewInvalidInput(ctx, "Start value for sequence must between minvalue and maxvalue")
+	}
+	return nil
+}
+
+func getValue[T constraints.Integer](minus bool, num any) T {
+	var v T
+	switch num := num.(type) {
+	case uint64:
+		v = T(num)
+	case int64:
+		if minus {
+			v = -T(num)
+		} else {
+			v = T(num)
+		}
+	}
+	return v
+}

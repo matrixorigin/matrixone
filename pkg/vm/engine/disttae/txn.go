@@ -16,9 +16,6 @@ package disttae
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,13 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -86,12 +80,6 @@ func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly
 }
 
-// use for solving halloween problem
-func (txn *Transaction) IncStatementId() {
-	txn.statementId++
-	txn.writes = append(txn.writes, make([]Entry, 0, 1))
-}
-
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteBatch(
@@ -130,10 +118,6 @@ func (txn *Transaction) WriteBatch(
 		dnStore:      dnStore,
 	})
 	txn.Unlock()
-
-	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
-		return err
-	}
 
 	txn.DumpBatch(false)
 
@@ -230,94 +214,6 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	return -1, attrs, tbl, nil
 }
 
-func (txn *Transaction) checkPrimaryKey(
-	typ int,
-	primaryIdx int,
-	bat *batch.Batch,
-	tableName string,
-	tableId uint64,
-) error {
-
-	// no primary key
-	if primaryIdx < 0 {
-		return nil
-	}
-
-	//TODO ignore these buggy auto incr tables for now
-	if strings.Contains(tableName, "%!%mo_increment") {
-		return nil
-	}
-
-	t := txn.nextLocalTS()
-	tx := memorytable.NewTransaction(t)
-	iter := memorytable.NewBatchIter(bat)
-	for {
-		tuple := iter()
-		if len(tuple) == 0 {
-			break
-		}
-
-		rowID := RowID(tuple[0].Value.(types.Rowid))
-
-		switch typ {
-
-		case INSERT:
-			var indexes []memorytable.Tuple
-
-			idx := primaryIdx + 1 // skip the first row id column
-			primaryKey := memorytable.ToOrdered(tuple[idx].Value)
-			index := memorytable.Tuple{
-				index_TableID_PrimaryKey,
-				memorytable.ToOrdered(tableId),
-				primaryKey,
-			}
-
-			// check primary key
-			entries, err := txn.workspace.Index(tx, index)
-			if err != nil {
-				return err
-			}
-			if len(entries) > 0 {
-				return moerr.NewDuplicateEntry(
-					txn.proc.Ctx,
-					common.TypeStringValue(*bat.Vecs[idx].GetType(), tuple[idx].Value),
-					bat.Attrs[idx],
-				)
-			}
-
-			// add primary key
-			indexes = append(indexes, index)
-
-			row := &workspaceRow{
-				rowID:   rowID,
-				tableID: tableId,
-				indexes: indexes,
-			}
-			err = txn.workspace.Insert(tx, row)
-			if err != nil {
-				return err
-			}
-
-		case DELETE:
-			err := txn.workspace.Delete(tx, rowID)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-
-		}
-	}
-	if err := tx.Commit(t); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
-	txn.localTS = txn.localTS.Next()
-	return txn.localTS
-}
-
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
@@ -339,24 +235,11 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 
-	// tx for workspace operations
-	t := txn.nextLocalTS()
-	tx := memorytable.NewTransaction(t)
-	defer func() {
-		if err := tx.Commit(t); err != nil {
-			panic(err)
-		}
-	}()
-
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for _, rowid := range rowids {
 		mp[rowid] = 0
 		// update workspace
-		err := txn.workspace.Delete(tx, RowID(rowid))
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			panic(err)
-		}
 	}
 
 	sels := txn.proc.Mp().GetSels()

@@ -82,6 +82,7 @@ func TestAppend(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestAppend2(t *testing.T) {
@@ -92,13 +93,13 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	forest := logtail.NewDirtyCollector(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
-		forest.Run()
-		t.Log(forest.String())
-	}, nil)
-	hb.Start()
-	defer hb.Stop()
+	// forest := logtail.NewDirtyCollector(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	// hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+	// 	forest.Run()
+	// 	t.Log(forest.String())
+	// }, nil)
+	// hb.Start()
+	// defer hb.Stop()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
@@ -349,10 +350,10 @@ func TestCreateBlock(t *testing.T) {
 	assert.Nil(t, err)
 	blk1, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
-	blk2, err := seg.CreateNonAppendableBlock()
+	blk2, err := seg.CreateNonAppendableBlock(nil)
 	assert.Nil(t, err)
 	lastAppendable := seg.GetMeta().(*catalog.SegmentEntry).LastAppendableBlock()
-	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.GetID())
+	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.ID)
 	assert.True(t, lastAppendable.IsAppendable())
 	blk2Meta := blk2.GetMeta().(*catalog.BlockEntry)
 	assert.False(t, blk2Meta.IsAppendable())
@@ -384,7 +385,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
-		blk, err := seg.CreateNonAppendableBlock()
+		blk, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		name := blockio.EncodeObjectName()
@@ -572,7 +573,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
 
-		destBlock, err := seg.CreateNonAppendableBlock()
+		destBlock, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		m := destBlock.GetMeta().(*catalog.BlockEntry)
 		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler, nil, nil)
@@ -1074,7 +1075,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, segCnt, 1)
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
-	seg, err = rel.GetSegment(segMeta.GetID())
+	seg, err = rel.GetSegment(segMeta.ID)
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
@@ -4044,7 +4045,6 @@ func TestBlockRead(t *testing.T) {
 		beforeDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b1.Close()
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
@@ -4053,14 +4053,12 @@ func TestBlockRead(t *testing.T) {
 		afterFirstDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b2.Close()
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b3.Close()
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
@@ -4072,7 +4070,6 @@ func TestBlockRead(t *testing.T) {
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b4.Close()
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
 
@@ -4085,7 +4082,6 @@ func TestBlockRead(t *testing.T) {
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
-	defer b5.Close()
 	assert.Equal(t, 1, len(b5.Vecs))
 	assert.Equal(t, 16, b5.Vecs[0].Length())
 }
@@ -4246,27 +4242,30 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
-	assert.NoError(t, err)
-
+	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 
+	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
 	})
 	t.Log(time.Since(now))
 	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
 
+	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+	assert.NoError(t, err)
+	now = time.Now()
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(4000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		tae.BGCheckpointRunner.ExistPendingEntryToGC()
 		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
 	})
+	t.Log(time.Since(now))
 	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -4277,8 +4276,8 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(ins)
-			t.Log(del)
+			t.Log(common.PrintApiBatch(ins, 3))
+			t.Log(common.PrintApiBatch(del, 3))
 		}
 	}
 	tae.restart()
@@ -4288,8 +4287,8 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(ins)
-			t.Log(del)
+			t.Log(common.PrintApiBatch(ins, 3))
+			t.Log(common.PrintApiBatch(del, 3))
 		}
 	}
 }
@@ -5021,7 +5020,9 @@ func TestGlobalCheckpoint1(t *testing.T) {
 
 	tae.createRelAndAppend(bat, true)
 
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.restart()
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.checkRowsByScan(400, true)
 
 	testutils.WaitExpect(4000, func() bool {
@@ -5736,6 +5737,32 @@ func TestForceCheckpoint(t *testing.T) {
 	assert.Error(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
+}
+
+func TestLogailAppend(t *testing.T) {
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
+	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	batch := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks)-1))
+	//create database, create table, append
+	tae.createRelAndAppend(batch, true)
+	//delete
+	err := tae.deleteAll(true)
+	assert.NoError(t, err)
+	//compact(metadata)
+	tae.DoAppend(batch)
+	tae.compactBlocks(false)
+	//drop table
+	tae.dropRelation(t)
+	//drop database
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	txn.DropDatabase("db")
+	assert.NoError(t, txn.Commit())
 }
 
 func TestSnapshotLag1(t *testing.T) {

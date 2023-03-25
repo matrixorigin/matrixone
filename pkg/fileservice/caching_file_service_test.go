@@ -54,28 +54,31 @@ func testCachingFileService(
 	})
 	assert.Nil(t, err)
 
-	vec := &IOVector{
-		FilePath: "foo",
-		Entries: []IOEntry{
-			{
-				Size: int64(len(data)),
-				ToObject: func(r io.Reader, data []byte) (any, int64, error) {
-					bs, err := io.ReadAll(r)
-					assert.Nil(t, err)
-					if len(data) > 0 {
-						assert.Equal(t, bs, data)
-					}
-					var m map[int]int
-					if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
-						return nil, 0, err
-					}
-					return m, 1, nil
+	makeVec := func() *IOVector {
+		return &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: int64(len(data)),
+					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+						bs, err := io.ReadAll(r)
+						assert.Nil(t, err)
+						if len(data) > 0 {
+							assert.Equal(t, bs, data)
+						}
+						var m map[int]int
+						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
+							return nil, 0, err
+						}
+						return m, 1, nil
+					},
 				},
 			},
-		},
+		}
 	}
 
 	// nocache
+	vec := makeVec()
 	vec.NoCache = true
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
@@ -84,9 +87,11 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(0), counterSet.Cache.Read.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Hit.Load())
 
-	// cache
-	vec.NoCache = false
+	// read, not hit
+	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	m, ok = vec.Entries[0].Object.(map[int]int)
@@ -94,8 +99,11 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(1), counterSet.Cache.Read.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Hit.Load())
 
-	// read again
+	// read again, hit cache
+	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	m, ok = vec.Entries[0].Object.(map[int]int)
@@ -103,10 +111,8 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
-
-	// counter
-	assert.Equal(t, counterSet.Cache.Read.Load(), int64(2))
-	assert.Equal(t, counterSet.Cache.Hit.Load(), int64(1))
+	assert.Equal(t, int64(2), counterSet.Cache.Read.Load())
+	assert.Equal(t, int64(1), counterSet.Cache.Hit.Load())
 
 	// flush
 	fs.FlushCache()
