@@ -49,9 +49,6 @@ func TestPrimaryKeyCheck(t *testing.T) {
 		}
 		var dnStore DNStore
 		txn := &Transaction{
-			writes: [][]Entry{
-				{},
-			},
 			engine:   engine,
 			dnStores: []DNStore{dnStore},
 		}
