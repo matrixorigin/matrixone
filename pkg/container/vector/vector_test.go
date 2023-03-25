@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -649,7 +648,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	AppendFixed(vec1, int32(1), false, mp)
 	AppendFixed(vec1, int32(2), true, mp)
 	AppendFixed(vec1, int32(3), false, mp)
-	assert.False(t, vec1.NeedDup())
+	require.False(t, vec1.NeedDup())
 
 	vec1Len := vec1.Length()
 	vec2, err := vec1.CloneWindow(0, vec1Len, nil)
@@ -657,26 +656,26 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	vec1.Free(mp)
 
 	t.Log(vec2.String())
-	assert.True(t, vec2.NeedDup())
-	assert.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
-	assert.True(t, vec2.GetNulls().Contains(uint64(1)))
-	assert.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
+	require.True(t, vec2.NeedDup())
+	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
+	require.True(t, vec2.GetNulls().Contains(uint64(1)))
+	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
 
 	vec3 := NewVec(types.T_char.ToType())
 	AppendBytes(vec3, []byte("h"), false, mp)
 	AppendBytes(vec3, []byte("xx"), true, mp)
 	AppendBytes(vec3, []byte("uuu"), false, mp)
-	assert.False(t, vec3.NeedDup())
+	require.False(t, vec3.NeedDup())
 
 	vec3Len := vec3.Length()
 	vec4, err := vec3.CloneWindow(0, vec3Len, nil)
 	require.NoError(t, err)
 	vec3.Free(mp)
 
-	assert.True(t, vec4.NeedDup())
-	assert.Equal(t, 1, len(vec4.GetBytesAt(0)))
-	assert.Equal(t, 3, len(vec4.GetBytesAt(2)))
-	assert.True(t, vec4.GetNulls().Contains(uint64(1)))
+	require.True(t, vec4.NeedDup())
+	require.Equal(t, 1, len(vec4.GetBytesAt(0)))
+	require.Equal(t, 3, len(vec4.GetBytesAt(2)))
+	require.True(t, vec4.GetNulls().Contains(uint64(1)))
 }
 
 /*
