@@ -84,8 +84,7 @@ func BlockReadInner(
 	for i, col := range columnBatch.Vecs {
 		// Fixme: Due to # 8684, we are not able to use mpool yet
 		// Fixme: replace with cnVec.Dup(nil) when it implemented.
-		colLen := col.Length()
-		columnBatch.Vecs[i], err = col.CloneWindow(0, colLen, nil)
+		columnBatch.Vecs[i], err = col.CloneWindow(0, col.Length(), nil)
 		if err != nil {
 			return nil, err
 		}

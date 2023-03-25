@@ -650,8 +650,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	AppendFixed(vec1, int32(3), false, mp)
 	require.False(t, vec1.NeedDup())
 
-	vec1Len := vec1.Length()
-	vec2, err := vec1.CloneWindow(0, vec1Len, nil)
+	vec2, err := vec1.CloneWindow(0, vec1.Length(), nil)
 	require.NoError(t, err)
 	vec1.Free(mp)
 
@@ -667,8 +666,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	AppendBytes(vec3, []byte("uuu"), false, mp)
 	require.False(t, vec3.NeedDup())
 
-	vec3Len := vec3.Length()
-	vec4, err := vec3.CloneWindow(0, vec3Len, nil)
+	vec4, err := vec3.CloneWindow(0, vec3.Length(), nil)
 	require.NoError(t, err)
 	vec3.Free(mp)
 
