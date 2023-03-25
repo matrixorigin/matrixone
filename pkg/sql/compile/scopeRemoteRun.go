@@ -103,10 +103,10 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver, aicm)
+	err := cnMessageHandle(receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}
@@ -125,7 +125,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 }
 
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer, aicm *defines.AutoIncrCacheManager) error {
+func cnMessageHandle(receiver messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		var ch chan process.WrapCs
@@ -151,7 +151,7 @@ func cnMessageHandle(receiver messageReceiverOnServer, aicm *defines.AutoIncrCac
 		return nil
 
 	case pipeline.PipelineMessage:
-		c := receiver.newCompile(aicm)
+		c := receiver.newCompile()
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.

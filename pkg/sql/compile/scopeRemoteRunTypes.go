@@ -48,6 +48,7 @@ type cnInformation struct {
 	storeEngine engine.Engine
 	fileService fileservice.FileService
 	lockService lockservice.LockService
+	aicm        *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -199,7 +200,8 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	txnClient client.TxnClient) messageReceiverOnServer {
+	txnClient client.TxnClient,
+	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
 		ctx:             ctx,
@@ -215,6 +217,7 @@ func newMessageReceiverOnServer(
 		storeEngine: storeEngine,
 		fileService: fileService,
 		lockService: lockService,
+		aicm:        aicm,
 	}
 
 	switch m.GetCmd() {
@@ -253,7 +256,7 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile(aicm *defines.AutoIncrCacheManager) *Compile {
+func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	// compile is almost surely wanting a small or middle pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
@@ -267,7 +270,7 @@ func (receiver *messageReceiverOnServer) newCompile(aicm *defines.AutoIncrCacheM
 		pHelper.txnOperator,
 		cnInfo.fileService,
 		cnInfo.lockService,
-		aicm)
+		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
