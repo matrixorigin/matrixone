@@ -260,8 +260,6 @@ func (pi *ProtocolImpl) SetTlsEstablished() {
 }
 
 func (pi *ProtocolImpl) ConnectionID() uint32 {
-	pi.m.Lock()
-	defer pi.m.Unlock()
 	return pi.connectionID
 }
 

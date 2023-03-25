@@ -128,6 +128,83 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
+func CloneMOVec(v *movec.Vector) *movec.Vector {
+	typ := *v.GetType()
+	if typ.IsVarlen() {
+		var header []types.Varlena
+		data, area := movec.MustVarlenaRawData(v)
+		header = make([]types.Varlena, len(data))
+		copy(header, data)
+		storage := make([]byte, len(area))
+		if len(storage) > 0 {
+			copy(storage, area)
+		}
+		dest, _ := movec.FromDNVector(typ, header, storage)
+		if v.GetNulls().Any() {
+			dest.SetNulls(v.GetNulls().Clone())
+		}
+		return dest
+	}
+	var bs *Bytes
+
+	switch v.GetType().Oid {
+	case types.T_bool:
+		bs = movecToBytes[bool](v)
+	case types.T_int8:
+		bs = movecToBytes[int8](v)
+	case types.T_int16:
+		bs = movecToBytes[int16](v)
+	case types.T_int32:
+		bs = movecToBytes[int32](v)
+	case types.T_int64:
+		bs = movecToBytes[int64](v)
+	case types.T_uint8:
+		bs = movecToBytes[uint8](v)
+	case types.T_uint16:
+		bs = movecToBytes[uint16](v)
+	case types.T_uint32:
+		bs = movecToBytes[uint32](v)
+	case types.T_uint64:
+		bs = movecToBytes[uint64](v)
+	case types.T_float32:
+		bs = movecToBytes[float32](v)
+	case types.T_float64:
+		bs = movecToBytes[float64](v)
+	case types.T_date:
+		bs = movecToBytes[types.Date](v)
+	case types.T_time:
+		bs = movecToBytes[types.Time](v)
+	case types.T_datetime:
+		bs = movecToBytes[types.Datetime](v)
+	case types.T_timestamp:
+		bs = movecToBytes[types.Timestamp](v)
+	case types.T_decimal64:
+		bs = movecToBytes[types.Decimal64](v)
+	case types.T_decimal128:
+		bs = movecToBytes[types.Decimal128](v)
+	case types.T_uuid:
+		bs = movecToBytes[types.Uuid](v)
+	case types.T_TS:
+		bs = movecToBytes[types.TS](v)
+	case types.T_Rowid:
+		bs = movecToBytes[types.Rowid](v)
+	case types.T_Blockid:
+		bs = movecToBytes[types.Blockid](v)
+	default:
+		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", typ.String())))
+	}
+	data := make([]byte, len(bs.Storage))
+	if len(data) > 0 {
+		copy(data, bs.Storage)
+	}
+	dest, _ := movec.FromDNVector(typ, nil, data)
+
+	if v.GetNulls().Any() {
+		dest.SetNulls(v.GetNulls().Clone())
+	}
+	return dest
+}
+
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(*v.GetType(), nullable)
 	var bs *Bytes
