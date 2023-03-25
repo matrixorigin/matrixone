@@ -643,7 +643,7 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-func TestCloneWindow(t *testing.T) {
+func TestCloneWindowWithMpNil(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
 	AppendFixed(vec1, int32(1), false, mp)
