@@ -45,6 +45,10 @@ type PartitionState struct {
 	Blocks       *btree.BTreeG[BlockEntry]
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	Checkpoints  []string
+
+	// noData indicates whether to retain data batch
+	// for primary key dedup, reading data is not required
+	noData bool
 }
 
 // RowEntry represents a version of a row
@@ -120,11 +124,12 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 	return p.RowEntryID < than.RowEntryID
 }
 
-func NewPartitionState() *PartitionState {
+func NewPartitionState(noData bool) *PartitionState {
 	opts := btree.Options{
-		Degree: 64,
+		Degree: 4,
 	}
 	return &PartitionState{
+		noData:       noData,
 		Rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
 		Blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		PrimaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
@@ -139,6 +144,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
 		Checkpoints:  checkpoints,
+		noData:       p.noData,
 	}
 }
 
@@ -240,8 +246,10 @@ func (p *PartitionState) HandleRowsInsert(
 				numInserted++
 			}
 
-			entry.Batch = batch
-			entry.Offset = int64(i)
+			if !p.noData {
+				entry.Batch = batch
+				entry.Offset = int64(i)
+			}
 			if i < len(primaryKeys) {
 				entry.PrimaryIndexBytes = primaryKeys[i]
 			}
@@ -299,8 +307,10 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			}
 
 			entry.Deleted = true
-			entry.Batch = batch
-			entry.Offset = int64(i)
+			if !p.noData {
+				entry.Batch = batch
+				entry.Offset = int64(i)
+			}
 
 			p.Rows.Set(entry)
 		})
