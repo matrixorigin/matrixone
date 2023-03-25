@@ -16,9 +16,9 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -240,7 +240,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		return nil
 	}
 	// record visible delete rows
-	deleteRows := bitmap.New(0)
+	deleteRows := nulls.NewWithSize(0)
 	for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
 		if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
 			continue
@@ -250,10 +250,10 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		}
 		rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
 		_, _, row := model.DecodePhyAddrKey(rowid)
-		deleteRows.Add(uint64(row))
+		nulls.Add(deleteRows, uint64(row))
 	}
 	var rows []int64
-	itr := deleteRows.Iterator()
+	itr := deleteRows.Np.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, int64(r))
