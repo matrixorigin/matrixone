@@ -100,8 +100,6 @@ type Transaction struct {
 	// not-used now
 	// blockId uint64
 
-	// use for solving halloween problem
-	statementId uint64
 	// local timestamp for workspace operations
 	meta txn.TxnMeta
 	op   client.TxnOperator
@@ -109,8 +107,7 @@ type Transaction struct {
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
-	// every statement is an element
-	writes [][]Entry
+	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
 
@@ -175,15 +172,15 @@ type tableMeta struct {
 
 // txnTable represents an opened table in a transaction
 type txnTable struct {
-	tableId    uint64
-	tableName  string
-	dnList     []int
-	db         *txnDatabase
-	meta       *tableMeta
-	parts      []*PartitionState
-	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
+	tableId   uint64
+	tableName string
+	dnList    []int
+	db        *txnDatabase
+	meta      *tableMeta
+	parts     []*PartitionState
+	//	insertExpr *plan.Expr
+	defs     []engine.TableDef
+	tableDef *plan.TableDef
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -196,7 +193,11 @@ type txnTable struct {
 
 	updated bool
 	// use for skip rows
-	skipBlocks map[types.Blockid]uint8
+	// snapshot for read
+	writes []Entry
+	// offset of the writes in workspace
+	writesOffset int
+	skipBlocks   map[types.Blockid]uint8
 
 	// localState stores uncommitted data
 	localState *PartitionState
