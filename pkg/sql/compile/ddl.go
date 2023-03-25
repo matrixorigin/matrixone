@@ -127,21 +127,98 @@ func (s *Scope) AlterTable(c *Compile) error {
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
+	var addIndex *plan.IndexDef
+	var dropIndex *plan.IndexDef
+
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
 		case *plan.AlterTable_Action_Drop:
-			name := act.Drop.Name
-			for i, fk := range tableDef.Fkeys {
-				if fk.Name == name {
-					removeRefChildTbls[name] = fk.ForeignTbl
-					tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-					break
+			alterTableDrop := act.Drop
+			ConstraintName := alterTableDrop.Name
+			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				for i, fk := range tableDef.Fkeys {
+					if fk.Name == ConstraintName {
+						removeRefChildTbls[ConstraintName] = fk.ForeignTbl
+						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
+						break
+					}
+				}
+			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
+				for i, indexdef := range tableDef.Indexes {
+					if indexdef.IndexName == ConstraintName {
+						dropIndex = indexdef
+						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
+						// drop index table
+						if indexdef.TableExist {
+							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+						}
+						break
+					}
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
+		case *plan.AlterTable_Action_AddIndex:
+			// build and create index table
+			if act.AddIndex.IndexTableExist {
+				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+				planCols := def.GetCols()
+				exeCols := planColsToExeCols(planCols)
+				exeDefs, err := planDefsToExeDefs(def)
+				if err != nil {
+					return err
+				}
+				if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+					return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+				}
+				if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+					return err
+				}
+			}
+			// build and update constraint def
+			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
+			addIndex = indexDef
+			// insert data into index table
+			if indexDef.Unique {
+				targetAttrs := getIndexColsFromOriginTable(oldDefs, indexDef.Parts)
+				ret, err := rel.Ranges(c.ctx, nil)
+				if err != nil {
+					return err
+				}
+				rds, err := rel.NewReader(c.ctx, 1, nil, ret)
+				if err != nil {
+					return err
+				}
+				bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
+				if err != nil {
+					return err
+				}
+				err = rds[0].Close()
+				if err != nil {
+					return err
+				}
+				if bat != nil {
+					indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, act.AddIndex.OriginTablePrimaryKey, c.proc)
+					indexR, err := dbSource.Relation(c.ctx, indexDef.IndexTableName)
+					if err != nil {
+						return err
+					}
+					if cnt != 0 {
+						if err := indexR.Write(c.ctx, indexBat); err != nil {
+							return err
+						}
+					}
+					indexBat.Clean(c.proc.Mp())
+				}
+				// other situation is not supported now and check in plan
+			}
 		}
 	}
 
@@ -163,12 +240,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 	}
 	originHasFkDef := false
+	originHasIndexDef := false
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
 			for _, fkey := range t.Fkeys {
 				if _, ok := removeRefChildTbls[fkey.Name]; !ok {
-					newFkeys = append(newFkeys, fkey)
+					newFkeys = append(newFkeys)
 				}
 			}
 			t.Fkeys = newFkeys
@@ -177,6 +255,17 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *engine.RefChildTableDef:
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
+			originHasIndexDef = true
+			if dropIndex != nil {
+				for i, idx := range t.Indexes {
+					if dropIndex.IndexName == idx.IndexName {
+						t.Indexes = append(t.Indexes[:i], t.Indexes[i:]...)
+					}
+				}
+			}
+			if addIndex != nil {
+				t.Indexes = append(t.Indexes, addIndex)
+			}
 			newCt.Cts = append(newCt.Cts, t)
 		}
 	}
@@ -185,6 +274,12 @@ func (s *Scope) AlterTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 	}
+	if !originHasIndexDef && addIndex != nil {
+		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
+			Indexes: []*plan.IndexDef{addIndex},
+		})
+	}
+
 	err = rel.UpdateConstraint(c.ctx, newCt)
 	if err != nil {
 		return err
@@ -1004,3 +1099,63 @@ func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []strin
 	}
 	return keys
 }
+
+//func MakeIndexTableAndImportData(ctx context.Context, rel engine.Relation, dbSource engine.Database, AddIndex *plan.AlterTableAddIndex) error {
+//	DbName := AddIndex.DbName
+//	TableName := AddIndex.TableName
+//	// build and create index table
+//	if AddIndex.IndexTableExist {
+//		def := AddIndex.IndexInfo.GetIndexTables()[0]
+//		planCols := def.GetCols()
+//		exeCols := planColsToExeCols(planCols)
+//		exeDefs, err := planDefsToExeDefs(def)
+//		if err != nil {
+//			return err
+//		}
+//		if _, err := dbSource.Relation(ctx, def.Name); err == nil {
+//			return moerr.NewTableAlreadyExists(ctx, def.Name)
+//		}
+//		if err := dbSource.Create(ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+//			return err
+//		}
+//	}
+//	// build and update constraint def
+//	indexDef := AddIndex.IndexInfo.TableDef.Indexes[0]
+//	newIndexes = append(newIndexes, indexDef)
+//
+//	// TODO: implement by insert ... select ...
+//	// insert data into index table
+//	if indexDef.Unique {
+//		targetAttrs := getIndexColsFromOriginTable(oldDefs, indexDef.Parts)
+//		ret, err := rel.Ranges(ctx, nil)
+//		if err != nil {
+//			return err
+//		}
+//		rds, err := rel.NewReader(ctx, 1, nil, ret)
+//		if err != nil {
+//			return err
+//		}
+//		bat, err := rds[0].Read(ctx, targetAttrs, nil, proc.Mp())
+//		if err != nil {
+//			return err
+//		}
+//		err = rds[0].Close()
+//		if err != nil {
+//			return err
+//		}
+//
+//		if bat != nil {
+//			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, AddIndex.OriginTablePrimaryKey, c.proc)
+//			indexR, err := dbSource.Relation(c.ctx, indexDef.IndexTableName)
+//			if err != nil {
+//				return err
+//			}
+//			if cnt != 0 {
+//				if err := indexR.Write(c.ctx, indexBat); err != nil {
+//					return err
+//				}
+//			}
+//			indexBat.Clean(c.proc.Mp())
+//		}
+//	}
+//}
