@@ -83,7 +83,7 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchDecimal128Rows
 	case types.T_uuid:
 		return fetchUUIDRows
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar:
 		return fetchVarlenaRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
@@ -96,7 +96,12 @@ func fetchBoolRows(
 	tp types.Type,
 	max int,
 	lockTabel bool) ([][]byte, lock.Granularity) {
-	return [][]byte{{0}, {1}},
+	fn := func(v bool) []byte {
+		parker.Reset()
+		parker.EncodeBool(v)
+		return parker.Bytes()
+	}
+	return [][]byte{fn(false), fn(true)},
 		lock.Granularity_Range
 }
 
@@ -544,8 +549,8 @@ func fetchVarlenaRows(
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
-	for _, v := range data {
-		rows = append(rows, fn(v.GetByteSlice(area)))
+	for idx := range data {
+		rows = append(rows, fn(data[idx].GetByteSlice(area)))
 	}
 	return rows, lock.Granularity_Row
 }
