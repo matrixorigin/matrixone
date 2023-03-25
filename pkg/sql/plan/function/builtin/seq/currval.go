@@ -61,10 +61,17 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		tblId := rel.GetTableID(proc.Ctx)
 		// Get cur values here.
 		ss, exists := proc.SessionInfo.SeqCurValues[tblId]
-		if !exists {
+		// If nextval called before this currval.Check add values
+		ss1, existsAdd := proc.SessionInfo.SeqAddValues[tblId]
+		if !exists && !existsAdd {
 			return nil, moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", tblnames[i])
 		}
-		ress[i] = ss
+		// Assign the values of SeqAddValues first, cause this values is the updated curvals.
+		if existsAdd {
+			ress[i] = ss1
+		} else {
+			ress[i] = ss
+		}
 	}
 
 	if err := vector.AppendStringList(res, ress, isNulls, proc.Mp()); err != nil {

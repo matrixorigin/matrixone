@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -70,8 +71,8 @@ func (rel *TxnRelation) AddBlksWithMetaLoc([]dataio.Index, []string) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                    { return nil }
-func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)            { return }
-func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                         { return }
+func (rel *TxnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error)        { return }
+func (rel *TxnRelation) SoftDeleteSegment(id types.Uuid) (err error)                     { return }
 func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)              { return }
 func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)          { return }
@@ -107,7 +108,7 @@ func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32, handle.DeleteType) (e
 
 func (seg *TxnSegment) PushDeleteOp(handle.Filter) (err error)                  { return }
 func (seg *TxnSegment) PushUpdateOp(handle.Filter, string, any) (err error)     { return }
-func (seg *TxnSegment) SoftDeleteBlock(id uint64) (err error)                   { return }
+func (seg *TxnSegment) SoftDeleteBlock(id types.Blockid) (err error)            { return }
 func (seg *TxnSegment) GetBlock(id uint64) (blk handle.Block, err error)        { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)              { return }
 func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) { return }
@@ -127,7 +128,6 @@ func (blk *TxnBlock) GetByFilter(*handle.Filter) (offset uint32, err error) { re
 
 func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
 
-func (blk *TxnBlock) BatchDedup(containers.Vector) (err error)                  { return }
 func (blk *TxnBlock) Append(*containers.Batch, uint32) (n uint32, err error)    { return }
 func (blk *TxnBlock) Update(uint32, uint16, any) (err error)                    { return }
 func (blk *TxnBlock) RangeDelete(uint32, uint32, handle.DeleteType) (err error) { return }

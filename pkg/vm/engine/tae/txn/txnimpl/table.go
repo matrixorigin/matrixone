@@ -98,8 +98,6 @@ type txnTable struct {
 	entry        *catalog.TableEntry
 	schema       *catalog.Schema
 	logs         []wal.LogEntry
-	maxSegId     uint64
-	maxBlkId     uint64
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -196,7 +194,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 }
 
 func (tbl *txnTable) recurTransferDelete(
-	memo map[uint64]*common.PinnedItem[*model.TransferHashPage],
+	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
 	page *model.TransferHashPage,
 	id *common.ID,
 	row uint32,
@@ -241,17 +239,17 @@ func (tbl *txnTable) recurTransferDelete(
 	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return
 	}
-	logutil.Infof("depth-%d transfer delete from blk-%d row-%d to blk-%d row-%d",
+	logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
 		depth,
-		id.BlockID,
+		id.BlockID.String(),
 		row,
-		blockID,
+		blockID.String(),
 		offset)
 	return
 }
 
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
-	memo := make(map[uint64]*common.PinnedItem[*model.TransferHashPage])
+	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	logutil.Info("[Start]",
 		common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 		common.OperationField("transfer-deletes"),
@@ -305,18 +303,6 @@ func (tbl *txnTable) commitTransferDeleteNode(id *common.ID, node *deleteNode) {
 	delete(tbl.deleteNodes, *id)
 }
 
-func (tbl *txnTable) LogSegmentID(sid uint64) {
-	if tbl.maxSegId < sid {
-		tbl.maxSegId = sid
-	}
-}
-
-func (tbl *txnTable) LogBlockID(bid uint64) {
-	if tbl.maxBlkId < bid {
-		tbl.maxBlkId = bid
-	}
-}
-
 func (tbl *txnTable) WaitSynced() {
 	for _, e := range tbl.logs {
 		if err := e.WaitDone(); err != nil {
@@ -351,7 +337,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
+func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
 		return
@@ -371,7 +357,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	return
 }
 
-func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
+func (tbl *txnTable) SoftDeleteSegment(id types.Uuid) (err error) {
 	txnEntry, err := tbl.entry.DropSegmentEntry(id, tbl.store.txn)
 	if err != nil {
 		return
@@ -385,20 +371,20 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 }
 
 func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_Appendable, is1PC)
+	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_NotAppendable, is1PC)
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg handle.Segment, err error) {
+func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeSegmentFactory()
 	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory, opts); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -433,7 +419,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 	tbl.txnEntries.Append(entry)
 	for _, id := range readed {
 		// warChecker skip non-block read
-		if id.BlockID == 0 {
+		if common.IsEmptyBlkid(&id.BlockID) {
 			continue
 		}
 
@@ -460,58 +446,19 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid uint64) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_NotAppendable, false)
+func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
-func (tbl *txnTable) CreateNonAppendableBlockWithMeta(
-	sid uint64,
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
-	return tbl.createBlockWithMeta(sid, catalog.ES_NotAppendable,
-		false, metaLoc, deltaLoc)
-}
-
-func (tbl *txnTable) CreateBlock(sid uint64, is1PC bool) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC)
+func (tbl *txnTable) CreateBlock(sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) createBlock(
-	sid uint64,
-	state catalog.EntryState,
-	is1PC bool) (blk handle.Block, err error) {
-	var seg *catalog.SegmentEntry
-	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
-		return
-	}
-	if !seg.IsAppendable() && state == catalog.ES_Appendable {
-		err = moerr.NewInternalErrorNoCtx("not appendable")
-		return
-	}
-	var factory catalog.BlockDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeBlockFactory()
-	}
-	meta, err := seg.CreateBlock(tbl.store.txn, state, factory)
-	if err != nil {
-		return
-	}
-	if is1PC {
-		meta.Set1PC()
-	}
-	tbl.store.IncreateWriteCnt()
-	id := meta.AsCommonID()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
-	tbl.txnEntries.Append(meta)
-	return buildBlock(tbl, meta), err
-}
-
-func (tbl *txnTable) createBlockWithMeta(
-	sid uint64,
+	sid types.Uuid,
 	state catalog.EntryState,
 	is1PC bool,
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
+	opts *common.CreateBlockOpt) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -524,7 +471,7 @@ func (tbl *txnTable) createBlockWithMeta(
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
-	meta, err := seg.CreateBlockWithMeta(tbl.store.txn, state, factory, metaLoc, deltaLoc)
+	meta, err := seg.CreateBlock(tbl.store.txn, state, factory, opts)
 	if err != nil {
 		return
 	}
@@ -721,16 +668,16 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		// 		end)
 		// }
 		if err != nil {
-			logutil.Infof("[ts=%s]: table-%d blk-%d delete rows from %d to %d %v",
+			logutil.Infof("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
-				id.BlockID,
+				id.BlockID.String(),
 				start,
 				end,
 				err)
 		}
 	}()
-	if isLocalSegment(id) {
+	if tbl.localSegment != nil && id.SegmentID == tbl.localSegment.entry.ID {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -806,7 +753,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
 }
 
 func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
-	if isLocalSegment(id) {
+	if tbl.localSegment != nil && tbl.localSegment.entry.ID == id.SegmentID {
 		return tbl.localSegment.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
@@ -1006,10 +953,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
-		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
-		if seg.GetID() < tbl.maxSegId {
-			return
-		}
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1040,9 +983,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
-			if blk.GetID() < tbl.maxBlkId {
-				return
-			}
 			{
 				blk.RLock()
 				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
@@ -1080,10 +1020,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 	//loaded := false
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
-		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
-		if seg.GetID() < tbl.maxSegId {
-			return
-		}
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1125,9 +1061,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
-			if blk.GetID() < tbl.maxBlkId {
-				return
-			}
 			{
 				blk.RLock()
 				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()

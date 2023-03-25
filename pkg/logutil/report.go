@@ -139,5 +139,5 @@ func getTraceLogSinks() (zapcore.Encoder, zapcore.WriteSyncer) {
 }
 
 func init() {
-	SpanFieldKey.Store("")
+	SpanFieldKey.Store("__MO_NOT_SET_SPAN")
 }

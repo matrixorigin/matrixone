@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -30,7 +29,7 @@ type Block struct {
 	header BlockHeader
 
 	// columns is the vector in the batch
-	columns []ColumnObject
+	columns []*ColumnBlock
 
 	// object is a container that can store multiple blocks,
 	// using a fileservice file storage
@@ -50,7 +49,7 @@ func NewBlock(colCnt uint16, object *Object, name string) BlockObject {
 	block := &Block{
 		header:  header,
 		object:  object,
-		columns: make([]ColumnObject, colCnt),
+		columns: make([]*ColumnBlock, colCnt),
 		name:    name,
 	}
 	for i := range block.columns {
@@ -63,7 +62,7 @@ func (b *Block) GetExtent() Extent {
 	return b.extent
 }
 
-func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
+func (b *Block) GetColumn(idx uint16) (*ColumnBlock, error) {
 	if idx >= uint16(len(b.columns)) {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %v, column count: %d",
@@ -92,79 +91,39 @@ func (b *Block) GetColumnCount() uint16 {
 	return b.header.columnCount
 }
 
-func (b *Block) MarshalMeta() ([]byte, error) {
+func (b *Block) MarshalMeta() []byte {
 	var (
-		err    error
 		buffer bytes.Buffer
 	)
 	// write header
-	if err = binary.Write(&buffer, endian, b.header.tableId); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, b.header.segmentId); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, b.header.blockId); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, b.header.columnCount); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, b.header.dummy); err != nil {
-		return nil, err
-	}
-	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
-		return nil, err
-	}
+	buffer.Write(b.header.Marshal())
 	// write columns meta
 	for _, column := range b.columns {
-		columnMeta, err := column.(*ColumnBlock).MarshalMeta()
-		if err != nil {
-			return nil, err
-		}
-		if err = binary.Write(&buffer, endian, columnMeta); err != nil {
-			return nil, err
-		}
+		buffer.Write(column.MarshalMeta())
 	}
-	return buffer.Bytes(), nil
+	return buffer.Bytes()
 }
 
-func (b *Block) UnMarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
+func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
 	var err error
-	cache := bytes.NewBuffer(data)
 	size := uint32(0)
 	b.header = BlockHeader{}
-	if err = binary.Read(cache, endian, &b.header.tableId); err != nil {
-		return 0, err
-	}
-	if err = binary.Read(cache, endian, &b.header.segmentId); err != nil {
-		return 0, err
-	}
-	if err = binary.Read(cache, endian, &b.header.blockId); err != nil {
-		return 0, err
-	}
-	if err = binary.Read(cache, endian, &b.header.columnCount); err != nil {
-		return 0, err
-	}
-	if err = binary.Read(cache, endian, &b.header.dummy); err != nil {
-		return 0, err
-	}
-	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
-		return 0, err
-	}
+	b.header.Unmarshal(data)
 	size += HeaderSize
-	b.columns = make([]ColumnObject, b.header.columnCount)
+	data = data[HeaderSize:]
+	b.columns = make([]*ColumnBlock, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
-		b.columns[i].(*ColumnBlock).meta.zoneMap = ZoneMap{
+		b.columns[i].meta.zoneMap = ZoneMap{
 			idx:           uint16(i),
 			unmarshalFunc: ZMUnmarshalFunc,
 		}
-		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
+		err = b.columns[i].UnmarshalMate(data)
 		if err != nil {
 			return 0, err
 		}
+		size += ColumnMetaSize
+		data = data[ColumnMetaSize:]
 	}
-	size += ColumnMetaSize * uint32(b.header.columnCount)
 	return size, err
 }

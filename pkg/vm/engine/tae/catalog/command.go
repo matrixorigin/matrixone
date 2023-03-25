@@ -66,7 +66,7 @@ type EntryCommand struct {
 	entry     BaseEntry
 	DBID      uint64
 	TableID   uint64
-	SegmentID uint64
+	SegmentID types.Uuid
 	DB        *DBEntry
 	Table     *TableEntry
 	Segment   *SegmentEntry
@@ -216,7 +216,7 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 		if cmd.DBID != 0 {
 			dbid = cmd.DBID
 			id.TableID = cmd.TableID
-			id.SegmentID = cmd.entry.GetID()
+			id.SegmentID = cmd.Segment.ID
 		} else {
 			dbid = cmd.DB.ID
 			id.TableID = cmd.Table.ID
@@ -227,12 +227,12 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 			dbid = cmd.DBID
 			id.TableID = cmd.TableID
 			id.SegmentID = cmd.SegmentID
-			id.BlockID = cmd.entry.GetID()
+			id.BlockID = cmd.Block.ID
 		} else {
 			dbid = cmd.DB.ID
 			id.TableID = cmd.Table.ID
 			id.SegmentID = cmd.Segment.ID
-			id.BlockID = cmd.entry.GetID()
+			id.BlockID = cmd.Block.ID
 		}
 	}
 	return dbid, id
@@ -263,12 +263,13 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	n = 4 + 2
 
-	if err = binary.Write(w, binary.BigEndian, cmd.entry.GetID()); err != nil {
-		return
-	}
-	n += 4
 	switch cmd.GetType() {
 	case CmdUpdateDatabase:
+		// write db id
+		if err = binary.Write(w, binary.BigEndian, cmd.entry.GetID()); err != nil {
+			return
+		}
+		n += 8
 		if sn, err = common.WriteString(cmd.DB.name, w); err != nil {
 			return
 		}
@@ -282,6 +283,11 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += sn
 	case CmdUpdateTable:
+		// write table id
+		if err = binary.Write(w, binary.BigEndian, cmd.entry.GetID()); err != nil {
+			return
+		}
+		n += 8
 		if err = binary.Write(w, binary.BigEndian, cmd.Table.db.ID); err != nil {
 			return
 		}
@@ -299,6 +305,12 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += int64(len(schemaBuf))
 	case CmdUpdateSegment:
+		// write segment id
+		if _, err = w.Write(cmd.Segment.ID[:]); err != nil {
+			return
+		}
+		n += int64(types.UuidSize)
+
 		if err = binary.Write(w, binary.BigEndian, cmd.DB.ID); err != nil {
 			return
 		}
@@ -308,27 +320,33 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.Segment.state); err != nil {
 			return
 		}
-		if err = binary.Write(w, binary.BigEndian, cmd.Segment.sorted); err != nil {
+		var n2 int64
+		if n2, err = cmd.Segment.WriteAddonInfo(w); err != nil {
 			return
 		}
-		n += 8 + 8 + 1 + 1
-		var n2 int64
+		n += 8 + 8 + 1 + n2
 		n2, err = cmd.entry.WriteOneNodeTo(w)
 		if err != nil {
 			return
 		}
 		n += n2
 	case CmdUpdateBlock:
+		// write block id
+		if _, err = w.Write(cmd.Block.ID[:]); err != nil {
+			return
+		}
+		n += int64(types.BlockidSize)
 		if err = binary.Write(w, binary.BigEndian, cmd.DB.ID); err != nil {
 			return
 		}
 		if err = binary.Write(w, binary.BigEndian, cmd.Table.ID); err != nil {
 			return
 		}
-		if err = binary.Write(w, binary.BigEndian, cmd.Segment.ID); err != nil {
+		if _, err = w.Write(cmd.Segment.ID[:]); err != nil {
 			return
 		}
-		n += 8 + 8 + 8
+		n += int64(types.UuidSize)
+		n += 8 + 8
 		if err = binary.Write(w, binary.BigEndian, cmd.Block.state); err != nil {
 			return
 		}
@@ -351,6 +369,7 @@ func (cmd *EntryCommand) Marshal() (buf []byte, err error) {
 	return
 }
 func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
+	// read command id
 	if err = binary.Read(r, binary.BigEndian, &cmd.ID); err != nil {
 		return
 	}
@@ -403,11 +422,16 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 	case CmdUpdateSegment:
 		entry := NewReplayMetaBaseEntry()
-		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+		cmd.entry = entry
+		cmd.Segment = NewReplaySegmentEntry()
+
+		var segid types.Uuid
+		if _, err = r.Read(segid[:]); err != nil {
 			return
 		}
-		n += 8
-		cmd.entry = entry
+		n += int64(types.UuidSize)
+		cmd.Segment.ID = segid
+
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -416,30 +440,28 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 8
-		var state EntryState
-		if err = binary.Read(r, binary.BigEndian, &state); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &cmd.Segment.state); err != nil {
 			return
 		}
 		n += 1
-		var sorted bool
-		if err = binary.Read(r, binary.BigEndian, &sorted); err != nil {
+
+		if sn, err = cmd.Segment.ReadAddonInfo(r); err != nil {
 			return
 		}
-		n += 1
+		n += sn
 		if sn, err = cmd.entry.ReadOneNodeFrom(r); err != nil {
 			return
 		}
 		n += sn
-		cmd.Segment = NewReplaySegmentEntry()
+
 		cmd.Segment.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
-		cmd.Segment.state = state
-		cmd.Segment.sorted = sorted
 	case CmdUpdateBlock:
 		entry := NewReplayMetaBaseEntry()
-		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+		var blockid types.Blockid
+		if _, err = r.Read(blockid[:]); err != nil {
 			return
 		}
-		n += 8
+		n += int64(types.BlockidSize)
 		cmd.entry = entry
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
@@ -447,9 +469,12 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		if err = binary.Read(r, binary.BigEndian, &cmd.TableID); err != nil {
 			return
 		}
-		if err = binary.Read(r, binary.BigEndian, &cmd.SegmentID); err != nil {
+		var segid types.Uuid
+		if _, err = r.Read(segid[:]); err != nil {
 			return
 		}
+		n += int64(types.UuidSize)
+		cmd.SegmentID = segid
 		var state EntryState
 		if err = binary.Read(r, binary.BigEndian, &state); err != nil {
 			return
@@ -461,6 +486,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += n2
 		cmd.Block = NewReplayBlockEntry()
+		cmd.Block.ID = blockid
 		cmd.Block.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
 		cmd.Block.state = state
 	}

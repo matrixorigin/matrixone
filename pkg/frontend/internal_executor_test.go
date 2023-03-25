@@ -85,7 +85,6 @@ func TestIeProto(t *testing.T) {
 	_ = p.ConnectionID()
 	ctx := context.TODO()
 	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
-	assert.Panics(t, func() { p.Peer() })
 	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
 	assert.Nil(t, p.SendColumnCountPacket(1))
 	assert.Nil(t, p.SendEOFPacketIf(0, 1))
