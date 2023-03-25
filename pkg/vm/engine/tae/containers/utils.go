@@ -130,11 +130,11 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 
 func CloneMOVec(v *movec.Vector) *movec.Vector {
 	end := v.Length()
-	res, err := v.CloneWindow(0, end, nil)
+	dest, err := v.CloneWindow(0, end, nil)
 	if err != nil {
 		panic(err)
 	}
-	return res
+	return dest
 }
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
