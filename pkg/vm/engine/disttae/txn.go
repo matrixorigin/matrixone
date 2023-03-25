@@ -118,7 +118,6 @@ func (txn *Transaction) WriteBatch(
 		dnStore:      dnStore,
 	})
 	txn.Unlock()
-
 	return nil
 }
 
@@ -250,6 +249,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}
 
 	sels := txn.proc.Mp().GetSels()
+	txn.Lock()
 	for _, e := range txn.writes {
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
@@ -266,6 +266,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			}
 		}
 	}
+	txn.Unlock()
 	sels = sels[:0]
 	for k, rowid := range rowids {
 		if mp[rowid] == 0 {
