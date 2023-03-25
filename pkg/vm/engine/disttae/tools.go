@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -646,26 +645,24 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 }
 */
 
-func genWriteReqs(ctx context.Context, writes [][]Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByDN{})
-	for i := range writes {
-		for _, e := range writes[i] {
-			if e.bat.Length() == 0 {
-				continue
-			}
-			if v != nil {
-				e.pkChkByDN = v.(int8)
-			}
-			pe, err := toPBEntry(e)
-			if err != nil {
-				return nil, err
-			}
-			mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
-			if _, ok := mq[e.dnStore.ServiceID]; !ok {
-				mq[e.dnStore.ServiceID] = e.dnStore
-			}
+	for _, e := range writes {
+		if e.bat.Length() == 0 {
+			continue
+		}
+		if v != nil {
+			e.pkChkByDN = v.(int8)
+		}
+		pe, err := toPBEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
+		if _, ok := mq[e.dnStore.ServiceID]; !ok {
+			mq[e.dnStore.ServiceID] = e.dnStore
 		}
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
@@ -949,6 +946,7 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	return accountId, userId, roleId
 }
 
+/*
 func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dnNum int) ([]*batch.Batch, error) {
 	pvec, err := colexec.EvalExpr(bat, proc, expr)
 	if err != nil {
@@ -980,6 +978,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	}
 	return bats, nil
 }
+*/
 
 func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
 	txn := tbl.db.txn

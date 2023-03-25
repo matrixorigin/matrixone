@@ -316,39 +316,6 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-// hasConflict used to detect if a transaction on a cn is in conflict,
-// currently an empty implementation, assuming all transactions on a cn are conflict free
-func (e *Engine) hasConflict(txn *Transaction) bool {
-	return false
-}
-
-// hasDuplicate used to detect if a transaction on a cn has duplicate.
-func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
-	for i := range txn.writes {
-		for _, e := range txn.writes[i] {
-			if e.typ == DELETE {
-				continue
-			}
-			if e.bat.Length() == 0 {
-				continue
-			}
-			key := genTableKey(ctx, e.tableName, e.databaseId)
-			v, ok := txn.tableMap.Load(key)
-			if !ok {
-				continue
-			}
-			tbl := v.(*txnTable)
-			if tbl.meta == nil {
-				continue
-			}
-			if tbl.primaryIdx == -1 {
-				continue
-			}
-		}
-	}
-	return false
-}
-
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
 	proc := process.New(
@@ -373,7 +340,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		databaseMap: new(sync.Map),
 		createMap:   new(sync.Map),
 	}
-	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
@@ -429,13 +395,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn.readOnly {
 		return nil
 	}
-	if e.hasConflict(txn) {
-		return moerr.NewTxnWriteConflictNoCtx("write conflict")
-	}
-	if e.hasDuplicate(ctx, txn) {
-		return moerr.NewDuplicateNoCtx()
-	}
-	err := txn.DumpBatch(true)
+	err := txn.DumpBatch(true, 0)
 	if err != nil {
 		return err
 	}
@@ -546,9 +506,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
-		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.mp)
-		}
+		txn.writes[i].bat.Clean(e.mp)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil
