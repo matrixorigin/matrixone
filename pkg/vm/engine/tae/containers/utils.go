@@ -128,15 +128,6 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
-func CloneMOVec(v *movec.Vector) *movec.Vector {
-	end := v.Length()
-	dest, err := v.CloneWindow(0, end, nil)
-	if err != nil {
-		panic(err)
-	}
-	return dest
-}
-
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(*v.GetType(), nullable)
 	var bs *Bytes
