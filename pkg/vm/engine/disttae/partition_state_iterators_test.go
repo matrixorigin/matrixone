@@ -18,11 +18,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,11 +56,10 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	const num = 128
 
+	sid := common.NewSegmentid()
 	buildRowID := func(i int) types.Rowid {
-		return types.Rowid{
-			byte(i), 0, 0, 0, 0, 0,
-			byte(i), 0, 0, 0, 0, 0, // block id
-		}
+		blk := common.NewBlockid(&sid, uint16(i), 0)
+		return common.NewRowid(&blk, uint32(0))
 	}
 
 	{
@@ -183,7 +182,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 
 		{
-			blockID, _ := catalog.DecodeRowid(buildRowID(i + 1))
+			blockID, _ := buildRowID(i + 1).Decode()
 			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
@@ -192,7 +191,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				entry := iter.Entry()
 				rowIDs[entry.RowID] = true
 			}
-			require.Equal(t, 1, n)
+			require.Equal(t, 1, n, "num is %d", i)
 			require.Equal(t, 1, len(rowIDs))
 			require.Nil(t, iter.Close())
 		}
@@ -218,7 +217,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	for i := 0; i < num; i++ {
 		{
-			blockID, _ := catalog.DecodeRowid(buildRowID(i + 1))
+			blockID, _ := buildRowID(i + 1).Decode()
 			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), &blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0

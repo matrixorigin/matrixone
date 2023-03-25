@@ -231,7 +231,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	_, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
 	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
 		if !dropSequence.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
+			return nil, moerr.NewNoSuchSequence(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
 		}
 		dropSequence.Table = ""
 	}
