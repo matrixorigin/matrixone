@@ -300,7 +300,15 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 			slice = slice[offset+bias : offset+length+bias]
 			if sels == nil || sels.IsEmpty() {
 				for i, elem := range slice {
-					if err = op(elem, i+offset); err != nil {
+					var vv any
+					isNull := false
+					if vec.IsNull(i + offset + bias) {
+						isNull = true
+						vv = types.Null{}
+					} else {
+						vv = elem
+					}
+					if err = op(vv, isNull, i+offset); err != nil {
 						break
 					}
 				}
@@ -313,7 +321,16 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 					} else if int(idx) >= end {
 						break
 					}
-					if err = op(slice[int(idx)-offset], int(idx)); err != nil {
+
+					var vv any
+					isNull := false
+					if vec.IsNull(int(idx) + bias) {
+						isNull = true
+						vv = types.Null{}
+					} else {
+						vv = slice[int(idx)-offset]
+					}
+					if err = op(vv, isNull, int(idx)); err != nil {
 						break
 					}
 				}
@@ -323,34 +340,35 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 
 	}
 	if sels == nil || sels.IsEmpty() {
-		for rowId := offset; rowId < offset+length; rowId++ {
+		for i := offset; i < offset+length; i++ {
 			var elem any
 			if shallow {
-				elem = vec.ShallowGet(rowId + bias)
+				elem = vec.ShallowGet(i + bias)
 			} else {
-				elem = vec.Get(rowId + bias)
+				elem = vec.Get(i + bias)
 			}
-			if err = op(elem, rowId); err != nil {
+			if err = op(elem, vec.IsNull(i+bias), i); err != nil {
 				break
 			}
 		}
 	} else {
 
-		selsArray := sels.ToArray()
+		idxes := sels.ToArray()
 		end := offset + length
-		for _, rowId := range selsArray {
-			if int(rowId) < offset {
+		for _, idx := range idxes {
+			if int(idx) < offset {
 				continue
-			} else if int(rowId) >= end {
+			} else if int(idx) >= end {
 				break
 			}
 			var elem any
 			if shallow {
-				elem = vec.ShallowGet(int(rowId) + bias)
+				elem = vec.ShallowGet(int(idx) + bias)
 			} else {
-				elem = vec.Get(int(rowId) + bias)
+				elem = vec.Get(int(idx) + bias)
 			}
-			if err = op(elem, int(rowId)); err != nil {
+
+			if err = op(elem, vec.IsNull(int(idx)+bias), int(idx)); err != nil {
 				break
 			}
 		}
