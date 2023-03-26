@@ -68,6 +68,7 @@ const (
 	T_uuid      T = 63
 	T_binary    T = 64
 	T_varbinary T = 65
+	T_enum      T = 66
 
 	// blobs
 	T_blob T = 70
@@ -104,6 +105,8 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
+
+	EnumValues []string
 }
 
 type Date int32
@@ -245,6 +248,23 @@ func CharsetType(oid T) uint8 {
 
 func TypeSize(oid T) int {
 	return oid.TypeLen()
+}
+
+func (t Type) TypeEqual(o Type) (equal bool) {
+	equal = t.Size == o.Size && t.Width == o.Width && t.Scale == o.Scale &&
+		t.Oid == o.Oid && t.Charset == o.Charset && t.dummy1 == o.dummy1 && t.dummy2 == o.dummy2
+	if t.EnumValues == nil && o.EnumValues == nil {
+		return
+	}
+	if len(t.EnumValues) != len(o.EnumValues) {
+		return false
+	}
+	for i := range t.EnumValues {
+		if t.EnumValues[i] != o.EnumValues[i] {
+			return false
+		}
+	}
+	return
 }
 
 func (t Type) GetSize() int32 {

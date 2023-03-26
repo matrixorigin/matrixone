@@ -133,6 +133,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
+	case types.T_enum:
+		if desc {
+			return newCompare(genericDescCompare[uint16], genericCopy[uint16], nullsLast)
+		}
+		return newCompare(genericAscCompare[uint16], genericCopy[uint16], nullsLast)
 	}
 	return nil
 }

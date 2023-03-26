@@ -67,6 +67,9 @@ func (vec *vector[T]) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
+	if !vec.GetType().TypeEqual(o.GetType()) {
+		return false
+	}
 	if vec.GetType() != o.GetType() {
 		return false
 	}
