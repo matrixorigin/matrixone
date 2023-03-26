@@ -109,7 +109,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	if !exist {
 		return
 	}
-	op := func(v any, _ int) error {
+	op := func(v any, _ bool, _ int) error {
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {
 			return nil

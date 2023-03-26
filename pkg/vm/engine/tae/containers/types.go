@@ -28,7 +28,7 @@ type Options struct {
 	Allocator *mpool.MPool
 }
 
-type ItOp = func(v any, row int) error
+type ItOp = func(v any, isNull bool, row int) error
 
 type Vector interface {
 	GetType() types.Type

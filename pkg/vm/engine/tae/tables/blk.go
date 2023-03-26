@@ -156,8 +156,8 @@ func (blk *block) dedupClosure(
 	vec containers.Vector,
 	ts types.TS,
 	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, int) error {
-	return func(v any, _ int) (err error) {
+	def *catalog.ColDef) func(any, bool, int) error {
+	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
 			entry := common.TypeStringValue(vec.GetType(), v)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)

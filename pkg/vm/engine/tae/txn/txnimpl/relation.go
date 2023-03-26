@@ -268,7 +268,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = keys.ForeachShallow(func(key any, _ int) (err error) {
+	err = keys.ForeachShallow(func(key any, _ bool, _ int) (err error) {
 		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
 		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 		return

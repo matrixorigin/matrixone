@@ -17,7 +17,6 @@ package blockio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -84,7 +83,8 @@ func BlockReadInner(
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
 		// Fixme: Due to # 8684, we are not able to use mpool yet
-		columnBatch.Vecs[i] = containers.CloneMOVec(col)
+		// Fixme: replace with cnVec.Dup(nil) when it implemented.
+		columnBatch.Vecs[i], err = col.CloneWindow(0, col.Length(), nil)
 		if err != nil {
 			return nil, err
 		}
