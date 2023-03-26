@@ -147,9 +147,6 @@ func (zm *ZoneMap) BatchUpdate(KeysCtx *KeysCtx) error {
 }
 
 func (zm *ZoneMap) Contains(key any) (ok bool) {
-	if types.IsNull(key) {
-		return true
-	}
 	if !zm.inited {
 		return
 	}
@@ -202,9 +199,6 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 }
 
 func (zm *ZoneMap) SetMax(v any) {
-	if types.IsNull(v) {
-		return
-	}
 	if !zm.inited {
 		zm.init(v)
 		return
@@ -219,9 +213,6 @@ func (zm *ZoneMap) GetMax() any {
 }
 
 func (zm *ZoneMap) SetMin(v any) {
-	if types.IsNull(v) {
-		return
-	}
 	if !zm.inited {
 		zm.init(v)
 		return
