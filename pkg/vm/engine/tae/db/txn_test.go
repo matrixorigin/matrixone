@@ -250,7 +250,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			return
 		}
 		defer view.Close()
-		_ = view.GetData().Foreach(func(v any, row int) (err error) {
+		_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
 			pk := v.(uint64)
 			if pk != goodId {
 				return

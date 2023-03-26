@@ -33,7 +33,7 @@ type Bytes = stl.Bytes
 
 // var DefaultAllocator = alloc.NewAllocator(int(common.G) * 100)
 
-type ItOp = func(v any, row int) error
+type ItOp = func(v any, isNull bool, row int) error
 
 type VectorView interface {
 	IsView() bool
