@@ -106,9 +106,6 @@ func (zm *ZoneMap) init(v any) {
 }
 
 func (zm *ZoneMap) Update(v any) (err error) {
-	if types.IsNull(v) {
-		return
-	}
 	if !zm.inited {
 		zm.init(v)
 		return
@@ -137,7 +134,10 @@ func (zm *ZoneMap) BatchUpdate(KeysCtx *KeysCtx) error {
 	if !zm.typ.Eq(KeysCtx.Keys.GetType()) {
 		return ErrWrongType
 	}
-	update := func(v any, _ int) error {
+	update := func(v any, isNull bool, _ int) error {
+		if isNull {
+			return nil
+		}
 		return zm.Update(v)
 	}
 	if err := KeysCtx.Keys.ForeachWindow(KeysCtx.Start, KeysCtx.Count, update, nil); err != nil {
@@ -147,9 +147,6 @@ func (zm *ZoneMap) BatchUpdate(KeysCtx *KeysCtx) error {
 }
 
 func (zm *ZoneMap) Contains(key any) (ok bool) {
-	if types.IsNull(key) {
-		return true
-	}
 	if !zm.inited {
 		return
 	}
@@ -163,8 +160,8 @@ func (zm *ZoneMap) FastContainsAny(keys containers.Vector) (ok bool) {
 	if !zm.inited {
 		return
 	}
-	op := func(key any, _ int) (err error) {
-		if types.IsNull(key) ||
+	op := func(key any, isNull bool, _ int) (err error) {
+		if isNull ||
 			((zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) &&
 				compute.CompareGeneric(key, zm.min, zm.typ) >= 0) {
 			err = moerr.GetOkExpectedEOB()
@@ -182,9 +179,9 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 	}
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
-	op := func(key any, _ int) (err error) {
+	op := func(key any, isNull bool, _ int) (err error) {
 		// exist if key is null or (<= maxv && >= minv)
-		if types.IsNull(key) ||
+		if isNull ||
 			((zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) &&
 				compute.CompareGeneric(key, zm.min, zm.typ) >= 0) {
 			visibility.Add(row)
@@ -202,9 +199,6 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 }
 
 func (zm *ZoneMap) SetMax(v any) {
-	if types.IsNull(v) {
-		return
-	}
 	if !zm.inited {
 		zm.init(v)
 		return
@@ -219,9 +213,6 @@ func (zm *ZoneMap) GetMax() any {
 }
 
 func (zm *ZoneMap) SetMin(v any) {
-	if types.IsNull(v) {
-		return
-	}
 	if !zm.inited {
 		zm.init(v)
 		return
