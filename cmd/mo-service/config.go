@@ -38,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
-	_version "github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var (
@@ -256,14 +256,14 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend.SetLogAndVersion(&c.Log, _version.Version)
+	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
 	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
 	return cfg
 }
 
 func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 	cfg := c.Observability
-	cfg.SetDefaultValues(_version.Version)
+	cfg.SetDefaultValues(version.Version)
 	return cfg
 }
 

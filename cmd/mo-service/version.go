@@ -18,19 +18,19 @@ import (
 	"fmt"
 	"os"
 
-	_version "github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 func maybePrintVersion() {
-	if !*version {
+	if !*versionFlag {
 		return
 	}
 
 	fmt.Println("MatrixOne build info:")
-	fmt.Printf("  The golang version used to build this binary: %s\n", _version.GoVersion)
-	fmt.Printf("  Git branch name: %s\n", _version.BranchName)
-	fmt.Printf("  Git commit ID: %s\n", _version.CommitID)
-	fmt.Printf("  Buildtime: %s\n", _version.BuildTime)
-	fmt.Printf("  Version: %s\n", _version.Version)
+	fmt.Printf("  The golang version used to build this binary: %s\n", version.GoVersion)
+	fmt.Printf("  Git branch name: %s\n", version.BranchName)
+	fmt.Printf("  Git commit ID: %s\n", version.CommitID)
+	fmt.Printf("  Buildtime: %s\n", version.BuildTime)
+	fmt.Printf("  Version: %s\n", version.Version)
 	os.Exit(0)
 }
