@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -28,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
 )
@@ -174,41 +172,21 @@ func (cleaner *DiskCleaner) replay() error {
 	if len(readDirs) == 0 {
 		return nil
 	}
-	jobs := make([]*tasks.Job, len(readDirs))
-	jobScheduler := tasks.NewParallelJobScheduler(100)
-	defer jobScheduler.Stop()
-	makeJob := func(i int) (job *tasks.Job) {
-		dir := readDirs[i]
-		exec := func(ctx context.Context) (result *tasks.JobResult) {
-			result = &tasks.JobResult{}
-			table := NewGCTable()
-			err := table.ReadTable(ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
-			if err != nil {
-				result.Err = err
-				return
-			}
-			cleaner.updateInputs(table)
-			return
-		}
-		job = tasks.NewJob(
-			fmt.Sprintf("load-%s", dir.Name),
-			context.Background(),
-			exec)
-		return
-	}
 
-	for i := range readDirs {
-		jobs[i] = makeJob(i)
-		if err = jobScheduler.Schedule(jobs[i]); err != nil {
+	for _, dir := range readDirs {
+		table := NewGCTable()
+		err = table.Prefetch(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		if err != nil {
 			return err
 		}
 	}
-
-	for _, job := range jobs {
-		result := job.WaitDone()
-		if err = result.Err; err != nil {
+	for _, dir := range readDirs {
+		table := NewGCTable()
+		err = table.ReadTable(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		if err != nil {
 			return err
 		}
+		cleaner.updateInputs(table)
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
