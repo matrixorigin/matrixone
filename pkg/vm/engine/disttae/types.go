@@ -74,6 +74,7 @@ type Engine struct {
 
 	// XXX related to cn push model
 	usePushModel       bool
+	pClient            pushClient
 	subscriber         *logTailSubscriber
 	receiveLogTailTime syncLogTailTimestamp
 	subscribed         subscribedTable

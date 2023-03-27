@@ -155,28 +155,16 @@ func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
 	return false
 }
 
-func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
-	ctx context.Context, txnTime timestamp.Timestamp) error {
-	// if block time is too long, return error.
-	maxBlockTime := maxTimeToNewTransaction
-	for {
-		if maxBlockTime < 0 {
-			return moerr.NewTxnError(ctx,
-				"new txn failed. please retry.")
-		}
-		if r.greatEq(txnTime) {
-			return nil
-		}
-		time.Sleep(periodToCheckTxnTimestamp)
-		maxBlockTime -= periodToCheckTxnTimestamp
-	}
-}
-
 // logTailSubscriber is responsible for
 // sending subscribe request and unsubscribe request to dn.
 type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
+
+	// return a table subscribe method.
+	lockSubscriber chan func(context.Context, api.TableID) error
+	// return a table unsubscribe method.
+	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
 }
 
 type logTailSubscriberResponse struct {
@@ -184,10 +172,7 @@ type logTailSubscriberResponse struct {
 	err      error
 }
 
-func (s *logTailSubscriber) init(serviceAddr string) (err error) {
-	// XXX we assume that we have only 1 dn now.
-	s.dnNodeID = 0
-
+func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 	// XXX generate a rpc client and new a stream.
 	// we should hide these code into NewClient method next day.
 	codec := morpc.NewMessageCodec(func() morpc.Message {
@@ -205,16 +190,44 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 		morpc.WithClientTag("cn-log-tail-client"),
 	)
 	if err1 != nil {
-		return err1
+		return nil, err1
 	}
 
 	stream, err2 := c.NewStream(serviceAddr, true)
-	if err2 != nil {
-		return err2
+	return stream, err2
+}
+
+func (s *logTailSubscriber) init(serviceAddr string) (err error) {
+	// XXX we assume that we have only 1 dn now.
+	s.dnNodeID = 0
+
+	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
+	if err != nil {
+		return err
 	}
+
+	// if lockSubscriber is not nil here, it's most likely called by reconnect process.
+	// we need to take out the content of lockSubscriber to ensure that
+	// the subscriber can't be used during the init process.
+	if s.lockSubscriber == nil {
+		s.lockSubscriber = make(chan func(context.Context, api.TableID) error, 1)
+	} else {
+		<-s.lockSubscriber
+	}
+	if s.lockUnSubscriber == nil {
+		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
+	} else {
+		<-s.lockUnSubscriber
+	}
+
 	// new the log tail client.
 	s.logTailClient, err = service.NewLogtailClient(stream,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	if err != nil {
+		s.lockSubscriber, s.lockUnSubscriber = nil, nil
+	}
+	s.lockSubscriber <- s.logTailClient.Subscribe
+	s.lockUnSubscriber <- s.logTailClient.Unsubscribe
 	return err
 }
 
