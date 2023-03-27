@@ -101,7 +101,7 @@ func newDatabase(db *txnDB) *txnDatabase {
 	return dbase
 
 }
-func (db *txnDatabase) GetID() uint64        { return db.txnDB.entry.GetID() }
+func (db *txnDatabase) GetID() uint64        { return db.txnDB.entry.ID }
 func (db *txnDatabase) GetName() string      { return db.txnDB.entry.GetName() }
 func (db *txnDatabase) String() string       { return db.txnDB.entry.String() }
 func (db *txnDatabase) IsSubscription() bool { return db.txnDB.entry.IsSubscription() }

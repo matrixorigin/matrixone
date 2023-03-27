@@ -52,7 +52,7 @@ func (segment *dataSegment) Destroy() (err error) {
 	return
 }
 
-func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }
+func (segment *dataSegment) GetID() uint64 { panic("not support") }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
 	// TODO: segment level index

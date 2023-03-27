@@ -227,7 +227,7 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, cmd.ID.BlockID); err != nil {
 		return
 	}
-	n = 2 + 8 + 8 + 8 + 8
+	n = 2 + 8 + 8 + int64(types.UuidSize) + int64(types.BlockidSize)
 	var sn int64
 	if sn, err = cmd.mvccNode.WriteTo(w); err != nil {
 		return

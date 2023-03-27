@@ -47,8 +47,10 @@ func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 func (e *DBMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
 
 type DBNode struct {
-	acInfo accessInfo
-	name   string
+	acInfo    accessInfo
+	name      string
+	datType   string
+	createSql string
 }
 
 func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -58,6 +60,14 @@ func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += sn
 	if sn, err = node.acInfo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
+	if node.createSql, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if node.datType, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -71,6 +81,14 @@ func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += sn
 	if sn, err = node.acInfo.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = common.WriteString(node.createSql, w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = common.WriteString(node.datType, w); err != nil {
 		return
 	}
 	n += sn

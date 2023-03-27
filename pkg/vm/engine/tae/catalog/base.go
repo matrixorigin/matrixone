@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
@@ -41,7 +40,6 @@ type BaseEntry interface {
 	PPString(common.PPLevel, int, string) string
 
 	GetTxn() txnif.TxnReader
-	GetID() uint64
 	GetIndexes() []*wal.Index
 	GetLogIndex() *wal.Index
 
@@ -77,7 +75,6 @@ func CompareUint64(left, right uint64) int {
 type BaseEntryImpl[T BaseNode] struct {
 	//chain of MetadataMVCCNode
 	*txnbase.MVCCChain
-	ID uint64
 }
 
 func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
@@ -87,15 +84,14 @@ func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
 	return be
 }
 
-func NewBaseEntry[T BaseNode](id uint64, factory func() T) *BaseEntryImpl[T] {
+func NewBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
-		ID:        id,
 		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
 	}
 }
 
 func (be *BaseEntryImpl[T]) StringLocked() string {
-	return fmt.Sprintf("[%d]%s", be.ID, be.MVCCChain.StringLocked())
+	return be.MVCCChain.StringLocked()
 }
 
 func (be *BaseEntryImpl[T]) String() string {
@@ -145,8 +141,6 @@ func (be *BaseEntryImpl[T]) GetVisibleDeltaLoc(ts types.TS) string {
 	str := be.GetVisibleNode(ts).(*MVCCNode[*MetadataMVCCNode]).BaseNode.DeltaLoc
 	return str
 }
-
-func (be *BaseEntryImpl[T]) GetID() uint64 { return be.ID }
 
 func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
@@ -364,14 +358,6 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 	return un.(*MVCCNode[T]).HasDropCommitted()
 }
 
-func (be *BaseEntryImpl[T]) DoCompre(oe *BaseEntryImpl[T]) int {
-	be.RLock()
-	defer be.RUnlock()
-	oe.RLock()
-	defer oe.RUnlock()
-	return CompareUint64(be.ID, oe.ID)
-}
-
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(ts types.TS) bool {
 	visible, dropped := be.GetVisibilityLocked(ts)
 	if !visible {
@@ -432,7 +418,6 @@ func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry
 	}
 	return &BaseEntryImpl[T]{
 		MVCCChain: chain,
-		ID:        be.ID,
 	}
 }
 
@@ -462,56 +447,4 @@ func (be *BaseEntryImpl[T]) GetVisibility(ts types.TS) (visible, dropped bool) {
 		be.RLock()
 	}
 	return be.GetVisibilityLocked(ts)
-}
-func (be *BaseEntryImpl[T]) WriteOneNodeTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.WriteOneNodeTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
-}
-func (be *BaseEntryImpl[T]) WriteAllTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.WriteAllTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
-}
-func (be *BaseEntryImpl[T]) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.ReadOneNodeFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
-}
-func (be *BaseEntryImpl[T]) ReadAllFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
-		return
-	}
-	n += 8
-	var sn int64
-	sn, err = be.MVCCChain.ReadAllFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	return
 }

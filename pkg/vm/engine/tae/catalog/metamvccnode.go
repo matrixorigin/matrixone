@@ -127,8 +127,15 @@ func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type SegmentNode struct {
-	state  EntryState
-	sorted bool
+	state    EntryState
+	IsLocal  bool   // this segment is hold by a localsegment
+	SortHint uint64 // sort segment by create time, make iteration on segment determined
+	// used in appendable segment, bump this if creating a new block, and
+	// the block will be eventually flushed to a s3 file.
+	// for non-appendable segment, this field makes no sense, because if we
+	// decide to create a new non-appendable segment, its content is all set.
+	nextObjectIdx uint16
+	sorted        bool // deprecated
 }
 
 func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -137,6 +144,14 @@ func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 1
 	if err = binary.Read(r, binary.BigEndian, &node.sorted); err != nil {
+		return
+	}
+	n += 1
+	if err = binary.Read(r, binary.BigEndian, &node.SortHint); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Read(r, binary.BigEndian, &node.IsLocal); err != nil {
 		return
 	}
 	n += 1
@@ -152,7 +167,22 @@ func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 1
+	if err = binary.Write(w, binary.BigEndian, node.SortHint); err != nil {
+		return
+	}
+	n += 8
+	if err = binary.Write(w, binary.BigEndian, node.IsLocal); err != nil {
+		return
+	}
+	n += 1
 	return
+}
+func (node *SegmentNode) String() string {
+	sorted := "US"
+	if node.sorted {
+		sorted = "S"
+	}
+	return fmt.Sprintf("%s/%d/%d", sorted, node.SortHint, node.nextObjectIdx)
 }
 
 type BlockNode struct {
