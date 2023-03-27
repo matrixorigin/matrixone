@@ -55,10 +55,16 @@ var validDatetimeUnit = map[string]struct{}{
 }
 
 var validTimeUnit = map[string]struct{}{
-	"microsecond": {},
-	"second":      {},
-	"minute":      {},
-	"hour":        {},
+	"microsecond":        {},
+	"second":             {},
+	"minute":             {},
+	"hour":               {},
+	"second_microsecond": {},
+	"minute_microsecond": {},
+	"minute_second":      {},
+	"hour_microsecond":   {},
+	"hour_second":        {},
+	"hour_minute":        {},
 }
 
 func ExtractFromOneDate(unit string, date types.Date) uint32 {
@@ -245,6 +251,40 @@ func ExtractFromTime(unit string, times []types.Time, results []string) ([]strin
 	case "hour":
 		for i, t := range times {
 			value := fmt.Sprintf("%02d", int(t.Hour()))
+			results[i] = value
+		}
+
+	case "second_microsecond":
+		for i, t := range times {
+			microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
+			value := fmt.Sprintf("%2d%s", int(t.Sec()), microSec)
+			results[i] = value
+		}
+	case "minute_microsecond":
+		for i, t := range times {
+			microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
+			value := fmt.Sprintf("%2d%2d%s", int(t.Minute()), int(t.Sec()), microSec)
+			results[i] = value
+		}
+	case "minute_second":
+		for i, t := range times {
+			value := fmt.Sprintf("%2d%2d", int(t.Minute()), int(t.Sec()))
+			results[i] = value
+		}
+	case "hour_microsecond":
+		for i, t := range times {
+			microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
+			value := fmt.Sprintf("%2d%2d%2d%s", int(t.Hour()), int(t.Minute()), int(t.Sec()), microSec)
+			results[i] = value
+		}
+	case "hour_second":
+		for i, t := range times {
+			value := fmt.Sprintf("%2d%2d%2d", int(t.Hour()), int(t.Minute()), int(t.Sec()))
+			results[i] = value
+		}
+	case "hour_minute":
+		for i, t := range times {
+			value := fmt.Sprintf("%2d%2d", int(t.Hour()), int(t.Minute()))
 			results[i] = value
 		}
 	}

@@ -446,12 +446,18 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_time},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ExtractFromTime,
+			},
+			{
+				Index:     1,
 				Args:      []types.T{types.T_varchar, types.T_datetime},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.ExtractFromDatetime,
 			},
 			{
-				Index:     1,
+				Index:     2,
 				Args:      []types.T{types.T_varchar, types.T_date},
 				ReturnTyp: types.T_uint32,
 				Fn:        binary.ExtractFromDate,
