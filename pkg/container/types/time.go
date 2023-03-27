@@ -408,7 +408,7 @@ func isDateType(s string) bool {
 	strArr := strings.Split(s, " ")
 	if len(strArr) > 1 {
 		if _, err := strconv.ParseUint(strArr[0], 10, 64); err != nil {
-			return false
+			return true
 		}
 	}
 
