@@ -156,7 +156,6 @@ type IoPipeline struct {
 		scheduler tasks.JobScheduler
 	}
 
-	fs         *objectio.ObjectFS
 	waitQ      sm.Queue
 	jobFactory IOJobFactory
 
@@ -166,7 +165,6 @@ type IoPipeline struct {
 }
 
 func NewIOPipeline(
-	fs *objectio.ObjectFS,
 	opts ...Option,
 ) *IoPipeline {
 	p := new(IoPipeline)
@@ -174,7 +172,6 @@ func NewIOPipeline(
 		opt(p)
 	}
 	p.fillDefaults()
-	p.fs = fs
 
 	p.waitQ = sm.NewSafeQueue(
 		100000,

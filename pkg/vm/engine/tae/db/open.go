@@ -16,7 +16,6 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"sync/atomic"
 	"time"
@@ -101,7 +100,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
-	blockio.Start()
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
