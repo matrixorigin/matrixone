@@ -1051,7 +1051,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.List.Add(1)
+		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.ListObjects(ctx, params, optFns...)
 }
@@ -1059,7 +1059,7 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Head.Add(1)
+		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
@@ -1067,7 +1067,7 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Put.Add(1)
+		counter.FileService.S3.Put.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
@@ -1075,7 +1075,7 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Get.Add(1)
+		counter.FileService.S3.Get.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
@@ -1083,7 +1083,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.DeleteMulti.Add(1)
+		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
@@ -1091,7 +1091,7 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Delete.Add(1)
+		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }
