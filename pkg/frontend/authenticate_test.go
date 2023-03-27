@@ -301,6 +301,10 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
 				AdminName: "root",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "123456",
+				},
 			},
 		})
 		convey.So(err, convey.ShouldBeNil)
@@ -7256,8 +7260,12 @@ func TestDoCreatePublication(t *testing.T) {
 	defer ses.Dispose()
 
 	tenant := &TenantInfo{
-		Tenant:   sysAccountName,
-		TenantID: sysAccountID,
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
 
@@ -7464,6 +7472,231 @@ func TestDoAlterPublication(t *testing.T) {
 		} else {
 			require.NoError(t, err)
 		}
+	}
+
+}
+
+func TestCheckSubscriptionValid(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Dispose()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ses.SetTenantInfo(tenant)
+
+	columns := [][]Column{
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_id",
+					columnType: defines.MYSQL_TYPE_LONGLONG,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "status",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "database_name",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "all_account",
+					columnType: defines.MYSQL_TYPE_BOOL,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_list",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+	}
+
+	kases := []struct {
+		createSql string
+
+		accName   string
+		pubName   string
+		pubExists bool
+		accExists bool
+
+		subName string
+
+		accId     uint32
+		accStatus string
+
+		databaseName string
+		allAccount   bool
+		accountList  string
+
+		sqls  []string
+		datas [][][]interface{}
+
+		err bool
+	}{
+		{
+			createSql: "create database sub1 from acc0 publication",
+			accName:   "acc0",
+			pubName:   "",
+			subName:   "sub1",
+			accId:     1,
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from sys publication pub1",
+			accName:   "sys",
+			pubName:   "pub1",
+			subName:   "sub1",
+			accId:     0,
+			accStatus: "",
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   true,
+			accountList:  "",
+
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: false,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: false,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+	}
+
+	initData := func(idx int) {
+		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
+		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
+		kases[idx].sqls = []string{
+			sql1, sql2,
+		}
+		kases[idx].datas = [][][]interface{}{
+			{{kases[idx].accId, kases[idx].accStatus}},
+			{{kases[idx].databaseName, kases[idx].allAccount, kases[idx].accountList}},
+		}
+
+		if !kases[idx].accExists {
+			kases[idx].datas[0] = nil
+		}
+		if !kases[idx].pubExists {
+			kases[idx].datas[1] = nil
+		}
+	}
+
+	for idx := range kases {
+		initData(idx)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+		for i := range kases[idx].sqls {
+			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
+				Data:    kases[idx].datas[i],
+				Columns: columns[i],
+			}
+		}
+
+		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
+		require.Equal(t, kases[idx].err, err != nil)
 	}
 
 }
