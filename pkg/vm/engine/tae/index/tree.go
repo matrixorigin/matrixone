@@ -70,7 +70,7 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 
 func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error) {
 	existence := make(map[any]bool)
-	op := func(v any, i int) error {
+	op := func(v any, _ bool, i int) error {
 		encoded := types.EncodeValue(v, art.typ)
 		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {

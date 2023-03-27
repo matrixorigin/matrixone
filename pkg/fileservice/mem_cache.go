@@ -77,7 +77,7 @@ func defaultMemCacheOptions() memCacheOptions {
 	return memCacheOptions{}
 }
 
-var _ Cache = new(MemCache)
+var _ IOVectorCache = new(MemCache)
 
 func (m *MemCache) Read(
 	ctx context.Context,
@@ -92,10 +92,10 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.Cache.Read.Add(numRead)
-			c.Cache.Hit.Add(numHit)
-			c.Cache.MemRead.Add(numRead)
-			c.Cache.MemHit.Add(numHit)
+			c.FileService.Cache.Read.Add(numRead)
+			c.FileService.Cache.Hit.Add(numHit)
+			c.FileService.Cache.Memory.Read.Add(numRead)
+			c.FileService.Cache.Memory.Hit.Add(numHit)
 		}, m.counterSets...)
 	}()
 
@@ -106,7 +106,7 @@ func (m *MemCache) Read(
 		if entry.ToObject == nil {
 			continue
 		}
-		key := CacheKey{
+		key := IOVectorCacheKey{
 			Path:   vector.FilePath,
 			Offset: entry.Offset,
 			Size:   entry.Size,
@@ -141,7 +141,7 @@ func (m *MemCache) Update(
 		if entry.Object == nil {
 			continue
 		}
-		key := CacheKey{
+		key := IOVectorCacheKey{
 			Path:   vector.FilePath,
 			Offset: entry.Offset,
 			Size:   entry.Size,

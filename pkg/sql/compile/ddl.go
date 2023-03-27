@@ -17,8 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
-	"math"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+	"math"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -47,10 +47,21 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
-	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
+	ctx := context.WithValue(c.ctx, defines.SqlKey{}, c.sql)
+	datType := ""
+	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+		datType = catalog.SystemDBTypeSubscription
+	}
+	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
+	err := c.e.Create(ctx,
 		dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+
+	// subscription database does not need to create auto increment table
+	if datType == catalog.SystemDBTypeSubscription {
+		return nil
 	}
 	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
 }
@@ -63,7 +74,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
-	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Drop the old view, and create the new view.
@@ -350,7 +372,24 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
+
+	if checkIndexInitializable(dbName, tblName) {
+		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
+		if err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func checkIndexInitializable(dbName string, tblName string) bool {
+	if dbName == "mo_task" {
+		return false
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
+		return false
+	}
+	return true
 }
 
 func (s *Scope) CreateTempTable(c *Compile) error {
@@ -516,6 +555,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		// other situation is not supported now and check in plan
 	}
 
+	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -557,6 +600,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
+			return err
+		}
+	}
+	// execute additional sql pipeline, currently, only delete operations are performed
+	if s.AttachedScope != nil {
+		_, err = s.AttachedScope.Delete(c)
+		if err != nil {
 			return err
 		}
 	}
@@ -826,6 +876,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 		}
 		return err
 	}
+
 	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		if qry.GetIfExists() {
@@ -896,6 +947,15 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
@@ -906,7 +966,19 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// execute additional sql pipeline, currently, only delete operations are performed
+			if s.AttachedScope != nil {
+				_, err = s.AttachedScope.Delete(c)
+				if err != nil {
+					return err
+				}
+			}
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		}
+		return nil
 	}
 }
 

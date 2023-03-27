@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -173,6 +174,8 @@ func (s *service) Close() error {
 	if err := s.stopRPCs(); err != nil {
 		return err
 	}
+	// stop I/O pipeline
+	blockio.Stop()
 	return s.server.Close()
 }
 
@@ -279,7 +282,6 @@ func (s *service) initEngine(
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
@@ -400,7 +402,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
 				}
 			case txn.TxnMethod_Commit:
-				err = storage.Commit(ctx, req.Txn)
+				_, err = storage.Commit(ctx, req.Txn)
 				if err == nil {
 					resp.Txn.Status = txn.TxnStatus_Committed
 				}

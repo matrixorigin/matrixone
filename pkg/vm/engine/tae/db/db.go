@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"io"
 	"sync/atomic"
 
@@ -68,6 +69,7 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
+	Pipeline    *blockio.IoPipeline
 
 	Fs *objectio.ObjectFS
 

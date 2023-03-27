@@ -198,7 +198,6 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 			bat.Close()
 		}
 	}()
-
 	var vec containers.Vector
 	for i, col := range schema.ColDefs {
 		vec, err = blk.LoadPersistedColumnData(i)
@@ -345,7 +344,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		types.TS,
 		*roaring.Bitmap,
 		*catalog.ColDef,
-	) func(any, int) error) (err error) {
+	) func(any, bool, int) error) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
