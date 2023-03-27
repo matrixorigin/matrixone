@@ -23,41 +23,11 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
-
-const (
-	defaultUsername        = "dump"
-	defaultPassword        = "111"
-	defaultHost            = "127.0.0.1"
-	defaultPort            = 6001
-	defaultNetBufferLength = mpool.MB
-	minNetBufferLength     = mpool.KB * 16
-	maxNetBufferLength     = mpool.MB * 16
-	defaultCsv             = false
-	timeout                = 10 * time.Second
-)
-
-var (
-	conn      *sql.DB
-	nullBytes = []byte("\\N")
-)
-
-type Column struct {
-	Name string
-	Type string
-}
-
-type Table struct {
-	Name string
-	Kind string
-}
-
-type Tables []Table
 
 func (t *Tables) String() string {
 	return fmt.Sprint(*t)
@@ -136,7 +106,7 @@ func main() {
 		return
 	}
 	if len(tables) == 0 { //dump all tables
-		createDb, err = getCreateDB(database)
+		createDb, err = getCreateDB(ctx, database)
 		if err != nil {
 			return
 		}
@@ -179,6 +149,7 @@ func main() {
 			showCreateTable(create, true)
 		default:
 			err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
+			return
 		}
 	}
 }
@@ -231,14 +202,15 @@ func getTables(db string, tables Tables) (Tables, error) {
 	return tables, nil
 }
 
-func getCreateDB(db string) (string, error) {
+func getCreateDB(ctx context.Context, db string) (string, error) {
 	r := conn.QueryRow("show create database `" + db + "`")
 	var create string
 	err := r.Scan(&db, &create)
 	if err != nil {
 		return "", err
 	}
-	return create, nil
+	// What if it is a subscription database?
+	return create, err
 }
 
 func getCreateTable(db, tbl string) (string, error) {
@@ -331,7 +303,8 @@ func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string) er
 			return err
 		}
 		for i, v := range args {
-			_, err = fmt.Fprintf(f, "%s", convertValue2(v, cols[i].Type))
+			dt, format := convertValue2(v, cols[i].Type)
+			_, err = fmt.Fprintf(f, format, dt)
 			if err != nil {
 				return err
 			}
@@ -398,19 +371,20 @@ func convertValue(v any, typ string) string {
 	}
 }
 
-func convertValue2(v any, typ string) sql.RawBytes {
+func convertValue2(v any, typ string) (sql.RawBytes, string) {
 	ret := *(v.(*sql.RawBytes))
 	if ret == nil {
-		return nullBytes
+		return nullBytes, defaultFmt
 	}
 	typ = strings.ToLower(typ)
 	switch typ {
 	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "double", "bool", "boolean", "", "float":
 		// why empty string in column type?
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
-		return ret
+		return ret, defaultFmt
+	case "json":
+		return ret, jsonFmt
 	default:
-		// quote string with double quote
-		return append(append([]byte{'"'}, ret...), '"')
+		return ret, quoteFmt
 	}
 }
