@@ -37,6 +37,13 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+var (
+	updateMoIndexesWithTableIdFormat      = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v;`
+	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	createIndexTableForamt                = "create table %s.`%s` (%s);"
+)
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	var span trace.Span
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
@@ -198,62 +205,77 @@ func (s *Scope) AlterTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			// build and create index table
 			if act.AddIndex.IndexTableExist {
+				var sql string
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				planCols := def.GetCols()
-				exeCols := planColsToExeCols(planCols)
-				exeDefs, err := planDefsToExeDefs(def)
-				if err != nil {
-					return err
-				}
-				if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
-					return moerr.NewTableAlreadyExists(c.ctx, def.Name)
-				}
-				if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-					return err
-				}
-			}
-			// insert data into index table
-			// execute additional sql pipeline, currently, only delete operations are performed
-			//if s.AttachedScope != nil {
-			//	_, err = s.AttachedScope.Insert(c)
-			//	if err != nil {
-			//		return err
-			//	}
-			//}
-			if indexDef.Unique {
-				targetAttrs := getIndexColsFromOriginTable(oldDefs, indexDef.Parts)
-				ret, err := rel.Ranges(c.ctx, nil)
-				if err != nil {
-					return err
-				}
-				rds, err := rel.NewReader(c.ctx, 1, nil, ret)
-				if err != nil {
-					return err
-				}
-				bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
-				if err != nil {
-					return err
-				}
-				err = rds[0].Close()
-				if err != nil {
-					return err
-				}
-				if bat != nil {
-					indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, act.AddIndex.OriginTablePrimaryKey, c.proc)
-					indexR, err := dbSource.Relation(c.ctx, indexDef.IndexTableName)
-					if err != nil {
-						return err
+				for i, planCol := range planCols {
+					if i == 1 {
+						sql += ","
 					}
-					if cnt != 0 {
-						if err := indexR.Write(c.ctx, indexBat); err != nil {
-							return err
+					sql += planCol.Name + " "
+					typeId := types.T(planCol.Typ.Id)
+					switch typeId {
+					case types.T_char:
+						sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+					case types.T_varchar:
+						sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+					case types.T_binary:
+						sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+					case types.T_varbinary:
+						sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+					case types.T_decimal64:
+						sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					case types.T_decimal128:
+						sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					default:
+						sql += typeId.String()
+					}
+					if i == 0 {
+						sql += " primary key"
+					}
+				}
+
+				createSQL := fmt.Sprintf(createIndexTableForamt, dbName, indexDef.IndexTableName, sql)
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(createSQL)
+				if err != nil {
+					return err
+				}
+				var insetSQL string
+				var temp string
+				for i, part := range indexDef.Parts {
+					if i == 0 {
+						temp += part
+					} else {
+						temp += "," + part
+					}
+				}
+
+				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+				} else {
+					pkeyName := tableDef.Pkey.PkeyColName
+					var pKeyMsg string
+					if pkeyName == catalog.CPrimaryKeyColName {
+						pKeyMsg = "serial("
+						for i, part := range tableDef.Pkey.Names {
+							if i == 0 {
+								pKeyMsg += part
+							} else {
+								pKeyMsg += "," + part
+							}
 						}
+						pKeyMsg += ")"
+					} else {
+						pKeyMsg = pkeyName
 					}
-					indexBat.Clean(c.proc.Mp())
+
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, dbName, indexDef.IndexTableName, temp, pKeyMsg, dbName, tblName, temp)
 				}
-				// other situation is not supported now and check in plan
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(insetSQL)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -302,6 +324,8 @@ func (s *Scope) AlterTable(c *Compile) error {
 			if addIndex != nil {
 				t.Indexes = append(t.Indexes, addIndex)
 			}
+			newCt.Cts = append(newCt.Cts, t)
+		case *engine.PrimaryKeyDef:
 			newCt.Cts = append(newCt.Cts, t)
 		}
 	}
@@ -1191,8 +1215,12 @@ func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []strin
 		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
 			for _, ct := range constraintDef.Cts {
 				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
-					for _, name := range pk.Pkey.Names {
-						colNameMap[name] = 1
+					if pk.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+						colNameMap[catalog.CPrimaryKeyColName] = 1
+					} else {
+						for _, name := range pk.Pkey.Names {
+							colNameMap[name] = 1
+						}
 					}
 					break
 				}

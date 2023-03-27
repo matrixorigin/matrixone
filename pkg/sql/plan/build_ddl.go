@@ -969,6 +969,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
+
 		indexDef.IndexName = indexInfo.Name
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
@@ -1403,6 +1404,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
 	}
+	if tableDef.CompositePkey != nil {
+		colMap[tableDef.CompositePkey.Name] = tableDef.CompositePkey
+	}
+
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -1578,6 +1583,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
+	}
+	if tableDef.CompositePkey != nil {
+		colMap[tableDef.CompositePkey.Name] = tableDef.CompositePkey
 	}
 
 	alterTable.TableDef = tableDef

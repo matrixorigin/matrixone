@@ -495,10 +495,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	}
 
 	if table.Pkey != nil {
-		newTable.Pkey = &plan.PrimaryKeyDef{
-			Names: make([]string, len(table.Pkey.Names)),
-		}
-		copy(newTable.Pkey.Names, table.Pkey.Names)
+		newTable.Pkey = DeepCopyPrimaryKeyDef(table.Pkey)
 	}
 
 	if table.CompositePkey != nil {
