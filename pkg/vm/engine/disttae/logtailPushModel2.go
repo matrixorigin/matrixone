@@ -37,6 +37,9 @@ func (client *pushClient) init(serviceAddr string) error {
 	client.receivedLogTailTime.initLogTailTimestamp()
 	client.subscribed.initTableSubscribeRecord()
 
+	if client.subscriber == nil {
+		client.subscriber = new(logTailSubscriber)
+	}
 	err := client.subscriber.init(serviceAddr)
 	if err != nil {
 		return err
@@ -47,12 +50,11 @@ func (client *pushClient) init(serviceAddr string) error {
 // checkTxnTimeIsLegal will block the process until log tail time of pushClient >= txn time.
 func (client *pushClient) checkTxnTimeIsLegal(
 	ctx context.Context, txnTime timestamp.Timestamp) error {
-	ticker := time.NewTicker(periodToCheckTxnTimestamp)
-	defer ticker.Stop()
-
 	if client.receivedLogTailTime.greatEq(txnTime) {
 		return nil
 	}
+	ticker := time.NewTicker(periodToCheckTxnTimestamp)
+	defer ticker.Stop()
 
 	for i := maxTimeToNewTransaction; i > 0; i -= periodToCheckTxnTimestamp {
 		select {
@@ -72,7 +74,36 @@ func (client *pushClient) getLatestLogTailTimestamp() timestamp.Timestamp {
 	return client.receivedLogTailTime.getTimestamp()
 }
 
-// subscriber related
+// TryToSubscribeTable subscribe a table and block until subscribe succeed.
+func (client *pushClient) TryToSubscribeTable(
+	ctx context.Context,
+	dbId, tblId uint64) error {
+	if client.subscribed.getTableSubscribe(dbId, tblId) {
+		return nil
+	}
+	if err := client.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
+	defer ticker.Stop()
+
+	noticeRange := int(noticeTimeToCheckTableSubscribeSucceed / periodToCheckTableSubscribeSucceed)
+	for j := 1; ; j++ {
+		for i := 0; i < noticeRange; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+				if client.subscribed.getTableSubscribe(dbId, tblId) {
+					return nil
+				}
+			}
+		}
+		logutil.Warnf("didn't receive tbl[db: %d, tbl: %d] subscribe response for a long time [%d * %s]",
+			dbId, tblId, j, noticeTimeToCheckTableSubscribeSucceed)
+	}
+}
+
 func (client *pushClient) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	select {
