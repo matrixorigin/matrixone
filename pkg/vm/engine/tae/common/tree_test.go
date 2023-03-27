@@ -25,8 +25,11 @@ import (
 func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
-	tree.AddSegment(1, 2, 3)
-	tree.AddBlock(4, 5, 6, 7)
+	seg1 := NewSegmentid()
+	tree.AddSegment(1, 2, NewSegmentid())
+	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 0, 0))
+	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 1, 0))
+	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 2, 0))
 	t.Log(tree.String())
 	assert.Equal(t, 2, tree.TableCount())
 

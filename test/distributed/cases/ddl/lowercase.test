@@ -1,0 +1,457 @@
+-- lower case sensitivity
+-- DEFAULT:1
+
+-- DB_name
+DROP DATABASE IF EXISTS TEST01;
+CREATE DATABASE TEST01;
+show CREATE DATABASE test01;
+DROP DATABASE test01;
+
+-- DB_name
+DROP DATABASE IF EXISTS test02;
+CREATE DATABASE test02;
+show CREATE DATABASE TEST02;
+DROP DATABASE test02;
+
+-- mixed uppercase
+DROP DATABASE IF EXISTS mysql_TEST;
+CREATE DATABASE mysql_TEST;
+show CREATE DATABASE mysql_TEST;
+DROP DATABASE mysql_TEST;
+
+-- TEMPORARY table
+DROP DATABASE IF EXISTS test03;
+DROP TABLE IF EXISTS t1;
+CREATE DATABASE test03;
+USE test03;
+CREATE TEMPORARY TABLE t1(a float);
+INSERT INTO T1 VALUES(213823.12);
+INSERT INTO t1 VALUES(-45412.38920);
+SELECT * FROM t1;
+DROP TABLE T1;
+
+-- external table
+drop table IF EXISTS table01;
+CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+SELECT * FROM Table01;
+SELECT Clo1 FROM table01;
+DROP table table01;
+
+-- Table name
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+show CREATE TABLE t1;
+INSERT INTO t1 VALUES (1, 'a');
+INSERT INTO t1 VALUES (2, 'b');
+INSERT INTO t1 VALUES (3, 'c');
+INSERT INTO T1 VALUES (4, 'd');
+
+SELECT * FROM t1;
+SELECT * FROM T1;
+SELECT T1.id FROM T1 LIMIT 1;
+SELECT T1.id FROM t1 LIMIT 1;
+SELECT id FROM T1;
+select ID FROM t1;
+SELECT Id FROM t1;
+SELECT COUNT(*) FROM t1;
+SELECT COUNT(*) FROM T1;
+SELECT COUNT(t1.id) FROM t1;
+SELECT COUNT(T1.Id) FROM t1;
+SELECT * FROM t1 WHERE Id = 2;
+
+DROP TABLE IF EXISTS t2;
+CREATE table t2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+INSERT INTO T2 SELECT * from T1;
+SELECT * FROM T2;
+DROP TABLE t1;
+
+DROP TABLE IF EXISTS t2;
+DROP TABLE IF EXISTS t3;
+CREATE TABLE T2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
+CREATE TABLE t3(id int primary key, Word varchar(40) NOT NULL);
+show CREATE TABLE t2;
+show CREATE TABLE t3;
+INSERT INTO T2 VALUES (1, 'a');
+INSERT INTO t2 VALUES (2, 'b');
+INSERT INTO t2 VALUES (3, 'c');
+INSERT INTO T2 VALUES (4, 'd');
+INSERT INTO t3 VALUES (1,'match');
+DELETE FROM t2 WHERE id = 1;
+DELETE FROM T2 WHERE ID = 2;
+
+SELECT * FROM T2;
+SELECT * FROM t3;
+
+SELECT T2.id FROM T2 LIMIT 1;
+SELECT Id, WORD FROM t2;
+SELECT * FROM t3 WHERE WORD = 'match';
+
+-- Alias case sensitive
+SELECT t3.id AS t3_ID FROM T3 LIMIT 1;
+SELECT t3.ID AS t3_ID FROM t3 LIMIT 1;
+
+SELECT * FROM t2 left join t3 ON (test.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+DROP TABLE t2;
+DROP TABLE t3;
+
+-- foreign key
+DROP TABLE IF EXISTS t4;
+DROP TABLE IF EXISTS t5;
+CREATE TABLE t4(a int primary key,b varchar(5));
+CREATE TABLE t5(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+ALTER table t5 DROP FOREIGN KEY fC;
+ALTER table t5 ADD constraint fC foreign key(c) REFERENCES t4(a);
+show CREATE TABLE t4;
+show CREATE TABLE T5;
+DROP table t5;
+DROP table t4;
+
+-- create USER
+DROP USER IF EXISTS u_name;
+CREATE USER u_name IDENTIFIED BY '123456';
+CREATE USER U_NAME IDENTIFIED BY '123456';
+CREATE USER U_name IDENTIFIED BY '123456';
+SELECT user_host,user_name,status FROM mo_catalog.mo_user WHERE user_name = 'U_name';
+SELECT user_host,user_name,status FROM mo_catalog.mo_user;
+DROP USER u_name;
+DROP DATABASE test03;
+
+-- Test all caps database name
+DROP database IF EXISTS test03;
+create database test03;
+use test03;
+create table t6 (a int);
+INSERT INTO t6 VALUES(1);
+INSERT INTO t6 VALUES(24845615);
+INSERT INTO T6 VALUES(-289173);
+select T6.a from test03.T6;
+select t6.a from test03.T6;
+select test03.t6.a from TEST03.t6;
+select TEST03.t6.a from TEST03.t6;
+select TEST03.T6.a from TEST03.T6;
+select TEST03.T6.a from T6;
+select TEST03.t6.a from TEST03.t6;
+DROP TABLE t6;
+
+-- multiupdate/delete & --lower-case-table-names
+DROP TABLE IF EXISTS t7;
+DROP TABLE IF EXISTS t8;
+create table t7 (a int);
+create table t8 (a int);
+INSERT INTO t7 VALUES(1);
+INSERT INTO t8 VALUES(1);
+update t7 as p1, t8 as p2 SET p1.a=1,p2.a=1 where p1.a=p2.a;
+update t7 as P1, t8 as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
+SELECT * FROM t7;
+SELECT * FROM t8;
+DROP TABLE t7;
+DROP TABLE t8;
+drop database test03;
+
+-- aliases case insensitive
+DROP DATABASE IF EXISTS test04;
+CREATE DATABASE test04;
+USE test04;
+DROP table IF EXISTS t9;
+DROP table IF EXISTS t10;
+CREATE TABLE t9 (a int);
+CREATE TABLE t10(a int);
+INSERT INTO t9 VALUES(100);
+INSERT INTO t10 VALUES(1000);
+SELECT t9.a AS a,t10.A as B from t9,t10;
+DROP TABLE t9;
+DROP TABLE t10;
+
+-- index(PRIMARY KEY, UNIQUE index, index)
+DROP TABLE if EXISTS t10;
+create table t10(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into t10 values(1,"Abby", 24);
+insert into t10 values(2,"Bob", 25);
+create unique index idx on t10(name);
+select * from t10;
+show CREATE TABLE t10;
+DROP TABLE t10;
+
+DROP table IF EXISTS t11;
+CREATE table t11(col1 int PRIMARY KEY,col2 CHAR,col3 float);
+INSERT INTO t11 VALUES(1,'a',898021.8392);
+INSERT INTO t11 VALUES(2, NULL, 213145.45);
+select * from t11;
+show CREATE table t11;
+DROP TABLE t11;
+
+DROP TABLE IF EXISTS t12;
+CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
+CREATE INDEX ABc ON t12(col2);
+DROP INDEX abc on t12;
+select * from t12;
+show CREATE table t12;
+DROP TABLE t12;
+
+-- create account
+DROP ACCOUNT IF EXISTS tenant_test;
+CREATE ACCOUNT tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
+ALTER ACCOUNT tenant_TEST comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+CREATE ACCOUNT tenant_TEST admin_name = 'root' identified by '111' open comment 'tenant_test';
+CREATE ACCOUNT TENANT_TEST admin_name = 'root' identified by '111' open comment 'tenant_test';
+SELECT account_name,status,comments FROM mo_catalog.mo_account WHERE account_name = 'tenant_test';
+DROP ACCOUNT IF EXISTS TENANT_TEST;
+
+
+-- create role
+DROP ROLE IF EXISTS rolex;
+CREATE ROLE rolex;
+CREATE ROLE Rolex;
+CREATE ROLE ROLEX;
+SELECT role_name,COmments FROM mo_catalog.mo_role;
+SELECT role_name,COmments FROM mo_catalog.mo_role WHERE role_name = 'Rolex';
+DROP ROLE rolex;
+
+-- create sequence
+DROP SEQUENCE IF EXISTS SEQ;
+CREATE SEQUENCE SEQ increment 100 start 30;
+CREATE SEQUENCE seq increment 100 start 30;
+SELECT * FROM SEQ;
+SELECT laSt_seq_nuM,min_value,start_value FROM Seq;
+DROP SEQUENCE SEQ;
+
+-- create view
+DROP TABLE IF EXISTS t12;
+DROP TABLE IF EXISTS t13;
+DROP view IF EXISTS view1;
+CREATE TABLE t12(a INTEGER);
+INSERT INTO t12 VALUES (1),(2);
+CREATE TABLE t13(a INTEGER);
+INSERT INTO t13 VALUES (1);
+CREATE VIEW view1 AS SELECT t12.a, t13.a AS b FROM t12 LEFT JOIN t13 USING(a);
+CREATE VIEW VIEW1 AS SELECT t12.a, t13.a AS b FROM t12 LEFT JOIN t13 USING(a);
+DROP VIEW view1;
+DROP TABLE t12;
+DROP TABLE t13;
+
+-- drop view
+DROP TABLE IF EXISTS TaB;
+DROP VIEW IF EXISTS vie;
+CREATE TABLE TaB(Field int);
+CREATE VIEW ViE AS SELECT * FROM TAb;
+show CREATE TABLE VIe;
+DROP VIEW vie;
+DROP table TAB;
+
+-- alter view
+DROP TABLE IF EXISTS t13;
+DROP VIEW IF EXISTS view01;
+CREATE TABLE t13 (a int);
+INSERT INTO t13 VALUES(1),(2),(3),(4);
+CREATE VIEW view01 AS SELECT * FROM t13;
+ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
+show CREATE TABLE vieW01;
+SELECT * FROM view01;
+SELECT * FROM vieW01 WHERE A = 1 OR a = 2;
+DROP view view01;
+drop table t13;
+drop database test04;
+
+-- with symbol ``,DB_name
+DROP DATABASE IF EXISTS `TEST01`;
+CREATE DATABASE `TEST01`;
+show CREATE DATABASE `test01`;
+DROP DATABASE `test01`;
+
+-- with symbol ``,DB_name
+DROP DATABASE IF EXISTS `test02`;
+CREATE DATABASE `test02`;
+show CREATE DATABASE `TEST02`;
+DROP DATABASE `test02`;
+
+-- with symbol ``,mixed uppercase
+DROP DATABASE IF EXISTS `mysql_TEST`;
+CREATE DATABASE `mysql_TEST`;
+show CREATE DATABASE `mysql_TEST`;
+DROP DATABASE `mysql_TEST`;
+
+-- with symbol ``
+DROP DATABASE IF EXISTS `test05`;
+CREATE DATABASE `test05`;
+use `Test05`;
+CREATE TABLE `t11`(aa float);
+INSERT INTO `t11` VALUES(12.322);
+INSERT INTO `T11` VALUES(-56.23);
+SELECT * FROM `t11`;
+DROP table t11;
+
+-- with symbol ``,Test all caps database name
+DROP TABLE IF EXISTS `t12`;
+create table `t12` (a int);
+INSERT INTO `t12` VALUES(1);
+INSERT INTO `t12` VALUES(24845615);
+INSERT INTO `T12` VALUES(-289173);
+select `T12`.a from `test05`.T12;
+select `t12`.a from `test05`.T12;
+select test05.t12.a from `TEST05`.t12;
+select `TEST05`.t12.a from TEST05.t12;
+select TEST05.T12.a from TEST05.`T12`;
+select TEST05.T12.a from `T12`;
+select TEST05.t12.a from `TEST05`.t12;
+DROP TABLE t12;
+DROP DATABASE TEST05;
+
+-- with symbol ``,aliases case insensitive
+DROP DATABASE IF EXISTS `test06`;
+CREATE DATABASE `test06`;
+USE test06;
+DROP table IF EXISTS `t13`;
+DROP table IF EXISTS `t14`;
+CREATE TABLE `t13` (a int);
+CREATE TABLE `t14` (a int);
+INSERT INTO `t13` VALUES(100);
+INSERT INTO `t14` VALUES(1000);
+SELECT `t13`.a AS a,`t14`.A as B from `t13`,`t14`;
+DROP TABLE `t13`;
+DROP TABLE `t14`;
+
+-- with symbol ``,multiupdate/delete & --lower-case-table-names
+DROP TABLE IF EXISTS `t15`;
+DROP TABLE IF EXISTS `t16`;
+create table `t15` (a int);
+create table `t16` (a int);
+INSERT INTO `t15` VALUES(1);
+INSERT INTO `t16` VALUES(1);
+update `t15` as p1, `t16` as p2 SET p1.a=1,P2.a=1 where p1.a=P2.a;
+update `t15` as P1, `t16` as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
+SELECT * FROM `t15`;
+SELECT * FROM `T16`;
+DROP TABLE `t15`;
+DROP TABLE `t16`;
+
+-- with symbol ``,index(PRIMARY KEY, UNIQUE index, index)
+DROP TABLE if EXISTS `t17`;
+create table `t17`(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into `t17` values(1,"Abby", 24);
+insert into `t17` values(2,"Bob", 25);
+create unique index `Idx` on t17(name);
+select * from `t17`;
+show CREATE TABLE `t17`;
+DROP TABLE `t17`;
+
+-- with symbol ``, create sequence
+DROP SEQUENCE IF EXISTS `SEQ`;
+CREATE SEQUENCE `SEQ` increment 100 start 30;
+CREATE SEQUENCE `seq` increment 100 start 30;
+SELECT * FROM `SEQ`;
+SELECT `laSt_seq_nuM`,`min_value`,`start_value` FROM Seq;
+DROP SEQUENCE `SEQ`;
+
+DROP table IF EXISTS `t18`;
+CREATE table `t18`(col1 int PRIMARY KEY,col2 CHAR,col3 float);
+INSERT INTO `t18` VALUES(1,'a',898021.8392);
+INSERT INTO `t18` VALUES(2, NULL, 213145.45);
+select * from `t18`;
+show CREATE table `t18`;
+DROP TABLE `t18`;
+
+DROP TABLE IF EXISTS `t19`;
+CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
+CREATE INDEX `ABc` ON t19(col2);
+DROP INDEX `abc` ON t19;
+select * from `t19`;
+show CREATE table `t19`;
+DROP TABLE `t19`;
+
+-- create account
+DROP ACCOUNT IF EXISTS `tenant_test`;
+CREATE ACCOUNT `tenant_test` admin_name = 'root' identified by '111' open comment 'tenant_test';
+ALTER ACCOUNT `tenant_TEST` comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+CREATE ACCOUNT `tenant_TEST` admin_name = 'root' identified by '111' open comment 'tenant_test';
+CREATE ACCOUNT `TENANT_TEST` admin_name = 'root' identified by '111' open comment 'tenant_test';
+SELECT `account_name`,`status`,`comments` FROM `mo_catalog`.`mo_account` WHERE `account_name` = 'tenant_test';
+DROP ACCOUNT IF EXISTS TENANT_TEST;
+
+-- create role
+DROP ROLE IF EXISTS `rolex`;
+CREATE ROLE `rolex`;
+CREATE ROLE `Rolex`;
+CREATE ROLE `ROLEX`;
+SELECT role_name,comments FROM `mo_catalog`.`mo_role`;
+SELECT role_name,COmments FROM `mo_catalog`.`mo_role` WHERE `role_name` = 'Rolex';
+DROP ROLE `Rolex`;
+
+-- create USER
+DROP USER IF EXISTS `user_name`;
+CREATE USER `user_name` IDENTIFIED BY '123456';
+CREATE USER `USER_NAME` IDENTIFIED BY '123456';
+CREATE USER `USER_name` IDENTIFIED BY '123456';
+SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user`;
+SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user` WHERE user_name = 'User_name';
+DROP USER `user_name`;
+DROP DATABASE `test06`;
+
+-- create view
+DROP TABLE IF EXISTS `t20`;
+DROP TABLE IF EXISTS `t21`;
+DROP VIEW IF EXISTS `view1`;
+CREATE TABLE `t20`(a INTEGER);
+INSERT INTO `t20` VALUES (1),(2);
+CREATE TABLE `t21`(a INTEGER);
+INSERT INTO `t21` VALUES (1);
+CREATE VIEW `view1` AS SELECT t20.a, T21.a AS b FROM t20 LEFT JOIN t21 USING(a);
+CREATE VIEW `VIEW1` AS SELECT t20.a, t21.a AS b FROM t20 LEFT JOIN t21 USING(a);
+SELECT * FROM `view1`;
+DROP VIEW `view1`;
+DROP TABLE `t20`;
+DROP TABLE `t21`;
+
+-- DROP view
+DROP TABLE IF EXISTS `TaB`;
+DROP VIEW IF EXISTS `ViE`;
+CREATE TABLE `TaB`(Field int);
+INSERT INTO TAB VALUES(10);
+CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
+show CREATE TABLE `VIe`;
+DROP view `VIE`;
+DROP table `TAB`;
+
+-- alter view
+DROP TABLE IF EXISTS `t22`;
+DROP VIEW IF EXISTS `view01`;
+CREATE TABLE `t22` (a int);
+INSERT INTO `t22` VALUES(1),(2),(3),(4);
+CREATE VIEW `view01` AS SELECT * FROM `t22`;
+ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
+SELECT * FROM `view01`;
+SELECT * FROM `view01` WHERE A = 1;
+DROP view `vieW01`;
+
+-- TEMPORARY table
+DROP DATABASE IF EXISTS `test07`;
+DROP TABLE IF EXISTS `t1`;
+CREATE DATABASE `test07`;
+USE `test03`;
+CREATE TEMPORARY TABLE `t1`(a float);
+INSERT INTO `T1` VALUES(213823.12);
+INSERT INTO `t1` VALUES(-45412.38920);
+SELECT * FROM `t1`;
+DROP TABLE `t1`;
+DROP DATABASE `TEST07`;
+
+-- foreign key
+DROP TABLE IF EXISTS `t4`;
+DROP TABLE IF EXISTS `t5`;
+CREATE TABLE `t4`(a int primary key,b varchar(5));
+CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
+ALTER table `t5` DROP FOREIGN KEY fC;
+ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
+show CREATE TABLE `t4`;
+show CREATE TABLE `T5`;
+DROP table `t5`;
+DROP table `t4`;
+
+-- external table
+DROP DATABASE IF EXISTS `test08`;
+CREATE DATABASE `test08`;
+use  `test08`;
+DROP table IF EXISTS `table02`;
+CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+SELECT * FROM `Table02`;
+drop table table02;
+DROP DATABASE `TEST08`;

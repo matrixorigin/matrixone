@@ -16,8 +16,8 @@ package blockio
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -87,20 +87,6 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 	ctx.Keys = values
 	ctx.Count = values.Length()
 	err = writer.zonemap.BatchUpdate(ctx)
-	return
-}
-
-func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
-	if writer.zonemap == nil {
-		writer.zonemap = index.NewZoneMap(typ)
-	} else {
-		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalErrorNoCtx("wrong type")
-			return
-		}
-	}
-	writer.zonemap.SetMin(min)
-	writer.zonemap.SetMax(max)
 	return
 }
 

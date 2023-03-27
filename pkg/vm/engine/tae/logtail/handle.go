@@ -52,7 +52,7 @@ Main workflow:
                                   |                 |    |            |
                                   v                 v    v            v
                               +-------+           +-------+       +-------+
-                              | BLK-1 |           | BLK-2 |       | BLK-2 |
+                              | BLK-1 |           | BLK-2 |       | BLK-3 |
                               +---+---+           +---+---+       +---+---+
                                   |                   |               |
                                   v                   v               v
@@ -490,7 +490,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
@@ -499,7 +499,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
 	}
 
 }

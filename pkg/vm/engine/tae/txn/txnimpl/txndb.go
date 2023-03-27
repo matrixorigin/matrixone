@@ -15,9 +15,11 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -74,16 +76,6 @@ func (db *txnDB) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*com
 		return
 	}
 	return table.LogTxnEntry(entry, readed)
-}
-
-func (db *txnDB) LogSegmentID(tid, sid uint64) {
-	table, _ := db.getOrSetTable(tid)
-	table.LogSegmentID(sid)
-}
-
-func (db *txnDB) LogBlockID(tid, bid uint64) {
-	table, _ := db.getOrSetTable(tid)
-	table.LogBlockID(bid)
 }
 
 func (db *txnDB) Close() error {
@@ -321,7 +313,7 @@ func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableSegment(is1PC)
+	return table.CreateNonAppendableSegment(is1PC, nil)
 }
 
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
@@ -350,23 +342,12 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
+func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateNonAppendableBlock(id.SegmentID)
-}
-
-func (db *txnDB) CreateNonAppendableBlockWithMeta(
-	id *common.ID,
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateNonAppendableBlockWithMeta(id.SegmentID, metaLoc, deltaLoc)
+	return table.CreateNonAppendableBlock(id.SegmentID, opts)
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
@@ -377,7 +358,7 @@ func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return table.GetBlock(id)
 }
 
-func (db *txnDB) CreateBlock(tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
+func (db *txnDB) CreateBlock(tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -51,16 +50,6 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 			panic("concurrent mutation")
 		}
 	}
-}
-
-func rowIDToBlockID(rowID RowID) uint64 {
-	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
-	return id
-}
-
-func blockIDFromRowID(rowID types.Rowid) uint64 {
-	id, _ := catalog.DecodeRowid(rowID)
-	return id
 }
 
 func (p Partitions) Snapshot() []*PartitionState {

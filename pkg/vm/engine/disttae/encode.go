@@ -175,7 +175,7 @@ func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_json, types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_Rowid:
 		s := vector.MustStrCol(vec)
 		for _, v := range s {
 			packer.EncodeStringType([]byte(v))

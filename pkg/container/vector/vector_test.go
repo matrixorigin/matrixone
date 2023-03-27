@@ -598,7 +598,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Rowid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -640,6 +640,40 @@ func TestCopy(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestCloneWindowWithMpNil(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec1 := NewVec(types.T_int32.ToType())
+	AppendFixed(vec1, int32(1), false, mp)
+	AppendFixed(vec1, int32(2), true, mp)
+	AppendFixed(vec1, int32(3), false, mp)
+	require.False(t, vec1.NeedDup())
+
+	vec2, err := vec1.CloneWindow(0, vec1.Length(), nil)
+	require.NoError(t, err)
+	vec1.Free(mp)
+
+	t.Log(vec2.String())
+	require.True(t, vec2.NeedDup())
+	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
+	require.True(t, vec2.GetNulls().Contains(uint64(1)))
+	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
+
+	vec3 := NewVec(types.T_char.ToType())
+	AppendBytes(vec3, []byte("h"), false, mp)
+	AppendBytes(vec3, []byte("xx"), true, mp)
+	AppendBytes(vec3, []byte("uuu"), false, mp)
+	require.False(t, vec3.NeedDup())
+
+	vec4, err := vec3.CloneWindow(0, vec3.Length(), nil)
+	require.NoError(t, err)
+	vec3.Free(mp)
+
+	require.True(t, vec4.NeedDup())
+	require.Equal(t, 1, len(vec4.GetBytesAt(0)))
+	require.Equal(t, 3, len(vec4.GetBytesAt(2)))
+	require.True(t, vec4.GetNulls().Contains(uint64(1)))
 }
 
 /*

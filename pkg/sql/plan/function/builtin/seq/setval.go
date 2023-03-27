@@ -182,7 +182,7 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		return "", err
 	}
 
-	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from %s.%s", db, tblname))
+	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
@@ -263,7 +263,7 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 }
 
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update %s.%s set last_seq_num = %d", db, tbl, setv))
+	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}

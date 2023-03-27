@@ -56,11 +56,15 @@ func TestHandle(t *testing.T) {
 	maxsize := uint64(100)
 	evicter := NewSimpleEvictHolder()
 	mgr := NewNodeManager(maxsize, evicter)
-	baseId := common.ID{}
-	id1 := baseId.NextBlock()
-	id2 := baseId.NextBlock()
-	id3 := baseId.NextBlock()
-	id4 := baseId.NextBlock()
+	id1 := common.ID{}
+	seg := common.NewSegmentid()
+	id1.BlockID = common.NewBlockid(&seg, 0, 1)
+	id2 := id1
+	id2.BlockID = common.NewBlockid(&seg, 0, 2)
+	id3 := id1
+	id3.BlockID = common.NewBlockid(&seg, 0, 3)
+	id4 := id1
+	id4.BlockID = common.NewBlockid(&seg, 0, 4)
 	sz1, sz2, sz3, sz4 := uint64(30), uint64(30), uint64(50), uint64(80)
 	n1 := newTestNodeHandle(mgr, id1, sz1, t)
 	n2 := newTestNodeHandle(mgr, id2, sz2, t)
@@ -89,9 +93,7 @@ func TestHandle(t *testing.T) {
 	h4 := mgr.Pin(n4)
 	assert.NotNil(t, h4)
 	assert.Equal(t, sz4, mgr.Total())
-
-	t.Log(mgr.String())
-
+	// t.Log(mgr.String())
 	h4.Close()
 	h3 = mgr.Pin(n3)
 	assert.NotNil(t, h3)
@@ -103,12 +105,11 @@ func TestHandle(t *testing.T) {
 	assert.Nil(t, err)
 	h2 = mgr.Pin(n2)
 	assert.Nil(t, h2)
-	t.Log(mgr.String())
-
+	// t.Log(mgr.String())
 	n1.Close()
 	n2.Close()
 	n3.Close()
 	n4.Close()
 	assert.Equal(t, uint64(0), mgr.Total())
-	t.Log(mgr.String())
+	// t.Log(mgr.String())
 }
