@@ -72,6 +72,8 @@ type LockStorage interface {
 // Lock, a set of background goroutines are notified to start a deadlock detection for all
 // transactions in the Lock's wait queue.
 type LockService interface {
+	// GetConfig returns the lockservice config
+	GetConfig() Config
 	// Lock locks rows(row or row range determined by the Granularity in options) a table. Lockservice
 	// has no requirement for the format of rows, but requires all rows of a table on a lockservice
 	// to be sortable.
@@ -85,8 +87,18 @@ type LockService interface {
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
+
 	// Close close the lock service.
 	Close() error
+
+	// Observability methods
+
+	// GetWaitingList get specical txnID's waiting list
+	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
+	// ForceRefreshLockTableBinds force refresh all lock tables binds
+	ForceRefreshLockTableBinds()
+	// GetLockTableBind returns lock table bind
+	GetLockTableBind(tableID uint64) (pb.LockTable, error)
 }
 
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined

@@ -198,7 +198,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
-	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -241,7 +240,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Account:              tenant.GetTenant(),
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
+		Host:                 ses.protocol.Peer(),
 		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
@@ -265,9 +264,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
-	for _, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, sqlTypes []string, err error) context.Context {
+	retErr := moerr.NewParseError(ctx, err.Error())
+	sqlType := sqlTypes[0]
+	for i, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+		if i < len(sqlTypes) {
+			sqlType = sqlTypes[i]
+		}
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+		motrace.EndStatement(ctx, retErr, 0)
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -405,17 +410,25 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 func doUse(ctx context.Context, ses *Session, db string) error {
+	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
+	var dbMeta engine.Database
 	txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if _, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
+	}
+	if dbMeta.IsSubscription(ctx) {
+		_, err = checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx))
+		if err != nil {
+			return err
+		}
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
@@ -1226,6 +1239,23 @@ func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tre
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err = doShowPublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tree.ShowSubscriptions, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowSubscriptions(ctx, ses, ss)
 	if err != nil {
 		return err
 	}
@@ -2195,7 +2225,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -2244,7 +2275,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	if err != nil {
 		sql = removePrefixComment(sql)
 		sql = hideAccessKey(sql)
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -2388,12 +2419,22 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 		case *tree.DropDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -2461,6 +2502,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 			case *tree.Update:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			case *tree.DropTable, *tree.DropIndex:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2471,6 +2514,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		case *tree.DropTable, *tree.DropIndex:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
@@ -2499,6 +2544,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowCreatePublications:
 			selfHandle = true
 			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowSubscriptions:
+			selfHandle = true
+			if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.CreateAccount:
@@ -3061,6 +3111,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 			if node.NotCacheable {
 				return false
 			}
+			if node.ObjRef != nil && len(node.ObjRef.SubscriptionName) > 0 {
+				return false
+			}
 		}
 	}
 	return true
@@ -3082,7 +3135,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		ses.GetMemPool(),
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3120,7 +3174,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr

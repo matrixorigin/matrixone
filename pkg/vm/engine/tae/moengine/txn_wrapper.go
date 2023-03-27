@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -105,5 +106,9 @@ func (w *wrappedTx) Txn() txn.TxnMeta {
 }
 
 func (w *wrappedTx) AddLockTable(lock.LockTable) error {
+	panic("should not call")
+}
+
+func (w *wrappedTx) UpdateSnapshot(ts timestamp.Timestamp) error {
 	panic("should not call")
 }

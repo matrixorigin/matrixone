@@ -57,7 +57,7 @@ func (z *ZoneMap) GetIdx() uint16 {
 
 func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
 	var err error
-	block.columns[z.idx].(*ColumnBlock).meta.zoneMap = *z
+	block.columns[z.idx].meta.zoneMap = *z
 	return err
 }
 
@@ -108,8 +108,8 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
 	if err != nil {
 		return err
 	}
-	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.offset = uint32(offset)
-	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.length = uint32(length)
-	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(dataLen)
+	block.columns[b.idx].meta.bloomFilter.offset = uint32(offset)
+	block.columns[b.idx].meta.bloomFilter.length = uint32(length)
+	block.columns[b.idx].meta.bloomFilter.originSize = uint32(dataLen)
 	return err
 }

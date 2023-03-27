@@ -158,7 +158,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			}
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
-			if originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
 				// append row_id to deleteBatch
@@ -255,7 +255,7 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 	// if err != nil {
 	// 	return nil, err
 	// }
-
+	var originVec *vector.Vector
 	newBatch := batch.New(true, attrs)
 	for i, attr := range newBatch.Attrs {
 		if expr, exists := updateExpr[attr]; exists && i < columnCount {
@@ -268,7 +268,11 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 			}
 			newBatch.SetVector(int32(i), newVec)
 		} else {
-			originVec := oldBatch.Vecs[i]
+			if i < columnCount {
+				originVec = oldBatch.Vecs[i+columnCount]
+			} else {
+				originVec = oldBatch.Vecs[i]
+			}
 			newVec := vector.NewVec(*originVec.GetType())
 			err := newVec.UnionOne(originVec, int64(rowIdx), proc.Mp())
 			if err != nil {

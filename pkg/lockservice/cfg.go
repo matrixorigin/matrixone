@@ -21,35 +21,77 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
+var (
+	defaultLockListenAddress      = "127.0.0.1:6003"
+	defaultMaxLockRowBytes        = 1 << 10 // 1kb
+	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
+	defaultKeepRemoteLockDuration = time.Second
+	defaultKeepBindTimeout        = time.Second * 10
+)
+
 // Config lock service config
 type Config struct {
-	ServiceID              string
-	ServiceAddress         string
-	MaxFixedSliceSize      toml.ByteSize
-	KeepBindDuration       toml.Duration
-	KeepRemoteLockDuration toml.Duration
-	RemoteLockTimeout      toml.Duration
-	RPC                    morpc.Config
+	// ServiceID service id
+	ServiceID string `toml:"-"`
+	// RPC rpc config
+	RPC morpc.Config `toml:"-"`
+
+	// ListenAddress lock service listen address for receiving lock requests
+	ListenAddress string `toml:"listen-address"`
+	// ServiceAddress service address for communication, if this address is not set, use
+	// ListenAddress as the communication address.
+	ServiceAddress string `toml:"service-address"`
+	// MaxFixedSliceSize lockservice uses fixedSlice to store all lock information, a pool
+	// of fixedSlice will be built internally, there are various specifications of fixexSlice,
+	// this value sets how big the maximum specification of FixedSlice is.
+	MaxFixedSliceSize toml.ByteSize `toml:"max-fixed-slice-size"`
+	// KeepBindDuration Maintain the period of the locktable bound to the current service
+	KeepBindDuration toml.Duration `toml:"keep-bind-duration"`
+	// KeepRemoteLockDuration how often to send a heartbeat to maintain a lock on a remote
+	// locktable.
+	KeepRemoteLockDuration toml.Duration `toml:"keep-remote-lock-duration"`
+	// RemoteLockTimeout how long does it take to receive a heartbeat that maintains the
+	// remote lock before releasing the lock
+	RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
+	// MaxLockRowBytes each time a lock is added, some LockRow is stored in the lockservice, if
+	// too many LockRows are put in each time, it will cause too much memory overhead, this value
+	// limits the maximum size of LocRow put into the LockService each time, beyond this size it
+	// will be converted into a Range of locks
+	MaxLockRowBytes toml.ByteSize `toml:"remote-lock-timeout"`
+	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
+	// continuously hold the bind, and if no hold request is received after the configured time,
+	// then all bindings for the service will fail.
+	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
 }
 
-func (c *Config) adjust() {
+// Validate validate
+func (c *Config) Validate() {
 	if c.ServiceID == "" {
 		panic("missing service id")
 	}
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultLockListenAddress
+	}
 	if c.ServiceAddress == "" {
-		panic("missing service address")
+		c.ServiceAddress = c.ListenAddress
+	}
+	if c.MaxLockRowBytes == 0 {
+		c.MaxLockRowBytes = toml.ByteSize(defaultMaxLockRowBytes)
 	}
 	if c.MaxFixedSliceSize == 0 {
-		c.MaxFixedSliceSize = toml.ByteSize(1024 * 1024)
+		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second
 	}
 	if c.KeepRemoteLockDuration.Duration == 0 {
-		c.KeepRemoteLockDuration.Duration = time.Second
+		c.KeepRemoteLockDuration.Duration = defaultKeepRemoteLockDuration
 	}
 	if c.RemoteLockTimeout.Duration == 0 {
 		c.RemoteLockTimeout.Duration = c.KeepRemoteLockDuration.Duration * 10
+	}
+	if c.KeepBindTimeout.Duration == 0 {
+		c.KeepBindTimeout.Duration = defaultKeepBindTimeout
 	}
 	c.RPC.Adjust()
 }

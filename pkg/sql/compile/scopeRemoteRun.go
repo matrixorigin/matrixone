@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
@@ -89,6 +90,7 @@ func CnServerMessageHandler(
 	cs morpc.ClientSession,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
+	lockService lockservice.LockService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
 
@@ -99,7 +101,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
@@ -164,12 +166,12 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		}
 		defer func() {
 			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil

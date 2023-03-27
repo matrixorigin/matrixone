@@ -21,8 +21,10 @@ import (
 )
 
 func TestAdjustConfig(t *testing.T) {
-	c := Config{ServiceID: "s1", ServiceAddress: "address"}
-	c.adjust()
+	c := Config{ServiceID: "s1"}
+	c.Validate()
+	assert.NotEmpty(t, c.ListenAddress)
+	assert.NotEmpty(t, c.ServiceAddress)
 	assert.NotEmpty(t, c.KeepBindDuration)
 	assert.NotEmpty(t, c.KeepRemoteLockDuration)
 	assert.NotEmpty(t, c.MaxFixedSliceSize)

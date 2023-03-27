@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -31,6 +30,11 @@ const (
 type WriteOptions struct {
 	Type WriteType
 	Val  any
+}
+
+type ReadBlockOptions struct {
+	Id    uint32
+	Idxes map[uint16]bool
 }
 
 // Writer is to virtualize batches into multiple blocks
@@ -64,6 +68,13 @@ type Reader interface {
 		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
+	ReadBlocks(ctx context.Context,
+		extent Extent,
+		ids map[uint32]*ReadBlockOptions,
+		m *mpool.MPool,
+		zoneMapFunc ZoneMapUnmarshalFunc,
+		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
 	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
@@ -75,7 +86,7 @@ type Reader interface {
 // BlockObject is a batch written to fileservice
 type BlockObject interface {
 	// GetColumn gets a ColumnObject with idx
-	GetColumn(idx uint16) (ColumnObject, error)
+	GetColumn(idx uint16) (*ColumnBlock, error)
 
 	// GetRows gets the rows of the BlockObject
 	GetRows() (uint32, error)
@@ -104,8 +115,7 @@ type ColumnObject interface {
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
-}
 
-var (
-	endian = binary.LittleEndian
-)
+	MarshalMeta() []byte
+	UnmarshalMate(data []byte) error
+}

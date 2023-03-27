@@ -375,6 +375,8 @@ type Database interface {
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
 	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
+	IsSubscription(context.Context) bool
+	GetCreateSql(context.Context) string
 }
 
 type Engine interface {
@@ -411,6 +413,9 @@ type Engine interface {
 
 	// Get relation by table id
 	GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error)
+
+	// AllocateIDByKey allocate a globally unique ID by key.
+	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
 type Hints struct {

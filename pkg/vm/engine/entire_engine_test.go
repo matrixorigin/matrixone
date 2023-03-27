@@ -54,6 +54,8 @@ type testEngine struct {
 	parent *testEntireEngine
 }
 
+var _ Engine = new(testEngine)
+
 type testOperator struct {
 }
 
@@ -307,6 +309,10 @@ func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator,
 	return "", "", nil, nil
 }
 
+func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, nil
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
@@ -345,4 +351,8 @@ func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.Se
 
 func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
+}
+
+func (o *testOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+	panic("should not call")
 }

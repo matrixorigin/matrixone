@@ -120,6 +120,8 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		txnOperator: txnOperator,
 		id:          resp.ID,
 		name:        resp.Name,
+		typ:         resp.DatTyp,
+		createSql:   resp.CreateSql,
 	}
 
 	return db, nil
@@ -190,6 +192,11 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
 	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
+}
+
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	id, err := e.idGenerator.NewIDByKey(ctx, key)
+	return uint64(id), err
 }
 
 func getDNServices(cluster clusterservice.MOCluster) []metadata.DNService {

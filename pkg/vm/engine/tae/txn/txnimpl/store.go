@@ -15,10 +15,12 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -130,16 +132,6 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 	}
 	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
 	return
-}
-
-func (store *txnStore) LogSegmentID(dbId, tid, sid uint64) {
-	db, _ := store.getOrSetDB(dbId)
-	db.LogSegmentID(tid, sid)
-}
-
-func (store *txnStore) LogBlockID(dbId, tid, bid uint64) {
-	db, _ := store.getOrSetDB(dbId)
-	db.LogBlockID(tid, bid)
 }
 
 func (store *txnStore) Close() error {
@@ -308,8 +300,8 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 	return
 }
 
-func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntry(name, createSql, store.txn)
+func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntry(name, createSql, datTyp, store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -324,8 +316,8 @@ func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database
 	return
 }
 
-func (store *txnStore) CreateDatabaseWithID(name, createSql string, id uint64) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, id, store.txn)
+func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -531,24 +523,12 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableBlock(id)
-}
-
-func (store *txnStore) CreateNonAppendableBlockWithMeta(
-	dbId uint64,
-	id *common.ID,
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
-		return
-	}
-	return db.CreateNonAppendableBlockWithMeta(id, metaLoc, deltaLoc)
+	return db.CreateNonAppendableBlock(id, opts)
 }
 
 func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
@@ -559,7 +539,7 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
