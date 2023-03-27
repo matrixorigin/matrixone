@@ -223,13 +223,15 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 		slice = slice[offset+bias : offset+length+bias]
 		if sels == nil || sels.IsEmpty() {
 			for i, elem := range slice {
-				var v any
+				var vv any
+				isNull := false
 				if impl.IsNull(i + offset + bias) {
-					v = types.Null{}
+					isNull = true
+					vv = types.Null{}
 				} else {
-					v = elem
+					vv = elem
 				}
-				if err = op(v, i+offset); err != nil {
+				if err = op(vv, isNull, i+offset); err != nil {
 					break
 				}
 			}
@@ -242,13 +244,15 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 				} else if int(idx) >= end {
 					break
 				}
-				var v any
+				var vv any
+				isNull := false
 				if impl.IsNull(int(idx) + bias) {
-					v = types.Null{}
+					isNull = true
+					vv = types.Null{}
 				} else {
-					v = slice[int(idx)-offset]
+					vv = slice[int(idx)-offset]
 				}
-				if err = op(v, int(idx)); err != nil {
+				if err = op(vv, isNull, int(idx)); err != nil {
 					break
 				}
 			}
@@ -264,7 +268,7 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 			} else {
 				elem = impl.Get(i + bias)
 			}
-			if err = op(elem, i); err != nil {
+			if err = op(elem, impl.IsNull(i+bias), i); err != nil {
 				break
 			}
 		}
@@ -285,7 +289,7 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 		} else {
 			elem = impl.Get(int(idx) + bias)
 		}
-		if err = op(elem, int(idx)); err != nil {
+		if err = op(elem, impl.IsNull(int(idx)+bias), int(idx)); err != nil {
 			break
 		}
 	}

@@ -82,11 +82,15 @@ func BlockReadInner(
 	}
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
-		if col.GetType().Oid != types.T_Rowid {
-			columnBatch.Vecs[i], err = col.Dup(pool)
-		}
+		// Fixme: Due to # 8684, we are not able to use mpool yet
+		// Fixme: replace with cnVec.Dup(nil) when it implemented.
+		columnBatch.Vecs[i], err = col.CloneWindow(0, col.Length(), nil)
 		if err != nil {
 			return nil, err
+		}
+		if col.GetType().Oid == types.T_Rowid {
+			// rowid need free
+			col.Free(pool)
 		}
 		if len(deleteRows) > 0 {
 			columnBatch.Vecs[i].Shrink(deleteRows, true)

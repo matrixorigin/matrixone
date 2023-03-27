@@ -194,6 +194,14 @@ func (h *mockDBHandle) GetRelationByID(id uint64) (rel handle.Relation, err erro
 	return nil, nil
 }
 
+func (h *mockDBHandle) IsSubscription() bool {
+	return h.entry.IsSubscription()
+}
+
+func (h *mockDBHandle) GetCreateSql() string {
+	return h.entry.GetCreateSql()
+}
+
 func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
 	return new(mockSegIt)
 }
@@ -211,8 +219,8 @@ type mockTxn struct {
 	catalog *Catalog
 }
 
-func (txn *mockTxn) CreateDatabase(name, createSql string) (handle.Database, error) {
-	entry, err := txn.catalog.CreateDBEntry(name, createSql, txn)
+func (txn *mockTxn) CreateDatabase(name, createSql, datTyp string) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntry(name, createSql, datTyp, txn)
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +229,8 @@ func (txn *mockTxn) CreateDatabase(name, createSql string) (handle.Database, err
 	return h, nil
 }
 
-func (txn *mockTxn) CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error) {
-	entry, err := txn.catalog.CreateDBEntryWithID(name, createSql, id, txn)
+func (txn *mockTxn) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 	if err != nil {
 		return nil, err
 	}
