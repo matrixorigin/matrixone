@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -138,13 +137,13 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 func GenBlockInfo(rows [][]any) []BlockInfo {
 	infos := make([]BlockInfo, len(rows))
 	for i, row := range rows {
-		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
+		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
 		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
-		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(uint64)
+		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
 	}
 	return infos
 }
@@ -388,11 +387,18 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_Blockid:
+			col := vector.MustFixedCol[types.Blockid](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
 			col := vector.MustBytesCol(vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		default:
+			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))
 		}
 	}
 	return rows
@@ -407,14 +413,6 @@ func isTruncate(name string) (uint64, string, bool) {
 	str := reg.FindString(name)
 	id, _ := strconv.ParseUint(str, 10, 64)
 	return id, name[len(str)+Meta_Length:], true
-}
-
-func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {
-	tempBuf := make([]byte, 8)
-	copy(tempBuf[2:], rowid[6:12])
-	blockId = binary.BigEndian.Uint64(tempBuf)
-	offset = binary.BigEndian.Uint32(rowid[12:])
-	return
 }
 
 func BuildQueryResultPath(accountName, statementId string, blockIdx int) string {

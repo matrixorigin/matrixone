@@ -1,6 +1,8 @@
 
 name: PR Document Issue Check
 on:
+  issues:
+    types: [ closed ]
   pull_request_target:
     types: [ opened ]
     branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
@@ -8,6 +10,7 @@ on:
 jobs:
   ducu_issue_check:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request_target' }}
     steps:
       - uses: guguducken/pull-issue-reviewer@v0.1.0
         with:
@@ -16,4 +19,13 @@ jobs:
           id_label: "5138861359"
           reviewers: "lacrimosaprinz,dengn"
           mentions: "Prinz,DengNan"
-      
+  issue_close_check:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'issues' }}
+    steps:
+      - uses: guguducken/pull-issue-reviewer@issue_close_check
+        with:
+          token_action: ${{ secrets.TOKEN_ACTION }}
+          uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
+          id_label: "5138861359"
+          mentions: "Prinz,DengNan"

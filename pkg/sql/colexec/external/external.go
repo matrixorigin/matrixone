@@ -354,7 +354,7 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 	return arr, nil
 }
 
-func getCompressType(param *tree.ExternParam, filepath string) string {
+func GetCompressType(param *tree.ExternParam, filepath string) string {
 	if param.CompressType != "" && param.CompressType != tree.AUTO {
 		return param.CompressType
 	}
@@ -376,7 +376,7 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 }
 
 func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadCloser) (io.ReadCloser, error) {
-	switch strings.ToLower(getCompressType(param, filepath)) {
+	switch strings.ToLower(GetCompressType(param, filepath)) {
 	case tree.NOCOMPRESS:
 		return r, nil
 	case tree.GZIP, tree.GZ:
@@ -405,7 +405,10 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 	}
 }
 
-func makeType(Cols []*plan.ColDef, index int) types.Type {
+func makeType(Cols []*plan.ColDef, index int, flag bool) types.Type {
+	if flag {
+		return types.New(types.T_varchar, 0, 0)
+	}
 	return types.New(types.T(Cols[index].Typ.Id), Cols[index].Typ.Width, Cols[index].Typ.Scale)
 }
 
@@ -413,7 +416,7 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batc
 	batchData := batch.New(true, param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
-		typ := makeType(param.Cols, i)
+		typ := makeType(param.Cols, i, param.ParallelLoad)
 		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
 		batchData.Vecs[i] = vec
 	}
@@ -597,22 +600,9 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	plh.batchSize = cnt
-	if param.ParallelLoad {
-		bat = &batch.Batch{
-			Ht: &LoadItem{
-				Param: param,
-				Plh: &ParseLineHandler{
-					batchSize:      plh.batchSize,
-					moCsvLineArray: plh.moCsvLineArray,
-				},
-			},
-		}
-		bat.Zs = make([]int64, 1)
-	} else {
-		bat, err = GetBatchData(param, plh, proc)
-		if err != nil {
-			return nil, err
-		}
+	bat, err = GetBatchData(param, plh, proc)
+	if err != nil {
+		return nil, err
 	}
 	return bat, nil
 }
@@ -645,7 +635,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
 		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i), rows, nil)
+			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -660,7 +650,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 				rows = vecTmp.Length()
 			}
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i), rows, nil)
+			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -1045,6 +1035,14 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
+		if param.ParallelLoad {
+			err := vector.SetStringAt(vec, rowIdx, field, mp)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
 		switch id {
 		case types.T_bool:
 			cols := vector.MustFixedCol[bool](vec)

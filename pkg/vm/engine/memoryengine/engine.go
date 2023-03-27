@@ -192,6 +192,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
 }
 
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	id, err := e.idGenerator.NewIDByKey(ctx, key)
+	return uint64(id), err
+}
+
 func getDNServices(cluster clusterservice.MOCluster) []metadata.DNService {
 	var values []metadata.DNService
 	cluster.GetDNService(clusterservice.NewSelector(),

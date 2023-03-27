@@ -36,7 +36,7 @@ type PartitionReader struct {
 	typsMap              map[string]types.Type
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
-	skipBlocks           map[uint64]uint8
+	skipBlocks           map[types.Blockid]uint8
 	iter                 partitionStateIter
 	sourceBatchNameIndex map[string]int
 
@@ -170,7 +170,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				if _, ok := p.deletes[rowIds[j]]; ok {
 					continue
 				}
-				b.Zs = append(b.Zs, int64(j))
+				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
 			return b, nil
 		}

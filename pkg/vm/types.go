@@ -53,7 +53,6 @@ const (
 	Insert
 	Update
 	External
-	ExternalFill
 
 	Minus
 	Intersect

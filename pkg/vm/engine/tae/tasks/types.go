@@ -15,7 +15,10 @@
 package tasks
 
 import (
+	"hash/fnv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
@@ -96,7 +99,10 @@ var DefaultScopeSharder = func(scope *common.ID) int {
 	if scope == nil {
 		return 0
 	}
-	return int(scope.TableID + scope.SegmentID)
+	hasher := fnv.New64a()
+	hasher.Write(types.EncodeUint64(&scope.TableID))
+	hasher.Write(types.EncodeUuid(&scope.SegmentID))
+	return int(hasher.Sum64())
 }
 
 func IsSameScope(left, right *common.ID) bool {

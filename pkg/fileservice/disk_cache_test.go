@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -115,4 +117,120 @@ func TestDiskCache(t *testing.T) {
 	assert.Nil(t, err)
 	testUpdate(cache)
 
+}
+
+func TestDiskCachePreload(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	// new
+	cache, err := NewDiskCache(dir, 1024, nil)
+	assert.Nil(t, err)
+
+	// set content
+	err = cache.SetFileContent(ctx, "foo", func(_ context.Context, vec *IOVector) error {
+		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.SetFileContent.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+
+	// get content
+	r, err := cache.GetFileContent(ctx, "foo", 0)
+	assert.Nil(t, err)
+	data, err := io.ReadAll(r)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("foo"), data)
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.GetFileContent.Load())
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+
+	r, err = cache.GetFileContent(ctx, "foo", 1)
+	assert.Nil(t, err)
+	data, err = io.ReadAll(r)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("oo"), data)
+	assert.Equal(t, int64(2), counterSet.Cache.Disk.GetFileContent.Load())
+	assert.Equal(t, int64(2), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+
+	// read
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 0,
+				Size:   3,
+			},
+			{
+				Offset: 1,
+				Size:   2,
+			},
+			{
+				Offset: 2,
+				Size:   1,
+			},
+		},
+	}
+	assert.Nil(t, cache.Read(ctx, vec))
+	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
+	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
+	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
+	assert.Equal(t, int64(3), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+
+	// update
+	assert.Nil(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(3), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+
+	// read and update again
+	assert.Nil(t, cache.Read(ctx, vec))
+	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
+	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
+	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
+	assert.Equal(t, int64(4), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+	assert.Nil(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(4), counterSet.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+
+}
+
+func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	// new
+	cache, err := NewDiskCache(dir, 1024, nil)
+	assert.Nil(t, err)
+
+	n := 128
+	wg := new(sync.WaitGroup)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			err := cache.SetFileContent(ctx, "foo", func(_ context.Context, vec *IOVector) error {
+				_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
+				if err != nil {
+					return err
+				}
+				return nil
+			})
+			assert.Nil(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(1), counterSet.Cache.Disk.SetFileContent.Load())
 }

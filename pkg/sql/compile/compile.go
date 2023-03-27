@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalfill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -117,6 +116,8 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	// about ap or tp, what and how many compute resource we can use.
 	c.info = plan2.GetExecTypeFromPlan(pn)
 
+	// Compile may exec some function that need engine.Engine.
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
 	if err != nil {
@@ -246,9 +247,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropDatabase,
-				Plan:  pn,
+				Magic:         DropDatabase,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -266,9 +278,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropTable,
-				Plan:  pn,
+				Magic:         DropTable,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -291,9 +314,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: DropIndex,
-				Plan:  pn,
+				Magic:         DropIndex,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
@@ -526,8 +560,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if err != nil {
 			return nil, err
 		}
-		ss2 := c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
-		return ss2, nil
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
 		if err != nil {
@@ -733,13 +766,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
-	if param.Parallel && param.CompressType != "" && param.CompressType != tree.NOCOMPRESS {
-		return c.compileExternScanParallel(ctx, n)
-	}
-	if n.ObjRef != nil {
-		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
-	}
-
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var fileList []string
@@ -769,6 +795,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+	if len(fileList) == 0 {
+		return nil, nil
+	}
+
+	if param.Parallel && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		return c.compileExternScanParallel(n, param, fileList, fileSize, ctx)
+	}
 
 	var fileOffset [][][2]int
 	for i := 0; i < len(fileList); i++ {
@@ -786,11 +819,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	tag := len(fileList) % mcpu
 	index := 0
 	currentFirstFlag := c.anal.isFirst
-	/*ss2 := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss2[i] = c.constructLoadMergeScope()
-	}*/
-	mcpu = 1
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructScopeForExternal()
@@ -812,67 +840,27 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			IsFirst: currentFirstFlag,
 			Arg:     constructExternal(n, param, c.ctx, fileListTmp, fileSize, offset),
 		})
-		/*_, arg := constructDispatchLocalAndRemote(0, ss, c.addr, ss[0].Proc)
-		arg.FuncId = dispatch.SendToAnyLocalFunc
-		ss[i].appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
-			Arg: arg,
-		})*/
 		if param.Parallel {
 			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
 		}
 	}
-	/*ss2[0].PreScopes = append(ss2[0].PreScopes, ss[0])
-	c.anal.isFirst = false
-	return ss2, nil*/
 	c.anal.isFirst = false
 	return ss, nil
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	ctx, span := trace.Start(ctx, "compileExternScanParallel")
-	defer span.End()
-	mcpu := c.cnList[0].Mcpu
-	param := &tree.ExternParam{}
-	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if err != nil {
-		return nil, err
-	}
-	if err := plan2.InitInfileParam(param); err != nil {
-		return nil, err
-	}
-	if n.ObjRef != nil {
-		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
-	}
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, ctx context.Context) ([]*Scope, error) {
 	param.Parallel = false
-	param.FileService = c.proc.FileService
-	param.Ctx = c.ctx
-	var fileList []string
-	var fileSize []int64
-	fileList, fileSize, err = plan2.ReadDir(param)
-	if err != nil {
-		return nil, err
-	}
-	fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
-	if err != nil {
-		return nil, err
-	}
+	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
-		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.ExternalFill,
-			Idx:     c.anal.curr,
-			IsFirst: c.anal.isFirst,
-			Arg:     &externalfill.Argument{},
-		})
 	}
 	offset := make([][2]int, 0)
 	extern := constructExternal(n, param, c.ctx, fileList, fileSize, offset)
 	extern.Es.ParallelLoad = true
-	tmp := c.constructScopeForExternal()
-	tmp.appendInstruction(vm.Instruction{
+	scope := c.constructScopeForExternal()
+	scope.appendInstruction(vm.Instruction{
 		Op:      vm.External,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
@@ -880,11 +868,11 @@ func (c *Compile) compileExternScanParallel(ctx context.Context, n *plan.Node) (
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr, ss[0].Proc)
 	arg.FuncId = dispatch.SendToAnyLocalFunc
-	tmp.appendInstruction(vm.Instruction{
+	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
 	})
-	ss[0].PreScopes = append(ss[0].PreScopes, tmp)
+	ss[0].PreScopes = append(ss[0].PreScopes, scope)
 	c.anal.isFirst = false
 	return ss, nil
 }
