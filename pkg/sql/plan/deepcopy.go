@@ -473,10 +473,9 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
-		//CompositePkey: nil,
-		OriginCols: make([]*plan.ColDef, len(table.OriginCols)),
-		Indexes:    make([]*IndexDef, len(table.Indexes)),
-		Fkeys:      make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
+		Indexes:       make([]*IndexDef, len(table.Indexes)),
+		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
 	}
 
 	for idx, col := range table.Cols {

@@ -37,7 +37,6 @@ import (
 )
 
 var (
-	updateMoIndexesWithTableIdFormat      = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v;`
 	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
 	createIndexTableForamt                = "create table %s.`%s` (%s);"

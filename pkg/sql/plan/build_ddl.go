@@ -1236,9 +1236,6 @@ var (
 	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesWithTableIdFormat             = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v;`
-	insertIntoIndexTableWithPKeyFormat           = "insert into `%s` select serial(%s), %s from %s where serial(%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat        = "insert into `%s` select serial(%s) from %s where serial(%s) is not null;"
 )
 
 // Build a plan to delete index metadata
@@ -1260,24 +1257,6 @@ func buildDeleteIndexMetaPlan(indexName string, tblId uint64, databaseId uint64,
 		return buildDelete(deleteStmt, ctx)
 	} else {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not delete syntax tree")
-	}
-}
-
-// Build a plan to update index tableid metadata when truncate table
-func buildUpdateIndexMetaPlan(oldTblId uint64, newTblId uint64, mode DeleteIndexMode, ctx CompilerContext) (*Plan, error) {
-	var sql string
-	switch mode {
-	case TRUNCATE_TABLE:
-		sql = fmt.Sprintf(updateMoIndexesWithTableIdFormat, newTblId, oldTblId)
-	}
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-	if err != nil {
-		return nil, err
-	}
-	if udpateStmt, ok := stmt.(*tree.Update); ok {
-		return buildTableUpdate(udpateStmt, ctx)
-	} else {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not update syntax tree")
 	}
 }
 
