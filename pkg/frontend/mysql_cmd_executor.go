@@ -2424,6 +2424,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				return err
 			}
+			if st.SubscriptionOption != nil && !ses.GetTenantInfo().IsAdminRole() {
+				err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
+				return err
+			}
 		case *tree.DropDatabase:
 			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
 			if err != nil {
