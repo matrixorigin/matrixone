@@ -300,8 +300,8 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 	return
 }
 
-func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntry(name, createSql, store.txn)
+func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntry(name, createSql, datTyp, store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -316,8 +316,8 @@ func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database
 	return
 }
 
-func (store *txnStore) CreateDatabaseWithID(name, createSql string, id uint64) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, id, store.txn)
+func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
 	}
