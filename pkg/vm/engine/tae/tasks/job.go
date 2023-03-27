@@ -112,24 +112,12 @@ type Job struct {
 	endTs   time.Time
 }
 
-func NewJob(id string, typ JobType, ctx context.Context, exec JobExecutor) *Job {
-	e := &Job{
-		id:   id,
-		typ:  typ,
-		ctx:  ctx,
-		exec: exec,
-		wg:   sync.WaitGroup{},
-	}
-	e.wg.Add(1)
-	return e
-}
-
 func (job *Job) Run() {
 	defer job.wg.Done()
 	job.startTs = time.Now()
 	defer func() {
 		job.endTs = time.Now()
-		logutil.Info("run-job", common.AnyField("name", job.String()),
+		logutil.Debug("run-job", common.AnyField("name", job.String()),
 			common.ErrorField(job.result.Err),
 			common.DurationField(job.endTs.Sub(job.startTs)))
 	}()

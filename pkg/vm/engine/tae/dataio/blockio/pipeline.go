@@ -64,7 +64,7 @@ var pipeline *IoPipeline
 type IOJobFactory func(context.Context, fetch) *tasks.Job
 
 func init() {
-	pipeline = NewIOPipeline(nil)
+	pipeline = NewIOPipeline()
 }
 
 func Start() {
