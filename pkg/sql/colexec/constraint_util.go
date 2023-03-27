@@ -161,13 +161,6 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 		return nil
 	}
 
-	var ukBatch *batch.Batch
-	defer func() {
-		if ukBatch != nil {
-			ukBatch.Clean(proc.Mp())
-		}
-	}()
-
 	uIdx := 0
 	for _, indexDef := range tableDef.Indexes {
 		if !indexDef.Unique {
@@ -180,7 +173,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 			uniqueColumnPos[p] = updateNameToPos[column]
 		}
 
-		colCount := len(uniqueColumnPos)
+		var ukBatch *batch.Batch
 		if pkPos == -1 {
 			//have no pk
 			ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
@@ -190,6 +183,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 
 		var vec *vector.Vector
 		var bitMap *nulls.Nulls
+		colCount := len(uniqueColumnPos)
 		if colCount == 1 {
 			idx := uniqueColumnPos[0]
 			vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[idx], proc)
@@ -223,6 +217,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 				return err
 			}
 		}
+		ukBatch.Clean(proc.Mp())
 	}
 
 	return nil

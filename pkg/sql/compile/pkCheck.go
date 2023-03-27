@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -141,6 +142,67 @@ func buildGroupDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, 
 	return groupDedupScope, nil
 }
 
+func buildHashPipeline(c *Compile, pkIdx int32, pkCol *plan.ColDef, joinPipeline *Scope) *Scope {
+	hashPipeline := &Scope{
+		Magic:        Merge,
+		Instructions: make([]vm.Instruction, 0, 3),
+		Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+	}
+
+	hashPipeline.appendInstruction(vm.Instruction{
+		Op:  vm.Merge,
+		Idx: c.anal.curr,
+		Arg: &merge.Argument{},
+	})
+
+	pkColExpr := &plan.Expr{
+		Typ: pkCol.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: pkIdx},
+		},
+	}
+
+	hashPipeline.appendInstruction(vm.Instruction{
+		Op:  vm.HashBuild,
+		Idx: c.anal.curr,
+		Arg: &hashbuild.Argument{
+			NeedHashMap: true,
+			Typs:        []types.Type{plan2.MakeTypeByPlan2Type(pkCol.Typ)},
+			Conditions:  []*plan.Expr{pkColExpr},
+		},
+	})
+
+	hashPipeline.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Idx: c.anal.curr,
+		Arg: constructDispatchLocal(true, joinPipeline.Proc.Reg.MergeReceivers),
+	})
+
+	return hashPipeline
+}
+
+func buildSelectScope(c *Compile, pkIdx int32, pkCol *plan.ColDef, tableDef *plan.TableDef) (*Scope, error) {
+	_, _, rel, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, tableDef.TblId)
+	if err != nil {
+		return nil, err
+	}
+	ranges, err := rel.Ranges(c.ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	readers, err := rel.NewReader(c.ctx, c.NumCPU(), nil, ranges)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, r := range readers {
+		r.Read()
+	}
+
+	return nil, nil
+}
+
 func buildJoinDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, error) {
 	joinDedupScope := &Scope{
 		Magic:        Merge,
@@ -154,16 +216,23 @@ func buildJoinDedupScope(c *Compile, pkIdx int32, pkCol *plan.ColDef) (*Scope, e
 		Arg: &merge.Argument{},
 	})
 
+	pkColExpr := &plan.Expr{
+		Typ: pkCol.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: pkIdx,
+			},
+		},
+	}
+
 	joinDedupScope.appendInstruction(vm.Instruction{
 		Op:  vm.Semi,
 		Idx: c.anal.curr,
 		Arg: &semi.Argument{
-			Ibucket:    0,
-			Nbucket:    0,
-			Result:     nil,
-			Typs:       nil,
-			Cond:       nil,
-			Conditions: nil,
+			Result:     []int32{0},
+			Typs:       []types.Type{plan2.MakeTypeByPlan2Type(pkCol.Typ)},
+			Conditions: [][]*plan.Expr{{pkColExpr}, {pkColExpr}},
 		},
 	})
 
