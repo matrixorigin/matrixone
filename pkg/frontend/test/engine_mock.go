@@ -530,6 +530,20 @@ func (mr *MockDatabaseMockRecorder) Delete(arg0, arg1 interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockDatabase)(nil).Delete), arg0, arg1)
 }
 
+// GetCreateSql mocks base method.
+func (m *MockDatabase) GetCreateSql(arg0 context.Context) string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCreateSql", arg0)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetCreateSql indicates an expected call of GetCreateSql.
+func (mr *MockDatabaseMockRecorder) GetCreateSql(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCreateSql", reflect.TypeOf((*MockDatabase)(nil).GetCreateSql), arg0)
+}
+
 // GetDatabaseId mocks base method.
 func (m *MockDatabase) GetDatabaseId(arg0 context.Context) string {
 	m.ctrl.T.Helper()
@@ -542,6 +556,20 @@ func (m *MockDatabase) GetDatabaseId(arg0 context.Context) string {
 func (mr *MockDatabaseMockRecorder) GetDatabaseId(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDatabaseId", reflect.TypeOf((*MockDatabase)(nil).GetDatabaseId), arg0)
+}
+
+// IsSubscription mocks base method.
+func (m *MockDatabase) IsSubscription(arg0 context.Context) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsSubscription", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsSubscription indicates an expected call of IsSubscription.
+func (mr *MockDatabaseMockRecorder) IsSubscription(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSubscription", reflect.TypeOf((*MockDatabase)(nil).IsSubscription), arg0)
 }
 
 // Relation mocks base method.

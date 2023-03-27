@@ -144,9 +144,11 @@ type Entry struct {
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
-	databaseId   uint64
-	databaseName string
-	txn          *Transaction
+	databaseId        uint64
+	databaseName      string
+	databaseType      string
+	databaseCreateSql string
+	txn               *Transaction
 }
 
 type tableKey struct {
