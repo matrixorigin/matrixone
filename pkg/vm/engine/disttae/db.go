@@ -317,7 +317,7 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *
 }
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	return e.tryToGetTableLogTail(ctx, databaseId, tableId)
+	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
 }
 
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
