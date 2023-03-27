@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -87,7 +86,7 @@ type Reader interface {
 // BlockObject is a batch written to fileservice
 type BlockObject interface {
 	// GetColumn gets a ColumnObject with idx
-	GetColumn(idx uint16) (ColumnObject, error)
+	GetColumn(idx uint16) (*ColumnBlock, error)
 
 	// GetRows gets the rows of the BlockObject
 	GetRows() (uint32, error)
@@ -116,8 +115,7 @@ type ColumnObject interface {
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
-}
 
-var (
-	endian = binary.LittleEndian
-)
+	MarshalMeta() []byte
+	UnmarshalMate(data []byte) error
+}

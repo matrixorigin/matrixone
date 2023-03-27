@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -626,6 +627,9 @@ type ParameterUnit struct {
 
 	// FileService
 	FileService fileservice.FileService
+
+	// LockService instance
+	LockService lockservice.LockService
 }
 
 func NewParameterUnit(

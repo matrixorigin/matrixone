@@ -233,7 +233,13 @@ func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
 				newIdx++
 			} else {
 				selIdx++
-				if selIdx >= oldLen {
+				if selIdx >= len(sels) {
+					for idx := oldIdx + 1; idx < oldLen; idx++ {
+						if nsp.Np.Contains(uint64(idx)) {
+							np.Add(uint64(newIdx))
+						}
+						newIdx++
+					}
 					break
 				}
 				sel = sels[selIdx]
@@ -242,17 +248,13 @@ func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
 		nsp.Np = np
 		return nsp
 	} else {
-		var sp []uint64
-		if len(sels) > 0 {
-			sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
-		}
 		np := bitmap.New(len(sels))
-		upperLimit := uint64(nsp.Np.Len())
-		for i, sel := range sp {
+		upperLimit := int64(nsp.Np.Len())
+		for i, sel := range sels {
 			if sel >= upperLimit {
 				continue
 			}
-			if nsp.Np.Contains(sel) {
+			if nsp.Np.Contains(uint64(sel)) {
 				np.Add(uint64(i))
 			}
 		}

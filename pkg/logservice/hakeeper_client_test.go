@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestHAKeeperClientConfigIsValidated(t *testing.T) {
@@ -110,7 +109,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 			ServiceAddresses: []string{"localhost:53033"}, // obvious not reachable
 			DiscoveryAddress: testServiceAddress,
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		c, err := NewLogHAKeeperClient(ctx, cfg)
 		require.NoError(t, err)
@@ -308,7 +307,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	}
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -319,7 +318,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	}()
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
-		testutil.NewFS(),
+		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

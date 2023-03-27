@@ -198,7 +198,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
-	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -241,7 +240,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Account:              tenant.GetTenant(),
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
-		Host:                 sessInfo.GetHost(),
+		Host:                 ses.protocol.Peer(),
 		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
@@ -265,9 +264,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
-	for _, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, sqlTypes []string, err error) context.Context {
+	retErr := moerr.NewParseError(ctx, err.Error())
+	sqlType := sqlTypes[0]
+	for i, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+		if i < len(sqlTypes) {
+			sqlType = sqlTypes[i]
+		}
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+		motrace.EndStatement(ctx, retErr, 0)
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -405,6 +410,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 func doUse(ctx context.Context, ses *Session, db string) error {
+	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
@@ -1361,7 +1367,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
@@ -1468,6 +1474,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			st: st,
+		})
+	case *tree.ShowSequences:
+		ret = (&ShowSequencesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ss: st,
 		})
 	case *tree.ShowDatabases:
 		ret = (&ShowDatabasesExecutor{
@@ -1828,6 +1841,20 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			di: st,
 		})
+	case *tree.CreateSequence:
+		ret = (&CreateSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cs: st,
+		})
+	case *tree.DropSequence:
+		ret = (&DropSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ds: st,
+		})
 	case *tree.CreateView:
 		ret = (&CreateViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2174,7 +2201,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -2191,7 +2219,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:      ses.GetLastInsertID(),
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		SqlHelper:         ses.GetSqlHelper(),
 	}
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -2218,7 +2251,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	if err != nil {
 		sql = removePrefixComment(sql)
 		sql = hideAccessKey(sql)
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -2362,12 +2395,22 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 		case *tree.DropDatabase:
+			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
+			if err != nil {
+				return err
+			}
 			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -2435,6 +2478,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 			case *tree.Update:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			case *tree.DropTable, *tree.DropIndex:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2445,6 +2490,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		case *tree.DropTable, *tree.DropIndex:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
@@ -2517,10 +2564,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.AlterView:
-			ses.InvalidatePrivilegeCache()
-		case *tree.AlterTable:
-			ses.InvalidatePrivilegeCache()
 		case *tree.AlterUser: //TODO
 			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
@@ -2635,7 +2678,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch statement := cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
@@ -2734,8 +2777,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
-			*tree.CreateView, *tree.DropView,
-			*tree.AlterView, *tree.AlterTable,
+			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+			*tree.CreateSequence, *tree.DropSequence,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -2747,7 +2790,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 			//change privilege
 			switch cw.GetAst().(type) {
-			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
+			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole,
 				*tree.Revoke, *tree.Grant,
@@ -2893,9 +2936,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			return txnErr
 		}
 		switch stmt.(type) {
+		case *tree.Select:
+			if len(proc.SessionInfo.SeqAddValues) != 0 {
+				ses.AddSeqValues(proc)
+			}
+			ses.SetSeqLastValue(proc)
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
+			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -2908,6 +2957,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if proc.GetLastInsertID() != 0 {
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
+			}
+			if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
+				ses.DeleteSeqValues(proc)
 			}
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
@@ -3051,7 +3103,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		ses.GetMemPool(),
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService)
+		pu.FileService,
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3067,7 +3120,10 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
-
+	proc.InitSeq()
+	// Copy curvalues stored in session to this proc.
+	// Deep copy the map, takes some memory.
+	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
@@ -3086,7 +3142,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -3295,6 +3351,8 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 func (mce *MysqlCmdExecutor) Close() {}
 
 /*
+=======
+>>>>>>> main
 convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {

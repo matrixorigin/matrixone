@@ -195,7 +195,7 @@ func TestHandleCNHeartbeat(t *testing.T) {
 func TestGetIDCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm1.state.State = pb.HAKeeperRunning
-	cmd := GetGetIDCmd(100)
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 1}, result)
@@ -207,6 +207,39 @@ func TestGetIDCmd(t *testing.T) {
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 202}, result)
+}
+
+func TestAllocateIDByKeyCmd(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperRunning
+
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{Key: "k1", Batch: 100})
+
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 1}, result)
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 101}, result)
+
+	assert.Equal(t, uint64(201), tsm1.assignIDByKey("k1"))
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 202}, result)
+
+	cmd = GetAllocateIDCmd(pb.CNAllocateID{Key: "k2", Batch: 50})
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 1}, result)
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 51}, result)
+
+	assert.Equal(t, uint64(101), tsm1.assignIDByKey("k2"))
 }
 
 func TestUpdateScheduleCommandsCmd(t *testing.T) {
