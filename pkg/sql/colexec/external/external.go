@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -167,25 +169,24 @@ func containColname(col string) bool {
 }
 
 func GetAccountPrefix(expr *plan.Expr) (bool, string) {
-
 	if expr_F, ok := expr.Expr.(*plan.Expr_F); ok {
-		//Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
 		f := expr_F.F
 		if f.Func.ObjName == "=" && len(f.Args) == 2 {
-			if colName, isCol := f.Args[0].Expr.(*plan.Expr_Col); isCol && colName.Col.Name == STATEMENT_ACCOUNT {
-				val, isConst := f.Args[0].Expr.(*plan.Expr_C)
-				str, isString := val.C.Value.(*plan.Const_Sval)
-				if isConst && isString {
-					return true, str.Sval
+			if colName, isCol := f.Args[0].Expr.(*plan.Expr_Col); isCol {
+				if strings.Contains(colName.Col.Name, STATEMENT_ACCOUNT) {
+					if val, isConst := f.Args[1].Expr.(*plan.Expr_C); isConst {
+						if str, isString := val.C.Value.(*plan.Const_Sval); isString {
+							return true, str.Sval
+						}
+					}
 				}
 			}
 		}
 	}
-
 	return false, ""
 }
 
-func JudgeContainColname(expr *plan.Expr) bool {
+func judgeContainColname(expr *plan.Expr) bool {
 	expr_F, ok := expr.Expr.(*plan.Expr_F)
 	if !ok {
 		return false
@@ -193,7 +194,7 @@ func JudgeContainColname(expr *plan.Expr) bool {
 	if expr_F.F.Func.ObjName == "or" {
 		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
-			flag = flag && JudgeContainColname(expr_F.F.Args[i])
+			flag = flag && judgeContainColname(expr_F.F.Args[i])
 		}
 		return flag
 	}
@@ -202,11 +203,45 @@ func JudgeContainColname(expr *plan.Expr) bool {
 		return true
 	}
 	for _, arg := range expr_F.F.Args {
-		if JudgeContainColname(arg) {
+		if judgeContainColname(arg) {
 			return true
 		}
 	}
 	return false
+}
+
+// FormatFilePathWithAccountFilterCondition try to format param.Filepath with filter condition `account=?`
+// example:
+//
+//	etl:/*/*/*/... ==> etl:/{account}/*/*/*/...
+func FormatFilePathWithAccountFilterCondition(ctx context.Context, n *plan.Node, param *tree.ExternParam) {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, strings.ToLower(defines.ETLFileServiceName)+":") {
+		if len(filePath) > 4 && filePath[4] == '/' {
+			filePath = filePath[5:]
+		} else {
+			filePath = filePath[4:]
+		}
+		builder := table.NewAccountDatePathBuilder()
+		p, err := builder.ParsePath(ctx, filePath)
+		if err != nil {
+			logutil.Warn("unknown etl filepath", trace.ContextField(ctx), logutil.PathField(filePath), logutil.ErrorField(err))
+		} else if p.GetAccount() != table.ETLParamAccountAll {
+			logutil.Warn("should not use with filter condition `account=?`", trace.ContextField(ctx), logutil.PathField(filePath))
+		} else {
+			for i := 0; i < len(n.FilterList); i++ {
+				fl := n.FilterList[i]
+				if judgeContainColname(fl) {
+					exist, account := GetAccountPrefix(fl)
+					if exist {
+						p.SetAccount(account)
+						param.Filepath = strings.ToLower(defines.ETLFileServiceName) + ":" + "/" + p.ToString()
+						break
+					}
+				}
+			}
+		}
+	}
 }
 
 func getAccountCol(filepath string) string {
@@ -256,7 +291,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if JudgeContainColname(node.FilterList[i]) {
+		if judgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
 		} else {
 			filterList2 = append(filterList2, node.FilterList[i])

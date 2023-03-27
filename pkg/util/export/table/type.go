@@ -72,8 +72,12 @@ type PathBuilder interface {
 }
 
 type Path interface {
+	// ParseFilename parse the filename elem, then we can get Timestamp()
+	ParseFilename(ctx context.Context) error
 	SetAccount(account string)
+	GetAccount() string
 	Table() string
+	// Timestamp need call ParseFilename first.
 	Timestamp() []string
 	ToString() string
 }
@@ -113,7 +117,7 @@ func NewETLPath(path string) *ETLPath {
 	return &ETLPath{path: path}
 }
 
-func (p *ETLPath) Parse(ctx context.Context) error {
+func (p *ETLPath) ParsePath(ctx context.Context) error {
 	// parse path => filename, table
 	p.elems = strings.Split(p.path, "/")
 	if len(p.elems) != PathElems {
@@ -121,6 +125,17 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	}
 	p.filename = p.elems[PathIdxFilename]
 	p.table = p.elems[PathIdxTable]
+
+	return nil
+}
+
+func (p *ETLPath) ParseFilename(ctx context.Context) error {
+	if len(p.elems) == 0 {
+		err := p.ParsePath(ctx)
+		if err != nil {
+			return err
+		}
+	}
 
 	// parse filename => fileType, timestamps
 	filename := strings.Trim(p.filename, CsvExtension)
@@ -147,8 +162,17 @@ func (p *ETLPath) Timestamp() []string {
 	return p.timestamps
 }
 
+func (p *ETLPath) GetAccount() string {
+	if len(p.elems) <= PathIdxAccount {
+		return ""
+	}
+	return p.elems[PathIdxAccount]
+}
+
 func (p *ETLPath) SetAccount(account string) {
-	p.elems[1] = account
+	if len(p.elems) > PathIdxAccount {
+		p.elems[PathIdxAccount] = account
+	}
 }
 
 func (p *ETLPath) ToString() string {
@@ -215,7 +239,7 @@ func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
 
 func (b *AccountDatePathBuilder) ParsePath(ctx context.Context, path string) (Path, error) {
 	p := NewETLPath(path)
-	return p, p.Parse(ctx)
+	return p, p.ParsePath(ctx)
 }
 
 var timeMu sync.Mutex

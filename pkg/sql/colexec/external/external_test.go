@@ -832,3 +832,145 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatFilePathWithAccountFilterCondition(t *testing.T) {
+	type args struct {
+		ctx   context.Context
+		n     *plan.Node
+		param *tree.ExternParam
+	}
+
+	tableName := "dummy_table"
+	nodeWithFunction := func(expr *plan.Expr_F) *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_EXTERNAL_SCAN,
+			Stats:    &plan.Stats{},
+			TableDef: &plan.TableDef{
+				TableType: "func_table",
+				TblFunc: &plan.TableFunction{
+					Name: tableName,
+				},
+				Cols: []*plan.ColDef{
+					{
+						Name: STATEMENT_ACCOUNT,
+						Typ: &plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: types.MaxVarcharLen,
+							Table: tableName,
+						},
+					},
+				},
+			},
+			FilterList: []*plan.Expr{
+				{
+					Typ: &plan.Type{
+						Id: int32(types.T_bool),
+					},
+					Expr: expr,
+				},
+			},
+		}
+	}
+
+	eqStrFid := function.EncodeOverloadID(function.EQUAL, 12)
+
+	newColExpr := func(pos int32, typ types.Type, name string) *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Scale: typ.Scale,
+				Width: typ.Width,
+				Id:    int32(typ.Oid),
+			},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: pos,
+					ColPos: 0,
+					Name:   tableName + "." + name,
+				},
+			},
+		}
+	}
+	constStrField := func(val string) *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Value: &plan.Const_Sval{
+						Sval: val,
+					},
+				},
+			},
+		}
+	}
+
+	accountFuncN := func(account string) *plan.Node {
+		return nodeWithFunction(&plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: eqStrFid, ObjName: "="},
+				Args: []*plan.Expr{
+					newColExpr(0, types.T_varchar.ToType(), STATEMENT_ACCOUNT),
+					constStrField(account),
+				},
+			},
+		})
+	}
+
+	getParamPath := func(path string) *tree.ExternParam {
+		return &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: path,
+			},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		args         args
+		wantFilepath string
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx:   context.TODO(),
+				n:     accountFuncN("sys"),
+				param: getParamPath("etl:/*/*/yyyy/mm/dd/table/1_2_3.csv"),
+			},
+			wantFilepath: "etl:/sys/*/yyyy/mm/dd/table/1_2_3.csv",
+		},
+		{
+			name: "normal_sys_path",
+			args: args{
+				ctx:   context.TODO(),
+				n:     accountFuncN("123"),
+				param: getParamPath("etl:/sys/*/yyyy/mm/dd/table/1_2_3.csv"),
+			},
+			wantFilepath: "etl:/sys/*/yyyy/mm/dd/table/1_2_3.csv",
+		},
+		{
+			name: "normal_invalid_etl",
+			args: args{
+				ctx:   context.TODO(),
+				n:     accountFuncN("123"),
+				param: getParamPath("etl:/"),
+			},
+			wantFilepath: "etl:/",
+		},
+		{
+			name: "normal_invalid_etl",
+			args: args{
+				ctx:   context.TODO(),
+				n:     accountFuncN("123"),
+				param: getParamPath("etl:"),
+			},
+			wantFilepath: "etl:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			FormatFilePathWithAccountFilterCondition(tt.args.ctx, tt.args.n, tt.args.param)
+			require.Equal(t, tt.wantFilepath, tt.args.param.Filepath)
+		})
+	}
+}

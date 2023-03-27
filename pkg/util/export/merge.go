@@ -299,6 +299,10 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		if err != nil {
 			return err
 		}
+		err = p.ParseFilename(ctx)
+		if err != nil {
+			return err
+		}
 		ts := p.Timestamp()
 		if len(ts) == 0 {
 			m.logger.Warn(fmt.Sprintf("merge file meet unknown file: %s", f.FilePath))
