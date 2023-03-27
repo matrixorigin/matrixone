@@ -146,9 +146,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:          txn,
-		databaseName: name,
-		databaseId:   key.Id,
+		txn:               txn,
+		databaseName:      name,
+		databaseId:        key.Id,
+		databaseType:      key.Typ,
+		databaseCreateSql: key.CreateSql,
 	}, nil
 }
 

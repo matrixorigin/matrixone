@@ -32,10 +32,20 @@ import (
 )
 
 type BlockReader struct {
-	reader objectio.Reader
-	key    string
+	reader  objectio.Reader
+	key     string
+	name    string
+	meta    objectio.Extent
+	manager *IoPipeline
+}
+
+type fetch struct {
 	name   string
 	meta   objectio.Extent
+	idxes  []uint16
+	ids    []uint32
+	pool   *mpool.MPool
+	reader objectio.Reader
 }
 
 func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
@@ -48,9 +58,10 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		return nil, err
 	}
 	return &BlockReader{
-		reader: reader,
-		name:   name,
-		meta:   meta,
+		reader:  reader,
+		name:    name,
+		meta:    meta,
+		manager: pipeline,
 	}, nil
 }
 
@@ -60,8 +71,9 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 		return nil, err
 	}
 	return &BlockReader{
-		reader: reader,
-		name:   name,
+		reader:  reader,
+		name:    name,
+		manager: pipeline,
 	}, nil
 }
 
@@ -86,27 +98,37 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 		return nil, err
 	}
 	return &BlockReader{
-		key:    key,
-		reader: reader,
-		name:   name,
-		meta:   locs[0],
+		key:     key,
+		reader:  reader,
+		name:    name,
+		meta:    locs[0],
+		manager: pipeline,
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
 	if r.meta.End() == 0 {
 		return bats, nil
 	}
-	ioVectors, err := r.reader.Read(ctx, r.meta, idxs, ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	proc := fetch{
+		name:   r.name,
+		meta:   r.meta,
+		idxes:  idxes,
+		ids:    ids,
+		pool:   m,
+		reader: r.reader,
+	}
+	v, err := r.manager.Fetch(ctx, proc)
 	if err != nil {
 		return nil, err
 	}
+	ioVectors := v.(*fileservice.IOVector)
 	for y := range ids {
-		bat := batch.NewWithSize(len(idxs))
-		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		bat := batch.NewWithSize(len(idxes))
+		for i := range idxes {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxes)+i].Object.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}
@@ -228,6 +250,16 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 	return bat, nil
 }
 
+func (r *BlockReader) GetObjectName() string {
+	return r.name
+}
+func (r *BlockReader) GetObjectExtent() objectio.Extent {
+	return r.meta
+}
+func (r *BlockReader) GetObjectReader() objectio.Reader {
+	return r.reader
+}
+
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
 	zm := NewZoneMap(typ)
 	err := zm.Unmarshal(buf[:])
@@ -281,4 +313,28 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 		}
 		return vec, int64(len(decompressed)), nil
 	}
+}
+
+// The caller has merged the block information that needs to be prefetched
+func PrefetchWithMerged(pref prefetch) error {
+	return pipeline.Prefetch(pref)
+}
+
+func Prefetch(idxes []uint16, reader dataio.Reader,
+	ids []uint32, m *mpool.MPool) error {
+	if reader.GetObjectExtent().End() == 0 {
+		return nil
+	}
+
+	pref := BuildPrefetch(reader, m)
+	pref.AddBlock(idxes, ids)
+	return pipeline.Prefetch(pref)
+}
+
+func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
+	if reader.GetObjectExtent().End() == 0 {
+		return nil
+	}
+	pref := BuildPrefetch(reader, m)
+	return pipeline.Prefetch(pref)
 }
