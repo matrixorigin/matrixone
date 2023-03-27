@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -176,6 +177,13 @@ type Session struct {
 	seqLastValue string
 
 	sqlHelper *SqlHelper
+
+	// when starting a transaction in session, the snapshot ts of the transaction
+	// is to get a DN push to CN to get the maximum commitTS. but there is a problem,
+	// when the last transaction ends and the next one starts, it is possible that the
+	// log of the last transaction has not been pushed to CN, we need to wait until at
+	// least the commit of the last transaction log of the previous transaction arrives.
+	lastCommitTS timestamp.Timestamp
 }
 
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
@@ -1464,4 +1472,10 @@ handleFailed:
 		return nil, rbErr
 	}
 	return nil, err
+}
+
+func (ses *Session) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
+	if lastCommitTS.Greater(ses.lastCommitTS) {
+		ses.lastCommitTS = lastCommitTS
+	}
 }
