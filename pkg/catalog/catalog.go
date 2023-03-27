@@ -158,6 +158,7 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 		cmds[i].AccountId = row[MO_DATABASE_ACCOUNT_ID_IDX].(uint32)
 		cmds[i].CreatedTime = row[MO_DATABASE_CREATED_TIME_IDX].(types.Timestamp)
 		cmds[i].CreateSql = string(row[MO_DATABASE_CREATESQL_IDX].([]byte))
+		cmds[i].DatTyp = string(row[MO_DATABASE_DAT_TYPE_IDX].([]byte))
 	}
 	return cmds
 }

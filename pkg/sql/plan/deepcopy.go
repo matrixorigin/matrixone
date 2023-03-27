@@ -290,6 +290,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		NotCacheable:    node.NotCacheable,
 	}
 
 	copy(newNode.Children, node.Children)

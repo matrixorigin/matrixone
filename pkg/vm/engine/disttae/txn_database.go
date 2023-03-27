@@ -215,6 +215,14 @@ func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
 	return strconv.FormatUint(db.databaseId, 10)
 }
 
+func (db *txnDatabase) GetCreateSql(ctx context.Context) string {
+	return db.databaseCreateSql
+}
+
+func (db *txnDatabase) IsSubscription(ctx context.Context) bool {
+	return db.databaseType == catalog.SystemDBTypeSubscription
+}
+
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	accountId, userId, roleId := getAccessInfo(ctx)
 	tableId, err := db.txn.allocateID(ctx)

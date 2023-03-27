@@ -134,6 +134,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 		arg: &Argument{
 			Attrs: attrs,
 			Rets:  colDefs,
+			Name:  "unnest",
 		},
 		jsons:    jsons,
 		paths:    paths,
@@ -155,7 +156,7 @@ func TestUnnestString(t *testing.T) {
 func TestUnnestCall(t *testing.T) {
 	for _, ut := range utc {
 
-		err := unnestPrepare(ut.proc, ut.arg)
+		err := Prepare(ut.proc, ut.arg)
 		require.NotNil(t, err)
 		var inputBat *batch.Batch
 		switch ut.jsonType {

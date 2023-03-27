@@ -244,6 +244,7 @@ type CreateDatabase struct {
 	DatabaseId  uint64
 	Name        string
 	CreateSql   string
+	DatTyp      string
 	Owner       uint32
 	Creator     uint32
 	AccountId   uint32

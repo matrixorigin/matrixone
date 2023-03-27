@@ -309,7 +309,7 @@ func printCheckpointStats(t *testing.T, tae *DB) {
 func createDB(t *testing.T, e *DB, dbName string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
-	_, err = txn.CreateDatabase(dbName, "")
+	_, err = txn.CreateDatabase(dbName, "", "")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
@@ -332,7 +332,7 @@ func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName, "")
+		db, err = txn.CreateDatabase(dbName, "", "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)
@@ -355,7 +355,7 @@ func createRelationAndAppend(
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName, "")
+		db, err = txn.CreateDatabase(dbName, "", "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)
