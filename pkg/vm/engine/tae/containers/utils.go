@@ -47,9 +47,12 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
-	end := vec.Length()
-	a, _ := vec.getDownstreamVector().CloneWindow(0, end, nil)
-	return a
+	vecLen := vec.getDownstreamVector().Length()
+	res, err := vec.getDownstreamVector().CloneWindow(0, vecLen, nil)
+	if err != nil {
+		panic(err)
+	}
+	return res
 }
 
 func CopyToMoVecs(vecs []Vector) []*movec.Vector {

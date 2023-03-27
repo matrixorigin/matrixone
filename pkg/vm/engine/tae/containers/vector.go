@@ -236,7 +236,10 @@ func (vec *vector[T]) Allocated() int {
 func (vec *vector[T]) tryCoW() {
 
 	if !vec.isOwner {
-		newCnVector, _ := vec.downstreamVector.Dup(vec.mpool)
+		newCnVector, err := vec.downstreamVector.Dup(vec.mpool)
+		if err != nil {
+			panic(err)
+		}
 		vec.downstreamVector = newCnVector
 		vec.isOwner = true
 	}
