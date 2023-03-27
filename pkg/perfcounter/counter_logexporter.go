@@ -33,12 +33,12 @@ func NewCounterLogExporter(counter *CounterSet) stats.LogExporter {
 func (c *CounterLogExporter) Export() []zap.Field {
 	var fields []zap.Field
 
-	reads := c.counter.Cache.Read.SwapW(0)
-	hits := c.counter.Cache.Hit.SwapW(0)
-	memReads := c.counter.Cache.Memory.Read.SwapW(0)
-	memHits := c.counter.Cache.Memory.Hit.SwapW(0)
-	diskReads := c.counter.Cache.Disk.Read.SwapW(0)
-	diskHits := c.counter.Cache.Disk.Hit.SwapW(0)
+	reads := c.counter.FileService.Cache.Read.SwapW(0)
+	hits := c.counter.FileService.Cache.Hit.SwapW(0)
+	memReads := c.counter.FileService.Cache.Memory.Read.SwapW(0)
+	memHits := c.counter.FileService.Cache.Memory.Hit.SwapW(0)
+	diskReads := c.counter.FileService.Cache.Disk.Read.SwapW(0)
+	diskHits := c.counter.FileService.Cache.Disk.Hit.SwapW(0)
 
 	fields = append(fields, zap.Any("reads", reads))
 	fields = append(fields, zap.Any("hits", hits))

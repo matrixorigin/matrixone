@@ -235,7 +235,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -255,6 +255,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
+	}
+	if obj.PubAccountId != -1 {
+		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
 	if !tblInfo.haveConstraint {

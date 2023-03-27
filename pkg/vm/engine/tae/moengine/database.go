@@ -176,3 +176,11 @@ func (db *txnDatabase) DropRelationByID(_ context.Context, id uint64) error {
 func (db *txnDatabase) GetDatabaseID(_ context.Context) uint64 {
 	return db.handle.GetID()
 }
+
+func (db *txnDatabase) IsSubscription(_ context.Context) bool {
+	return db.handle.IsSubscription()
+}
+
+func (db *txnDatabase) GetCreateSql(_ context.Context) string {
+	return db.handle.GetCreateSql()
+}
