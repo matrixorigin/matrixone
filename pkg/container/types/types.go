@@ -74,16 +74,18 @@ const (
 	T_text T = 71
 
 	// Transaction TS
-	T_TS    T = 100
-	T_Rowid T = 101
+	T_TS      T = 100
+	T_Rowid   T = 101
+	T_Blockid T = 102
 
 	// system family
 	T_tuple T = 201
 )
 
 const (
-	TxnTsSize = 12
-	RowidSize = 16
+	TxnTsSize   = 12
+	RowidSize   = 24
+	BlockidSize = 20
 )
 
 type Type struct {
@@ -134,6 +136,9 @@ type TS [TxnTsSize]byte
 // Rowid
 type Rowid [RowidSize]byte
 
+// Blockid
+type Blockid [BlockidSize]byte
+
 // Fixed bytes.   Deciaml64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
 type FixedBytes interface {
@@ -166,7 +171,7 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid
+	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid | Blockid
 }
 
 type Number interface {
@@ -214,6 +219,7 @@ var Types map[string]T = map[string]T{
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
+	"blockid":               T_Blockid,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -376,6 +382,8 @@ func (t T) ToType() Type {
 		typ.Size = TxnTsSize
 	case T_Rowid:
 		typ.Size = RowidSize
+	case T_Blockid:
+		typ.Size = BlockidSize
 	case T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
 	case T_char:
@@ -461,6 +469,8 @@ func (t T) String() string {
 		return "ROWID"
 	case T_uuid:
 		return "UUID"
+	case T_Blockid:
+		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
 	}
@@ -526,6 +536,8 @@ func (t T) OidString() string {
 		return "T_TS"
 	case T_Rowid:
 		return "T_Rowid"
+	case T_Blockid:
+		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
 	}
@@ -571,6 +583,8 @@ func (t T) TypeLen() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
+	case T_Blockid:
+		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
 	}
@@ -602,6 +616,8 @@ func (t T) FixedLength() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
+	case T_Blockid:
+		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
 	}

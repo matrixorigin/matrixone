@@ -14,6 +14,10 @@
 
 package objectio
 
+import (
+	"unsafe"
+)
+
 type Extent struct {
 	id         uint32
 	offset     uint32
@@ -39,3 +43,14 @@ func (ex Extent) Offset() uint32 { return ex.offset }
 func (ex Extent) Length() uint32 { return ex.length }
 
 func (ex Extent) OriginSize() uint32 { return ex.originSize }
+
+func (ex Extent) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&ex)), ExtentSize)
+}
+func (ex *Extent) Unmarshal(data []byte) {
+	e := *(*Extent)(unsafe.Pointer(&data[0]))
+	ex.id = e.id
+	ex.offset = e.offset
+	ex.length = e.length
+	ex.originSize = e.originSize
+}

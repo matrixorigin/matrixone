@@ -5,6 +5,7 @@ create account if not exists `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY 
 -- @session:id=1&user=query_tae_table:admin:accountadmin&password=123456
 drop database if exists `query_tae_table`;
 create database `query_tae_table`;
+/*issue_8168*/use query_tae_table;select syntax error stmt;
 use query_tae_table;
 drop table if exists `query_tae_table`;
 set @uuid_drop_table = last_uuid();
@@ -20,9 +21,11 @@ select account from system.statement_info where statement_id = @uuid_create_tabl
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
 -- @session
 
-
 -- case: select span_kind issue #7571
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
+
+-- case: fix issue 8168, with syntax error
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt');
 
 -- clean
 drop account `query_tae_table`;
