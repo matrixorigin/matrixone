@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -101,8 +102,11 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		defer ctrl.Finish()
 
 		ctx := context.TODO()
+		idx := int64(1)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+			CommitTS: timestamp.Timestamp{PhysicalTime: idx},
+		}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
 			func(ctx context.Context) error {
@@ -152,10 +156,15 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
+		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
+
 		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
+
+		idx++
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
 	})
 }
 
