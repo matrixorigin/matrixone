@@ -626,6 +626,8 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(bats[1])
 	assert.Nil(t, err)
 	rows += 1600
+	blkIterator = tbl.MakeBlockIt()
+	blkID = blkIterator.GetBlock().Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100

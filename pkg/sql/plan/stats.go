@@ -175,8 +175,6 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 		return outCnt * 0.9
 	} else if sortOrder == 1 {
 		return outCnt * 0.7
-	} else if sortOrder == 2 {
-		return outCnt * 0.25
 	} else {
 		return outCnt * 0.1
 	}
@@ -305,6 +303,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			//no good way to estimate, just 0.1*cost
 			outcnt = cost * 0.1
 		}
+	case *plan.Expr_C:
+		outcnt = cost
 	}
 	if outcnt > cost {
 		//outcnt must be smaller than cost

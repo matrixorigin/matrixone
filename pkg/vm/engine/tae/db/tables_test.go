@@ -481,7 +481,7 @@ func TestMergeBlocks1(t *testing.T) {
 			assert.Nil(t, txn.Commit())
 		}
 		start := time.Now()
-		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, blks[0].GetSegment(), db.Scheduler)
+		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, nil, db.Scheduler)
 		// err = task.WaitDone()
 		// assert.Nil(t, err)
 		{

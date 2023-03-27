@@ -345,7 +345,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		types.TS,
 		*roaring.Bitmap,
 		*catalog.ColDef,
-	) func(any, int) error) (err error) {
+	) func(any, bool, int) error) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,

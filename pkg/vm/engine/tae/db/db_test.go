@@ -82,6 +82,7 @@ func TestAppend(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestAppend2(t *testing.T) {
@@ -92,13 +93,13 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	forest := logtail.NewDirtyCollector(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
-		forest.Run()
-		t.Log(forest.String())
-	}, nil)
-	hb.Start()
-	defer hb.Stop()
+	// forest := logtail.NewDirtyCollector(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	// hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+	// 	forest.Run()
+	// 	t.Log(forest.String())
+	// }, nil)
+	// hb.Start()
+	// defer hb.Stop()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
@@ -349,10 +350,10 @@ func TestCreateBlock(t *testing.T) {
 	assert.Nil(t, err)
 	blk1, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
-	blk2, err := seg.CreateNonAppendableBlock()
+	blk2, err := seg.CreateNonAppendableBlock(nil)
 	assert.Nil(t, err)
 	lastAppendable := seg.GetMeta().(*catalog.SegmentEntry).LastAppendableBlock()
-	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.GetID())
+	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.ID)
 	assert.True(t, lastAppendable.IsAppendable())
 	blk2Meta := blk2.GetMeta().(*catalog.BlockEntry)
 	assert.False(t, blk2Meta.IsAppendable())
@@ -384,7 +385,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
-		blk, err := seg.CreateNonAppendableBlock()
+		blk, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		name := blockio.EncodeObjectName()
@@ -572,7 +573,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
 
-		destBlock, err := seg.CreateNonAppendableBlock()
+		destBlock, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		m := destBlock.GetMeta().(*catalog.BlockEntry)
 		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler, nil, nil)
@@ -1074,7 +1075,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, segCnt, 1)
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
-	seg, err = rel.GetSegment(segMeta.GetID())
+	seg, err = rel.GetSegment(segMeta.ID)
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
@@ -4275,8 +4276,8 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(ins)
-			t.Log(del)
+			t.Log(common.PrintApiBatch(ins, 3))
+			t.Log(common.PrintApiBatch(del, 3))
 		}
 	}
 	tae.restart()
@@ -4286,8 +4287,8 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(ins)
-			t.Log(del)
+			t.Log(common.PrintApiBatch(ins, 3))
+			t.Log(common.PrintApiBatch(del, 3))
 		}
 	}
 }
@@ -5019,7 +5020,9 @@ func TestGlobalCheckpoint1(t *testing.T) {
 
 	tae.createRelAndAppend(bat, true)
 
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.restart()
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.checkRowsByScan(400, true)
 
 	testutils.WaitExpect(4000, func() bool {

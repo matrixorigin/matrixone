@@ -123,6 +123,7 @@ const (
 	ErrFunctionAlreadyExists        uint16 = 20441
 	ErrDropNonExistsFunction        uint16 = 20442
 	ErrNoConfig                     uint16 = 20443
+	ErrNoSuchSequence               uint16 = 20444
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -237,6 +238,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLogServiceNotReady:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
 	ErrBadDB:                        {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
 	ErrNoSuchTable:                  {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
+	ErrNoSuchSequence:               {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
 	ErrEmptyVector:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
 	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
@@ -689,6 +691,10 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	return newError(ctx, ErrNoSuchTable, db, tbl)
+}
+
+func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
+	return newError(ctx, ErrNoSuchSequence, db, tbl)
 }
 
 func NewBadView(ctx context.Context, db, v string) *Error {

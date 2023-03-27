@@ -1257,7 +1257,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
-		Default:           int8(1),
+		Default:           int8(0),
 	},
 }
 
@@ -1292,6 +1292,9 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 			}
 		}
 
+		if minIdx != len(tzStr)-2 {
+			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+		}
 		if tzStr[minIdx] < '0' || tzStr[minIdx] > '9' {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}

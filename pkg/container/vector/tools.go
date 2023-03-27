@@ -207,6 +207,8 @@ func (v *Vector) setupColFromData() {
 			v.col = DecodeFixedCol[types.TS](v)
 		case types.T_Rowid:
 			v.col = DecodeFixedCol[types.Rowid](v)
+		case types.T_Blockid:
+			v.col = DecodeFixedCol[types.Blockid](v)
 		default:
 			panic("unknown type")
 		}
