@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"os"
 	"syscall"
 	"time"
@@ -74,6 +75,8 @@ func initTAE(
 	opts.CheckpointCfg.MinCount = cfg.Engine.MinCount
 	opts.CheckpointCfg.IncrementalInterval = cfg.Engine.IncrementalInterval.Duration
 	opts.CheckpointCfg.GlobalMinCount = cfg.Engine.GlobalMinCount
+
+	blockio.Start()
 
 	tae, err := db.Open(targetDir+"/tae", opts)
 	if err != nil {
