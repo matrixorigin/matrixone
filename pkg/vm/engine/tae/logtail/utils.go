@@ -506,7 +506,7 @@ func (data *CheckpointData) PrefetchFrom(
 		}
 		pref.AddBlock(idxes, []uint32{metas[idx].GetID()})
 	}
-	return blockio.Prefetch(pref)
+	return blockio.PrefetchWithMerged(pref)
 }
 
 // TODO:

@@ -414,7 +414,7 @@ func (h *Handle) prefetch(ctx context.Context,
 		}
 		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
 	}
-	return blockio.Prefetch(pref)
+	return blockio.PrefetchWithMerged(pref)
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.

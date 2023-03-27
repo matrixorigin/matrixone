@@ -20,27 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 )
 
+// prefetch is the parameter of the executed IoPipeline.Prefetch, which
+// provides the merge function, which can merge the prefetch requests of
+// multiple blocks in an object/file
 type prefetch struct {
 	name   string
 	meta   objectio.Extent
 	ids    map[uint32]*objectio.ReadBlockOptions
 	pool   *mpool.MPool
 	reader objectio.Reader
-}
-
-func mergePrefetch(processes []prefetch) map[string]prefetch {
-	pc := make(map[string]prefetch)
-	for _, p := range processes {
-		if pc[p.name].name == "" {
-			pc[p.name] = p
-			continue
-		}
-		pre := pc[p.name]
-		pre.mergeIds(p.ids)
-		pc[p.name] = pre
-
-	}
-	return pc
 }
 
 func BuildPrefetch(reader dataio.Reader, m *mpool.MPool) prefetch {
@@ -79,4 +67,19 @@ func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
 			p.ids[id].Idxes[index] = true
 		}
 	}
+}
+
+func mergePrefetch(processes []prefetch) map[string]prefetch {
+	pc := make(map[string]prefetch)
+	for _, p := range processes {
+		if pc[p.name].name == "" {
+			pc[p.name] = p
+			continue
+		}
+		pre := pc[p.name]
+		pre.mergeIds(p.ids)
+		pc[p.name] = pre
+
+	}
+	return pc
 }

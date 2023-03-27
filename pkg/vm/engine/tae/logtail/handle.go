@@ -636,7 +636,7 @@ func LoadCheckpointEntries(
 			}
 			pref.AddBlock(idxes, []uint32{readerMetas[i][idx].GetID()})
 		}
-		err = blockio.Prefetch(pref)
+		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
 			return
 		}

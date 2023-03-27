@@ -39,7 +39,7 @@ var (
 // type pipeline interface {
 // 	Start()
 // 	Stop()
-// 	Prefetch(location string) error
+// 	PrefetchWithMerged(location string) error
 // 	Fetch(ctx context.Context, location string) (any, error)
 // 	AsyncFetch(ctx context.Context, location string) (tasks.Job, error)
 // }
@@ -79,6 +79,7 @@ func makeName(location string) string {
 	return fmt.Sprintf("%s-%d", location, time.Now().UTC().Nanosecond())
 }
 
+// load data job
 func jobFactory(
 	ctx context.Context,
 	proc fetch,
@@ -101,6 +102,7 @@ func jobFactory(
 	)
 }
 
+// prefetch data job
 func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
@@ -121,6 +123,7 @@ func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 	)
 }
 
+// prefetch metadata job
 func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
@@ -146,11 +149,13 @@ type IoPipeline struct {
 		fetchParallism    int
 		prefetchParallism int
 	}
+	// load queue
 	fetch struct {
 		queue     sm.Queue
 		scheduler tasks.JobScheduler
 	}
 
+	// prefetch queue
 	prefetch struct {
 		queue     sm.Queue
 		scheduler tasks.JobScheduler
@@ -310,7 +315,6 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 	merged := mergePrefetch(processes)
-	logutil.Infof("items is %d, merged is %d", len(items), len(merged))
 	for _, option := range merged {
 		job := prefetchJob(
 			context.Background(),

@@ -384,7 +384,7 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 		}
 		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
 	}
-	return blockio.Prefetch(pref)
+	return blockio.PrefetchWithMerged(pref)
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
