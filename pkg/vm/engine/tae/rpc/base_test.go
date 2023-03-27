@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"testing"
 	"time"
 
@@ -63,6 +64,8 @@ type txnCommand struct {
 
 func (h *mockHandle) HandleClose(ctx context.Context) error {
 	err := h.Handle.HandleClose(ctx)
+	blockio.Stop()
+	blockio.ResetPipeline()
 	return err
 }
 
@@ -150,6 +153,7 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 }
 
 func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
+	blockio.Start()
 	tae := initDB(t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),

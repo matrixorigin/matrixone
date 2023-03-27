@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,7 @@ type testEngine struct {
 }
 
 func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+	blockio.Start()
 	db := initDB(t, opts)
 	return &testEngine{
 		DB: db,
@@ -82,7 +84,10 @@ func (e *testEngine) restart() {
 }
 
 func (e *testEngine) Close() error {
-	return e.DB.Close()
+	err := e.DB.Close()
+	blockio.Stop()
+	blockio.ResetPipeline()
+	return err
 }
 
 func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {

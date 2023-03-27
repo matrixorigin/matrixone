@@ -59,6 +59,15 @@ func putJob(job *tasks.Job) {
 	_jobPool.Put(job)
 }
 
+// At present, the read and write operations of all modules of mo-service use blockio.
+// I have started/stopped IoPipeline when mo is initialized/stopped, but in order to
+// be compatible with the UT of each module, I must add syncFetch and syncPrefetch.
+
+// Most UT cases do not call Start(), so in order to be compatible with these cases,
+// the pipeline uses syncFetch and syncPrefetch.In order to avoid the data race of UT,
+// I did not switch pipeline.fetchFun and pipeline.prefetchFunc when
+// I stopped, so I need to execute ResetPipeline again
+
 var pipeline *IoPipeline
 
 type IOJobFactory func(context.Context, fetch) *tasks.Job
@@ -69,10 +78,16 @@ func init() {
 
 func Start() {
 	pipeline.Start()
+	pipeline.fetchFun = pipeline.asyncFetch
+	pipeline.prefetchFunc = pipeline.asyncPrefetch
 }
 
 func Stop() {
 	pipeline.Stop()
+}
+
+func ResetPipeline() {
+	pipeline = NewIOPipeline()
 }
 
 func makeName(location string) string {
@@ -144,6 +159,26 @@ func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 	)
 }
 
+type FetchFunc = func(ctx context.Context, proc fetch) (any, error)
+type PrefetchFunc = func(pref prefetch) error
+
+func syncFetch(ctx context.Context, proc fetch) (any, error) {
+	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	if err != nil {
+		return nil, err
+	}
+	return ioVectors, nil
+}
+
+func syncPrefetch(pref prefetch) error {
+	_, err := pref.reader.ReadBlocks(context.Background(),
+		pref.meta, pref.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type IoPipeline struct {
 	options struct {
 		fetchParallism    int
@@ -167,6 +202,9 @@ type IoPipeline struct {
 	active    atomic.Bool
 	onceStart sync.Once
 	onceStop  sync.Once
+
+	fetchFun     FetchFunc
+	prefetchFunc PrefetchFunc
 }
 
 func NewIOPipeline(
@@ -194,6 +232,9 @@ func NewIOPipeline(
 		64,
 		p.onFetch)
 	p.fetch.scheduler = tasks.NewParallelJobScheduler(p.options.fetchParallism)
+
+	p.fetchFun = syncFetch
+	p.prefetchFunc = syncPrefetch
 	return p
 }
 
@@ -236,13 +277,7 @@ func (p *IoPipeline) Fetch(
 	ctx context.Context,
 	proc fetch,
 ) (res any, err error) {
-	job, err := p.AsyncFetch(ctx, proc)
-	if err != nil {
-		return
-	}
-	result := job.WaitDone()
-	res, err = result.Res, result.Err
-	return
+	return p.fetchFun(ctx, proc)
 }
 
 func (p *IoPipeline) AsyncFetch(
@@ -261,11 +296,28 @@ func (p *IoPipeline) AsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(ctx prefetch) (err error) {
-	if _, err = p.prefetch.queue.Enqueue(ctx); err != nil {
+func (p *IoPipeline) asyncFetch(
+	ctx context.Context,
+	proc fetch,
+) (res any, err error) {
+	job, err := p.AsyncFetch(ctx, proc)
+	if err != nil {
+		return
+	}
+	result := job.WaitDone()
+	res, err = result.Res, result.Err
+	return
+}
+
+func (p *IoPipeline) asyncPrefetch(pref prefetch) (err error) {
+	if _, err = p.prefetch.queue.Enqueue(pref); err != nil {
 		return
 	}
 	return
+}
+
+func (p *IoPipeline) Prefetch(pref prefetch) (err error) {
+	return p.prefetchFunc(pref)
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {

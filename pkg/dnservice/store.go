@@ -185,8 +185,6 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
-	// stop I/O pipeline
-	blockio.Stop()
 	s.stopper.Stop()
 	var err error
 	s.moCluster.Close()
@@ -215,6 +213,8 @@ func (s *store) Close() error {
 	if ts != nil {
 		err = ts.Close()
 	}
+	// stop I/O pipeline
+	blockio.Stop()
 	return err
 }
 

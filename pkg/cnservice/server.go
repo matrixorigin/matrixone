@@ -164,8 +164,6 @@ func (s *service) Start() error {
 func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
-	// stop I/O pipeline
-	blockio.Stop()
 	s.stopper.Stop()
 	if err := s.stopFrontend(); err != nil {
 		return err
@@ -176,6 +174,8 @@ func (s *service) Close() error {
 	if err := s.stopRPCs(); err != nil {
 		return err
 	}
+	// stop I/O pipeline
+	blockio.Stop()
 	return s.server.Close()
 }
 
