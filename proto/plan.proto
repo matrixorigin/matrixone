@@ -264,6 +264,8 @@ message PrimaryKeyDef {
 	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
 	repeated string names = 5;
+	// Composite primary key column definition
+	ColDef comp_pkey_col = 6;
 }
 
 message IndexDef {
@@ -404,9 +406,8 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
-	ColDef composite_pkey = 33;
-	bool isLocked = 34;
-	TableLockType tableLockType = 35;
+	bool isLocked = 33;
+	TableLockType tableLockType = 34;
 }
 
 message TableFunction{

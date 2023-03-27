@@ -426,6 +426,10 @@ func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
 		Names:       make([]string, len(pkeyDef.Names)),
 	}
 	copy(def.Names, pkeyDef.Names)
+	// Check whether the composite primary key column is included
+	if pkeyDef.CompPkeyCol != nil {
+		def.CompPkeyCol = DeepCopyColDef(pkeyDef.CompPkeyCol)
+	}
 	return def
 }
 
@@ -469,10 +473,10 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
-		CompositePkey: nil,
-		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
-		Indexes:       make([]*IndexDef, len(table.Indexes)),
-		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		//CompositePkey: nil,
+		OriginCols: make([]*plan.ColDef, len(table.OriginCols)),
+		Indexes:    make([]*IndexDef, len(table.Indexes)),
+		Fkeys:      make([]*plan.ForeignKeyDef, len(table.Fkeys)),
 	}
 
 	for idx, col := range table.Cols {
@@ -499,9 +503,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		newTable.Pkey = DeepCopyPrimaryKeyDef(table.Pkey)
 	}
 
-	if table.CompositePkey != nil {
-		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
-	}
 	if table.ClusterBy != nil {
 		newTable.ClusterBy = &plan.ClusterByDef{
 			Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),

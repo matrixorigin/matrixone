@@ -709,6 +709,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			pkeyDef := &PrimaryKeyDef{
 				Names:       primaryKeys,
 				PkeyColName: pkeyName,
+				CompPkeyCol: colDef,
 			}
 			createTable.TableDef.Pkey = pkeyDef
 		}
@@ -1280,36 +1281,6 @@ func buildUpdateIndexMetaPlan(oldTblId uint64, newTblId uint64, mode DeleteIndex
 	}
 }
 
-// Build a plan to insert index table with origin table data
-func buildInsertIndexTablePlan(indexTable string, indexParts []string, originTable string, pkeyName string, ctx CompilerContext) (*Plan, error) {
-	var sql string
-	var temp string
-	for i, part := range indexParts {
-		if i == 0 {
-			temp += part
-		} else {
-			temp += "," + part
-		}
-	}
-
-	if len(pkeyName) == 0 {
-		sql = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, indexTable, temp, originTable, temp)
-	} else {
-		sql = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, indexTable, temp, pkeyName, originTable, temp)
-	}
-	fmt.Printf("-----------wuxiliang-------------sql: %s\n", sql)
-
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-	if err != nil {
-		return nil, err
-	}
-	if insertStmt, ok := stmt.(*tree.Insert); ok {
-		return buildInsert(insertStmt, ctx, false)
-	} else {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not insert syntax tree")
-	}
-}
-
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	dropTable := &plan.DropTable{
 		IfExists: stmt.IfExists,
@@ -1401,7 +1372,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			return nil, err
 		}
 		attachedPlan, err = buildDeleteIndexMetaPlan("", 0, databaseId, DROP_DATABASE, ctx)
-		//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1466,8 +1436,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
 	}
-	if tableDef.CompositePkey != nil {
-		colMap[tableDef.CompositePkey.Name] = tableDef.CompositePkey
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
 
 	// index.TableDef.Defs store info of index need to be modified
@@ -1656,8 +1628,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
 	}
-	if tableDef.CompositePkey != nil {
-		colMap[tableDef.CompositePkey.Name] = tableDef.CompositePkey
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
 
 	alterTable.TableDef = tableDef
@@ -1749,11 +1722,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				if err = buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
-				//indexDef := indexInfo.TableDef.Indexes[0]
-				//attachedPlan, err = buildInsertIndexTablePlan(indexDef.IndexTableName, indexDef.Parts, tableDef.Name, oriPriKeyName, ctx)
-				//if err != nil {
-				//	return nil, err
-				//}
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
