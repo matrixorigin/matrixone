@@ -101,9 +101,11 @@ func newDatabase(db *txnDB) *txnDatabase {
 	return dbase
 
 }
-func (db *txnDatabase) GetID() uint64   { return db.txnDB.entry.GetID() }
-func (db *txnDatabase) GetName() string { return db.txnDB.entry.GetName() }
-func (db *txnDatabase) String() string  { return db.txnDB.entry.String() }
+func (db *txnDatabase) GetID() uint64        { return db.txnDB.entry.GetID() }
+func (db *txnDatabase) GetName() string      { return db.txnDB.entry.GetName() }
+func (db *txnDatabase) String() string       { return db.txnDB.entry.String() }
+func (db *txnDatabase) IsSubscription() bool { return db.txnDB.entry.IsSubscription() }
+func (db *txnDatabase) GetCreateSql() string { return db.txnDB.entry.GetCreateSql() }
 
 func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)

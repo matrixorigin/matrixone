@@ -60,6 +60,7 @@ type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
 type IndexDef = plan.IndexDef
+type SubscriptionMeta = plan.SubscriptionMeta
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -100,6 +101,11 @@ type CompilerContext interface {
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
 	GetStatsCache() *StatsCache
+	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
+	CheckSubscriptionValid(subName, accName string, pubName string) error
+	SetQueryingSubscription(meta *SubscriptionMeta)
+	GetQueryingSubscription() *SubscriptionMeta
+	IsPublishing(dbName string) (bool, error)
 }
 
 type Optimizer interface {
