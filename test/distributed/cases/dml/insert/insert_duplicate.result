@@ -158,15 +158,17 @@ col1    col2    col3    col4
 22    bear    tower    1000
 300    paper    up    0
 create table indup_tmp(col1 int,col2 varchar(20),col3 varchar(20));
-insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(4,'wine','down'),(5,'box','high');
-insert into indup_02(col1,col2,col3) select * from  indup_tmp on duplicate key update col3=left(col3,2),col2='wow';
-Column 'col3' in field list is ambiguous
+insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(10,'wine','down'),(300,'box','high');
+insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update indup_02.col3=left(indup_02.col3,2),col2='wow';
 select * from indup_02;
 col1    col2    col3    col4
-10    apple    left    null
-11    a1    b1    300
 22    bear    tower    1000
-300    paper    up    0
+11    a1    b1    300
+1    apple    left    30
+2    bear    right    30
+3    paper    up    30
+10    wow    le    null
+300    wow    up    0
 delete from indup_02;
 select * from indup_02;
 col1    col2    col3    col4
@@ -225,9 +227,7 @@ CREATE TABLE IF NOT EXISTS indup_04(
 `spu_id` VARCHAR(30) NOT NULL,
 `uv`  BIGINT NOT NULL,
 `update_time` date default '2020-10-10' COMMENT 'lastest time',
-PRIMARY KEY ( `id`, `act_name`),
-unique key idx_spu_id (spu_id),
-KEY idx_act_name(act_name)
+PRIMARY KEY ( `id`, `act_name`)
 );
 insert into indup_04 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
 select * from indup_04;
@@ -238,41 +238,41 @@ id    act_name    spu_id    uv    update_time
 insert into indup_04 values (4,'shenzheng','004',4,'2021-05-28'),(1,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
-1    beijing    010    5    2021-01-03
 2    shanghai    002    2    2022-09-23
 3    guangzhou    003    3    2022-09-23
 4    shenzheng    004    4    2021-05-28
+1    beijing    010    5    2021-01-03
 insert into indup_04 values (2,'shanghai','002',21,'1999-09-23'),(3,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
+4    shenzheng    004    4    2021-05-28
 1    beijing    010    5    2021-01-03
 2    shanghai    002    21    2022-09-23
 3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
 insert into indup_04 values (2,'shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
-Column 'act_name' cannot be null
+constraint violation: Column 'act_name' cannot be null
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
+4    shenzheng    004    4    2021-05-28
 1    beijing    010    5    2021-01-03
 2    shanghai    002    21    2022-09-23
 3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
 insert into indup_04 values (5,'shanxi','005',4,'2022-10-08'),(6,'shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
+4    shenzheng    004    4    2021-05-28
 1    beijing    010    5    2021-01-03
 2    shanghai    002    21    2022-09-23
 3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
 5    shanxi    005    4    2022-10-08
 6    shandong    006    6    2022-11-22
 insert into indup_04 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
+4    shenzheng    004    4    2021-05-28
 1    beijing    010    5    2021-01-03
 2    shanghai    002    21    2022-09-23
 3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
 5    shanxi    005    4    2022-10-08
 6    shandong    006    6    2022-11-22
 10    xinjiang    008    7    null
@@ -284,7 +284,7 @@ insert into indup_fk2 values(2,'score',1),(2,'student',4),(10,'goods',2);
 insert into indup_fk2 values(10,'food',1)on duplicate key update col1=50;
 Cannot add or update a child row: a foreign key constraint fails (`insert_duplicate`.`indup_fk2`, CONSTRAINT `ck` FOREIGN KEY (`col1`) REFERENCES `indup_fk1` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT)
 insert into indup_fk2 values(50,'food',1)on duplicate key update col1=values(col1);
-Cannot add or update a child row: a foreign key constraint fails (`insert_duplicate`.`indup_fk2`, CONSTRAINT `ck` FOREIGN KEY (`col1`) REFERENCES `indup_fk1` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from indup_fk1;
 col1    col2    col3
 2    yellow    20
@@ -295,9 +295,8 @@ col1    col2    col3
 2    score    1
 10    goods    2
 2    student    4
-drop table indup_fk1;
-Cannot drop table 'indup_fk1' referenced by a foreign key constraint 'ck' on table 'indup_fk2'.
 drop table indup_fk2;
+drop table indup_fk1;
 CREATE TABLE IF NOT EXISTS indup_05(
 col1 INT ,
 col2 VARCHAR(20) NOT NULL,
@@ -317,13 +316,13 @@ col1    col2    col3    col4
 create table indup_06(col1 int primary key,col2 int);
 insert into indup_06 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
-Duplicate entry '2' for key 'indup_06.PRIMARY'
+constraint violation: Duplicate entry for key 'col1'
 truncate table  indup_06;
 insert into indup_06 values(1,1);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2*10;
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2/10;
-Duplicate entry '2' for key 'indup_06.PRIMARY'
+constraint violation: Duplicate entry for key 'col1'
 CREATE TABLE IF NOT EXISTS indup_07(
 col1 INT primary key,
 col2 VARCHAR(20) NOT NULL,
@@ -337,58 +336,56 @@ col1    col2    col3    col4
 24    66    77    1
 25    99    88    1
 33    11    33    1
-truncate table indup_07;
 insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
+Data truncation: data out of range: data type int32, value '2147483649'
 begin;
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
+Duplicate entry '24' for key 'indup_07.PRIMARY'
 select * from indup_07;
 col1    col2    col3    col4
-22    11    33    1
 23    22    55    2
-24    1    1    100
-33    66    77    1
+24    66    77    1
+25    99    88    1
+33    11    33    1
 rollback ;
 select * from indup_07;
 col1    col2    col3    col4
-24    1    1    100
+23    22    55    2
+24    66    77    1
+25    99    88    1
+33    11    33    1
 start transaction ;
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
+Duplicate entry '24' for key 'indup_07.PRIMARY'
 select * from indup_07;
 col1    col2    col3    col4
-22    11    33    1
 23    22    55    2
-24    1    1    100
-33    66    77    1
+24    66    77    1
+25    99    88    1
+33    11    33    1
 commit;
 select * from indup_07;
 col1    col2    col3    col4
-22    11    33    1
 23    22    55    2
-24    1    1    100
-33    66    77    1
+24    66    77    1
+25    99    88    1
+33    11    33    1
 prepare stmt1 from "insert into indup_07 values(?, '11', '33', 1)on duplicate key update col1=col1*10";
 set @a_var = 1;
 execute stmt1 using @a_var;
 select * from indup_07;
 col1    col2    col3    col4
 1    11    33    1
-22    11    33    1
 23    22    55    2
-24    1    1    100
-33    66    77    1
+24    66    77    1
+25    99    88    1
+33    11    33    1
 set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
 col1    col2    col3    col4
 1    11    33    1
-22    11    33    1
-24    1    1    100
-33    66    77    1
+24    66    77    1
+25    99    88    1
+33    11    33    1
 230    22    55    2
-drop table indup_01;
-drop table indup_02;
-drop table indup_03;
-drop table indup_04;
-drop table indup_05;
-drop table indup_06;
-drop table indup_07;

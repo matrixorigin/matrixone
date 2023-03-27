@@ -1,4 +1,3 @@
--- @bvt:issue#8515
 CREATE TABLE IF NOT EXISTS indup_00(
     `id` INT UNSIGNED,
     `act_name` VARCHAR(20) NOT NULL,
@@ -24,7 +23,6 @@ insert into indup_00 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','00
 select * from indup_00;
 insert into indup_00 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_00;
--- @bvt:issue
 
 -- @bvt:issue#8498
 CREATE TABLE IF NOT EXISTS indup_01(
@@ -54,7 +52,7 @@ select * from indup_01;
 insert into indup_01 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_01;
 -- @bvt:issue
--- @bvt:issue#8494
+
 CREATE TABLE IF NOT EXISTS indup_02(
     col1 INT ,
     col2 VARCHAR(20) NOT NULL,
@@ -75,19 +73,21 @@ insert into indup_02 values(3,'aaa','bbb',30) on duplicate key update col1=col1+
 select * from indup_02;
 --insert primary key duplicate data, update data pk conflict other insert data
 insert into indup_02 values(3,'aaa','bbb',30),(30,'abc','abc',10),(11,'a1','b1',300) on duplicate key update col1=col1*10,col4=0;
+-- @bvt:issue#8716
 select * from indup_02;
 --insert into select from table duplicate update,update col=function(col) col=constant
 create table indup_tmp(col1 int,col2 varchar(20),col3 varchar(20));
-insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(4,'wine','down'),(5,'box','high');
-insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update col3=left(col3,2),col2='wow';
+insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(10,'wine','down'),(300,'box','high');
+insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update indup_02.col3=left(indup_02.col3,2),col2='wow';
 select * from indup_02;
+-- @bvt:issue
 delete from indup_02;
 select * from indup_02;
 
 --insert primary key no duplicate data
 insert into indup_02(col1,col2,col3) values(6,'app','uper'),(7,'light','') on duplicate key update col2='';
 select * from indup_02;
--- @bvt:issue
+
 CREATE TABLE IF NOT EXISTS indup_03(
     col1 varchar(25) ,
     col2 VARCHAR(20) NOT NULL,
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS indup_04(
     `spu_id` VARCHAR(30) NOT NULL,
     `uv`  BIGINT NOT NULL,
     `update_time` date default '2020-10-10' COMMENT 'lastest time',
-    PRIMARY KEY ( `id`, `act_name`),
+    PRIMARY KEY ( `id`, `act_name`)
 );
 insert into indup_04 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
 select * from indup_04;
@@ -146,12 +146,14 @@ create table indup_fk1(col1 int primary key,col2 varchar(25),col3 tinyint);
 create table indup_fk2(col1 int,col2 varchar(25),col3 tinyint primary key,constraint ck foreign key(col1) REFERENCES indup_fk1(col1) on delete RESTRICT on update RESTRICT);
 insert into indup_fk1 values (2,'yellow',20),(10,'apple',50),(11,'opppo',51);
 insert into indup_fk2 values(2,'score',1),(2,'student',4),(10,'goods',2);
+-- @bvt:issue#8711
 insert into indup_fk2 values(10,'food',1)on duplicate key update col1=50;
 insert into indup_fk2 values(50,'food',1)on duplicate key update col1=values(col1);
 select * from indup_fk1;
 select * from indup_fk2;
-drop table indup_fk1;
+-- @bvt:issue
 drop table indup_fk2;
+drop table indup_fk1;
 
 -- without pk and unique index
 CREATE TABLE IF NOT EXISTS indup_05(
@@ -188,6 +190,7 @@ select * from indup_07;
 insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
 
 --transaction
+-- @bvt:issue#8713
 begin;
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
 select * from indup_07;
@@ -198,7 +201,7 @@ insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) o
 select * from indup_07;
 commit;
 select * from indup_07;
-
+-- @bvt:issue
 --prepare
 prepare stmt1 from "insert into indup_07 values(?, '11', '33', 1)on duplicate key update col1=col1*10";
 set @a_var = 1;
