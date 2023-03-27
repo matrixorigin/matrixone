@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -117,9 +115,9 @@ func (job *Job) Run() {
 	job.startTs = time.Now()
 	defer func() {
 		job.endTs = time.Now()
-		logutil.Debug("run-job", common.AnyField("name", job.String()),
-			common.ErrorField(job.result.Err),
-			common.DurationField(job.endTs.Sub(job.startTs)))
+		/*logutil.Debug("run-job", common.AnyField("name", job.String()),
+		common.ErrorField(job.result.Err),
+		common.DurationField(job.endTs.Sub(job.startTs)))*/
 	}()
 	result := job.exec(job.ctx)
 	job.result = result
