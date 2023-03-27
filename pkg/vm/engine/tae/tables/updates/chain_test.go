@@ -51,8 +51,8 @@ func TestDeleteChain1(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
-	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
 
 	controller := NewMVCCHandle(blk)
 	chain := NewDeleteChain(nil, controller)
@@ -159,7 +159,8 @@ func TestDeleteChain1(t *testing.T) {
 func TestDeleteChain2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, 0, types.TS{}))
+	seg := common.NewSegmentid()
+	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, common.NewBlockid(&seg, 0, 0), types.TS{}))
 	chain := NewDeleteChain(nil, controller)
 
 	txn1 := mockTxn()

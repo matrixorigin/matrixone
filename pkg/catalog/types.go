@@ -228,13 +228,13 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID    uint64
+	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
 	MetaLoc    string
 	DeltaLoc   string
 	CommitTs   types.TS
-	SegmentID  uint64
+	SegmentID  types.Uuid
 }
 
 // used for memengine and tae
@@ -404,13 +404,13 @@ var (
 		types.New(types.T_int8, 0, 0),       // att_is_clusterby
 	}
 	MoTableMetaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),                    // block_id
+		types.New(types.T_Blockid, 0, 0),                   // block_id
 		types.New(types.T_bool, 0, 0),                      // entry_state, true for appendable
 		types.New(types.T_bool, 0, 0),                      // sorted, true for sorted by primary key
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
 		types.New(types.T_TS, 0, 0),                        // committs
-		types.New(types.T_uint64, 0, 0),                    // segment_id
+		types.New(types.T_uuid, 0, 0),                      // segment_id
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

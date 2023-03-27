@@ -74,11 +74,11 @@ func (d *DiskCache) Read(
 	var numHit, numRead, numOpen int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.Cache.Read.Add(numRead)
-			c.Cache.Hit.Add(numHit)
-			c.Cache.Disk.Read.Add(numRead)
-			c.Cache.Disk.Hit.Add(numHit)
-			c.Cache.Disk.OpenFile.Add(numOpen)
+			c.FileService.Cache.Read.Add(numRead)
+			c.FileService.Cache.Hit.Add(numHit)
+			c.FileService.Cache.Disk.Read.Add(numRead)
+			c.FileService.Cache.Disk.Hit.Add(numHit)
+			c.FileService.Cache.Disk.OpenFile.Add(numOpen)
 		}, d.perfCounterSets...)
 	}()
 
@@ -173,8 +173,8 @@ func (d *DiskCache) Update(
 	var numOpen, numStat int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-			set.Cache.Disk.OpenFile.Add(numOpen)
-			set.Cache.Disk.StatFile.Add(numStat)
+			set.FileService.Cache.Disk.OpenFile.Add(numOpen)
+			set.FileService.Cache.Disk.StatFile.Add(numStat)
 		})
 	}()
 
@@ -272,7 +272,7 @@ func (d *DiskCache) GetFileContent(ctx context.Context, filePath string, offset 
 		return nil, err
 	}
 	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-		set.Cache.Disk.OpenFile.Add(1)
+		set.FileService.Cache.Disk.OpenFile.Add(1)
 	})
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
@@ -280,7 +280,7 @@ func (d *DiskCache) GetFileContent(ctx context.Context, filePath string, offset 
 		}
 	}
 	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-		set.Cache.Disk.GetFileContent.Add(1)
+		set.FileService.Cache.Disk.GetFileContent.Add(1)
 	})
 	return f, nil
 }
@@ -297,7 +297,7 @@ func (d *DiskCache) SetFileContent(
 	if err == nil {
 		// file exists
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-			set.Cache.Disk.StatFile.Add(1)
+			set.FileService.Cache.Disk.StatFile.Add(1)
 		})
 		return nil
 	}
@@ -340,7 +340,7 @@ func (d *DiskCache) SetFileContent(
 	}
 
 	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-		set.Cache.Disk.SetFileContent.Add(1)
+		set.FileService.Cache.Disk.SetFileContent.Add(1)
 	})
 
 	return nil

@@ -44,7 +44,7 @@ type binaryFuseFilter struct {
 func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.GetType()}
 	hashes := make([]uint64, 0)
-	op := func(v any, _ int) error {
+	op := func(v any, _ bool, _ int) error {
 		hash, err := types.Hash(v, sf.typ)
 		if err != nil {
 			return err
@@ -93,7 +93,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visib
 	row := uint32(0)
 	exist := false
 
-	op := func(v any, _ int) error {
+	op := func(v any, _ bool, _ int) error {
 		hash, err := types.Hash(v, filter.typ)
 		if err != nil {
 			return err

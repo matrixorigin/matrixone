@@ -33,11 +33,11 @@ type partitionStateRowsIter struct {
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
-	blockID      uint64
+	blockID      types.Blockid
 	iterDeleted  bool
 }
 
-func (p *PartitionState) NewRowsIter(ts types.TS, blockID *uint64, iterDeleted bool) *partitionStateRowsIter {
+func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *partitionStateRowsIter {
 	iter := p.Rows.Copy().Iter()
 	ret := &partitionStateRowsIter{
 		ts:          ts,

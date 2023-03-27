@@ -17,9 +17,9 @@ package txnimpl
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -187,35 +187,25 @@ func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
 	return seg
 }
 
-func (seg *txnSegment) GetMeta() any    { return seg.entry }
-func (seg *txnSegment) String() string  { return seg.entry.String() }
-func (seg *txnSegment) GetID() uint64   { return seg.entry.GetID() }
-func (seg *txnSegment) getDBID() uint64 { return seg.entry.GetTable().GetDB().ID }
+func (seg *txnSegment) GetMeta() any      { return seg.entry }
+func (seg *txnSegment) String() string    { return seg.entry.String() }
+func (seg *txnSegment) GetID() types.Uuid { return seg.entry.ID }
+func (seg *txnSegment) getDBID() uint64   { return seg.entry.GetTable().GetDB().ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
 
-func (seg *txnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID())
-}
-
-func (seg *txnSegment) CreateNonAppendableBlockWithMeta(
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateNonAppendableBlockWithMeta(
-		seg.getDBID(),
-		seg.entry.AsCommonID(),
-		metaLoc,
-		deltaLoc)
+func (seg *txnSegment) CreateNonAppendableBlock(opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID(), opts)
 }
 
 func (seg *txnSegment) IsUncommitted() bool {
-	return isLocalSegmentByID(seg.entry.GetID())
+	return seg.entry.IsLocal
 }
 
 func (seg *txnSegment) IsAppendable() bool { return seg.entry.IsAppendable() }
 
-func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
+func (seg *txnSegment) SoftDeleteBlock(id types.Blockid) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
 	return seg.Txn.GetStore().SoftDeleteBlock(seg.getDBID(), fp)
@@ -225,21 +215,12 @@ func (seg *txnSegment) GetRelation() (rel handle.Relation) {
 	return newRelation(seg.table)
 }
 
-func (seg *txnSegment) GetBlock(id uint64) (blk handle.Block, err error) {
+func (seg *txnSegment) GetBlock(id types.Blockid) (blk handle.Block, err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
 	return seg.Txn.GetStore().GetBlock(seg.getDBID(), fp)
 }
 
 func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID(), is1PC)
-}
-
-func (seg *txnSegment) BatchDedup(pks containers.Vector) (err error) {
-	if isLocalSegment(seg.entry.AsCommonID()) {
-		return seg.table.localSegment.BatchDedup(pks)
-	}
-	segData := seg.entry.GetSegmentData()
-	seg.Txn.GetStore().LogSegmentID(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
-	return segData.BatchDedup(seg.Txn, pks)
+	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.ID, is1PC)
 }

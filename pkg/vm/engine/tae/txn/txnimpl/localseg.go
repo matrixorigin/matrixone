@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,19 +36,11 @@ const (
 	LocalSegmentStartID uint64 = 1 << 47
 )
 
-var localSegmentIdAlloc *common.IdAlloctor
+// var localSegmentIdAlloc *common.IdAlloctor
 
-func init() {
-	localSegmentIdAlloc = common.NewIdAlloctor(LocalSegmentStartID)
-}
-
-func isLocalSegment(id *common.ID) bool {
-	return id.SegmentID >= LocalSegmentStartID
-}
-
-func isLocalSegmentByID(id uint64) bool {
-	return id >= LocalSegmentStartID
-}
+// func init() {
+// 	localSegmentIdAlloc = common.NewIdAlloctor(LocalSegmentStartID)
+// }
 
 type localSegment struct {
 	entry      *catalog.SegmentEntry
@@ -67,7 +60,6 @@ type localSegment struct {
 func newLocalSegment(table *txnTable) *localSegment {
 	entry := catalog.NewStandaloneSegment(
 		table.entry,
-		localSegmentIdAlloc.Alloc(),
 		table.store.txn.GetStartTS())
 	return &localSegment{
 		entry:   entry,
@@ -93,7 +85,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 func (seg *localSegment) registerNode(metaLoc string, deltaLoc string, zm dataio.Index) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
-		uint64(len(seg.nodes)),
+		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
@@ -113,7 +105,7 @@ func (seg *localSegment) registerNode(metaLoc string, deltaLoc string, zm dataio
 func (seg *localSegment) registerANode() {
 	meta := catalog.NewStandaloneBlock(
 		seg.entry,
-		uint64(len(seg.nodes)),
+		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewANode(
@@ -252,17 +244,31 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		return
 	}
 	//handle persisted insertNode.
-	if seg.nseg == nil ||
-		seg.nseg.GetMeta().(*catalog.SegmentEntry).BlockCnt() ==
-			int(seg.nseg.GetMeta().(*catalog.SegmentEntry).GetTable().
-				GetSchema().SegmentMaxBlocks) {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
+	metaloc, deltaloc := node.GetPersistedLoc()
+	name, blkn, _, _, _ := blockio.DecodeLocation(metaloc)
+	sid, filen := common.MustSegmentidFromMetalocName(name)
+
+	shouldCreateNewSeg := func() bool {
+		if seg.nseg == nil {
+			return true
+		}
+		entry := seg.nseg.GetMeta().(*catalog.SegmentEntry)
+		return entry.ID != sid
+	}
+
+	if shouldCreateNewSeg() {
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(common.CreateSegOpt).WithId(&sid))
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
 			return
 		}
 	}
-	_, err = seg.nseg.CreateNonAppendableBlockWithMeta(node.GetPersistedLoc())
+	opts := new(common.CreateBlockOpt).
+		WithMetaloc(metaloc).
+		WithDetaloc(deltaloc).
+		WithFileIdx(filen).
+		WithBlkIdx(uint16(blkn))
+	_, err = seg.nseg.CreateNonAppendableBlock(opts)
 	if err != nil {
 		return
 	}
@@ -472,8 +478,8 @@ func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
-	npos := int(blk.ID)
-	n := seg.nodes[npos]
+	_, pos := blk.ID.Offsets()
+	n := seg.nodes[int(pos)]
 	return n.GetColumnDataByIds(colIdxes)
 }
 
@@ -481,14 +487,14 @@ func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
 ) (view *model.ColumnView, err error) {
-	npos := int(blk.ID)
-	n := seg.nodes[npos]
+	_, pos := blk.ID.Offsets()
+	n := seg.nodes[int(pos)]
 	return n.GetColumnDataById(colIdx)
 }
 
 func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
-	npos := int(blk.ID)
-	n := seg.nodes[npos]
+	_, pos := blk.ID.Offsets()
+	n := seg.nodes[int(pos)]
 	return int(n.Rows())
 }
 
