@@ -275,7 +275,7 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 		table.RLock()
 		defer table.RUnlock()
 		if node := table.MVCCChain.GetVisibleNode(ts); node != nil {
-			colData.Append([]byte(node.(*catalog.MVCCNode[*catalog.TableMVCCNode]).BaseNode.SchemaConstraints))
+			colData.Append([]byte(node.BaseNode.SchemaConstraints))
 		} else {
 			colData.Append([]byte(""))
 		}

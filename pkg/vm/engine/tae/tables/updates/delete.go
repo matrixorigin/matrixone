@@ -36,14 +36,12 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(va, vb txnif.MVCCNode) int {
-	a := va.(*DeleteNode)
-	b := vb.(*DeleteNode)
+func compareDeleteNode(a, b *DeleteNode) int {
 	return a.TxnMVCCNode.Compare2(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
-	*common.GenericDLNode[txnif.MVCCNode]
+	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
 	logIndexes []*wal.Index
@@ -51,7 +49,7 @@ type DeleteNode struct {
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
-	viewNodes  map[uint32]*common.GenericDLNode[txnif.MVCCNode]
+	viewNodes  map[uint32]*common.GenericDLNode[*DeleteNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -60,16 +58,16 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Merge,
 		logIndexes:  make([]*wal.Index, 0),
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	return n
 }
-func NewEmptyDeleteNode() txnif.MVCCNode {
+func NewEmptyDeleteNode() *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	return n
 }
@@ -79,7 +77,7 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()
@@ -90,9 +88,10 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-func (node *DeleteNode) CloneAll() txnif.MVCCNode  { panic("todo") }
-func (node *DeleteNode) CloneData() txnif.MVCCNode { panic("todo") }
-func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
+func (node *DeleteNode) CloneAll() *DeleteNode  { panic("todo") }
+func (node *DeleteNode) CloneData() *DeleteNode { panic("todo") }
+func (node *DeleteNode) Update(*DeleteNode)     { panic("todo") }
+func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
@@ -79,7 +80,7 @@ func NewBlockEntryWithMeta(
 			state: state,
 		},
 	}
-	e.BaseEntryImpl.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
+	e.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
@@ -115,7 +116,7 @@ func NewStandaloneBlockWithLoc(
 			state: ES_Appendable,
 		},
 	}
-	e.BaseEntryImpl.CreateWithLoc(ts, metaLoc, delLoc)
+	e.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
 }
 
@@ -280,5 +281,116 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	// segmentEntry.RLock()
 	// terminated,ts = segmentEntry.TryGetTerminatedTS(true)
 	// segmentEntry.RUnlock()
+	return
+}
+
+func (entry *BlockEntry) HasPersistedData() bool {
+	return entry.GetMetaLoc() != ""
+}
+func (entry *BlockEntry) GetMetaLoc() string {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.GetLatestNodeLocked() == nil {
+		return ""
+	}
+	str := entry.GetLatestNodeLocked().BaseNode.MetaLoc
+	return str
+}
+func (entry *BlockEntry) HasPersistedDeltaData() bool {
+	return entry.GetDeltaLoc() != ""
+}
+func (entry *BlockEntry) GetDeltaLoc() string {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.GetLatestNodeLocked() == nil {
+		return ""
+	}
+	str := entry.GetLatestNodeLocked().BaseNode.DeltaLoc
+	return str
+}
+
+func (entry *BlockEntry) GetVisibleMetaLoc(ts types.TS) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	str := entry.GetVisibleNode(ts).BaseNode.MetaLoc
+	return str
+}
+func (entry *BlockEntry) GetVisibleDeltaLoc(ts types.TS) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	str := entry.GetVisibleNode(ts).BaseNode.DeltaLoc
+	return str
+}
+
+func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc string) {
+	baseNode := &MetadataMVCCNode{
+		MetaLoc:  metaLoc,
+		DeltaLoc: deltaLoc,
+	}
+	node := &MVCCNode[*MetadataMVCCNode]{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
+		BaseNode:    baseNode.CloneAll(),
+	}
+	entry.Insert(node)
+}
+
+func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
+	baseNode := &MetadataMVCCNode{
+		MetaLoc:  metaLoc,
+		DeltaLoc: deltaLoc,
+	}
+	node := &MVCCNode[*MetadataMVCCNode]{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		BaseNode:    baseNode.CloneAll(),
+	}
+	entry.Insert(node)
+}
+func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isNewNode bool, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txnToWait.GetTxnState(true)
+		entry.Lock()
+	}
+	err = entry.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	baseNode := &MetadataMVCCNode{
+		MetaLoc: metaloc,
+	}
+	var node *MVCCNode[*MetadataMVCCNode]
+	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	node.BaseNode.Update(baseNode)
+	return
+}
+
+func (entry *BlockEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc string) (isNewNode bool, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txnToWait.GetTxnState(true)
+		entry.Lock()
+	}
+	err = entry.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	baseNode := &MetadataMVCCNode{
+		DeltaLoc: deltaloc,
+	}
+	var node *MVCCNode[*MetadataMVCCNode]
+	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	node.BaseNode.Update(baseNode)
 	return
 }

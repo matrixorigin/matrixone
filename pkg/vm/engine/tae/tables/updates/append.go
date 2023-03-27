@@ -35,8 +35,8 @@ type AppendNode struct {
 	id       *common.ID
 }
 
-func CompareAppendNode(e, o txnif.MVCCNode) int {
-	return e.(*AppendNode).Compare(o.(*AppendNode).TxnMVCCNode)
+func CompareAppendNode(e, o *AppendNode) int {
+	return e.Compare(o.TxnMVCCNode)
 }
 
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
@@ -89,7 +89,7 @@ func NewAppendNode(
 	return n
 }
 
-func NewEmptyAppendNode() txnif.MVCCNode {
+func NewEmptyAppendNode() *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
@@ -97,15 +97,16 @@ func NewEmptyAppendNode() txnif.MVCCNode {
 func (node *AppendNode) String() string {
 	return node.GeneralDesc()
 }
-func (node *AppendNode) CloneAll() txnif.MVCCNode {
+func (node *AppendNode) CloneAll() *AppendNode {
 	panic("todo")
 }
-func (node *AppendNode) CloneData() txnif.MVCCNode {
+func (node *AppendNode) CloneData() *AppendNode {
 	panic("todo")
 }
-func (node *AppendNode) Update(txnif.MVCCNode) {
+func (node *AppendNode) Update(*AppendNode) {
 	panic("todo")
 }
+func (node *AppendNode) IsNil() bool { return node == nil }
 func (node *AppendNode) GeneralDesc() string {
 	return fmt.Sprintf("%s;StartRow=%d MaxRow=%d", node.TxnMVCCNode.String(), node.startRow, node.maxRow)
 }

@@ -324,14 +324,14 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		}
 		return
 	}
-	prev := db.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])
+	prev := db.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*DBMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: db.GetCreatedAt(),
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
-		BaseNode:    prev.BaseNode.CloneAll().(*DBMVCCNode),
+		BaseNode:    prev.BaseNode.CloneAll(),
 	}
 	db.Insert(un)
 }
@@ -475,14 +475,14 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 		}
 		return
 	}
-	prev := tbl.MVCCChain.GetLatestCommittedNode().(*MVCCNode[*TableMVCCNode])
+	prev := tbl.MVCCChain.GetLatestCommittedNode()
 	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
-		BaseNode:    prev.BaseNode.CloneAll().(*TableMVCCNode),
+		BaseNode:    prev.BaseNode.CloneAll(),
 	}
 	tbl.Insert(un)
 
@@ -615,14 +615,14 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid uint64, segid types.Uui
 		}
 		return
 	}
-	prevUn := seg.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	prevUn := seg.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
-		BaseNode:    prevUn.BaseNode.CloneAll().(*MetadataMVCCNode),
+		BaseNode:    prevUn.BaseNode.CloneAll(),
 	}
 	seg.Insert(un)
 }
@@ -745,7 +745,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 			},
 		}
 	} else {
-		prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+		prevUn := blk.MVCCChain.GetLatestNodeLocked()
 		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: prevUn.CreatedAt,
@@ -756,7 +756,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 				DeltaLoc: deltaloc,
 			},
 		}
-		node := blk.MVCCChain.SearchNode(un).(*MVCCNode[*MetadataMVCCNode])
+		node := blk.MVCCChain.SearchNode(un)
 		if node != nil {
 			if !node.CreatedAt.Equal(un.CreatedAt) {
 				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
@@ -801,7 +801,7 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid uint64, segid types.Uuid, 
 		}
 		return
 	}
-	prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode])
+	prevUn := blk.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,

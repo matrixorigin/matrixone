@@ -26,12 +26,12 @@ func NewEmptyDBMVCCNode() *DBMVCCNode {
 	return &DBMVCCNode{}
 }
 
-func (e *DBMVCCNode) CloneAll() BaseNode {
+func (e *DBMVCCNode) CloneAll() *DBMVCCNode {
 	node := &DBMVCCNode{}
 	return node
 }
 
-func (e *DBMVCCNode) CloneData() BaseNode {
+func (e *DBMVCCNode) CloneData() *DBMVCCNode {
 	return &DBMVCCNode{}
 }
 
@@ -40,7 +40,7 @@ func (e *DBMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) Update(vun BaseNode) {}
+func (e *DBMVCCNode) Update(vun *DBMVCCNode) {}
 
 func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 

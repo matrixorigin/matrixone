@@ -30,13 +30,13 @@ func NewEmptyTableMVCCNode() *TableMVCCNode {
 	return &TableMVCCNode{}
 }
 
-func (e *TableMVCCNode) CloneAll() BaseNode {
+func (e *TableMVCCNode) CloneAll() *TableMVCCNode {
 	node := &TableMVCCNode{}
 	node.SchemaConstraints = e.SchemaConstraints
 	return node
 }
 
-func (e *TableMVCCNode) CloneData() BaseNode {
+func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 	return &TableMVCCNode{
 		SchemaConstraints: e.SchemaConstraints,
 	}
@@ -49,8 +49,7 @@ func (e *TableMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) Update(vun BaseNode) {
-	un := vun.(*TableMVCCNode)
+func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 	e.SchemaConstraints = un.SchemaConstraints
 }
 

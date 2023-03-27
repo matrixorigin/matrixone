@@ -245,7 +245,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		dbNode := node.(*catalog.MVCCNode[*catalog.DBMVCCNode])
+		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
@@ -269,7 +269,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		tblNode := node.(*catalog.MVCCNode[*catalog.TableMVCCNode])
+		tblNode := node
 		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
 			if !tblNode.HasDropCommitted() {
@@ -438,7 +438,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestPrepareTs := newest.CloneAll().(*catalog.MVCCNode[*catalog.MetadataMVCCNode]).GetPrepare()
+		latestPrepareTs := newest.CloneAll().GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -447,14 +447,14 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	e.RUnlock()
 
 	for _, node := range mvccNodes {
-		metaNode := node.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
+		metaNode := node
 		if metaNode.BaseNode.MetaLoc != "" && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
 
 	if n := len(mvccNodes); n > 0 {
-		newest := mvccNodes[n-1].(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
+		newest := mvccNodes[n-1]
 		if e.IsAppendable() {
 			if newest.BaseNode.MetaLoc != "" {
 				// appendable block has been flushed, no need to collect data

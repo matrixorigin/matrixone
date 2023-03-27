@@ -107,23 +107,23 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	return nil
 }
 
-type BaseNode interface {
-	CloneAll() BaseNode
-	CloneData() BaseNode
+type BaseNode[T any] interface {
+	CloneAll() T
+	CloneData() T
 	String() string
-	Update(vun BaseNode)
+	Update(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
 }
 
-type MVCCNode[T BaseNode] struct {
+type MVCCNode[T BaseNode[T]] struct {
 	*EntryMVCCNode
 	*txnbase.TxnMVCCNode
 	BaseNode T
 }
 
-func NewEmptyMVCCNodeFactory[T BaseNode](factory func() T) func() txnif.MVCCNode {
-	return func() txnif.MVCCNode {
+func NewEmptyMVCCNodeFactory[T BaseNode[T]](factory func() T) func() *MVCCNode[T] {
+	return func() *MVCCNode[T] {
 		return &MVCCNode[T]{
 			EntryMVCCNode: &EntryMVCCNode{},
 			TxnMVCCNode:   &txnbase.TxnMVCCNode{},
@@ -132,27 +132,29 @@ func NewEmptyMVCCNodeFactory[T BaseNode](factory func() T) func() txnif.MVCCNode
 	}
 }
 
-func CompareBaseNode[T BaseNode](e, o txnif.MVCCNode) int {
-	return e.(*MVCCNode[T]).Compare(o.(*MVCCNode[T]).TxnMVCCNode)
+func CompareBaseNode[T BaseNode[T]](e, o *MVCCNode[T]) int {
+	return e.Compare(o.TxnMVCCNode)
 }
 
-func (e *MVCCNode[T]) CloneAll() txnif.MVCCNode {
+func (e *MVCCNode[T]) CloneAll() *MVCCNode[T] {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
-		BaseNode:      e.BaseNode.CloneAll().(T),
+		BaseNode:      e.BaseNode.CloneAll(),
 	}
 	return node
 }
 
-func (e *MVCCNode[T]) CloneData() txnif.MVCCNode {
+func (e *MVCCNode[T]) CloneData() *MVCCNode[T] {
 	return &MVCCNode[T]{
 		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-		BaseNode:      e.BaseNode.CloneData().(T),
+		BaseNode:      e.BaseNode.CloneData(),
 	}
 }
-
+func (e *MVCCNode[T]) IsNil() bool {
+	return e == nil
+}
 func (e *MVCCNode[T]) String() string {
 
 	return fmt.Sprintf("%s%s%s",
@@ -162,8 +164,7 @@ func (e *MVCCNode[T]) String() string {
 }
 
 // for create drop in one txn
-func (e *MVCCNode[T]) Update(vun txnif.MVCCNode) {
-	un := vun.(*MVCCNode[T])
+func (e *MVCCNode[T]) Update(un *MVCCNode[T]) {
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
 	e.BaseNode.Update(un.BaseNode)

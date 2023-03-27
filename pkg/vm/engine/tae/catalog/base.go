@@ -16,7 +16,7 @@ package catalog
 
 import (
 	"fmt"
-	"io"
+	// "io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,40 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-// JXM TODO:
-// Generic BaseEntry can't work in go 1.19 because of compiler bug:
-// https://github.com/golang/go/issues/54671
-// Refactor catalog and use generic BaseEntry after go 1.19.1 release.
 type BaseEntry interface {
-	RLock()
-	RUnlock()
-
-	String() string
-	StringLocked() string
-	PPString(common.PPLevel, int, string) string
-
-	GetTxn() txnif.TxnReader
-	GetIndexes() []*wal.Index
+	// for replay
 	GetLogIndex() *wal.Index
 
-	GetLatestNodeLocked() txnif.MVCCNode
-	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
-
-	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool
-	IsCreatingOrAborted() bool
-	IsCommitting() bool
+	//for global checkpoint
+	RLock()
+	RUnlock()
 	DeleteBefore(ts types.TS) bool
-	HasDropCommitted() bool
-	HasDropCommittedLocked() bool
-
-	WriteOneNodeTo(w io.Writer) (n int64, err error)
-	ReadOneNodeFrom(r io.Reader) (n int64, err error)
-	CloneCommittedInRange(start, end types.TS) (ret BaseEntry)
-
-	PrepareCommit() error
-	PrepareRollback() (bool, error)
-	ApplyCommit(index *wal.Index) error
-	ApplyRollback(index *wal.Index) error
 }
 
 func CompareUint64(left, right uint64) int {
@@ -72,19 +46,19 @@ func CompareUint64(left, right uint64) int {
 	return 0
 }
 
-type BaseEntryImpl[T BaseNode] struct {
+type BaseEntryImpl[T BaseNode[T]] struct {
 	//chain of MetadataMVCCNode
-	*txnbase.MVCCChain
+	*txnbase.MVCCChain[*MVCCNode[T]]
 }
 
-func NewReplayBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
+func NewReplayBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	be := &BaseEntryImpl[T]{
 		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
 	}
 	return be
 }
 
-func NewBaseEntry[T BaseNode](factory func() T) *BaseEntryImpl[T] {
+func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
 		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
 	}
@@ -104,43 +78,6 @@ func (be *BaseEntryImpl[T]) PPString(level common.PPLevel, depth int, prefix str
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
-func (be *BaseEntryImpl[T]) HasPersistedData() bool {
-	return be.GetMetaLoc() != ""
-}
-func (be *BaseEntryImpl[T]) GetMetaLoc() string {
-	be.RLock()
-	defer be.RUnlock()
-	if be.GetLatestNodeLocked() == nil {
-		return ""
-	}
-	str := be.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode]).BaseNode.MetaLoc
-	return str
-}
-func (be *BaseEntryImpl[T]) HasPersistedDeltaData() bool {
-	return be.GetDeltaLoc() != ""
-}
-func (be *BaseEntryImpl[T]) GetDeltaLoc() string {
-	be.RLock()
-	defer be.RUnlock()
-	if be.GetLatestNodeLocked() == nil {
-		return ""
-	}
-	str := be.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode]).BaseNode.DeltaLoc
-	return str
-}
-
-func (be *BaseEntryImpl[T]) GetVisibleMetaLoc(ts types.TS) string {
-	be.RLock()
-	defer be.RUnlock()
-	str := be.GetVisibleNode(ts).(*MVCCNode[*MetadataMVCCNode]).BaseNode.MetaLoc
-	return str
-}
-func (be *BaseEntryImpl[T]) GetVisibleDeltaLoc(ts types.TS) string {
-	be.RLock()
-	defer be.RUnlock()
-	str := be.GetVisibleNode(ts).(*MVCCNode[*MetadataMVCCNode]).BaseNode.DeltaLoc
-	return str
-}
 
 func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
@@ -149,34 +86,6 @@ func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
 		BaseNode:    baseNode,
-	}
-	be.Insert(node)
-}
-
-func (be *BaseEntryImpl[T]) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc string) {
-	baseNode := &MetadataMVCCNode{
-		MetaLoc:  metaLoc,
-		DeltaLoc: deltaLoc,
-	}
-	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: ts,
-		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
-		BaseNode:    baseNode.CloneAll().(T),
-	}
-	be.Insert(node)
-}
-
-func (be *BaseEntryImpl[T]) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Schema) {
-	node := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: txnif.UncommitTS,
-		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
-		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
-		},
 	}
 	be.Insert(node)
 }
@@ -197,8 +106,8 @@ func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminate
 	if node == nil {
 		return
 	}
-	if node.(*MVCCNode[T]).HasDropCommitted() {
-		return true, node.(*MVCCNode[T]).DeletedAt
+	if node.HasDropCommitted() {
+		return true, node.DeletedAt
 	}
 	return
 }
@@ -228,49 +137,13 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 	}
 	return
 }
-func (be *BaseEntryImpl[T]) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
-	be.Lock()
-	defer be.Unlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		be.Unlock()
-		txnToWait.GetTxnState(true)
-		be.Lock()
-	}
-	err = be.CheckConflict(txn)
-	if err != nil {
-		return
-	}
-	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.BaseNode.Update(
-		&TableMVCCNode{
-			SchemaConstraints: string(cstr),
-		})
-	return
-}
-
-func (be *BaseEntryImpl[T]) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
-	baseNode := &MetadataMVCCNode{
-		MetaLoc:  metaLoc,
-		DeltaLoc: deltaLoc,
-	}
-	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: txnif.UncommitTS,
-		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
-		BaseNode:    baseNode.CloneAll().(T),
-	}
-	be.Insert(node)
-}
 
 func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
-		return false, entry.(*MVCCNode[T])
+		return false, entry
 	} else {
-		node := entry.CloneData().(*MVCCNode[T])
+		node := entry.CloneData()
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.Insert(node)
 		return true, node
@@ -281,50 +154,6 @@ func (be *BaseEntryImpl[T]) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, e
 	var entry *MVCCNode[T]
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.Delete()
-	return
-}
-
-func (be *BaseEntryImpl[T]) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isNewNode bool, err error) {
-	be.Lock()
-	defer be.Unlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		be.Unlock()
-		txnToWait.GetTxnState(true)
-		be.Lock()
-	}
-	err = be.CheckConflict(txn)
-	if err != nil {
-		return
-	}
-	baseNode := &MetadataMVCCNode{
-		MetaLoc: metaloc,
-	}
-	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.BaseNode.Update(baseNode)
-	return
-}
-
-func (be *BaseEntryImpl[T]) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc string) (isNewNode bool, err error) {
-	be.Lock()
-	defer be.Unlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		be.Unlock()
-		txnToWait.GetTxnState(true)
-		be.Lock()
-	}
-	err = be.CheckConflict(txn)
-	if err != nil {
-		return
-	}
-	baseNode := &MetadataMVCCNode{
-		DeltaLoc: deltaloc,
-	}
-	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.BaseNode.Update(baseNode)
 	return
 }
 
@@ -355,7 +184,7 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 	if un == nil {
 		return false
 	}
-	return un.(*MVCCNode[T]).HasDropCommitted()
+	return un.HasDropCommitted()
 }
 
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -373,9 +202,9 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(ts types.TS) (visible, dropped b
 	}
 	visible = true
 	if un.IsSameTxn(ts) {
-		dropped = un.(*MVCCNode[T]).HasDropIntent()
+		dropped = un.HasDropIntent()
 	} else {
-		dropped = un.(*MVCCNode[T]).HasDropCommitted()
+		dropped = un.HasDropCommitted()
 	}
 	return
 }
@@ -408,7 +237,7 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.(*MVCCNode[T]).DeletedAt.Greater(ts)
+	return un.DeletedAt.Greater(ts)
 }
 
 func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry {
@@ -426,7 +255,7 @@ func (be *BaseEntryImpl[T]) GetCreatedAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.(*MVCCNode[T]).CreatedAt
+	return un.CreatedAt
 }
 
 func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
@@ -434,7 +263,7 @@ func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.(*MVCCNode[T]).DeletedAt
+	return un.DeletedAt
 }
 
 func (be *BaseEntryImpl[T]) GetVisibility(ts types.TS) (visible, dropped bool) {

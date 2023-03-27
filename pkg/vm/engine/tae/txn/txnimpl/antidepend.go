@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-func readWriteConfilictCheck[T catalog.BaseNode](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
+func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)

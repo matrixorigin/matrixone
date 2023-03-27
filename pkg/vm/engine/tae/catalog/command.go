@@ -47,22 +47,22 @@ func CmdName(t int16) string {
 
 func init() {
 	txnif.RegisterCmdFactory(CmdUpdateDatabase, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd[*DBMVCCNode](cmdType,
+		return newEmptyEntryCmd(cmdType,
 			NewEmptyMVCCNodeFactory(NewEmptyDBMVCCNode),
 			func() *DBNode { return &DBNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateTable, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd[*TableMVCCNode](cmdType,
+		return newEmptyEntryCmd(cmdType,
 			NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
 			func() *TableNode { return &TableNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateSegment, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd[*MetadataMVCCNode](cmdType,
+		return newEmptyEntryCmd(cmdType,
 			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
 			func() *SegmentNode { return &SegmentNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateBlock, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd[*MetadataMVCCNode](cmdType,
+		return newEmptyEntryCmd(cmdType,
 			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
 			func() *BlockNode { return &BlockNode{} })
 	})
@@ -73,7 +73,7 @@ type Node interface {
 	ReadFrom(r io.Reader) (n int64, err error)
 }
 
-type EntryCommand[T BaseNode, N Node] struct {
+type EntryCommand[T BaseNode[T], N Node] struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType  int16
 	DBID     uint64
@@ -82,11 +82,11 @@ type EntryCommand[T BaseNode, N Node] struct {
 	node     N
 }
 
-func newEmptyEntryCmd[T BaseNode, N Node](cmdType int16, mvccNodeFactory func() txnif.MVCCNode, nodeFactory func() N) *EntryCommand[T, N] {
+func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType int16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N) *EntryCommand[T, N] {
 	impl := &EntryCommand[T, N]{
 		cmdType:  cmdType,
 		ID:       &common.ID{},
-		mvccNode: mvccNodeFactory().(*MVCCNode[T]),
+		mvccNode: mvccNodeFactory(),
 		node:     nodeFactory(),
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, impl)
@@ -98,7 +98,7 @@ func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand[*Met
 		DBID:     entry.GetSegment().GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode]),
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
 		node:     entry.BlockNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
@@ -110,7 +110,7 @@ func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand[
 		DBID:     entry.GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked().(*MVCCNode[*MetadataMVCCNode]),
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
 		node:     entry.SegmentNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
@@ -122,7 +122,7 @@ func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand[*Tab
 		DBID:     entry.GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked().(*MVCCNode[*TableMVCCNode]),
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
 		node:     entry.TableNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
@@ -135,7 +135,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand[*DBMVCCNod
 		ID:       &common.ID{},
 		cmdType:  cmdType,
 		node:     entry.DBNode,
-		mvccNode: entry.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode]),
+		mvccNode: entry.GetLatestNodeLocked(),
 	}
 	// if entry != nil {
 	// 	impl.mvccNode = entry.BaseEntryImpl.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])

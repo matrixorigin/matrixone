@@ -31,7 +31,7 @@ func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
 	return &MetadataMVCCNode{}
 }
 
-func (e *MetadataMVCCNode) CloneAll() BaseNode {
+func (e *MetadataMVCCNode) CloneAll() *MetadataMVCCNode {
 	node := &MetadataMVCCNode{
 		MetaLoc:  e.MetaLoc,
 		DeltaLoc: e.DeltaLoc,
@@ -39,7 +39,7 @@ func (e *MetadataMVCCNode) CloneAll() BaseNode {
 	return node
 }
 
-func (e *MetadataMVCCNode) CloneData() BaseNode {
+func (e *MetadataMVCCNode) CloneData() *MetadataMVCCNode {
 	return &MetadataMVCCNode{
 		MetaLoc:  e.MetaLoc,
 		DeltaLoc: e.DeltaLoc,
@@ -54,8 +54,7 @@ func (e *MetadataMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) Update(vun BaseNode) {
-	un := vun.(*MetadataMVCCNode)
+func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 	if un.MetaLoc != "" {
 		e.MetaLoc = un.MetaLoc
 	}

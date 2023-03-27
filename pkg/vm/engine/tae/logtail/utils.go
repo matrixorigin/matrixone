@@ -604,7 +604,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		dbNode := node.(*catalog.MVCCNode[*catalog.DBMVCCNode])
+		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
@@ -652,7 +652,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
-		tblNode := node.(*catalog.MVCCNode[*catalog.TableMVCCNode])
+		tblNode := node
 		if !tblNode.HasDropCommitted() {
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(
@@ -734,7 +734,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
-		segNode := node.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
+		segNode := node
 		if segNode.HasDropCommitted() {
 			collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(segid2rowid(&entry.ID))
 			collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd())
@@ -780,7 +780,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 		if node.IsAborted() {
 			continue
 		}
-		metaNode := node.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
+		metaNode := node
 		if metaNode.BaseNode.MetaLoc == "" || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
 				collector.data.bats[BLKDNMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&entry.ID))
