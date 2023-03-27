@@ -316,15 +316,11 @@ func showInsert(r *sql.Rows, args []any, cols []*Column, tbl string, bufPool *sy
 	return nil
 }
 
-func showLoad(r *sql.Rows, args []any, cols []*Column, tbl string) error {
-	fname := fmt.Sprintf("%s.csv", tbl)
+func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string) error {
+	fname := fmt.Sprintf("%s_%s.%s", db, tbl, "csv")
 	pwd := os.Getenv("PWD")
 	f, err := os.Create(fname)
-	ctx := context.Background()
 	if err != nil {
-		if os.IsExist(err) {
-			err = moerr.NewFileAlreadyExists(ctx, fname)
-		}
 		return err
 	}
 	defer f.Close()
@@ -377,7 +373,7 @@ func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, t
 	if !toCsv {
 		return showInsert(r, args, cols, tbl, bufPool, netBufferLength)
 	}
-	return showLoad(r, args, cols, tbl)
+	return showLoad(r, args, cols, db, tbl)
 }
 
 func convertValue(v any, typ string) string {
