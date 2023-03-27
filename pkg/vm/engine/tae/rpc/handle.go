@@ -571,6 +571,7 @@ func (h *Handle) HandlePreCommitWrite(
 						RoleID:    cmd.Owner,
 						AccountID: cmd.AccountId,
 					},
+					DatTyp: cmd.DatTyp,
 				}
 				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateDatabaseResp)); err != nil {
@@ -704,7 +705,8 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatabaseId, txn)
+	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatTyp, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
