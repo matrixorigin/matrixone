@@ -879,6 +879,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
+		if n.ObjRef.PubAccountId != -1 {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -937,6 +940,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			AccountId:    n.ObjRef.PubAccountId,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1676,12 +1680,12 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -1713,6 +1717,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	if n.ObjRef.PubAccountId != -1 {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
