@@ -252,6 +252,7 @@ func (ses *Session) Dispose() {
 	}
 	ses.cleanCache()
 
+	ses.statsCache = nil
 	// Clean sequence record data.
 	ses.seqCurValues = nil
 }
@@ -304,15 +305,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache:      &privilegeCache{},
-		blockIdx:   0,
-		planCache:  newPlanCache(100),
-		statsCache: plan2.NewStatsCache(),
+		cache:     &privilegeCache{},
+		blockIdx:  0,
+		planCache: newPlanCache(100),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
+		ses.statsCache = plan2.NewStatsCache()
 	}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
@@ -395,6 +396,7 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.txnCompileCtx = nil
 		bgs.Session.txnHandler = nil
 		bgs.Session.gSysVars = nil
+		bgs.Session.statsCache = nil
 	}
 	bgs = nil
 }
