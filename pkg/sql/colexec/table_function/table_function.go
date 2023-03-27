@@ -46,11 +46,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if e != nil || f {
 		return f, e
 	}
-	if proc.InputBatch().VectorCount() != len(tblArg.Rets) {
+	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
 		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
-	for i := range tblArg.Rets {
-		if int32(proc.InputBatch().GetVector(int32(i)).GetType().Oid) != tblArg.Rets[i].Typ.Id {
+	for i := range tblArg.retSchema {
+		if proc.InputBatch().GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
 			return true, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
 		}
 	}
@@ -63,6 +63,13 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	tblArg := arg.(*Argument)
+
+	retSchema := make([]types.Type, len(tblArg.Rets))
+	for i := range tblArg.Rets {
+		retSchema[i] = dupType(tblArg.Rets[i].Typ)
+	}
+	tblArg.retSchema = retSchema
+
 	switch tblArg.Name {
 	case "unnest":
 		return unnestPrepare(proc, tblArg)
