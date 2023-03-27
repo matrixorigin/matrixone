@@ -269,7 +269,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 	var err error
-	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, opts.Allocator)
+	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
 	if err != nil {
 		panic(err)
 	}
