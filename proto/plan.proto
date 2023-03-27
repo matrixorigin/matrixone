@@ -172,10 +172,11 @@ message Function {
 
 		// Window and Agg
 		AGG        = 128;
-		WIN        = 256;
+		WIN_VALUE				= 256;
+		WIN_ORDER				= 512;
 
 		// Monotonic function can filter by zonemap
-		MONOTONIC = 512;
+		MONOTONIC = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -191,16 +192,17 @@ message Expr {
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		SubqueryRef	sub		= 8;
-		CorrColRef	corr	= 9;
-		TargetType  t		= 10;
-		ExprList	list	= 11;
-		MaxValue	max		= 12;
+		WindowSpec w = 8;
+		SubqueryRef	sub		= 9;
+		CorrColRef	corr	= 10;
+		TargetType  t		= 11;
+		ExprList	list	= 12;
+		MaxValue	max		= 13;
 	}
 
-	int32 aux_id = 13;
-	double ndv = 14;
-	double selectivity = 15;
+	int32 aux_id = 14;
+	double ndv = 15;
+	double selectivity = 16;
 }
 
 enum CompressType {
@@ -471,10 +473,32 @@ message OrderBySpec {
 }
 
 message WindowSpec {
-	repeated Expr partition_by = 1;
-	repeated OrderBySpec order_by = 2;
-	int32 lead = 3;
-	int32 lag  = 4;
+	Expr window_func = 1;
+	repeated Expr partition_by = 2;
+	repeated OrderBySpec order_by = 3;
+	FrameClause frame = 4;
+	string name = 5;
+}
+
+message FrameClause {
+	enum FrameType {
+		ROWS = 0;
+		RANGE = 1;
+	}
+	FrameType type = 1;
+	FrameBound start = 2;
+	FrameBound end = 3;
+}
+
+message FrameBound {
+	enum BoundType {
+		FOLLOWING = 0;
+		PRECEDING = 1;
+		CURRENT_ROW = 2;
+	}
+	BoundType type = 1;
+	bool unBounded = 2;
+	Expr val = 3;
 }
 
 message OnDuplicateKeyCtx {
@@ -613,7 +637,7 @@ message Node {
 	repeated Expr agg_list = 12;
 
 	// WINDOW
-	WindowSpec win_spec = 13;
+	repeated Expr win_spec_list = 13;
 
 	// SORT
 	repeated OrderBySpec order_by = 14;
