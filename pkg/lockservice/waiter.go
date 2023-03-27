@@ -142,6 +142,11 @@ func (w *waiter) add(
 	logWaitersAdded(serviceID, w, waiters...)
 }
 
+func (w *waiter) moveTo(to *waiter) {
+	// TODO:
+	111
+}
+
 func (w *waiter) getStatus() waiterStatus {
 	return waiterStatus(w.status.Load())
 }

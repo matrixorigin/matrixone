@@ -223,6 +223,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,
+			s.fsp,
 			s.deadlockDetector,
 			s.clock)
 	} else {

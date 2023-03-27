@@ -30,6 +30,7 @@ import (
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
 	bind     pb.LockTable
+	fsp      *fixedSlicePool
 	detector *detector
 	clock    clock.Clock
 	mu       struct {
@@ -41,10 +42,12 @@ type localLockTable struct {
 
 func newLocalLockTable(
 	bind pb.LockTable,
+	fsp *fixedSlicePool,
 	detector *detector,
 	clock clock.Clock) lockTable {
 	l := &localLockTable{
 		bind:     bind,
+		fsp:      fsp,
 		detector: detector,
 		clock:    clock,
 	}
@@ -256,11 +259,17 @@ func (l *localLockTable) acquireRangeLockLocked(
 		logLocalLockRange(l.bind.ServiceID, txn, l.bind.Table, start, end, mode)
 		key, lock, ok := l.mu.store.Seek(start)
 		if ok &&
-			bytes.Compare(key, end) <= 0 {
-			// current txn's lock
+			// [start, key(row|start) ,end] || [start, end, key(end)]
+			(bytes.Compare(key, end) <= 0 ||
+				lock.isLockRangeEnd()) {
 			if bytes.Equal(txn.txnID, lock.txnID) {
-				// TODO: range merge, and check start to end conflict
-				panic("BUG: current not support")
+				needMergeLocks := newCowSlice(l.fsp, nil)
+				defer needMergeLocks.close()
+
+				if conflictWith, ok :=
+					l.findRangeConflictLocked(start, end, key, lock, needMergeLocks, txn); ok {
+					lock = conflictWith
+				}
 			}
 
 			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
@@ -268,7 +277,9 @@ func (l *localLockTable) acquireRangeLockLocked(
 			return i, w, timestamp.Timestamp{}
 		}
 
-		l.addRangeLockLocked(txn, start, end, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
+		l.addRangeLockLocked(txn, start, end,
+			getWaiter(l.bind.ServiceID, w, txn.txnID),
+			mode)
 		// lock added, need create new waiter next time
 		w = nil
 		i += 2
@@ -329,4 +340,62 @@ func getWaiter(serviceID string, w *waiter, txnID []byte) *waiter {
 		return w
 	}
 	return acquireWaiter(serviceID, txnID)
+}
+
+func (l *localLockTable) findRangeConflictLocked(
+	start, end, seekKey []byte,
+	seekLock Lock,
+	w *waiter,
+	txn *activeTxn) {
+	mergedLocks := l.fsp.acquire(4)
+	defer mergedLocks.close()
+
+	// addStart, addEnd := true, true
+
+	// var conflictWith Lock
+	// needMergeLocks := []Lock{seekLock}
+	// l.mu.store.Range(
+	// 	nextKey(seekKey, nil),
+	// 	nextKey(end, nil),
+	// 	func(k []byte, v Lock) bool {
+	// 		if !bytes.Equal(v.txnID, txn.txnID) {
+	// 			conflictWith = v
+	// 			return false
+	// 		}
+	// 		needMergeLocks = append(needMergeLocks, v)
+	// 		return true
+	// 	})
+	// return needMergeLocks, conflictWith, conflictWith.waiter != nil
+}
+
+// mergeRangeLock we found a lock >= start, try merge this lock
+func (l *localLockTable) mergeRangeLocked(
+	start, end []byte,
+	seekKey []byte,
+	seekLock Lock,
+	mergedLocks *cowSlice,
+	txn *activeTxn) (w *waiter, bool) {
+	// range lock encounted a row lock
+	if seekLock.isLockRow() {
+		// [1+] + [1, 4] => [1, 4]
+		mergedLocks.append([][]byte{seekKey})
+		return seekLock.waiter,false
+	}
+
+	if seekLock.isLockRangeEnd() {
+		// seekKey = 5, [1, 5] + [3, 4] => [1, 5]
+		if bytes.Compare(seekKey, end) >= 0 {
+			return nil,false
+		}
+
+		// seekKey = 5, [1, 5] + [3, 8] => [1, 8]
+		mergedLocks.append([][]byte{seekKey, start})
+		return seekLock.waiter,false
+	}
+}
+
+func nextKey(src, dst []byte) []byte {
+	dst = append(dst, src...)
+	dst = append(dst, 0)
+	return dst
 }
