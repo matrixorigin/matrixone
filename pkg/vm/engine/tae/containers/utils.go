@@ -370,13 +370,13 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	case types.T_Rowid:
 		data := make([]types.Rowid, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.BuildRowid(int64(i+1), int64(i%16)))
+			data = append(data, types.BuildTestRowid(int64(i+1), int64(i%16)))
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)
 	case types.T_Blockid:
 		data := make([]types.Blockid, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.BuildBlockid(int64(i+1), int64(i%16)))
+			data = append(data, types.BuildTestBlockid(int64(i+1), int64(i%16)))
 		}
 		_ = movec.AppendFixedList(vec, data, nil, mockMp)
 	default:
