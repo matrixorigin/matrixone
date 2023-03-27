@@ -774,12 +774,8 @@ func (tbl *txnTable) updateLocalState(
 		return nil
 	}
 
-	var state *PartitionState
 	if tbl.localState == nil {
-		tbl.localState = NewPartitionState()
-		state = tbl.localState
-	} else {
-		state = tbl.localState.Copy()
+		tbl.localState = NewPartitionState(true)
 	}
 
 	// make a logtail compatible batch
@@ -817,11 +813,11 @@ func (tbl *txnTable) updateLocalState(
 	switch typ {
 
 	case INSERT:
-		primaryKeys := state.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
+		primaryKeys := tbl.localState.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
 
 		// check primary key
 		for idx, primaryKey := range primaryKeys {
-			iter := state.NewPrimaryKeyIter(ts, primaryKey)
+			iter := tbl.localState.NewPrimaryKeyIter(ts, primaryKey)
 			n := 0
 			for iter.Next() {
 				n++
@@ -841,14 +837,12 @@ func (tbl *txnTable) updateLocalState(
 		}
 
 	case DELETE:
-		state.HandleRowsDelete(ctx, protoBatch)
+		tbl.localState.HandleRowsDelete(ctx, protoBatch)
 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", typ))
 
 	}
-
-	tbl.localState = state
 
 	return
 }

@@ -19,6 +19,12 @@ import (
 )
 
 type CounterSet struct {
+	FileService       FileServiceCounterSet
+	FileServiceByName map[string]*CounterSet
+	DistTAE           DistTAECounterSet
+}
+
+type FileServiceCounterSet struct {
 	S3 struct {
 		List        stats.Counter
 		Head        stats.Counter
@@ -51,20 +57,18 @@ type CounterSet struct {
 		UnderlyingRead  stats.Counter
 		UnderlyingWrite stats.Counter
 	}
+}
 
-	FileServices map[string]*CounterSet
+type DistTAECounterSet struct {
+	Logtail struct {
+		Entries               stats.Counter
+		InsertEntries         stats.Counter
+		MetadataInsertEntries stats.Counter
+		DeleteEntries         stats.Counter
+		MetadataDeleteEntries stats.Counter
 
-	DistTAE struct {
-		Logtail struct {
-			Entries               stats.Counter
-			InsertEntries         stats.Counter
-			MetadataInsertEntries stats.Counter
-			DeleteEntries         stats.Counter
-			MetadataDeleteEntries stats.Counter
-
-			InsertRows   stats.Counter
-			ActiveRows   stats.Counter
-			InsertBlocks stats.Counter
-		}
+		InsertRows   stats.Counter
+		ActiveRows   stats.Counter
+		InsertBlocks stats.Counter
 	}
 }
