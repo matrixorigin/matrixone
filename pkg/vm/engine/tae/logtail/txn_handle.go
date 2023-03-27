@@ -120,6 +120,7 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		b.batches[dataInsBatch] = mybat
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
+		mybat.Close()
 	}
 }
 
@@ -239,13 +240,25 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 
 func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid uint64) {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
-	b.batches[blkMetaInsBatch] = nil
+	if b.batches[blkMetaInsBatch] != nil {
+		b.batches[blkMetaInsBatch].Close()
+		b.batches[blkMetaInsBatch] = nil
+	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
-	b.batches[blkMetaDelBatch] = nil
+	if b.batches[blkMetaDelBatch] != nil {
+		b.batches[blkMetaDelBatch].Close()
+		b.batches[blkMetaDelBatch] = nil
+	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
-	b.batches[dataDelBatch] = nil
+	if b.batches[dataDelBatch] != nil {
+		b.batches[dataDelBatch].Close()
+		b.batches[dataDelBatch] = nil
+	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
-	b.batches[dataInsBatch] = nil
+	if b.batches[dataInsBatch] != nil {
+		b.batches[dataInsBatch].Close()
+		b.batches[dataInsBatch] = nil
+	}
 	b.currTableID = tid
 	b.currDBID = dbid
 	b.currTableName = tableName
@@ -265,6 +278,9 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbInsBatch, false)
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbDelBatch, true)
 	for i := range b.batches {
-		b.batches[i] = nil
+		if b.batches[i] != nil {
+			b.batches[i].Close()
+			b.batches[i] = nil
+		}
 	}
 }

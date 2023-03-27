@@ -39,6 +39,7 @@ type Txn interface {
 	GetID() string
 	Is2PC() bool
 	SetCommitTS(cts types.TS) error
+	GetCommitTS() types.TS
 	SetParticipants(ids []uint64) error
 	SetPKDedupSkip(skip txnif.PKDedupSkipScope)
 	Prepare() (types.TS, error)

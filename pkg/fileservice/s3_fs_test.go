@@ -90,7 +90,6 @@ func TestS3FS(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
 		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FS(
@@ -101,7 +100,7 @@ func TestS3FS(t *testing.T) {
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				-1,
 				-1,
-				cacheDir,
+				"",
 				nil,
 				true,
 			)
@@ -113,7 +112,6 @@ func TestS3FS(t *testing.T) {
 	})
 
 	t.Run("list root", func(t *testing.T) {
-		cacheDir := t.TempDir()
 		fs, err := NewS3FS(
 			"",
 			"s3",
@@ -122,7 +120,7 @@ func TestS3FS(t *testing.T) {
 			"",
 			-1,
 			-1,
-			cacheDir,
+			"",
 			nil,
 			true,
 		)
@@ -134,12 +132,11 @@ func TestS3FS(t *testing.T) {
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
-		assert.True(t, counterSet.S3.List.Load() > 0)
-		assert.True(t, counterSet2.S3.List.Load() > 0)
+		assert.True(t, counterSet.FileService.S3.List.Load() > 0)
+		assert.True(t, counterSet2.FileService.S3.List.Load() > 0)
 	})
 
 	t.Run("mem caching file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
 				"",
@@ -149,7 +146,7 @@ func TestS3FS(t *testing.T) {
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
 				-1,
-				cacheDir,
+				"",
 				nil,
 				false,
 			)
@@ -159,7 +156,6 @@ func TestS3FS(t *testing.T) {
 	})
 
 	t.Run("disk caching file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
 				"",
@@ -169,7 +165,7 @@ func TestS3FS(t *testing.T) {
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				-1,
 				128*1024,
-				cacheDir,
+				t.TempDir(),
 				nil,
 				false,
 			)

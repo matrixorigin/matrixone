@@ -373,3 +373,9 @@ drop account test_account2;
 select col1,col2 from cluster_table_7;
 
 drop table cluster_table_7;
+
+use mo_catalog;
+CREATE CLUSTER TABLE mo_instance (id varchar(128) NOT NULL,name VARCHAR(255) NOT NULL,account_name varchar(128) NOT NULL,provider longtext NOT NULL,provider_id longtext,region longtext NOT NULL,plan_type longtext NOT NULL,version longtext,status longtext,quota longtext,network_policy longtext,created_by longtext,created_at datetime(3) NULL,PRIMARY KEY (id, account_id),UNIQUE INDEX uniq_acc (account_name));
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+drop account acc_idx;
+drop table mo_instance;
