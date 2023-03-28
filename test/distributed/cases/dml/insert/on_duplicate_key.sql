@@ -82,3 +82,8 @@ insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,
 select * from indup;
 insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
 select * from indup;
+drop table indup;
+create table t1(a int primary key, b int, c int);
+insert into t1 values (1,1,1),(2,2,2);
+insert into t1 values (1,9,1),(11,8,2) on duplicate key update a=a+10, c=10;
+select * from t1 order by a;

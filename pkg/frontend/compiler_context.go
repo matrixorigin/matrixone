@@ -401,7 +401,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
-	var CompositePkey *plan2.ColDef = nil
 	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
@@ -437,7 +436,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			}
 			// Is it a composite primary key
 			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				CompositePkey = col
 				continue
 			}
 			if attr.Attr.ClusterBy {
@@ -534,21 +532,21 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:         tableId,
-		Name:          tableName,
-		Cols:          cols,
-		Defs:          defs,
-		TableType:     TableType,
-		Createsql:     Createsql,
-		Pkey:          primarykey,
-		CompositePkey: CompositePkey,
-		ViewSql:       viewSql,
-		Partition:     partitionInfo,
-		Fkeys:         foreignKeys,
-		RefChildTbls:  refChildTbls,
-		ClusterBy:     clusterByDef,
-		OriginCols:    originCols,
-		Indexes:       indexes,
+		TblId:     tableId,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
+		Pkey:      primarykey,
+		//CompositePkey: CompositePkey,
+		ViewSql:      viewSql,
+		Partition:    partitionInfo,
+		Fkeys:        foreignKeys,
+		RefChildTbls: refChildTbls,
+		ClusterBy:    clusterByDef,
+		OriginCols:   originCols,
+		Indexes:      indexes,
 	}
 	return obj, tableDef
 }
