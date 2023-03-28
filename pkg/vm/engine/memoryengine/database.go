@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,8 @@ import (
 type Database struct {
 	id          ID
 	name        string
+	typ         string
+	createSql   string
 	engine      *Engine
 	txnOperator client.TxnOperator
 }
@@ -178,4 +181,11 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
 func (d *Database) GetDatabaseId(ctx context.Context) string {
 	return fmt.Sprintf("%d", d.id)
+}
+
+func (d *Database) IsSubscription(ctx context.Context) bool {
+	return d.typ == catalog.SystemDBTypeSubscription
+}
+func (d *Database) GetCreateSql(ctx context.Context) string {
+	return d.createSql
 }

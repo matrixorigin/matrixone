@@ -103,9 +103,11 @@ func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 
 func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
 	cols := make([]int32, 0)
-	for colName, ndv := range s.NdvMap {
-		if ndv/s.TableCnt > 0.99 {
-			cols = append(cols, b.FindColumn(colName))
+	if s.TableCnt != 0 {
+		for colName, ndv := range s.NdvMap {
+			if ndv/s.TableCnt > 0.99 {
+				cols = append(cols, b.FindColumn(colName))
+			}
 		}
 	}
 	return cols
@@ -625,7 +627,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		}
 
 	default:
-		if len(node.Children) > 0 {
+		if len(node.Children) > 0 && childStats != nil {
 			node.Stats = &plan.Stats{
 				Outcnt:      childStats.Outcnt,
 				Cost:        childStats.Outcnt,

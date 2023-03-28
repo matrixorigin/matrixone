@@ -73,10 +73,8 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
-	usePushModel       bool
-	subscriber         *logTailSubscriber
-	receiveLogTailTime syncLogTailTimestamp
-	subscribed         subscribedTable
+	usePushModel bool
+	pClient      pushClient
 }
 
 type Partitions []*Partition
@@ -144,9 +142,11 @@ type Entry struct {
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
-	databaseId   uint64
-	databaseName string
-	txn          *Transaction
+	databaseId        uint64
+	databaseName      string
+	databaseType      string
+	databaseCreateSql string
+	txn               *Transaction
 }
 
 type tableKey struct {

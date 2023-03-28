@@ -46,6 +46,8 @@ type DatabaseRow struct {
 	ID        ID
 	AccountID uint32 // 0 is the sys account
 	Name      []byte
+	Typ       []byte
+	CreateSql []byte
 }
 
 func (d *DatabaseRow) Key() ID {
