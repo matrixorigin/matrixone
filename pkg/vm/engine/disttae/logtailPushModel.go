@@ -34,10 +34,10 @@ import (
 )
 
 const (
-	// periodToCheckTxnTimestamp is a period to check if we have received enough log for a new txn.
-	// If still not within maxTimeToNewTransaction, the transaction creation fails.
-	maxTimeToNewTransaction   = 1 * time.Minute
-	periodToCheckTxnTimestamp = 1 * time.Millisecond
+	// each periodToCheckTxnTimestamp, we check if we have received enough log for a new txn.
+	// If still not within maxBlockTimeToNewTransaction, the transaction creation fails.
+	maxBlockTimeToNewTransaction = 1 * time.Minute
+	periodToCheckTxnTimestamp    = 1 * time.Millisecond
 
 	// if we didn't receive response within time maxTimeToWaitServerResponse.
 	// we assume that client has lost connect to server.
@@ -48,7 +48,7 @@ const (
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
 
-	// periodToCheckTableSubscribeSucceed is a period to check table subscribe status after subscribe a table first time.
+	// once we send a table subscribe request, we check table subscribe status each periodToCheckTableSubscribeSucceed.
 	// If check time exceeds noticeTimeToCheckTableSubscribeSucceed, warning log will be printed.
 	periodToCheckTableSubscribeSucceed     = 1 * time.Millisecond
 	noticeTimeToCheckTableSubscribeSucceed = 10 * time.Second
@@ -56,10 +56,10 @@ const (
 	// default deadline for context to send a rpc message.
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
 
-	// check subscribe status of tables in a period of unsubscribeProcessTicker,
-	// if table was not used for tableSubscribeDeadline time, we will unsubscribe it.
+	// each unsubscribeProcessTicker, we scan the table subscribe record.
+	// to unsubscribe the table which was unused for a long time (more than unsubscribeTimer).
 	unsubscribeProcessTicker = 20 * time.Minute
-	tableSubscribeDeadline   = 1 * time.Hour
+	unsubscribeTimer         = 1 * time.Hour
 )
 
 const (
@@ -67,7 +67,7 @@ const (
 	parallelNums = 4
 
 	// each routine's log tail buffer size.
-	bufferLength = 100
+	bufferLength = 128
 )
 
 // pushClient is a structure responsible for all operations related to the log tail push model.
@@ -115,7 +115,7 @@ func (client *pushClient) checkTxnTimeIsLegal(
 	ticker := time.NewTicker(periodToCheckTxnTimestamp)
 	defer ticker.Stop()
 
-	for i := maxTimeToNewTransaction; i > 0; i -= periodToCheckTxnTimestamp {
+	for i := maxBlockTimeToNewTransaction; i > 0; i -= periodToCheckTxnTimestamp {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -323,10 +323,10 @@ func (client *pushClient) unusedTableGCTicker() {
 			<-ticker.C
 
 			t := time.Now()
-			if t.After(time.Time{}.Add(tableSubscribeDeadline)) {
+			if t.After(time.Time{}.Add(unsubscribeTimer)) {
 				client.subscribed.mutex.Lock()
 
-				shouldClean := t.Add(-tableSubscribeDeadline)
+				shouldClean := t.Add(-unsubscribeTimer)
 				for k, v := range client.subscribed.m {
 					if ifShouldNotDistribute(k.db, k.tbl) {
 						// never unsubscribe the mo_databases, mo_tables, mo_columns.
