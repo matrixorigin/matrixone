@@ -7318,8 +7318,12 @@ func TestDoDropPublication(t *testing.T) {
 	defer ses.Dispose()
 
 	tenant := &TenantInfo{
-		Tenant:   sysAccountName,
-		TenantID: sysAccountID,
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
 
@@ -7356,8 +7360,12 @@ func TestDoAlterPublication(t *testing.T) {
 	defer ses.Dispose()
 
 	tenant := &TenantInfo{
-		Tenant:   sysAccountName,
-		TenantID: sysAccountID,
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
 	columns := []Column{
