@@ -451,6 +451,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	partitionTables := qry.GetPartitionTables()
+	for _, table := range partitionTables {
+		storageCols := planColsToExeCols(table.GetCols())
+		storageDefs, err := planDefsToExeDefs(table)
+		if err != nil {
+			return err
+		}
+		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+		if err != nil {
+			return err
+		}
+	}
+
 	fkDbs := qry.GetFkDbs()
 	if len(fkDbs) > 0 {
 		fkTables := qry.GetFkTables()
@@ -1138,6 +1151,14 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+
+		//delete partition table
+		for _, name := range qry.GetPartitionTableNames() {
+			if err = dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 			if err != nil {
@@ -1151,6 +1172,13 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		for _, name := range qry.IndexTableNames {
 			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+
+		//delete partition table
+		for _, name := range qry.GetPartitionTableNames() {
+			if err = dbSource.Delete(c.ctx, name); err != nil {
 				return err
 			}
 		}
@@ -1204,7 +1232,8 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			return nil, err
 		}
 		exeDefs = append(exeDefs, &engine.PartitionDef{
-			Partition: string(bytes),
+			Partitioned: 1,
+			Partition:   string(bytes),
 		})
 	}
 
