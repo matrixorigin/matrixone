@@ -173,7 +173,7 @@ func GetAccountPrefix(expr *plan.Expr) (bool, string) {
 		f := expr_F.F
 		if f.Func.ObjName == "=" && len(f.Args) == 2 {
 			if colName, isCol := f.Args[0].Expr.(*plan.Expr_Col); isCol {
-				if strings.Contains(colName.Col.Name, STATEMENT_ACCOUNT) {
+				if strings.HasSuffix(colName.Col.Name, STATEMENT_ACCOUNT) {
 					if val, isConst := f.Args[1].Expr.(*plan.Expr_C); isConst {
 						if str, isString := val.C.Value.(*plan.Const_Sval); isString {
 							return true, str.Sval
