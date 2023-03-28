@@ -1278,6 +1278,7 @@ const (
 	TXN_DELETE
 	TXN_UPDATE
 	TXN_DROP
+	TXN_ALTER
 )
 
 func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
