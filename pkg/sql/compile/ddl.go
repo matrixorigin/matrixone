@@ -36,6 +36,12 @@ import (
 	"math"
 )
 
+var (
+	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	createIndexTableForamt                = "create table %s.`%s` (%s);"
+)
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	var span trace.Span
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
@@ -155,21 +161,131 @@ func (s *Scope) AlterTable(c *Compile) error {
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
+	var addIndex *plan.IndexDef
+	var dropIndex *plan.IndexDef
+
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
 		case *plan.AlterTable_Action_Drop:
-			name := act.Drop.Name
-			for i, fk := range tableDef.Fkeys {
-				if fk.Name == name {
-					removeRefChildTbls[name] = fk.ForeignTbl
-					tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-					break
+			alterTableDrop := act.Drop
+			ConstraintName := alterTableDrop.Name
+			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				for i, fk := range tableDef.Fkeys {
+					if fk.Name == ConstraintName {
+						removeRefChildTbls[ConstraintName] = fk.ForeignTbl
+						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
+						break
+					}
+				}
+			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
+				for i, indexdef := range tableDef.Indexes {
+					if indexdef.IndexName == ConstraintName {
+						dropIndex = indexdef
+						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
+						// drop index table
+						if indexdef.TableExist {
+							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+						}
+						// execute additional sql pipeline, currently, only delete operations are performed
+						if s.AttachedScope != nil {
+							_, err = s.AttachedScope.Delete(c)
+							if err != nil {
+								return err
+							}
+						}
+						break
+					}
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
+		case *plan.AlterTable_Action_AddIndex:
+			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
+			addIndex = indexDef
+			// build and update constraint def
+			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
+			if err != nil {
+				return err
+			}
+			if act.AddIndex.IndexTableExist {
+				var sql string
+				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+				planCols := def.GetCols()
+				for i, planCol := range planCols {
+					if i == 1 {
+						sql += ","
+					}
+					sql += planCol.Name + " "
+					typeId := types.T(planCol.Typ.Id)
+					switch typeId {
+					case types.T_char:
+						sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+					case types.T_varchar:
+						sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+					case types.T_binary:
+						sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+					case types.T_varbinary:
+						sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+					case types.T_decimal64:
+						sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					case types.T_decimal128:
+						sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					default:
+						sql += typeId.String()
+					}
+					if i == 0 {
+						sql += " primary key"
+					}
+				}
+
+				createSQL := fmt.Sprintf(createIndexTableForamt, dbName, indexDef.IndexTableName, sql)
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(createSQL)
+				if err != nil {
+					return err
+				}
+				var insetSQL string
+				var temp string
+				for i, part := range indexDef.Parts {
+					if i == 0 {
+						temp += part
+					} else {
+						temp += "," + part
+					}
+				}
+
+				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+				} else {
+					pkeyName := tableDef.Pkey.PkeyColName
+					var pKeyMsg string
+					if pkeyName == catalog.CPrimaryKeyColName {
+						pKeyMsg = "serial("
+						for i, part := range tableDef.Pkey.Names {
+							if i == 0 {
+								pKeyMsg += part
+							} else {
+								pKeyMsg += "," + part
+							}
+						}
+						pKeyMsg += ")"
+					} else {
+						pKeyMsg = pkeyName
+					}
+
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, dbName, indexDef.IndexTableName, temp, pKeyMsg, dbName, tblName, temp)
+				}
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(insetSQL)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -191,6 +307,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 	}
 	originHasFkDef := false
+	originHasIndexDef := false
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
@@ -205,6 +322,19 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *engine.RefChildTableDef:
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
+			originHasIndexDef = true
+			if dropIndex != nil {
+				for i, idx := range t.Indexes {
+					if dropIndex.IndexName == idx.IndexName {
+						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
+					}
+				}
+			}
+			if addIndex != nil {
+				t.Indexes = append(t.Indexes, addIndex)
+			}
+			newCt.Cts = append(newCt.Cts, t)
+		case *engine.PrimaryKeyDef:
 			newCt.Cts = append(newCt.Cts, t)
 		}
 	}
@@ -213,6 +343,12 @@ func (s *Scope) AlterTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 	}
+	if !originHasIndexDef && addIndex != nil {
+		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
+			Indexes: []*plan.IndexDef{addIndex},
+		})
+	}
+
 	err = rel.UpdateConstraint(c.ctx, newCt)
 	if err != nil {
 		return err
@@ -1089,8 +1225,12 @@ func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []strin
 		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
 			for _, ct := range constraintDef.Cts {
 				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
-					for _, name := range pk.Pkey.Names {
-						colNameMap[name] = 1
+					if pk.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+						colNameMap[catalog.CPrimaryKeyColName] = 1
+					} else {
+						for _, name := range pk.Pkey.Names {
+							colNameMap[name] = 1
+						}
 					}
 					break
 				}
