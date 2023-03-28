@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -392,6 +393,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.Commit")
 	txn := e.getTransaction(op)
+	for i, entry := range txn.writes {
+		if entry.tableName == "t_mo_crash" {
+			if entry.fileName == "" {
+				logutil.Infof("mo-crash batch %d batchLen: %d a_len:%d b_len:%d", i, entry.bat.Length(), entry.bat.Vecs[0].Length(), entry.bat.Vecs[1].Length())
+			} else {
+				logutil.Infof("mo-crash batchS3 %d\n", i)
+			}
+		}
+	}
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -400,6 +410,15 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
+	for i, entry := range txn.writes {
+		if entry.tableName == "t_mo_crash" {
+			if entry.fileName == "" {
+				logutil.Infof("after dump: mo-crash batch %d batchLen: %d a_len:%d b_len:%d", i, entry.bat.Length(), entry.bat.Vecs[0].Length(), entry.bat.Vecs[1].Length())
+			} else {
+				logutil.Infof("after dump: mo-crash batchS3 %d\n", i)
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
