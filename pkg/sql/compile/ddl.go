@@ -73,6 +73,21 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -84,10 +99,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	// execute additional sql pipeline, currently, only delete operations are performed
-	if s.AttachedScope != nil {
-		_, err = s.AttachedScope.Delete(c)
-		if err != nil {
+
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -138,6 +152,21 @@ func (s *Scope) AlterView(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -189,13 +218,6 @@ func (s *Scope) AlterTable(c *Compile) error {
 								return err
 							}
 							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
-								return err
-							}
-						}
-						// execute additional sql pipeline, currently, only delete operations are performed
-						if s.AttachedScope != nil {
-							_, err = s.AttachedScope.Delete(c)
-							if err != nil {
 								return err
 							}
 						}
@@ -374,6 +396,11 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 	}
 
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -712,6 +739,21 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
@@ -752,10 +794,8 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
-	// execute additional sql pipeline, currently, only delete operations are performed
-	if s.AttachedScope != nil {
-		_, err = s.AttachedScope.Delete(c)
-		if err != nil {
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -1041,15 +1081,30 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	qry := s.Plan.GetDdl().GetDropTable()
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
 
+	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
+	tblName := qry.GetTable()
+
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
 	var isTemp bool
 
-	tblName := qry.GetTable()
 	tblId := qry.GetTableId()
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -1105,15 +1160,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// execute additional sql pipeline, currently, only delete operations are performed
-			if s.AttachedScope != nil {
-				_, err = s.AttachedScope.Delete(c)
-				if err != nil {
-					return err
-				}
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+			if err != nil {
+				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
 			return err
@@ -1132,18 +1184,20 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// execute additional sql pipeline, currently, only delete operations are performed
-			if s.AttachedScope != nil {
-				_, err = s.AttachedScope.Delete(c)
-				if err != nil {
-					return err
-				}
-			}
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+			if err != nil {
+				return err
+			}
 		}
-		return nil
 	}
+
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
