@@ -370,3 +370,16 @@ func TestBuildCreateTableError(t *testing.T) {
 	}
 	runTestShouldError(mock, t, sqlerrs)
 }
+
+func TestBuildAlterTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// should pass
+	sqls := []string{
+		"ALTER TABLE emp ADD UNIQUE idx1 (empno, ename);",
+		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno, ename);",
+		"ALTER TABLE emp ADD INDEX idx1 (ename, sal);",
+		//"alter table emp drop foreign key fk1",
+		//"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(n_nationkey)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}

@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sort"
 	"sync"
 	"time"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type metaFile struct {
@@ -97,14 +97,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 	}()
 
-	jobScheduler := tasks.NewParallelJobScheduler(200)
-	defer jobScheduler.Stop()
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
-	var wg sync.WaitGroup
-	readfn := func(i int) {
-		defer wg.Done()
+	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -121,21 +117,39 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			entryType: typ,
 		}
 		var err2 error
-		if datas[i], err2 = checkpointEntry.Read(ctx, jobScheduler, r.fs); err2 != nil {
-			logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-			emptyFileMu.Lock()
-			emptyFile = append(emptyFile, checkpointEntry)
-			emptyFileMu.Unlock()
+		if prefetch {
+			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+			}
 		} else {
-			entries[i] = checkpointEntry
+			if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+				emptyFileMu.Lock()
+				emptyFile = append(emptyFile, checkpointEntry)
+				emptyFileMu.Unlock()
+			} else {
+				entries[i] = checkpointEntry
+			}
 		}
 	}
-	wg.Add(bat.Length())
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		go readfn(i)
+		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		var ckpReader dataio.Reader
+		ckpReader, err = blockio.NewCheckPointReader(r.fs.Service, metaloc)
+		if err != nil {
+			return
+		}
+
+		blockio.PrefetchBlocksMeta(ckpReader, nil)
 	}
-	wg.Wait()
+
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, true)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, false)
+	}
 	readDuration += time.Since(t0)
 	if err != nil {
 		return

@@ -709,6 +709,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			pkeyDef := &PrimaryKeyDef{
 				Names:       primaryKeys,
 				PkeyColName: pkeyName,
+				CompPkeyCol: colDef,
 			}
 			createTable.TableDef.Pkey = pkeyDef
 		}
@@ -998,6 +999,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
+
 		indexDef.IndexName = indexInfo.Name
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
@@ -1227,6 +1229,7 @@ const (
 	DROP_INDEX DeleteIndexMode = iota
 	DROP_TABLE
 	DROP_DATABASE
+	TRUNCATE_TABLE
 )
 
 var (
@@ -1348,7 +1351,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			return nil, err
 		}
 		attachedPlan, err = buildDeleteIndexMetaPlan("", 0, databaseId, DROP_DATABASE, ctx)
-		//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1413,6 +1415,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
 	}
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
+	}
+
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -1593,51 +1601,72 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
+	var attachedPlan *plan.Plan
+
+	colMap := make(map[string]*ColDef)
+	for _, col := range tableDef.Cols {
+		colMap[col.Name] = col
+	}
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
+	}
+
 	alterTable.TableDef = tableDef
 
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
-			name := string(opt.Name)
+			alterTableDrop := new(plan.AlterTableDrop)
+			constraintName := string(opt.Name)
+			alterTableDrop.Name = constraintName
 			name_not_found := true
-			typ := plan.AlterTableDrop_COLUMN
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
-				typ = plan.AlterTableDrop_COLUMN
+				alterTableDrop.Typ = plan.AlterTableDrop_COLUMN
 				for _, col := range tableDef.Cols {
-					if col.Name == name {
+					if col.Name == constraintName {
 						name_not_found = false
 						break
 					}
 				}
 			case tree.AlterTableDropIndex:
-				typ = plan.AlterTableDrop_INDEX
+				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
+				// check index
+				for _, indexdef := range tableDef.Indexes {
+					if constraintName == indexdef.IndexName {
+						name_not_found = false
+						var err error
+						attachedPlan, err = buildDeleteIndexMetaPlan(indexdef.IndexName, tableDef.TblId, 0, DROP_INDEX, ctx)
+						if err != nil {
+							return nil, err
+						}
+						break
+					}
+				}
 			case tree.AlterTableDropKey:
-				typ = plan.AlterTableDrop_KEY
+				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
-				typ = plan.AlterTableDrop_PRIMARY_KEY
+				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
 				if tableDef.Pkey == nil {
 					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
 				}
 				name_not_found = false
 			case tree.AlterTableDropForeignKey:
-				typ = plan.AlterTableDrop_FOREIGN_KEY
+				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
 				for _, fk := range tableDef.Fkeys {
-					if fk.Name == name {
+					if fk.Name == constraintName {
 						name_not_found = false
 						break
 					}
 				}
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", name)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_Drop{
-					Drop: &plan.AlterTableDrop{
-						Typ:  typ,
-						Name: name,
-					},
+					Drop: alterTableDrop,
 				},
 			}
 
@@ -1658,6 +1687,58 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 						},
 					},
 				}
+			case *tree.UniqueIndex:
+				indexName := def.Name
+				for _, idx := range tableDef.Indexes {
+					if idx.IndexName == indexName {
+						return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
+					}
+				}
+				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
+
+				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				var err error
+				if err = buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
+					return nil, err
+				}
+
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddIndex{
+						AddIndex: &plan.AlterTableAddIndex{
+							DbName:                databaseName,
+							TableName:             tableName,
+							OriginTablePrimaryKey: oriPriKeyName,
+							IndexInfo:             indexInfo,
+							IndexTableExist:       true,
+						},
+					},
+				}
+			case *tree.Index:
+				indexName := def.Name
+				for _, idx := range tableDef.Indexes {
+					if idx.IndexName == indexName {
+						return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
+					}
+				}
+				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
+
+				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, ctx); err != nil {
+					return nil, err
+				}
+
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddIndex{
+						AddIndex: &plan.AlterTableAddIndex{
+							DbName:                databaseName,
+							TableName:             tableName,
+							OriginTablePrimaryKey: oriPriKeyName,
+							IndexInfo:             indexInfo,
+							IndexTableExist:       false,
+						},
+					},
+				}
+
 			}
 		}
 	}
@@ -1671,6 +1752,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				},
 			},
 		},
+		AttachedPlan: attachedPlan,
 	}, nil
 }
 
