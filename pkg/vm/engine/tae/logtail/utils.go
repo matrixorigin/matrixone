@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -34,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -491,22 +489,24 @@ func LoadBlkColumnsByMeta(
 	return bat, nil
 }
 
-func BlkColumnByMetaLoadJob(
-	cxt context.Context,
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
+func (data *CheckpointData) PrefetchFrom(
+	ctx context.Context,
 	reader dataio.Reader,
-) *tasks.Job {
-	exec := func(_ context.Context) (result *tasks.JobResult) {
-		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
-		return &tasks.JobResult{
-			Err: err,
-			Res: bat,
-		}
+	m *mpool.MPool) (err error) {
+	metas, err := reader.LoadBlocksMeta(ctx, m)
+	if err != nil {
+		return
 	}
-	return tasks.NewJob(uuid.NewString(), cxt, exec)
+
+	pref := blockio.BuildPrefetch(reader, m)
+	for idx, item := range checkpointDataRefer {
+		idxes := make([]uint16, len(item.attrs))
+		for i := range item.attrs {
+			idxes[i] = uint16(i)
+		}
+		pref.AddBlock(idxes, []uint32{metas[idx].GetID()})
+	}
+	return blockio.PrefetchWithMerged(pref)
 }
 
 // TODO:
@@ -514,69 +514,19 @@ func BlkColumnByMetaLoadJob(
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	reader dataio.Reader,
-	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
 	metas, err := reader.LoadBlocksMeta(ctx, m)
 	if err != nil {
 		return
 	}
 
-	if scheduler == nil {
-		scheduler = tasks.NewParallelJobScheduler(100)
-		defer scheduler.Stop()
-	}
-
-	jobs := make([]*tasks.Job, MaxIDX)
-
 	for idx, item := range checkpointDataRefer {
-		job := BlkColumnByMetaLoadJob(
-			ctx,
-			item.types,
-			item.attrs,
-			item.nullables,
-			metas[idx],
-			reader,
-		)
-		if err = scheduler.Schedule(job); err != nil {
-			break
+		var bat *containers.Batch
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, metas[idx], reader)
+		if err != nil {
+			return
 		}
-		jobs[idx] = job
-	}
-
-	cleanJobs := func() {
-		for _, job := range jobs {
-			if job == nil {
-				continue
-			}
-			result := job.WaitDone()
-			defer job.Close()
-			if result != nil && result.Res != nil && result.Res.(*containers.Batch) != nil {
-				result.Res.(*containers.Batch).Close()
-				result.Res = nil
-			}
-		}
-	}
-
-	if err != nil {
-		go cleanJobs()
-		return
-	}
-
-	for _, job := range jobs {
-		result := job.WaitDone()
-		if err = result.Err; err != nil {
-			break
-		}
-	}
-
-	if err != nil {
-		go cleanJobs()
-		return
-	}
-
-	for idx, job := range jobs {
-		result := job.GetResult()
-		data.bats[idx] = result.Res.(*containers.Batch)
+		data.bats[idx] = bat
 	}
 
 	return
