@@ -276,6 +276,8 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		ID:        req.ID,
 		AccountID: req.AccessInfo.AccountID,
 		Name:      []byte(req.Name),
+		Typ:       []byte(req.Typ),
+		CreateSql: []byte(req.CreateSql),
 	})
 	if err != nil {
 		return err
@@ -1026,7 +1028,8 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 	}
 	resp.ID = db.ID
 	resp.Name = string(db.Name)
-
+	resp.DatTyp = string(db.Typ)
+	resp.CreateSql = string(db.CreateSql)
 	return nil
 }
 

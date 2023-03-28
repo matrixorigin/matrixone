@@ -198,7 +198,6 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 			bat.Close()
 		}
 	}()
-
 	var vec containers.Vector
 	for i, col := range schema.ColDefs {
 		vec, err = blk.LoadPersistedColumnData(i)

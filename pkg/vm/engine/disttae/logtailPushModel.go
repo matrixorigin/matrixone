@@ -301,6 +301,7 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 					logutil.Error("rebuild the cn log tail client failed.")
 					continue
 				}
+
 				// once we reconnect succeed, should clean partition here.
 				e.cleanMemoryTable()
 

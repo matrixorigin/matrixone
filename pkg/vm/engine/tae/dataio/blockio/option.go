@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package perfcounter
+package blockio
 
-import (
-	"bytes"
-	"reflect"
-	"testing"
-)
+type Option func(*IoPipeline)
 
-func TestFormat(t *testing.T) {
-	c := &CounterSet{
-		FileServiceByName: make(map[string]*CounterSet),
+func WithFetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.fetchParallism = num
 	}
-	buf := new(bytes.Buffer)
-	format(buf, reflect.ValueOf(c), reflect.TypeOf(c))
+}
+
+func WithPrefetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.prefetchParallism = num
+	}
+}
+
+func WithJobFactory(factory IOJobFactory) Option {
+	return func(p *IoPipeline) {
+		p.jobFactory = factory
+	}
 }
