@@ -73,10 +73,8 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
-	usePushModel       bool
-	subscriber         *logTailSubscriber
-	receiveLogTailTime syncLogTailTimestamp
-	subscribed         subscribedTable
+	usePushModel bool
+	pClient      pushClient
 }
 
 type Partitions []*Partition
