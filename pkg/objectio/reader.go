@@ -155,6 +155,37 @@ func (r *ObjectReader) Read(ctx context.Context,
 	return data, nil
 }
 
+func (r *ObjectReader) ReadBlocks(ctx context.Context,
+	extent Extent, ids map[uint32]*ReadBlockOptions, m *mpool.MPool,
+	zoneMapFunc ZoneMapUnmarshalFunc,
+	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
+	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	data := &fileservice.IOVector{
+		FilePath: r.name,
+		Entries:  make([]fileservice.IOEntry, 0),
+	}
+	for _, block := range ids {
+		for idx := range block.Idxes {
+			col := blocks[block.Id].(*Block).columns[idx]
+			data.Entries = append(data.Entries, fileservice.IOEntry{
+				Offset: int64(col.GetMeta().location.Offset()),
+				Size:   int64(col.GetMeta().location.Length()),
+
+				ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+			})
+		}
+	}
+
+	err = r.object.fs.Read(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func (r *ObjectReader) ReadAllMeta(ctx context.Context,
 	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error) {
 	footer, err := r.readFooter(ctx, fileSize, m)

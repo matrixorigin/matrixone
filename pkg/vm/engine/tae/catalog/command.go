@@ -274,6 +274,14 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 		n += sn
+		if sn, err = common.WriteString(cmd.DB.createSql, w); err != nil {
+			return
+		}
+		n += sn
+		if sn, err = common.WriteString(cmd.DB.datType, w); err != nil {
+			return
+		}
+		n += sn
 		if sn, err = cmd.DB.acInfo.WriteTo(w); err != nil {
 			return
 		}
@@ -385,6 +393,14 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.entry = entry
 		cmd.DB = NewReplayDBEntry()
 		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
+			return
+		}
+		n += sn
+		if cmd.DB.createSql, sn, err = common.ReadString(r); err != nil {
+			return
+		}
+		n += sn
+		if cmd.DB.datType, sn, err = common.ReadString(r); err != nil {
 			return
 		}
 		n += sn

@@ -47,6 +47,33 @@ func SplitTableAndColumn(name string) (string, string) {
 func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
 }
+func DbIsSystemDb(dbName string) bool {
+	if dbName == catalog.MO_CATALOG {
+		return true
+	}
+	if dbName == catalog.MO_DATABASE {
+		return true
+	}
+	if dbName == catalog.MO_TABLES {
+		return true
+	}
+	if dbName == catalog.MO_COLUMNS {
+		return true
+	}
+	if dbName == "mo_task" {
+		return true
+	}
+	if dbName == "information_schema" {
+		return true
+	}
+	if dbName == "system" {
+		return true
+	}
+	if dbName == "system_metrics" {
+		return true
+	}
+	return false
+}
 
 // Build the filter condition AST expression for mo_database, as follows:
 // account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))

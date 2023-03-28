@@ -138,9 +138,9 @@ func TestDiskCachePreload(t *testing.T) {
 		return nil
 	})
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.SetFileContent.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.SetFileContent.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 	// get content
 	r, err := cache.GetFileContent(ctx, "foo", 0)
@@ -148,18 +148,18 @@ func TestDiskCachePreload(t *testing.T) {
 	data, err := io.ReadAll(r)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("foo"), data)
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.GetFileContent.Load())
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.GetFileContent.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 	r, err = cache.GetFileContent(ctx, "foo", 1)
 	assert.Nil(t, err)
 	data, err = io.ReadAll(r)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("oo"), data)
-	assert.Equal(t, int64(2), counterSet.Cache.Disk.GetFileContent.Load())
-	assert.Equal(t, int64(2), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.GetFileContent.Load())
+	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 	// read
 	vec := &IOVector{
@@ -183,24 +183,24 @@ func TestDiskCachePreload(t *testing.T) {
 	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
 	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
 	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
-	assert.Equal(t, int64(3), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 	// update
 	assert.Nil(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(3), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 	// read and update again
 	assert.Nil(t, cache.Read(ctx, vec))
 	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
 	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
 	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
-	assert.Equal(t, int64(4), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(4), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
 	assert.Nil(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(4), counterSet.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.StatFile.Load())
+	assert.Equal(t, int64(4), counterSet.FileService.Cache.Disk.OpenFile.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
 
 }
 
@@ -232,5 +232,5 @@ func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.Equal(t, int64(1), counterSet.Cache.Disk.SetFileContent.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.SetFileContent.Load())
 }
