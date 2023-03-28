@@ -2862,8 +2862,16 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		comment        string
 		sql            string
 		erArray        []ExecResult
+		tenantInfo     *TenantInfo
 		err            error
 	)
+
+	tenantInfo = ses.GetTenantInfo()
+
+	if !tenantInfo.IsAdminRole() {
+		return moerr.NewInternalError(ctx, "only admin can alter publication")
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -2988,10 +2996,18 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	bh := ses.GetBackgroundExec(ctx)
 	bh.ClearExecResultSet()
 	var (
-		err     error
-		sql     string
-		erArray []ExecResult
+		err        error
+		sql        string
+		erArray    []ExecResult
+		tenantInfo *TenantInfo
 	)
+
+	tenantInfo = ses.GetTenantInfo()
+
+	if !tenantInfo.IsAdminRole() {
+		return moerr.NewInternalError(ctx, "only admin can drop publication")
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
