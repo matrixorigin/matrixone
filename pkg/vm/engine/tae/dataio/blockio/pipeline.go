@@ -171,11 +171,7 @@ func syncFetch(ctx context.Context, proc fetch) (any, error) {
 }
 
 func syncPrefetch(pref prefetch) error {
-	_, err := pref.reader.ReadBlocks(context.Background(),
-		pref.meta, pref.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
-	if err != nil {
-		return err
-	}
+	// Synchronous prefetch does not need to do anything
 	return nil
 }
 
@@ -296,6 +292,10 @@ func (p *IoPipeline) AsyncFetch(
 	return
 }
 
+func (p *IoPipeline) Prefetch(pref prefetch) (err error) {
+	return p.prefetchFunc(pref)
+}
+
 func (p *IoPipeline) asyncFetch(
 	ctx context.Context,
 	proc fetch,
@@ -314,10 +314,6 @@ func (p *IoPipeline) asyncPrefetch(pref prefetch) (err error) {
 		return
 	}
 	return
-}
-
-func (p *IoPipeline) Prefetch(pref prefetch) (err error) {
-	return p.prefetchFunc(pref)
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
