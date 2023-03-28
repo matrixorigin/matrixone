@@ -1263,12 +1263,13 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		// Check whether the table definition contains index constraints
-		if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
-			var err error
-			attachedPlan, err = buildDeleteIndexMetaPlan("", tableDef.TblId, 0, DROP_TABLE, ctx)
-			//attachedPlan, err = buildDeleteIndexMetadata(sql, ctx)
-			if err != nil {
-				return nil, err
+		if dropTable.Database != catalog.MO_CATALOG && dropTable.Table != catalog.MO_INDEXES {
+			if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
+				var err error
+				attachedPlan, err = buildDeleteIndexMetaPlan("", tableDef.TblId, 0, DROP_TABLE, ctx)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
