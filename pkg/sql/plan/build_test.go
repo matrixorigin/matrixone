@@ -1092,11 +1092,11 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 }
 
 func Test_mergeContexts(t *testing.T) {
-	b1 := NewBinding(0, 1, "a", nil, nil, false)
+	b1 := NewBinding(0, 1, "a", 0, nil, nil, false)
 	bc1 := NewBindContext(nil, nil)
 	bc1.bindings = append(bc1.bindings, b1)
 
-	b2 := NewBinding(1, 2, "a", nil, nil, false)
+	b2 := NewBinding(1, 2, "a", 0, nil, nil, false)
 	bc2 := NewBindContext(nil, nil)
 	bc2.bindings = append(bc2.bindings, b2)
 
@@ -1108,7 +1108,7 @@ func Test_mergeContexts(t *testing.T) {
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 
 	//a merge b
-	b3 := NewBinding(2, 3, "b", nil, nil, false)
+	b3 := NewBinding(2, 3, "b", 0, nil, nil, false)
 	bc3 := NewBindContext(nil, nil)
 	bc3.bindings = append(bc3.bindings, b3)
 
