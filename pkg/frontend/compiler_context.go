@@ -484,12 +484,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Value: commnetDef.Comment,
 			})
 		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			p := &plan2.PartitionByDef{}
-			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-			if err != nil {
-				return nil, nil
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, nil
+				}
+				partitionInfo = p
 			}
-			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
