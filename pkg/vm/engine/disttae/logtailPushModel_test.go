@@ -15,8 +15,10 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -45,15 +47,6 @@ func TestLogList_Sort(t *testing.T) {
 	}
 }
 
-/*
-// should ensure syncLogTailTimestamp can get time or set time without any trace.
-// and will not cause any deadlock.
-func TestSyncLogTailTimestamp(t *testing.T) {
-	// Not now.
-	t.Skip()
-}
-*/
-
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
@@ -79,6 +72,48 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))
+}
+
+func TestReconnectRace(t *testing.T) {
+	pClient := pushClient{
+		receivedLogTailTime: syncLogTailTimestamp{},
+		subscribed:          subscribedTable{},
+		subscriber: &logTailSubscriber{
+			lockSubscriber: make(chan func(context.Context, api.TableID) error, 1),
+		},
+	}
+	pClient.receivedLogTailTime.initLogTailTimestamp()
+	pClient.subscribed.initTableSubscribeRecord()
+	pClient.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
+		return nil
+	}
+
+	// mock reconnect
+	mockReconnect := func(pc *pushClient) {
+		<-pc.subscriber.lockSubscriber
+		time.Sleep(time.Millisecond * 2)
+		pc.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
+			return nil
+		}
+	}
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			mockReconnect(&pClient)
+		}
+	}()
+	go func() {
+		for i := 0; i < 1000; i++ {
+			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
+			require.NoError(t, err)
+		}
+	}()
+	go func() {
+		for i := 0; i < 1000; i++ {
+			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
+			require.NoError(t, err)
+		}
+	}()
 }
 
 var _ = debugToPrintLogList

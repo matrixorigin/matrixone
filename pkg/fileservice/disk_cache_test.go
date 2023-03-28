@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -233,4 +234,40 @@ func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.SetFileContent.Load())
+}
+
+func TestDiskCacheEviction(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	// new
+	cache, err := NewDiskCache(dir, 1, nil)
+	assert.Nil(t, err)
+
+	n := 128
+	wg := new(sync.WaitGroup)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			err := cache.SetFileContent(ctx, fmt.Sprintf("%v", i), func(_ context.Context, vec *IOVector) error {
+				_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
+				if err != nil {
+					return err
+				}
+				return nil
+			})
+			assert.Nil(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(128), counterSet.FileService.Cache.Disk.SetFileContent.Load())
+
+	cache.stats.Lock()
+	cache.evict()
+	cache.stats.Unlock()
 }

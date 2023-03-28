@@ -272,9 +272,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
+			var attachedScope *Scope
+			var err error
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err = c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+			}
 			return &Scope{
-				Magic: AlterTable,
-				Plan:  pn,
+				Magic:         AlterTable,
+				Plan:          pn,
+				AttachedScope: attachedScope,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
 			var attachedScope *Scope
@@ -879,6 +890,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
+		if n.ObjRef.PubAccountId != -1 {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -937,6 +951,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			AccountId:    n.ObjRef.PubAccountId,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1713,6 +1728,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	if n.ObjRef.PubAccountId != -1 {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
