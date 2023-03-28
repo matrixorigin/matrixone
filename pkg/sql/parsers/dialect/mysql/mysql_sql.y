@@ -468,8 +468,8 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
-%type <alterTableOptions> alter_options
-%type <alterTableOption> alter_table_drop
+%type <alterTableOptions> alter_option_list
+%type <alterTableOption> alter_option alter_table_drop
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -2220,7 +2220,7 @@ alter_view_stmt:
     }
 
 alter_table_stmt:
-    ALTER TABLE table_name alter_options
+    ALTER TABLE table_name alter_option_list
     {
         $$ = &tree.AlterTable{
             Table: $3,
@@ -2228,25 +2228,31 @@ alter_table_stmt:
         }
     }
 
-alter_options:
+alter_option_list:
+alter_option
+    {
+        $$ = []tree.AlterTableOption{$1}
+    }
+|   alter_option_list ',' alter_option
+    {
+        $$ = append($1, $3)
+    }
+
+alter_option:
 ADD table_elem
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
         }
-        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+        $$ = tree.AlterTableOption(opt)
     }
-|   DROP alter_table_drop
+| DROP alter_table_drop
     {
-        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+        $$ = tree.AlterTableOption($2)
     }
-| table_option_list
+| table_option
     {
-        opts := make([]tree.AlterTableOption, len($1))
-        for i, opt := range $1 {
-            opts[i] = tree.AlterTableOption(opt)
-        }
-        $$ =  opts
+        $$ =  tree.AlterTableOption($1)
     }
 
 alter_table_drop:
