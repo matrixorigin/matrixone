@@ -777,6 +777,25 @@ func (h *Handle) HandleWrite(
 				req.MetaLocs)
 			return
 		}
+		//check the input batch passed by cn is valid.
+		len := 0
+		for i, vec := range req.Batch.Vecs {
+			if vec == nil {
+				logutil.Errorf("the vec:%d in req.Batch is nil", i)
+				panic("invalid vector : vector is nil")
+			}
+			if vec.Length() == 0 {
+				logutil.Errorf("the vec:%d in req.Batch is empty", i)
+				panic("invalid vector: vector is empty")
+			}
+			if i == 0 {
+				len = vec.Length()
+			}
+			if vec.Length() != len {
+				logutil.Errorf("the length of vec:%d in req.Batch is not equal to the first vec", i)
+				panic("invalid batch : the length of vectors in batch is not the same")
+			}
+		}
 		//Appends a batch of data into table.
 		err = tb.Write(ctx, req.Batch)
 		return
