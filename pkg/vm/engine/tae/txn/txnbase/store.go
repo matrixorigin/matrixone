@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -47,6 +48,8 @@ func (store *NoopTxnStore) PreApplyCommit() error  { return nil }
 func (store *NoopTxnStore) ApplyCommit() error     { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error { return nil }
 
+func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
+func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
@@ -68,10 +71,10 @@ func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.R
 	return
 }
 
-func (store *NoopTxnStore) CreateDatabase(name, creatSql string) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabase(name, creatSql, datTyp string) (db handle.Database, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
 	return
 }
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
@@ -94,18 +97,10 @@ func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64, _ bool) 
 	return
 }
 func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64, bool) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateBlock(uint64, uint64, types.Uuid, bool) (blk handle.Block, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
-	return
-}
-
-func (store *NoopTxnStore) CreateNonAppendableBlockWithMeta(
-	_ uint64,
-	_ *common.ID,
-	_ string,
-	_ string) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *common.CreateBlockOpt) (blk handle.Block, err error) {
 	return
 }
 
@@ -127,8 +122,6 @@ func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, 
 	return
 }
 
-func (store *NoopTxnStore) LogSegmentID(dbId, tid, sid uint64) {}
-func (store *NoopTxnStore) LogBlockID(dbId, tid, bid uint64)   {}
 func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
@@ -144,3 +137,16 @@ func (store *NoopTxnStore) GetDirty() *common.Tree                        { retu
 func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }
+
+func (store *NoopTxnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)) {
+}
+
+func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
+	return txnif.TxnType_Normal
+}

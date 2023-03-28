@@ -92,6 +92,56 @@ func TestAllocateID(t *testing.T) {
 	}
 }
 
+func TestAllocateIDByKey(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	// initialize cluster
+	c, err := NewCluster(t, DefaultOptions())
+	require.NoError(t, err)
+
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
+
+	cfg := logservice.HAKeeperClientConfig{
+		ServiceAddresses: []string{c.(*testCluster).network.addresses.logAddresses[0].listenAddr},
+		AllocateIDBatch:  10,
+	}
+	hc, err := logservice.NewCNHAKeeperClient(ctx, cfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, hc.Close())
+	}()
+
+	last := uint64(0)
+	for i := 0; i < int(cfg.AllocateIDBatch)-1; i++ {
+		v, err := hc.AllocateIDByKey(ctx, "k1")
+		require.NoError(t, err)
+		assert.True(t, v > 0)
+		if last != 0 {
+			assert.Equal(t, v, last+1, i)
+		}
+		last = v
+	}
+	v2, err := hc.AllocateIDByKey(ctx, "k2")
+	require.NoError(t, err)
+	assert.Equal(t, v2, uint64(1))
+	v3, err := hc.AllocateIDByKey(ctx, "k3")
+	require.NoError(t, err)
+	assert.Equal(t, v3, uint64(1))
+}
+
 func TestClusterAwareness(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	if testing.Short() {

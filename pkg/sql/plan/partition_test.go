@@ -15,6 +15,13 @@
 package plan
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -214,144 +221,6 @@ func TestKeyPartitionError(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 	}
-}
-
-// -----------------------Hash Partition-------------------------------------
-func TestHashPartition(t *testing.T) {
-	// HASH(expr) Partition
-	sqls := []string{
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);",
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;",
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));",
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;",
-		`CREATE TABLE employees (
-				id INT NOT NULL,
-				fname VARCHAR(30),
-				lname VARCHAR(30),
-				hired DATE NOT NULL DEFAULT '1970-01-01',
-				separated DATE NOT NULL DEFAULT '9999-12-31',
-				job_code INT,
-				store_id INT
-			)
-			PARTITION BY HASH(store_id)
-			PARTITIONS 4;`,
-
-		`CREATE TABLE t1 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			PRIMARY KEY (col1, col2)
-		)
-		PARTITION BY HASH(col1)
-		PARTITIONS 4;`,
-
-		`CREATE TABLE t1 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			PRIMARY KEY (col1, col3)
-		)
-		PARTITION BY HASH(col1 + col3)
-		PARTITIONS 4;`,
-
-		`CREATE TABLE t2 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			PRIMARY KEY (col1)
-		)
-		PARTITION BY HASH(col1+10)
-		PARTITIONS 4;`,
-		`CREATE TABLE employees (
-				id INT NOT NULL,
-				fname VARCHAR(30),
-				lname VARCHAR(30),
-				hired DATE NOT NULL DEFAULT '1970-01-01',
-				separated DATE NOT NULL DEFAULT '9999-12-31',
-				job_code INT,
-				store_id INT
-			)
-			PARTITION BY LINEAR HASH( YEAR(hired) )
-			PARTITIONS 4;`,
-	}
-
-	mock := NewMockOptimizer(false)
-	for _, sql := range sqls {
-		t.Log(sql)
-		logicPlan, err := buildSingleStmt(mock, t, sql)
-		if err != nil {
-			t.Fatalf("%+v", err)
-		}
-		outPutPlan(logicPlan, true, t)
-	}
-}
-
-func TestHashPartitionError(t *testing.T) {
-	// HASH(expr) Partition
-	sqls := []string{
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col2);",
-		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2);",
-		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col1+0.5);",
-		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(12);",
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4 SUBPARTITION BY KEY(col1);",
-		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY HASH( YEAR(col3) ) PARTITIONS;",
-		`CREATE TABLE employees (
-					id INT NOT NULL,
-					fname VARCHAR(30),
-					lname VARCHAR(30),
-					hired DATE NOT NULL DEFAULT '1970-01-01',
-					separated DATE NOT NULL DEFAULT '9999-12-31',
-					job_code INT,
-					store_id INT
-				)
-				PARTITION BY HASH(4)
-				PARTITIONS 4;`,
-
-		`CREATE TABLE t1 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			PRIMARY KEY (col1, col2)
-		)
-			PARTITION BY HASH(col3)
-			PARTITIONS 4;`,
-
-		`CREATE TABLE t2 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			PRIMARY KEY (col1)
-		)
-			PARTITION BY HASH(col1 + col3)
-			PARTITIONS 4;`,
-
-		`CREATE TABLE t2 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			UNIQUE KEY (col1),
-			UNIQUE KEY (col3)
-		)
-		PARTITION BY HASH(col1,col3)
-		PARTITIONS 4;`,
-	}
-
-	mock := NewMockOptimizer(false)
-	for _, sql := range sqls {
-		_, err := buildSingleStmt(mock, t, sql)
-		t.Log(sql)
-		t.Log(err)
-		if err == nil {
-			t.Fatalf("%+v", err)
-		}
-	}
-
 }
 
 // -----------------------Range Partition-------------------------------------
@@ -1752,4 +1621,604 @@ func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 		testDeepCopy(plan)
 	}
 	return plan, err
+}
+
+func Test_checkUniqueKeyIncludePartKey(t *testing.T) {
+	partKeys := map[string]int{
+		"a": 0,
+		"b": 0,
+		"c": 0,
+	}
+
+	partKeys2 := map[string]int{
+		"a": 0,
+		"b": 0,
+		"e": 0,
+	}
+
+	uniqueKeys := map[string]int{
+		"a": 0,
+		"b": 0,
+		"c": 0,
+		"d": 0,
+	}
+
+	r1 := checkUniqueKeyIncludePartKey(partKeys, uniqueKeys)
+	require.True(t, r1)
+	r2 := checkUniqueKeyIncludePartKey(partKeys2, uniqueKeys)
+	require.False(t, r2)
+
+	r3 := findColumnInIndexCols("a", uniqueKeys)
+	require.True(t, r3)
+
+	r4 := findColumnInIndexCols("e", uniqueKeys)
+	require.False(t, r4)
+
+	x := make(map[string]int)
+	r5 := findColumnInIndexCols("e", x)
+	require.False(t, r5)
+
+	x["e"] = 0
+	r6 := findColumnInIndexCols("e", x)
+	require.True(t, r6)
+}
+
+func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
+	mock := NewMockOptimizer(false)
+	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext())
+	bindContext := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       nil,
+		ObjRef:      nil,
+		TableDef:    tableDef,
+		BindingTags: []int32{builder.genNewTag()},
+	}, bindContext)
+
+	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+	if err != nil {
+		return nil, err
+	}
+	return NewPartitionBinder(builder, bindContext), err
+}
+
+func mockExpr(t *testing.T, s string) (tree.Expr, error) {
+	selStr := "select " + s
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1)
+	require.Nil(t, err)
+	return one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, err
+}
+
+func Test_checkPartitionKeys(t *testing.T) {
+	addCol := func(tableDef *TableDef, col *ColDef) {
+		tableDef.Cols = append(tableDef.Cols, col)
+	}
+
+	/*
+		table test:
+		col1 int32 pk
+		col2 int32
+	*/
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"col1"},
+		},
+	}
+
+	addCol(tableDef, &ColDef{
+		Name: "col1",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef, &ColDef{
+		Name: "col2",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+
+	/*
+		table test2:
+		col1 int32 pk
+		col2 int32 pk
+		col3 int32
+
+	*/
+	tableDef2 := &plan.TableDef{
+		Name: "test2",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"col1", "col2"},
+		},
+	}
+
+	addCol(tableDef2, &ColDef{
+		Name: "col1",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef2, &ColDef{
+		Name: "col2",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef2, &ColDef{
+		Name: "col3",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+
+	addIndex := func(tableDef *TableDef, index string, names ...string) {
+		tableDef.Indexes = append(tableDef.Indexes, &IndexDef{
+			Unique: true,
+			Parts:  names,
+		})
+	}
+
+	addIndex(tableDef2, "index1", "col1", "col2")
+
+	{
+		//partition keys [col1,col2] error
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1+1+col2")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		//partition keys [col1]
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1+1")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef, partDef)
+		require.Nil(t, err)
+	}
+	{
+		//partition keys []
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "1")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef, partDef)
+		require.Nil(t, err)
+	}
+	{
+		//partition keys [col1,col2]
+		pb, err := mockPartitionBinder(tableDef2)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1+1+col2")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef2, partDef)
+		require.Nil(t, err)
+	}
+	addIndex(tableDef2, "index2", "col1")
+	{
+		//partition keys [col1,col2]
+		pb, err := mockPartitionBinder(tableDef2)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1+1+col2")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef2, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		//partition keys [col2]
+		pb, err := mockPartitionBinder(tableDef2)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col2")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionKeys(context.TODO(), pb.builder.nameByColRef, tableDef2, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		//partition columns [col1]
+		partDef := &PartitionByDef{}
+		partDef.PartitionColumns = &plan.PartitionColumns{
+			PartitionColumns: []string{"col1"},
+		}
+
+		err := checkPartitionKeys(context.TODO(), nil, tableDef2, partDef)
+		require.Nil(t, err)
+	}
+	{
+		//partition columns [col1,col1]
+		partDef := &PartitionByDef{}
+		partDef.PartitionColumns = &plan.PartitionColumns{
+			PartitionColumns: []string{"col1", "col1"},
+		}
+
+		err := checkPartitionKeys(context.TODO(), nil, tableDef2, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		//partition columns [col1]
+		partDef := &PartitionByDef{}
+		partDef.PartitionColumns = &plan.PartitionColumns{
+			PartitionColumns: []string{"col1"},
+		}
+		tableDef2.Pkey = &PrimaryKeyDef{
+			Names: []string{"col1", "col1"},
+		}
+		err := checkPartitionKeys(context.TODO(), nil, tableDef2, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		//partition columns [col1]
+		partDef := &PartitionByDef{}
+		partDef.PartitionColumns = &plan.PartitionColumns{
+			PartitionColumns: []string{"col1"},
+		}
+		tableDef2.Indexes[0].Parts = []string{
+			"col1", "col1",
+		}
+		err := checkPartitionKeys(context.TODO(), nil, tableDef2, partDef)
+		require.NotNil(t, err)
+	}
+}
+
+func addCol(tableDef *TableDef, col *ColDef) {
+	tableDef.Cols = append(tableDef.Cols, col)
+}
+
+func Test_checkPartitionExprType(t *testing.T) {
+	/*
+		table test:
+		col1 int32 pk
+		col2 int32
+	*/
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"col1"},
+		},
+	}
+
+	addCol(tableDef, &ColDef{
+		Name: "col1",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef, &ColDef{
+		Name: "col2",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+
+	{
+		//partition keys [col1]
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.Nil(t, err)
+
+		partDef := &PartitionByDef{}
+		partDef.PartitionExpr = &plan.PartitionExpr{
+			Expr: expr,
+		}
+
+		err = checkPartitionExprType(context.TODO(), nil, nil, partDef)
+		require.Nil(t, err)
+	}
+	{
+		//partition keys [col1]
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, "col1 / 3")
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		require.NotNil(t, err)
+		require.Nil(t, expr)
+
+	}
+}
+
+func Test_stringSliceToMap(t *testing.T) {
+	smap := make(map[string]int)
+	r1, _ := stringSliceToMap(nil, smap)
+	require.False(t, r1)
+
+	smap2 := make(map[string]int)
+	r2, _ := stringSliceToMap([]string{"a1", "a2"}, smap2)
+	require.False(t, r2)
+
+	smap3 := make(map[string]int)
+	r3, r31 := stringSliceToMap([]string{"a1", "a1"}, smap3)
+	require.True(t, r3)
+	require.Equal(t, r31, "a1")
+
+	smap4 := make(map[string]int)
+	r4, r41 := stringSliceToMap([]string{"", ""}, smap4)
+	require.True(t, r4)
+	require.Equal(t, r41, "")
+}
+
+func Test_checkDuplicatePartitionName(t *testing.T) {
+	{
+		partDef1 := &PartitionByDef{
+			Partitions: []*plan.PartitionItem{
+				{PartitionName: "p0"},
+				{PartitionName: "p2"},
+			},
+		}
+
+		err := checkDuplicatePartitionName(context.TODO(), nil, partDef1)
+		require.Nil(t, err)
+	}
+	{
+		partDef1 := &PartitionByDef{
+			Partitions: []*plan.PartitionItem{
+				{PartitionName: "p0"},
+				{PartitionName: "p0"},
+			},
+		}
+
+		err := checkDuplicatePartitionName(context.TODO(), nil, partDef1)
+		require.NotNil(t, err)
+	}
+}
+
+func Test_checkPartitionCount(t *testing.T) {
+	{
+		err := checkPartitionCount(context.TODO(), nil, PartitionCountLimit-10)
+		require.Nil(t, err)
+	}
+	{
+		err := checkPartitionCount(context.TODO(), nil, PartitionCountLimit+10)
+		require.NotNil(t, err)
+	}
+}
+
+func Test_checkDuplicatePartitionColumns(t *testing.T) {
+	{
+		partDef := &PartitionByDef{
+			PartitionColumns: &plan.PartitionColumns{
+				PartitionColumns: []string{},
+			},
+		}
+		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		require.Nil(t, err)
+	}
+	{
+		partDef := &PartitionByDef{}
+		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		require.Nil(t, err)
+	}
+	{
+		partDef := &PartitionByDef{
+			PartitionColumns: &plan.PartitionColumns{
+				PartitionColumns: []string{"a"},
+			},
+		}
+		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		require.Nil(t, err)
+	}
+	{
+		partDef := &PartitionByDef{
+			PartitionColumns: &plan.PartitionColumns{
+				PartitionColumns: []string{"a", "a"},
+			},
+		}
+		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		require.NotNil(t, err)
+	}
+	{
+		partDef := &PartitionByDef{
+			PartitionColumns: &plan.PartitionColumns{
+				PartitionColumns: []string{"a", "b"},
+			},
+		}
+		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		require.Nil(t, err)
+	}
+}
+
+func Test_partition_binder(t *testing.T) {
+	/*
+		table test:
+		col1 int32 pk
+		col2 int32 pk
+		col3 date pk
+	*/
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"col1", "col2", "col3"},
+		},
+	}
+
+	addCol(tableDef, &ColDef{
+		Name: "col1",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef, &ColDef{
+		Name: "col2",
+		Typ: &plan.Type{
+			Id: int32(types.T_int8),
+		},
+	})
+	addCol(tableDef, &ColDef{
+		Name: "col3",
+		Typ: &plan.Type{
+			Id: int32(types.T_date),
+		},
+	})
+
+	type kase struct {
+		s        string
+		wantErr  bool
+		wantErr2 bool
+	}
+
+	checkFunc := func(k kase) {
+		//fmt.Println(k.s)
+		pb, err := mockPartitionBinder(tableDef)
+		require.Nil(t, err)
+
+		astExpr, err := mockExpr(t, k.s)
+		require.Nil(t, err)
+
+		expr, err := pb.BindExpr(astExpr, 0, true)
+		if !k.wantErr {
+			require.Nil(t, err)
+			require.NotNil(t, expr)
+
+			partDef := &PartitionByDef{
+				PartitionExpr: &plan.PartitionExpr{
+					Expr: expr,
+				},
+			}
+
+			err = checkPartitionExprType(context.TODO(), nil, nil, partDef)
+			if !k.wantErr2 {
+				require.Nil(t, err)
+			} else {
+				require.NotNil(t, err)
+			}
+
+		} else {
+			require.NotNil(t, err)
+		}
+	}
+
+	rightCases := []kase{
+		{"col1", false, false},
+		{"col1 + col2", false, false},
+		{"col1 - col2", false, false},
+		{"col1 * col2", false, false},
+		{"col1 div col2", false, false},
+	}
+
+	for _, k := range rightCases {
+		checkFunc(k)
+	}
+
+	wrongCases := []kase{
+		{"col1 / 3", true, false},
+		{"col1 / col2", true, false},
+		{"col1 | col2", true, false},
+		{"col1 & col2", true, false},
+		{"col1 ^ col2", true, false},
+		{"col1 << col2", true, false},
+		{"col1 >> col2", true, false},
+		{"~col2", true, false},
+	}
+	for _, k := range wrongCases {
+		checkFunc(k)
+	}
+
+	supportedFuncCases := []kase{
+		{"abs(col1)", false, false},
+		{"abs(-1)", false, true},
+		{"ceiling(col1)", false, false},
+		{"ceiling(0.1)", false, true},
+		{"datediff('2007-12-31 23:59:59','2007-12-30')", false, false},
+		{"datediff(col3,'2007-12-30')", false, false},
+		{"day(col3)", false, false},
+		{"dayofyear(col3)", false, false},
+		{"extract(year from col3)", false, false},
+		{"extract(year_month from col3)", false, false},
+		{"floor(col1)", false, false},
+		{"floor(0.1)", false, true},
+		{"hour(col3)", false, false},
+		{"minute(col3)", false, false},
+		{"mod(col1,3)", false, false},
+		{"month(col3)", false, false},
+		{"second(col3)", false, false},
+		{"unix_timestamp(col3)", false, false},
+		{"weekday(col3)", false, false},
+		{"year(col3)", false, false},
+	}
+	for _, k := range supportedFuncCases {
+		checkFunc(k)
+	}
+
+	unsupportedFuncCases := []kase{
+		{"dayofmonth(col3)", true, false},  //unsupported function
+		{"dayofweek(col3)", true, false},   //unsupported function
+		{"microsecond(col3)", true, false}, //unsupported function
+		{"quarter(col3)", true, false},     //unsupported function
+		{"time_to_sec(col3)", true, false},
+		{"to_days(col3)", true, false},
+		{"to_seconds(col3)", true, false},
+		{"yearweek(col3)", true, false},
+	}
+	for _, k := range unsupportedFuncCases {
+		checkFunc(k)
+	}
 }

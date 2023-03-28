@@ -50,7 +50,7 @@ func TestBuildAlterView(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	store["db.v"] = arg{nil,
+	store["db.v"] = arg{&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel,
 			ViewSql: &plan.ViewDef{
@@ -63,7 +63,7 @@ func TestBuildAlterView(t *testing.T) {
 		"db",
 	})
 	assert.NoError(t, err)
-	store["db.vx"] = arg{nil,
+	store["db.vx"] = arg{&plan.ObjectRef{},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel,
 			ViewSql: &plan.ViewDef{
@@ -72,7 +72,7 @@ func TestBuildAlterView(t *testing.T) {
 	}
 
 	store["db.a"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
@@ -87,7 +87,7 @@ func TestBuildAlterView(t *testing.T) {
 			},
 		}}
 
-	store["db.verror"] = arg{nil,
+	store["db.verror"] = arg{&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel},
 	}
@@ -108,6 +108,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(&plan.Stats{}).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
@@ -161,7 +162,7 @@ func TestBuildLockTables(t *testing.T) {
 	sql3 := "lock tables t1 read, t1 write"
 
 	store["db.t1"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
@@ -205,7 +206,7 @@ func TestBuildLockTables(t *testing.T) {
 	assert.Error(t, err)
 
 	store["db.t2"] = arg{
-		&plan.ObjectRef{},
+		&plan.ObjectRef{PubAccountId: -1},
 		&plan.TableDef{
 			TableType: catalog.SystemOrdinaryRel,
 			Cols: []*ColDef{
@@ -228,4 +229,157 @@ func TestBuildLockTables(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildLockTables(stmt3.(*tree.LockTableStmt), ctx)
 	assert.Error(t, err)
+}
+
+func TestBuildCreateTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqls := []string{
+		`CREATE TABLE t3(
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL UNIQUE KEY,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					PRIMARY KEY (col1),
+					KEY(col3),
+					KEY(col3) )`,
+		`CREATE TABLE t2 (
+						col1 INT NOT NULL,
+						col2 DATE NOT NULL,
+						col3 INT NOT NULL,
+						col4 INT NOT NULL,
+						UNIQUE KEY (col1),
+						UNIQUE KEY (col3)
+					);`,
+		`CREATE TABLE t2 (
+						col1 INT NOT NULL,
+						col2 DATE NOT NULL,
+						col3 INT NOT NULL,
+						col4 INT NOT NULL,
+						UNIQUE KEY (col1),
+						UNIQUE KEY (col1, col3)
+					);`,
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					UNIQUE KEY (col1),
+					UNIQUE KEY (col1, col3)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					KEY (col1)
+				);`,
+
+		`CREATE TABLE t2 (
+					col1 INT NOT NULL KEY,
+					col2 DATE NOT NULL,
+					col3 INT NOT NULL,
+					col4 INT NOT NULL,
+					UNIQUE KEY (col1),
+					UNIQUE KEY (col1, col3)
+				);`,
+
+		"CREATE TABLE t2 (" +
+			"	`PRIMARY` INT NOT NULL, " +
+			"	col2 DATE NOT NULL, " +
+			"	col3 INT NOT NULL," +
+			"	col4 INT NOT NULL," +
+			"	UNIQUE KEY (`PRIMARY`)," +
+			"	UNIQUE KEY (`PRIMARY`, col3)" +
+			");",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildCreateTableError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL unique key,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key col2 (col3)
+		);`,
+
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key idx_sp1 (col2),
+			unique key idx_sp1 (col3)
+		);`,
+
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key idx_sp1 (col2),
+			key idx_sp1 (col3)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL UNIQUE KEY,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			KEY col2 (col3)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL KEY,
+			col2 DATE NOT NULL KEY,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL
+		);`,
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildAlterTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// should pass
+	sqls := []string{
+		"ALTER TABLE emp ADD UNIQUE idx1 (empno, ename);",
+		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno, ename);",
+		"ALTER TABLE emp ADD INDEX idx1 (ename, sal);",
+		//"alter table emp drop foreign key fk1",
+		//"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(n_nationkey)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }

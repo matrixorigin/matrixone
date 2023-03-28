@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -123,7 +124,8 @@ func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
 	}
 
 	// Get CPkey index
-	if tableDef.CompositePkey != nil {
+	//if tableDef.CompositePkey != nil {
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		// the serialized cpk col is located in the last of the bat.vecs
 		s3Writer.sortIndex = append(s3Writer.sortIndex, len(tableDef.Cols))
 	} else {
@@ -154,8 +156,10 @@ func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
 			s3Writer.pk[def.Name] = struct{}{}
 		}
 	}
-	if tableDef.CompositePkey != nil {
-		s3Writer.pk[tableDef.CompositePkey.Name] = struct{}{}
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		s3Writer.pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
 	}
 
 	s3Writer.resetMetaLocBat()
@@ -416,7 +420,7 @@ func (w *S3Writer) MergeBlock(idx int, length int, proc *process.Process, cacheO
 		}
 	} else {
 		lastBatch := w.tableBatches[idx][length-1]
-		lastBatch.Shrink(w.sels[stopIdx+1:])
+		lastBatch.Shrink(w.sels[stopIdx+1 : lastBatch.Length()])
 		w.tableBatches[idx] = w.tableBatches[idx][:0]
 		w.tableBatches[idx] = append(w.tableBatches[idx], lastBatch)
 		w.tableBatchSizes[idx] = uint64(lastBatch.Size())
@@ -456,10 +460,10 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 }
 
 func (w *S3Writer) generateWriter(proc *process.Process) error {
-	segId, err := Srv.GenerateSegment()
-	if err != nil {
-		return err
-	}
+	// Use uuid as segment id
+	// TODO: multiple 64m file in one segment
+	id := common.NewSegmentid()
+	segId := common.NewObjectName(&id, 0)
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err

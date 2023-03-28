@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -58,7 +59,7 @@ func testDatabase(
 		},
 	}
 	defer func() {
-		err := s.Commit(ctx, txnMeta)
+		_, err := s.Commit(ctx, txnMeta)
 		assert.Nil(t, err)
 	}()
 

@@ -60,6 +60,7 @@ type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
 type IndexDef = plan.IndexDef
+type SubscriptionMeta = plan.SubscriptionMeta
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -89,6 +90,8 @@ type CompilerContext interface {
 	GetAccountId() uint32
 	// GetContext get raw context.Context
 	GetContext() context.Context
+	// GetDatabaseId Get database id
+	GetDatabaseId(dbName string) (uint64, error)
 
 	GetProcess() *process.Process
 
@@ -98,6 +101,11 @@ type CompilerContext interface {
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
 	GetStatsCache() *StatsCache
+	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
+	CheckSubscriptionValid(subName, accName string, pubName string) error
+	SetQueryingSubscription(meta *SubscriptionMeta)
+	GetQueryingSubscription() *SubscriptionMeta
+	IsPublishing(dbName string) (bool, error)
 }
 
 type Optimizer interface {
@@ -287,6 +295,8 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
+
+var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 
 const (
 	NotFound      int32 = math.MaxInt32

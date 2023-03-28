@@ -138,6 +138,16 @@ message ObjectRef {
 	string db_name		= 6;
 	string schema_name	= 7;
 	string obj_name		= 8;
+	string subscription_name = 9;
+	int32 pub_account_id = 10;
+}
+
+message SubscriptionMeta{
+	string name = 1; // pubName
+	int32 account_id = 2; // pubAccountID
+	string db_name = 3; // pubDbName
+	string account_name = 4;// pubAccountName
+	string sub_name = 5; // subName(subscription side db name)
 }
 
 message Function {
@@ -254,6 +264,8 @@ message PrimaryKeyDef {
 	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
 	repeated string names = 5;
+	// Composite primary key column definition
+	ColDef comp_pkey_col = 6;
 }
 
 message IndexDef {
@@ -394,9 +406,8 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
-	ColDef composite_pkey = 33;
-	bool isLocked = 34;
-	TableLockType tableLockType = 35;
+	bool isLocked = 33;
+	TableLockType tableLockType = 34;
 }
 
 message TableFunction{
@@ -476,7 +487,7 @@ message UpdateCtx {
 	repeated ObjectRef ref 				= 1;
 	repeated IdList idx 				= 2;
 	repeated TableDef tableDefs 		= 3;
-	repeated ColPosMap update_col 		= 4; 
+	repeated ColPosMap update_col 		= 4;
 
 	repeated ObjectRef idx_ref 			= 5;
 	repeated int32 idx_idx 				= 6;
@@ -487,12 +498,12 @@ message UpdateCtx {
 	repeated ObjectRef on_cascade_ref 			= 9;
 	repeated IdList on_cascade_idx 				= 10;
 	repeated TableDef on_cascade_def			= 11;
-	repeated ColPosMap on_cascade_update_col 	= 12; 
+	repeated ColPosMap on_cascade_update_col 	= 12;
 
 	repeated ObjectRef on_set_ref 			= 13;
 	repeated IdList on_set_idx 				= 14;
 	repeated TableDef on_set_def			= 15;
-	repeated ColPosMap on_set_update_col 	= 16; 
+	repeated ColPosMap on_set_update_col 	= 16;
 
 	repeated ColPosMap parent_idx = 17;
 }
@@ -625,7 +636,7 @@ message Node {
 
 	repeated Expr tbl_func_expr_list = 25;
 
-    // The pipeline will determine the parallelism by traversing the plan 
+    // The pipeline will determine the parallelism by traversing the plan
     // when it is received. Then the build is built based on this information.
     int32   parallelism = 26;
 
@@ -657,8 +668,8 @@ message DeleteCtx {
 	repeated ObjectRef on_set_ref 			= 8;
 	repeated TableDef on_set_def 			= 9;
 	repeated IdList on_set_idx 				= 10;
-	repeated ColPosMap on_set_update_col 	= 11; 
-	
+	repeated ColPosMap on_set_update_col 	= 11;
+
 	bool can_truncate = 12;
 }
 
@@ -741,6 +752,8 @@ message Plan {
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
 	}
+	// AttachedPlan for the ddl statements, Attached Plan is used to modify related metadata
+	Plan AttachedPlan = 5;
 }
 
 message column{
@@ -798,6 +811,11 @@ message DataDefinition {
 		SHOW_COLLATION 		= 26;
 		LOCK_TABLES         = 27;
 		UNLOCK_TABLES       = 28;
+		CREATE_SEQUENCE		= 29;
+		ALTER_SEQUENCE		= 30;
+		DROP_SEQUENCE		= 31;
+		SHOW_SEQUENCES      = 32;
+
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -822,12 +840,23 @@ message DataDefinition {
 		AlterView alter_view			= 14;
 		LockTables lock_tables          = 15;
 		UnLockTables unlock_tables      = 16;
+		CreateSequence create_sequence  = 17;
+		DropSequence   drop_sequence    = 18;
+		AlterSequence  alter_sequence   = 19;
+
 	}
+}
+
+
+message SubscriptionOption{
+	string from = 1;
+	string publication = 2;
 }
 
 message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
+	SubscriptionOption subscription_option = 3;
 }
 
 message AlterDatabase {
@@ -867,6 +896,7 @@ message AlterTableDrop {
 	}
 	Typ typ		= 1;
 	string name	= 2;
+	string index_table_name = 3;
 }
 
 message AlterTableAddFk {
@@ -876,26 +906,33 @@ message AlterTableAddFk {
 	ForeignKeyDef fkey 		= 4;
 }
 
+message AlterTableAddIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string	origin_table_primary_key = 3;
+	CreateTable indexInfo = 4;
+	bool index_table_exist = 5;
+}
+
+message AlterTableDropIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string index_name = 3;
+	string index_table_name = 4;
+}
+
 message AlterTable {
 	message Action {
 		oneof action {
 			AlterTableDrop drop 	= 1;
 			AlterTableAddFk add_fk 	= 2;
+			AlterTableAddIndex add_index = 3;
 		};
 	}
 	string database			= 1;
 	TableDef table_def 		= 2;
 	bool is_cluster_table	= 3;
 	repeated Action actions = 4;
-}
-
-message AlterView {
-	bool if_exists		= 1;
-	string database 	= 2;
-	bool temporary		= 3;
-	string table		= 4;
-	TableDef table_def	= 5;
-	repeated TableDef index_tables = 6;
 }
 
 message DropTable {
@@ -907,6 +944,29 @@ message DropTable {
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
 }
+
+message AlterView {
+	bool if_exists		= 1;
+	string database 	= 2;
+	TableDef table_def	= 4;
+}
+
+message CreateSequence {
+	bool if_not_exists		=1;
+	string database 		=2;
+	TableDef table_def 		=3;
+}
+
+message DropSequence {
+	bool if_exists 		= 1;
+	string database 	=2;
+	string table 		=3;
+	uint64	table_id 	= 4;
+}
+
+message AlterSequence {
+}
+
 
 message CreateIndex {
 	string database = 1;

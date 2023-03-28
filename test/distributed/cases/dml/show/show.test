@@ -243,6 +243,47 @@ drop table t3;
 
 drop database test;
 
+
+
+DROP DATABASE test;
+create database test;
+use test;
+
+drop table if exists t1;
+CREATE TABLE t1 (
+	col1 INT NOT NULL PRIMARY KEY,
+	col2 DATE NOT NULL,
+	col3 INT NOT NULL,
+	col4 INT NOT NULL,
+	INDEX (col2,col3)
+);
+show index from t1;
+drop table t1;
+
+drop table if exists t2;
+CREATE TABLE t2 (
+	col1 INT NOT NULL PRIMARY KEY,
+	col2 DATE NOT NULL UNIQUE KEY,
+	col3 INT NOT NULL,
+	col4 INT NOT NULL
+);
+show index from t2;
+drop table t2;
+
+drop table if exists t3;
+CREATE TABLE t3 (
+	col1 INT NOT NULL PRIMARY KEY,
+	col2 DATE NOT NULL,
+	col3 INT NOT NULL,
+	col4 INT NOT NULL,
+	UNIQUE KEY (col1),
+	UNIQUE KEY (col1, col3)
+);
+show index from t3;
+drop table t3;
+
+drop database test;
+
 drop database if exists test;
 create database test;
 use test;

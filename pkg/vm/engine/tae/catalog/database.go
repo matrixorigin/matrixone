@@ -87,7 +87,7 @@ func compareTableFn(a, b *TableEntry) int {
 	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
-func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64, txn txnif.AsyncTxn) *DBEntry {
+func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
 	//id := catalog.NextDB()
 
 	e := &DBEntry{
@@ -95,6 +95,7 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64
 		catalog:     catalog,
 		name:        name,
 		createSql:   createSql,
+		datType:     datTyp,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
@@ -109,13 +110,14 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64
 	return e
 }
 
-func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *DBEntry {
+func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		datType:     datTyp,
 		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
@@ -185,7 +187,10 @@ func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
 func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
 func (e *DBEntry) GetName() string              { return e.name }
 func (e *DBEntry) GetCreateSql() string         { return e.createSql }
-func (e *DBEntry) GetDatType() string           { return e.datType }
+func (e *DBEntry) IsSubscription() bool {
+	return e.datType == pkgcatalog.SystemDBTypeSubscription
+}
+func (e *DBEntry) GetDatType() string { return e.datType }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
 		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
@@ -497,66 +502,6 @@ func (e *DBEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	return
-}
-
-func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.DBBaseEntry.WriteAllTo(w); err != nil {
-		return
-	}
-	x, err := e.acInfo.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += x
-	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
-		return
-	}
-	var sn int
-	sn, err = w.Write([]byte(e.name))
-	if err != nil {
-		return
-	}
-	n += int64(sn) + 2
-	if err = binary.Write(w, binary.BigEndian, uint16(len(e.createSql))); err != nil {
-		return
-	}
-	sn, err = w.Write([]byte(e.createSql))
-	n += int64(sn) + 2
-	return
-}
-
-func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = e.DBBaseEntry.ReadAllFrom(r); err != nil {
-		return
-	}
-	x, err := e.acInfo.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += x
-	size := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
-		return
-	}
-	n += 2
-	buf := make([]byte, size)
-	if _, err = r.Read(buf); err != nil {
-		return
-	}
-	n += int64(size)
-	e.name = string(buf)
-
-	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
-		return
-	}
-	n += 2
-	buf = make([]byte, size)
-	if _, err = r.Read(buf); err != nil {
-		return
-	}
-	n += int64(size)
-	e.createSql = string(buf)
 	return
 }
 

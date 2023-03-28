@@ -28,6 +28,10 @@ const (
 	LockService = "lock-service"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
+	// TxnMode runtime default txn mode
+	TxnMode = "txn-mode"
+	// TxnIsolation runtime default txn isolation
+	TxnIsolation = "txn-isolation"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

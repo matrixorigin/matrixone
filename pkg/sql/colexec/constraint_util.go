@@ -360,7 +360,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 					}
 				}
 			} else {
-				err = vector.CopyConst(toVec, fromVec, batLen, proc.Mp())
+				err = toVec.UnionMulti(fromVec, 0, batLen, proc.Mp())
 				if err != nil {
 					updateBatch.Clean(proc.Mp())
 					return nil, err
@@ -398,7 +398,9 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 		Attrs:              make([]string, 0, len(tableDef.Cols)),
 		IdxList:            make([]int32, 0, len(tableDef.Cols)),
 	}
-	if tableDef.CompositePkey != nil {
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		info.hasCompositePkey = true
 		info.compositePkeyParts = tableDef.Pkey.Names
 	}

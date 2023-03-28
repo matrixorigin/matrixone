@@ -48,10 +48,7 @@ show collation like '%';
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -149,9 +146,7 @@ Tables_in_test_db
 test_table
 test_view
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -374,10 +369,7 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 /* cloud_user */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -560,10 +552,7 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 /* cloud_nonuser */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3

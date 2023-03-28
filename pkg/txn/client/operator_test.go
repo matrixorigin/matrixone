@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -111,6 +113,7 @@ func TestCommit(t *testing.T) {
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
+		assert.Equal(t, tc.mu.txn.SnapshotTS.Next(), tc.mu.txn.CommitTS)
 
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
@@ -136,6 +139,20 @@ func TestCommitReadOnly(t *testing.T) {
 
 func TestCommitWithLockTables(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		r := runtime.DefaultRuntime()
+		runtime.SetupProcessLevelRuntime(r)
+
+		c := clusterservice.NewMOCluster(nil, time.Hour, clusterservice.WithDisableRefresh())
+		defer c.Close()
+		r.SetGlobalVariables(runtime.ClusterService, c)
+
+		s := lockservice.NewLockService(lockservice.Config{ServiceID: "s1"})
+		defer func() {
+			assert.NoError(t, s.Close())
+		}()
+
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.option.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)

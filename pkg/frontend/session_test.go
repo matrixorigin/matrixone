@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -67,14 +68,24 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
 
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
 
 		txn := InitTxnHandler(eng, txnClient)
 		txn.ses = &Session{
 			requestCtx: ctx,
 			pu:         pu,
 			connectCtx: ctx,
+			gSysVars:   &gSys,
 		}
 		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
@@ -91,8 +102,11 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		defer ctrl.Finish()
 
 		ctx := context.TODO()
+		idx := int64(1)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+			CommitTS: timestamp.Timestamp{PhysicalTime: idx},
+		}).AnyTimes()
 		cnt := 0
 		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
 			func(ctx context.Context) error {
@@ -115,23 +129,42 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		_, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
 
 		txn := InitTxnHandler(eng, txnClient)
 		txn.ses = &Session{
 			requestCtx: ctx,
 			pu:         pu,
 			connectCtx: ctx,
+			gSysVars:   &gSys,
 		}
 		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
+		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
+
 		err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
+
+		idx++
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
 	})
 }
 
@@ -569,6 +602,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
+		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
@@ -583,7 +617,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1")
+		_, _, err := tcc.getRelation("abc", "t1", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1")

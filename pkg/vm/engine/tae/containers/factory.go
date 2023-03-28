@@ -62,6 +62,8 @@ func MakeVector(typ types.Type, nullable bool, opts ...Options) (vec Vector) {
 		vec = NewVector[types.TS](typ, nullable, opts...)
 	case types.T_Rowid:
 		vec = NewVector[types.Rowid](typ, nullable, opts...)
+	case types.T_Blockid:
+		vec = NewVector[types.Blockid](typ, nullable, opts...)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		vec = NewVector[[]byte](typ, nullable, opts...)

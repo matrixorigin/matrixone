@@ -143,6 +143,9 @@ func (c *testHAKeeperClient) addDN(serviceIDs ...string) {
 
 func (c *testHAKeeperClient) Close() error                                   { return nil }
 func (c *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) { return 0, nil }
+func (c *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, nil
+}
 func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	c.RLock()
 	defer c.RUnlock()
