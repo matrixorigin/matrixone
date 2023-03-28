@@ -198,7 +198,7 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 		slice = slice[offset+bias : offset+length+bias]
 		if sels == nil || sels.IsEmpty() {
 			for i, elem := range slice {
-				if err = op(elem, i+offset); err != nil {
+				if err = op(elem, false, i+offset); err != nil {
 					break
 				}
 			}
@@ -211,7 +211,7 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 				} else if int(idx) >= end {
 					break
 				}
-				if err = op(slice[int(idx)-offset], int(idx)); err != nil {
+				if err = op(slice[int(idx)-offset], false, int(idx)); err != nil {
 					break
 				}
 			}
@@ -226,7 +226,7 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 			} else {
 				elem = base.derived.stlvec.Get(i + bias)
 			}
-			if err = op(elem, i); err != nil {
+			if err = op(elem, false, i); err != nil {
 				break
 			}
 		}
@@ -247,7 +247,7 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 		} else {
 			elem = base.derived.stlvec.Get(int(idx) + bias)
 		}
-		if err = op(elem, int(idx)); err != nil {
+		if err = op(elem, false, int(idx)); err != nil {
 			break
 		}
 	}

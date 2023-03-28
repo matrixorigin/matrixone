@@ -16,9 +16,9 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -83,9 +82,15 @@ func BlockReadInner(
 	}
 	// remove rows from columns
 	for i, col := range columnBatch.Vecs {
-		columnBatch.Vecs[i], err = col.Dup(pool)
+		// Fixme: Due to # 8684, we are not able to use mpool yet
+		// Fixme: replace with cnVec.Dup(nil) when it implemented.
+		columnBatch.Vecs[i], err = col.CloneWindow(0, col.Length(), nil)
 		if err != nil {
 			return nil, err
+		}
+		if col.GetType().Oid == types.T_Rowid {
+			// rowid need free
+			col.Free(pool)
 		}
 		if len(deleteRows) > 0 {
 			columnBatch.Vecs[i].Shrink(deleteRows, true)
@@ -117,6 +122,15 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, [
 	return found, uint16(idx), idxes
 }
 
+func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
+	col = vector.NewVec(typ)
+	for i := uint32(0); i < length; i++ {
+		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
+		vector.AppendFixed(col, rowid, false, pool)
+	}
+	return
+}
+
 func readBlockData(ctx context.Context, colIndexes []uint16,
 	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
@@ -130,12 +144,12 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	if err != nil {
 		return nil, deleteRows, err
 	}
-	var rowIdVec containers.Vector
+	var rowIdVec *vector.Vector
 	var bat *batch.Batch
 	if ok {
 		// generate rowIdVec
 		prefix := info.BlockID[:]
-		rowIdVec, err = model.PreparePhyAddrDataWithPool(
+		rowIdVec, err = preparePhyAddrData(
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
@@ -147,7 +161,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		}
 		defer func() {
 			if err != nil {
-				rowIdVec.Close()
+				rowIdVec.Free(m)
 			}
 		}()
 	}
@@ -156,7 +170,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if len(idxes) == 0 && ok {
 			// only read rowid column on non appendable block, return early
 			bat = batch.NewWithSize(0)
-			bat.Vecs = append(bat.Vecs, containers.UnmarshalToMoVec(rowIdVec))
+			bat.Vecs = append(bat.Vecs, rowIdVec)
 			return nil, nil
 		}
 		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, nil)
@@ -167,7 +181,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		bat = batch.NewWithSize(0)
 		for _, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
-				bat.Vecs = append(bat.Vecs, containers.UnmarshalToMoVec(rowIdVec))
+				bat.Vecs = append(bat.Vecs, rowIdVec)
 				continue
 			}
 			bat.Vecs = append(bat.Vecs, entry[0])
@@ -240,7 +254,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		return nil
 	}
 	// record visible delete rows
-	deleteRows := bitmap.New(0)
+	deleteRows := nulls.NewWithSize(0)
 	for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
 		if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
 			continue
@@ -250,10 +264,10 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		}
 		rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
 		_, _, row := model.DecodePhyAddrKey(rowid)
-		deleteRows.Add(uint64(row))
+		nulls.Add(deleteRows, uint64(row))
 	}
 	var rows []int64
-	itr := deleteRows.Iterator()
+	itr := deleteRows.Np.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, int64(r))

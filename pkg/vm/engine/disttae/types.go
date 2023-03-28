@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -101,24 +100,19 @@ type Transaction struct {
 	// not-used now
 	// blockId uint64
 
-	// use for solving halloween problem
-	statementId uint64
 	// local timestamp for workspace operations
-	localTS timestamp.Timestamp
-	meta    txn.TxnMeta
-	op      client.TxnOperator
+	meta txn.TxnMeta
+	op   client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
-	// every statement is an element
-	writes [][]Entry
+	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
 
-	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
-	dnStores  []DNStore
-	proc      *process.Process
+	dnStores []DNStore
+	proc     *process.Process
 
 	idGen IDGenerator
 
@@ -178,15 +172,15 @@ type tableMeta struct {
 
 // txnTable represents an opened table in a transaction
 type txnTable struct {
-	tableId    uint64
-	tableName  string
-	dnList     []int
-	db         *txnDatabase
-	meta       *tableMeta
-	parts      []*PartitionState
-	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
+	tableId   uint64
+	tableName string
+	dnList    []int
+	db        *txnDatabase
+	meta      *tableMeta
+	parts     []*PartitionState
+	//	insertExpr *plan.Expr
+	defs     []engine.TableDef
+	tableDef *plan.TableDef
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -200,7 +194,17 @@ type txnTable struct {
 
 	updated bool
 	// use for skip rows
-	skipBlocks map[types.Blockid]uint8
+	// snapshot for read
+	writes []Entry
+	// offset of the writes in workspace
+	writesOffset int
+	skipBlocks   map[types.Blockid]uint8
+
+	// localState stores uncommitted data
+	localState *PartitionState
+	// this should be the statement id
+	// but seems that we're not maintaining it at the moment
+	localTS timestamp.Timestamp
 }
 
 type column struct {
@@ -283,30 +287,6 @@ func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
 	return a.Info.BlockID == b.Info.BlockID
-}
-
-type workspaceRow struct {
-	rowID   RowID
-	tableID uint64
-	indexes []memorytable.Tuple
-}
-
-var _ memorytable.Row[RowID, *workspaceRow] = new(workspaceRow)
-
-func (w *workspaceRow) Key() RowID {
-	return w.rowID
-}
-
-func (w *workspaceRow) Value() *workspaceRow {
-	return w
-}
-
-func (w *workspaceRow) Indexes() []memorytable.Tuple {
-	return w.indexes
-}
-
-func (w *workspaceRow) UniqueIndexes() []memorytable.Tuple {
-	return nil
 }
 
 type pkRange struct {

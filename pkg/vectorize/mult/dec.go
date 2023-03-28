@@ -66,19 +66,17 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		for i := 0; i < n; i++ {
-			x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
-			if xt[i]>>63 != 0 {
-				x.B64_127 = ^x.B64_127
-			}
-			y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
-			if yt[i]>>63 != 0 {
-				y.B64_127 = ^y.B64_127
-			}
-			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
-			if err != nil {
-				return
-			}
+		x := types.Decimal128{B0_63: uint64(xt[i]), B64_127: 0}
+		if xt[i]>>63 != 0 {
+			x.B64_127 = ^x.B64_127
+		}
+		y := types.Decimal128{B0_63: uint64(yt[i]), B64_127: 0}
+		if yt[i]>>63 != 0 {
+			y.B64_127 = ^y.B64_127
+		}
+		rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
+		if err != nil {
+			return
 		}
 	}
 	return nil

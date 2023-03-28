@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"strings"
 
@@ -24,9 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -57,16 +62,14 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
-	for i := range tbl.db.txn.writes {
-		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId != tbl.db.databaseId {
-				continue
-			}
-			if entry.tableId != tbl.tableId {
-				continue
-			}
-			writes = append(writes, entry)
+	for _, entry := range tbl.db.txn.writes {
+		if entry.databaseId != tbl.db.databaseId {
+			continue
 		}
+		if entry.tableId != tbl.tableId {
+			continue
+		}
+		writes = append(writes, entry)
 	}
 	tbl.db.txn.Unlock()
 
@@ -173,18 +176,22 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	for i := range tbl.db.txn.writes {
-		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId != tbl.db.databaseId {
-				continue
-			}
-			if entry.tableId != tbl.tableId {
-				continue
-			}
-			writes = append(writes, entry)
-		}
+	if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
+		return nil, err
 	}
+	tbl.db.txn.Lock()
+	tbl.writes = tbl.writes[:0]
+	tbl.writesOffset = len(tbl.db.txn.writes)
+	for i, entry := range tbl.db.txn.writes {
+		if entry.databaseId != tbl.db.databaseId {
+			continue
+		}
+		if entry.tableId != tbl.tableId {
+			continue
+		}
+		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
+	}
+	tbl.db.txn.Unlock()
 
 	err := tbl.updateMeta(ctx, expr)
 	if err != nil {
@@ -232,7 +239,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				iter.Close()
 			}
 
-			for _, entry := range writes {
+			for _, entry := range tbl.writes {
 				if entry.typ == DELETE {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
@@ -425,32 +432,23 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		i := rand.Int() % len(tbl.db.txn.dnStores)
 		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
 	}
-	if tbl.insertExpr == nil {
-		ibat := batch.New(true, bat.Attrs)
-		for j := range bat.Vecs {
-			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		}
-		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
-			return err
-		}
-		i := rand.Int() % len(tbl.db.txn.dnStores)
-		return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i], tbl.primaryIdx)
+	ibat := batch.New(true, bat.Attrs)
+	for j := range bat.Vecs {
+		ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 	}
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
-	if err != nil {
+	if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 		return err
 	}
-	for i := range bats {
-		if bats[i].Length() == 0 {
-			continue
-		}
-		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
-			return err
-		}
+	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
+		return err
 	}
-	return nil
+	packer, put := tbl.db.txn.engine.packerPool.Get()
+	defer put()
+	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
+		return err
+	}
+	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -459,6 +457,13 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	bat.SetAttributes([]string{catalog.Row_ID})
+
+	packer, put := tbl.db.txn.engine.packerPool.Get()
+	defer put()
+	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
+		return err
+	}
+
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
@@ -537,18 +542,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	tbl.db.txn.Lock()
-	for i := range tbl.db.txn.writes {
-		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId == tbl.db.databaseId &&
-				entry.tableId == tbl.tableId {
-				writes = append(writes, entry)
-			}
-		}
-	}
-	tbl.db.txn.Unlock()
-
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
@@ -563,7 +556,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			num,
 			encodedPrimaryKey,
 			blks,
-			writes,
+			tbl.writes,
 		)
 		if err != nil {
 			return nil, err
@@ -766,4 +759,102 @@ func (tbl *txnTable) newReader(
 	}
 
 	return readers, nil
+}
+
+func (tbl *txnTable) updateLocalState(
+	ctx context.Context,
+	typ int,
+	bat *batch.Batch,
+	packer *types.Packer,
+) (
+	err error,
+) {
+
+	if bat.Vecs[0].GetType().Oid != types.T_Rowid {
+		// skip
+		return nil
+	}
+
+	var state *PartitionState
+	if tbl.localState == nil {
+		tbl.localState = NewPartitionState()
+		state = tbl.localState
+	} else {
+		state = tbl.localState.Copy()
+	}
+
+	// make a logtail compatible batch
+	protoBatch, err := batch.BatchToProtoBatch(bat)
+	if err != nil {
+		panic(err)
+	}
+	vec := vector.NewVec(types.T_TS.ToType())
+	ts := types.TimestampToTS(tbl.nextLocalTS())
+	for i, l := 0, bat.Length(); i < l; i++ {
+		if err := vector.AppendFixed(
+			vec,
+			ts,
+			false,
+			tbl.db.txn.proc.Mp(),
+		); err != nil {
+			panic(err)
+		}
+	}
+	protoVec, err := vector.VectorToProtoVector(vec)
+	if err != nil {
+		panic(err)
+	}
+	newAttrs := make([]string, 0, len(protoBatch.Attrs)+1)
+	newAttrs = append(newAttrs, protoBatch.Attrs[:1]...)
+	newAttrs = append(newAttrs, "name")
+	newAttrs = append(newAttrs, protoBatch.Attrs[1:]...)
+	protoBatch.Attrs = newAttrs
+	newVecs := make([]*api.Vector, 0, len(protoBatch.Vecs)+1)
+	newVecs = append(newVecs, protoBatch.Vecs[:1]...)
+	newVecs = append(newVecs, protoVec)
+	newVecs = append(newVecs, protoBatch.Vecs[1:]...)
+	protoBatch.Vecs = newVecs
+
+	switch typ {
+
+	case INSERT:
+		primaryKeys := state.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
+
+		// check primary key
+		for idx, primaryKey := range primaryKeys {
+			iter := state.NewPrimaryKeyIter(ts, primaryKey)
+			n := 0
+			for iter.Next() {
+				n++
+			}
+			iter.Close()
+			if n > 1 {
+				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */]
+				return moerr.NewDuplicateEntry(
+					ctx,
+					common.TypeStringValue(
+						*primaryKeyVector.GetType(),
+						memorytable.VectorAt(primaryKeyVector, idx).Value,
+					),
+					bat.Attrs[tbl.primaryIdx+1],
+				)
+			}
+		}
+
+	case DELETE:
+		state.HandleRowsDelete(ctx, protoBatch)
+
+	default:
+		panic(fmt.Sprintf("unknown type: %v", typ))
+
+	}
+
+	tbl.localState = state
+
+	return
+}
+
+func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
+	tbl.localTS = tbl.localTS.Next()
+	return tbl.localTS
 }

@@ -66,26 +66,23 @@ func TestVectorShallowForeach(t *testing.T) {
 				}
 			}
 		}
-		vec.ForeachWindowShallow(0, 10, func(v any, row int) error {
+		vec.ForeachWindowShallow(0, 10, func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
+				assert.True(t, isNull)
 			}
 			return nil
 		}, nil)
 
-		vec.ForeachShallow(func(v any, row int) error {
+		vec.ForeachShallow(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
+				assert.True(t, isNull)
 			}
 			return nil
 		}, nil)
 
-		vec.GetView().ForeachShallow(func(v any, row int) error {
+		vec.GetView().ForeachShallow(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
+				assert.True(t, isNull)
 			}
 			return nil
 		}, nil)
@@ -256,7 +253,7 @@ func TestVector5(t *testing.T) {
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 10, false, true, nil)
 		rows := make([]int, 0)
-		op := func(v any, row int) (err error) {
+		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			assert.Equal(t, vec.Get(row), v)
 			return
@@ -304,7 +301,7 @@ func TestVector6(t *testing.T) {
 		assert.Equal(t, 8, win.Length())
 		assert.Equal(t, 8, win.Capacity())
 		rows := make([]int, 0)
-		op := func(v any, row int) (err error) {
+		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			assert.Equal(t, vec.Get(row+bias), v)
 			return
@@ -336,7 +333,7 @@ func TestVector6(t *testing.T) {
 		bias = 1
 		win = vec.Window(bias, 8)
 
-		op2 := func(v any, row int) (err error) {
+		op2 := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			// t.Logf("row=%d,v=%v", row, v)
 			// t.Logf("row=%d, winv=%v", row, win.Get(row))

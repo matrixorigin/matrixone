@@ -16,12 +16,14 @@ package objectio
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unsafe"
 )
 
 const HeaderSize = 64
-const ColumnMetaSize = 128
+const ColumnMetaSize = 136
+const ExtentSize = 16
 
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
@@ -78,6 +80,20 @@ func (bh *BlockHeader) GetColumnCount() uint16 {
 	return bh.columnCount
 }
 
+func (bh *BlockHeader) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(bh)), HeaderSize)
+}
+
+func (bh *BlockHeader) Unmarshal(data []byte) {
+	h := *(*BlockHeader)(unsafe.Pointer(&data[0]))
+	bh.tableId = h.tableId
+	bh.segmentId = h.segmentId
+	bh.blockId = h.blockId
+	bh.columnCount = h.columnCount
+	bh.dummy = h.dummy
+	bh.checksum = h.checksum
+}
+
 // +---------------------------------------------------------------------------------------------------------------+
 // |                                                    ColumnMeta                                                 |
 // +--------+-------+----------+--------+---------+--------+--------+------------+---------+----------+------------+
@@ -106,8 +122,8 @@ type ColumnMeta struct {
 	location    Extent
 	zoneMap     ZoneMap
 	bloomFilter Extent
-	dummy       [32]byte
-	checksum    uint32
+	//dummy       [32]byte
+	checksum uint32
 }
 
 func (cm *ColumnMeta) GetType() uint8 {
@@ -134,10 +150,51 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 	return cm.bloomFilter
 }
 
+func (cm *ColumnMeta) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeFixed[uint8](cm.typ))
+	buffer.Write(types.EncodeFixed[uint8](cm.alg))
+	buffer.Write(types.EncodeFixed[uint16](cm.idx))
+	buffer.Write(cm.location.Marshal())
+	var buf []byte
+	if cm.zoneMap.data == nil {
+		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
+		cm.zoneMap.data = buf
+	}
+	buffer.Write(cm.zoneMap.data.([]byte))
+	buffer.Write(cm.bloomFilter.Marshal())
+	dummy := make([]byte, 32)
+	buffer.Write(dummy)
+	buffer.Write(types.EncodeFixed[uint32](cm.checksum))
+	return buffer.Bytes()
+}
+
+func (cm *ColumnMeta) Unmarshal(data []byte) error {
+	cm.typ = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cm.alg = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cm.idx = types.DecodeUint16(data[:2])
+	data = data[2:]
+	cm.location.Unmarshal(data)
+	data = data[ExtentSize:]
+	cm.zoneMap.idx = cm.idx
+	t := types.T(cm.typ).ToType()
+	if err := cm.zoneMap.Unmarshal(data[:64], t); err != nil {
+		return err
+	}
+	data = data[64:]
+	cm.bloomFilter.Unmarshal(data)
+	// 32 skip dummy
+	data = data[ExtentSize+32:]
+	cm.checksum = types.DecodeUint32(data[:4])
+	return nil
+}
+
 type Header struct {
 	magic   uint64
 	version uint16
-	dummy   [22]byte
+	//dummy   [22]byte
 }
 
 type Footer struct {
@@ -149,35 +206,23 @@ type Footer struct {
 func (f *Footer) UnMarshalFooter(data []byte) error {
 	var err error
 	footer := data[len(data)-FooterSize:]
-	FooterCache := bytes.NewBuffer(footer)
-	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
-		return err
-	}
-	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
-		return err
-	}
+	f.blockCount = types.DecodeUint32(footer[:4])
+	footer = footer[4:]
+	f.magic = types.DecodeUint64(footer[:8])
 	if f.magic != uint64(Magic) {
 		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
 	}
-	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
+	if f.blockCount*ExtentSize+FooterSize > uint32(len(data)) {
 		return nil
 	} else {
 		f.extents = make([]Extent, f.blockCount)
 	}
-	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
-	ExtentsCache := bytes.NewBuffer(extents)
+	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentSize):]
 	size := uint32(0)
 	for i := 0; i < int(f.blockCount); i++ {
+		f.extents[i].Unmarshal(extents)
 		f.extents[i].id = uint32(i)
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
-			return err
-		}
+		extents = extents[ExtentSize:]
 		size += f.extents[i].originSize
 	}
 
