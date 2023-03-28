@@ -193,7 +193,8 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	extent Extent, ids map[uint32]*ReadBlockOptions, m *mpool.MPool,
 	zoneMapFunc ZoneMapUnmarshalFunc,
 	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
-	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	meta, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	blocks := meta.BlkMetas
 	if err != nil {
 		return nil, err
 	}
