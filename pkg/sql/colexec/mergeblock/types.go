@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -69,6 +70,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	arg.GetMetaLocBat(bat.Attrs[1])
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	metaLocs := vector.MustBytesCol(bat.GetVector(1))
+	deltaRows := uint64(0)
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
 			if tblIdx[i] == 0 {
@@ -77,6 +79,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 					return err
 				}
 				arg.AffectedRows += val
+				deltaRows = val
 			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {
@@ -87,10 +90,12 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			}
 			if idx == 0 {
 				arg.AffectedRows += uint64(bat.Length())
+				deltaRows = arg.AffectedRows
 			}
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
 		}
 	}
+	logutil.Infof("mergeBlock Delta Rows: %d. ", deltaRows)
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
 	}

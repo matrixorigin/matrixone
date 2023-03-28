@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -56,7 +57,9 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	if bat.Length() == 0 {
 		return false, nil
 	}
-
+	if insertArg.InsertCtx.TableDef.Name == "t_mo_crash" {
+		logutil.Infof("get batch Len:%d, a.Len:%d, b.Len:%d. ", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length())
+	}
 	defer func() {
 		bat.Clean(proc.Mp())
 	}()
