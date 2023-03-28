@@ -345,7 +345,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
-		if err := e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+		if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
 		}
