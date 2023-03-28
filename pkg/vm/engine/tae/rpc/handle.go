@@ -777,6 +777,17 @@ func (h *Handle) HandleWrite(
 				req.MetaLocs)
 			return
 		}
+		//check the input batch passed by cn is valid.
+		for i, vec := range req.Batch.Vecs {
+			if vec == nil {
+				logutil.Errorf("the vec in req.Batch is nil, its index is %d", i)
+				return moerr.NewInternalError(ctx, "invalid vector")
+			}
+			if vec.Length() == 0 {
+				logutil.Errorf("the vec in req.Batch is empty, its index is %d", i)
+				return moerr.NewInternalError(ctx, "invalid vector")
+			}
+		}
 		//Appends a batch of data into table.
 		err = tb.Write(ctx, req.Batch)
 		return
