@@ -1097,8 +1097,8 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount) error {
-	return doDropAccount(ctx, mce.GetSession(), da)
+func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount, rm *RoutineManager) error {
+	return doDropAccount(ctx, mce.GetSession(), da, rm)
 }
 
 // handleDropAccount drops a new user-level tenant
@@ -2531,7 +2531,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.DropAccount:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
-			if err = mce.handleDropAccount(requestCtx, st); err != nil {
+			if err = mce.handleDropAccount(requestCtx, st, mce.GetRoutineManager()); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterAccount:

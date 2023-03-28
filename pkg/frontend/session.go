@@ -1017,7 +1017,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 }
 
 // AuthenticateUser verifies the password of the user.
-func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
+func (ses *Session) AuthenticateUser(userInput string, rm *RoutineManager, rt *Routine) ([]byte, error) {
 	var defaultRoleID int64
 	var defaultRole string
 	var tenant *TenantInfo
@@ -1088,6 +1088,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	tenant.SetTenantID(uint32(tenantID))
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
+
+	//record tenatID to routine in RoutineManager
+	if rm != nil && rt != nil && tenantID != sysAccountID {
+		if rm.accountId2Routine[tenantID] == nil {
+			rm.accountId2Routine[tenantID] = make(map[*Routine]bool)
+		}
+		rm.accountId2Routine[tenantID][rt] = true
+	}
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 

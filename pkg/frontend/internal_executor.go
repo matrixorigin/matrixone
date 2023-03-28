@@ -216,7 +216,7 @@ func (ip *internalProtocol) IsTlsEstablished() bool {
 func (ip *internalProtocol) SetTlsEstablished() {
 }
 
-func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte, rm *RoutineManager, rt *Routine) (bool, error) {
 	return false, nil
 }
 

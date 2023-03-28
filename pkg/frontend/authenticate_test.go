@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -6311,7 +6312,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("drop account (if exists)", t, func() {
@@ -6349,7 +6350,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("drop account fail", t, func() {
@@ -6384,7 +6385,7 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeError)
 	})
 }

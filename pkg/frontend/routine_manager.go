@@ -34,13 +34,14 @@ import (
 )
 
 type RoutineManager struct {
-	mu             sync.Mutex
-	ctx            context.Context
-	clients        map[goetty.IOSession]*Routine
-	pu             *config.ParameterUnit
-	skipCheckUser  bool
-	tlsConfig      *tls.Config
-	autoIncrCaches defines.AutoIncrCaches
+	mu                sync.Mutex
+	ctx               context.Context
+	clients           map[goetty.IOSession]*Routine
+	pu                *config.ParameterUnit
+	skipCheckUser     bool
+	tlsConfig         *tls.Config
+	autoIncrCaches    defines.AutoIncrCaches
+	accountId2Routine map[int64]map[*Routine]bool
 }
 
 func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
@@ -160,6 +161,10 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				}
 				metric.ConnectionCounter(accountName).Dec()
 			})
+			tenantId := ses.tenant.TenantID
+			if rm.accountId2Routine[int64(tenantId)] != nil {
+				delete(rm.accountId2Routine[int64(tenantId)], rt)
+			}
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -268,7 +273,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		ses := routine.getSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoInfo, "setup ssl")
-			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(ctx, payload, rm, routine)
 			if err != nil {
 				logErrorf(protoInfo, "error:%v", err)
 				return err
@@ -299,7 +304,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 		} else {
 			logDebugf(protoInfo, "handleHandshake")
-			_, err = protocol.HandleHandshake(ctx, payload)
+			_, err = protocol.HandleHandshake(ctx, payload, rm, routine)
 			if err != nil {
 				logErrorf(protoInfo, "error:%v", err)
 				return err
@@ -346,6 +351,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 	// Initialize auto incre cache.
 	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
 	rm.autoIncrCaches.Mu = &rm.mu
+	rm.accountId2Routine = make(map[int64]map[*Routine]bool)
 
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)

@@ -311,7 +311,7 @@ type DropAccountExecutor struct {
 }
 
 func (dae *DropAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropAccount(ctx, ses, dae.da)
+	return doDropAccount(ctx, ses, dae.da, nil)
 }
 
 type AlterAccountExecutor struct {

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -2790,7 +2791,7 @@ handleFailed:
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
+func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount, rm *RoutineManager) error {
 	bh := ses.GetBackgroundExec(ctx)
 
 	//set backgroundHandler's default schema
@@ -2850,6 +2851,30 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 			goto handleFailed
 		}
 		hasAccount = false
+	}
+
+	//clean up all routine releated with this account
+	if rm != nil {
+		if rtMap, ok := rm.accountId2Routine[accountId]; ok {
+			for rt := range rtMap {
+				if rt != nil {
+					ses := rt.getSession()
+					if ses != nil {
+						rt.decreaseCount(func() {
+							account := ses.GetTenantInfo()
+							accountName := sysAccountName
+							if account != nil {
+								accountName = account.GetTenant()
+							}
+							metric.ConnectionCounter(accountName).Dec()
+						})
+						tenantId := ses.tenant.TenantID
+						delete(rm.accountId2Routine[int64(tenantId)], rt)
+					}
+					rt.cleanup()
+				}
+			}
+		}
 	}
 
 	//drop tables of the tenant

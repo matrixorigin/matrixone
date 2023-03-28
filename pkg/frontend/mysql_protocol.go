@@ -1069,8 +1069,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 	return bytes.Equal(hash1, auth)
 }
 
-// the server authenticate that the client can connect and use the database
-func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse []byte) error {
+// the server authenticate that th e client can connect and use the database
+func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse []byte, rm *RoutineManager, rt *Routine) error {
 	var psw []byte
 	var err error
 	var tenant *TenantInfo
@@ -1078,7 +1078,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
-		psw, err = ses.AuthenticateUser(mp.GetUserName())
+		psw, err = ses.AuthenticateUser(mp.GetUserName(), rm, rt)
 		if err != nil {
 			return err
 		}
@@ -1113,7 +1113,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte, rm *RoutineManager, rt *Routine) (bool, error) {
 	var err, err2 error
 	if len(payload) < 2 {
 		return false, moerr.NewInternalError(ctx, "received a broken response packet")
@@ -1173,7 +1173,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 	}
 
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
-	if err = mp.authenticateUser(ctx, authResponse); err != nil {
+	if err = mp.authenticateUser(ctx, authResponse, rm, rt); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		tipsFormat := "Access denied for user %s. %s"

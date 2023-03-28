@@ -177,7 +177,7 @@ type Protocol interface {
 
 	SetTlsEstablished()
 
-	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+	HandleHandshake(ctx context.Context, payload []byte, rm *RoutineManager, routine *Routine) (bool, error)
 
 	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
@@ -403,7 +403,7 @@ func (fp *FakeProtocol) SetTlsEstablished() {
 
 }
 
-func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte, rm *RoutineManager, rt *Routine) (bool, error) {
 	return false, nil
 }
 
