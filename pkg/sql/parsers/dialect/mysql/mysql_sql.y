@@ -198,6 +198,7 @@ import (
     indexHintScope tree.IndexHintScope
     indexHint *tree.IndexHint
     indexHintList []*tree.IndexHint
+    indexVisibility tree.VisibleType
 
     killOption tree.KillOption
     statementOption tree.StatementOption
@@ -469,7 +470,8 @@ import (
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_options
-%type <alterTableOption> alter_table_drop
+%type <alterTableOption> alter_table_drop alter_table_alter
+%type <indexVisibility> visibility
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -2240,6 +2242,10 @@ ADD table_elem
     {
         $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
     }
+|   ALTER alter_table_alter
+    {
+    	$$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+    }
 | table_option_list
     {
         opts := make([]tree.AlterTableOption, len($1))
@@ -2284,7 +2290,26 @@ alter_table_drop:
             Typ:  tree.AlterTableDropPrimaryKey,
         }
     }
-    
+
+alter_table_alter:
+   INDEX ident visibility
+   {
+	$$ = &tree.AlterOptionAlterIndex{
+            Visibility:  $3,
+            Name: tree.Identifier($2.Compare()),
+        }
+   }
+
+visibility:
+    VISIBLE
+    {
+        $$ = tree.VISIBLE_TYPE_VISIBLE
+    }
+|   INVISIBLE
+    {
+   	$$ = tree.VISIBLE_TYPE_INVISIBLE
+    }
+
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
