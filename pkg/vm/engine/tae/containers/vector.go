@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"unsafe"
 
@@ -70,7 +71,7 @@ func (vec *vector[T]) Equals(o Vector) bool {
 	if !vec.GetType().TypeEqual(o.GetType()) {
 		return false
 	}
-	if vec.GetType() != o.GetType() {
+	if !vec.GetType().TypeEqual(o.GetType()) {
 		return false
 	}
 	if vec.Nullable() != o.Nullable() {
@@ -222,10 +223,22 @@ func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
 	// 1. Vector type
+	var data []byte
 	vt := vec.GetType()
-	if nr, err = w.Write(types.EncodeType(&vt)); err != nil {
+	if data, err = types.Encode(vt); err != nil {
 		return
 	}
+	// Write the type's length.
+	length := uint64(len(data))
+	if err = binary.Write(w, binary.LittleEndian, length); err != nil {
+		return
+	}
+	n += 8
+	// Write the type itself.
+	if nr, err = w.Write(data); err != nil {
+		return
+	}
+
 	n += int64(nr)
 	// 2. Nullable
 	if nr, err = w.Write(types.EncodeFixed(vec.Nullable())); err != nil {
@@ -266,13 +279,19 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	vec.releaseRoStorage()
 	var tmpn int64
 	// 1. Vector type
-	typeBuf := make([]byte, types.TSize)
-	if _, err = r.Read(typeBuf); err != nil {
+	var length uint64
+	if err = binary.Read(r, binary.LittleEndian, &length); err != nil {
 		return
 	}
-	vec.typ = types.DecodeType(typeBuf)
-	n += int64(len(typeBuf))
-
+	n += 8
+	data := make([]byte, length)
+	if _, err = r.Read(data); err != nil {
+		return
+	}
+	n += int64(length)
+	if err = types.Decode(data, &vec.typ); err != nil {
+		return
+	}
 	// 2. Nullable
 	oneBuf := make([]byte, 1)
 	if _, err = r.Read(oneBuf); err != nil {
@@ -352,8 +371,13 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 			return
 		}
 	}
-	vec.typ = types.DecodeType(buf[:types.TSize])
-	buf = buf[types.TSize:]
+
+	length := types.DecodeUint64(buf[:8])
+	buf = buf[8:]
+	if err := types.Decode(buf[:length], &vec.typ); err != nil {
+		return err
+	}
+	buf = buf[length:]
 
 	nullable := types.DecodeFixed[bool](buf[:1])
 	buf = buf[1:]
@@ -389,6 +413,7 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 			return
 		}
 		vec.nulls = nulls
+		// buf = buf[nullSize:]
 	}
 	vec.roStorage = n
 	return

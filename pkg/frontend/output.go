@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"strconv"
 )
 
 var _ outputPool = &outputQueue{}
@@ -162,6 +163,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 	return row, nil
 }
 
+// Output value, for enum get the string values.
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
 	if vec.GetNulls().Contains(uint64(rowIndex)) {
@@ -228,6 +230,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
+	case types.T_enum:
+		var index uint16
+		if vec.GetType().GetSize() == 1 {
+			index = uint16(vector.GetFixedAt[uint8](vec, rowIndex))
+		} else {
+			index = vector.GetFixedAt[uint16](vec, rowIndex)
+		}
+		if index == 0 {
+			row[i] = ""
+		} else {
+			row[i] = vec.GetType().EnumValues[index-1]
+		}
 	default:
 		logErrorf(ses.GetDebugString(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)

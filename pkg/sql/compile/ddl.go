@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1066,6 +1067,11 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
 			},
+		}
+		// Check for enum type.
+		exeCols[i].(*engine.AttributeDef).Attr.Type.EnumValues = colTyp.EnumValues
+		if colTyp.EnumValues != nil && len(colTyp.EnumValues) <= 255 {
+			exeCols[i].(*engine.AttributeDef).Attr.Type.Size = 1
 		}
 	}
 	return exeCols

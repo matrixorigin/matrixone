@@ -196,14 +196,8 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 2
-	colBuf := make([]byte, types.TSize)
 	for i := uint16(0); i < colCnt; i++ {
-		if _, err = r.Read(colBuf); err != nil {
-			return
-		}
-		n += int64(types.TSize)
 		def := new(ColDef)
-		def.Type = types.DecodeType(colBuf)
 		if def.Name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
@@ -266,6 +260,21 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += int64(sn2)
+		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+			return
+		}
+		n += 8
+		data := make([]byte, length)
+		if length == 123 {
+			fmt.Printf("123 got.")
+		}
+		if sn2, err = r.Read(data); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if err = types.Decode(data, &def.Type); err != nil {
+			return
+		}
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -310,9 +319,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
-		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
-			return
-		}
+
 		if _, err = common.WriteString(def.Name, &w); err != nil {
 			return
 		}
@@ -355,6 +362,23 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 			return
 		}
 		if _, err = w.Write(def.OnUpdate); err != nil {
+			return
+		}
+		var data []byte
+		if data, err = types.Encode(def.Type); err != nil {
+			return
+		}
+		if def.Type.Oid == types.T_enum {
+			fmt.Printf("")
+		}
+		length = uint64(len(data))
+		if length == 120 {
+			fmt.Printf("Got 120")
+		}
+		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
+			return
+		}
+		if _, err = w.Write(data); err != nil {
 			return
 		}
 	}

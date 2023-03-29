@@ -181,6 +181,12 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		if v.Length() > 0 {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 		}
+	case types.T_enum:
+		if len(vec.GetType().EnumValues) <= 255 {
+			bs = movecToBytes[uint8](v)
+		} else {
+			bs = movecToBytes[uint16](v)
+		}
 	default:
 		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
 	}

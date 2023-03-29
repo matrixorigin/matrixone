@@ -129,6 +129,8 @@ type Decimal256 struct {
 
 type Varlena [VarlenaSize]byte
 
+type Enum uint16
+
 // UUID is Version 1 UUID based on the current NodeID and clock sequence, and the current time.
 type Uuid [16]byte
 
@@ -214,6 +216,8 @@ var Types map[string]T = map[string]T{
 
 	"binary":    T_binary,
 	"varbinary": T_varbinary,
+
+	"enum": T_enum,
 
 	"json": T_json,
 	"text": T_text,
@@ -421,6 +425,7 @@ func (t T) ToType() Type {
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
+	case T_enum:
 	default:
 		panic("Unknown type")
 	}
@@ -493,6 +498,8 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_enum:
+		return "ENUM"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -534,6 +541,8 @@ func (t T) OidString() string {
 		return "T_binary"
 	case T_varbinary:
 		return "T_varbinary"
+	case T_enum:
+		return "T_enum"
 	case T_date:
 		return "T_date"
 	case T_datetime:
@@ -607,6 +616,9 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
+	case T_enum:
+		// 2 as default, may need change to one.
+		return 2
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -640,6 +652,8 @@ func (t T) FixedLength() int {
 		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
+	case T_enum:
+		return 2
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
@@ -678,7 +692,8 @@ func IsFloat(t T) bool {
 
 // isString: return true if the types.T is string type
 func IsString(t T) bool {
-	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
+	if t == T_char || t == T_varchar || t == T_blob || t == T_text ||
+		t == T_enum || t == T_binary || t == T_varbinary {
 		return true
 	}
 	return false

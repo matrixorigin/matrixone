@@ -29,6 +29,7 @@ const (
 	MaxCharLen        = 255
 	MaxBinaryLen      = 255
 	MaxVarBinaryLen   = 65535
+	MaxEnumSize       = 65535
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {

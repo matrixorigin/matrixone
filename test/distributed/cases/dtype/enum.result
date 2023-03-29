@@ -1,0 +1,12 @@
+drop table if exists t1;
+create table t1(a enum('xs','s','m','l','xl'));
+insert into t1 values(1);
+insert into t1 values(6);
+invalid input: Insert value is bigger than 5
+insert into t1 values('xl');
+insert into t1 values('c');
+invalid input: Insert string is not in the enum's string list
+select * from t1;
+a
+xs
+xl

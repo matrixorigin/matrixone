@@ -45,6 +45,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
+		types.T_enum,
 	},
 
 	types.T_bool: {
@@ -53,6 +54,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_int8: {
@@ -64,6 +66,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_int16: {
@@ -75,6 +78,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_int32: {
@@ -86,6 +90,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_int64: {
@@ -97,6 +102,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_uint8: {
@@ -108,6 +114,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_uint16: {
@@ -119,6 +126,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_uint32: {
@@ -130,6 +138,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_uint64: {
@@ -141,6 +150,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_float32: {
@@ -151,6 +161,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_float64: {
@@ -161,6 +172,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_date: {
@@ -169,6 +181,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_datetime: {
@@ -177,6 +190,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_timestamp: {
@@ -185,6 +199,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_time: {
@@ -195,6 +210,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_decimal64: {
@@ -205,6 +221,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
+		types.T_enum,
 	},
 
 	types.T_decimal128: {
@@ -214,6 +231,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_char: {
@@ -228,6 +246,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_varchar: {
@@ -242,6 +261,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_binary: {
@@ -255,6 +275,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
+		types.T_enum,
 	},
 
 	types.T_varbinary: {
@@ -268,6 +289,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_blob: {
@@ -282,6 +304,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_text: {
@@ -296,6 +319,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_enum,
 	},
 
 	types.T_json: {
@@ -313,6 +337,19 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_Rowid: {
 		types.T_Rowid,
+	},
+
+	types.T_enum: {
+		types.T_blob, types.T_binary, types.T_varbinary,
+		types.T_varchar, types.T_char, types.T_text,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_enum,
 	},
 }
 
@@ -730,6 +767,13 @@ func int64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		if len(toType.EnumValues) == 2 {
+			rs := vector.MustFunctionResult[uint16](result)
+			return integerToEnum(ctx, source, rs, length)
+		}
+		rs := vector.MustFunctionResult[uint8](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
@@ -1400,6 +1444,13 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
+	case types.T_enum:
+		if len(toType.EnumValues) == 2 {
+			rs := vector.MustFunctionResult[uint16](result)
+			return strToEnum(ctx, source, rs, length)
+		}
+		rs := vector.MustFunctionResult[uint8](result)
+		return strToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -1517,6 +1568,65 @@ func floatNumToFixFloat[T1 constraints.Float](
 		return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
 	}
 	return T1(v), nil
+}
+
+func strToEnum[T uint8 | uint16](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena], to *vector.FunctionResult[T], length int) error {
+	totype := to.GetType()
+	var i uint64
+	var l = uint64(length)
+	var tov T
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.Append(tov, true); err != nil {
+				return err
+			}
+		} else {
+			// Check the string exists in enumValues.
+			isMatched := false
+			for i, ev := range totype.EnumValues {
+				//Matched. Insert and break.
+				if string(v) == ev {
+					if err := to.Append(T(i+1), false); err != nil {
+						return err
+					}
+					isMatched = true
+					break
+				}
+			}
+			if isMatched {
+				continue
+			}
+			// Not exists, report error.
+			return moerr.NewInvalidInput(ctx, "Insert string is not in the enum's string list")
+		}
+	}
+	return nil
+}
+
+func integerToEnum[T1 constraints.Integer, T2 uint8 | uint16](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int) error {
+	var tov T2
+	l := uint64(length)
+	for i := uint64(0); i < l; i++ {
+		v, isnull := from.GetValue(i)
+		// Here contains the situation when v == -1, assign
+		if isnull || int(v) == -1 {
+			if err := to.Append(tov, true); err != nil {
+				return err
+			}
+		} else if int(v) > len(to.GetType().EnumValues) {
+			return moerr.NewInvalidInput(ctx, "Insert value is bigger than %d", len(to.GetType().EnumValues))
+		} else {
+			if err := to.Append(T2(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // XXX do not use it to cast float to integer, please use floatToInteger

@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	// TSize is unused.
 	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
 	TimeSize       int = 8
@@ -345,6 +346,11 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[Rowid](val)
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val
+	case T_enum:
+		if typ.GetSize() == 1 {
+			return DecodeFixed[uint8](val)
+		}
+		return DecodeFixed[uint16](val)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
 	}
@@ -394,6 +400,11 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val.([]byte)
+	case T_enum:
+		if typ.GetSize() == 1 {
+			return EncodeFixed(val.(uint8))
+		}
+		return EncodeFixed(val.(uint16))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
 	}

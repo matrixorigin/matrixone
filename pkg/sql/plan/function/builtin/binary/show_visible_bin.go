@@ -80,6 +80,16 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 		}
 		if showLen {
 			ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
+			if tp.Oid == types.T_enum {
+				sv := ""
+				for _, v := range tp.EnumValues {
+					sv += v
+					sv += ","
+				}
+				// Remove trailing ','
+				sv = string(([]byte)(sv)[:len(sv)-1])
+				ret[i] = fmt.Sprintf("%s(%s)", tp.String(), sv)
+			}
 		} else {
 			ret[i] = tp.String()
 		}

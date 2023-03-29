@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strconv"
 
 	"github.com/FastFilter/xorfilter"
@@ -116,9 +117,18 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visib
 
 func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if _, err = w.Write(types.EncodeType(&filter.typ)); err != nil {
-		return
+	var data []byte
+	if data, err = types.Encode(filter.typ); err != nil {
+		return nil, err
 	}
+	length := uint64(len(data))
+	if err = binary.Write(&w, binary.LittleEndian, length); err != nil {
+		return nil, err
+	}
+	if _, err = w.Write(data); err != nil {
+		return nil, err
+	}
+
 	if _, err = types.WriteValues(
 		&w,
 		filter.inner.Seed,
@@ -136,8 +146,12 @@ func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 }
 
 func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
-	filter.typ = types.DecodeType(buf[:types.TSize])
-	buf = buf[types.TSize:]
+	length := types.DecodeUint64(buf[:8])
+	buf = buf[8:]
+	if err := types.Decode(buf[:length], &filter.typ); err != nil {
+		return err
+	}
+	buf = buf[length:]
 	filter.inner = &xorfilter.BinaryFuse8{}
 	filter.inner.Seed = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]

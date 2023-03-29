@@ -67,6 +67,12 @@ func MakeVector(typ types.Type, nullable bool, opts ...Options) (vec Vector) {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		vec = NewVector[[]byte](typ, nullable, opts...)
+	case types.T_enum:
+		if typ.GetSize() == 1 {
+			vec = NewVector[uint8](typ, nullable, opts...)
+		} else {
+			vec = NewVector[uint16](typ, nullable, opts...)
+		}
 	default:
 		panic("not support")
 	}

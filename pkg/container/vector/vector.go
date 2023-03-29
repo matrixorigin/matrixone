@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -295,13 +296,21 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
+	// write type
+	data, err := types.Encode(v.typ)
+	if err != nil {
+		return nil, err
+	}
+	lth := uint64(len(data))
+	if err := binary.Write(&buf, binary.LittleEndian, lth); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(data); err != nil {
+		return nil, err
+	}
 
 	// write class
 	buf.WriteByte(uint8(v.class))
-
-	// write type
-	data := types.EncodeType(&v.typ)
-	buf.Write(data)
 
 	// write length
 	length := uint32(v.length)
@@ -341,13 +350,16 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
+	// read typ
+	length := types.DecodeUint64(data[:8])
+	data = data[8:]
+	if err := types.Decode(data[:length], &v.typ); err != nil {
+		return err
+	}
+	data = data[length:]
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
-
-	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
 
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
@@ -378,7 +390,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 		if err := v.nsp.Read(data[:nspLen]); err != nil {
 			return err
 		}
-		//data = data[nspLen:]
+		// data = data[nspLen:]
 	}
 
 	v.cantFreeData = true
@@ -389,13 +401,16 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	var err error
+	// read typ
+	length := types.DecodeUint64(data[:8])
+	data = data[8:]
+	if err := types.Decode(data[:length], &v.typ); err != nil {
+		return err
+	}
+	data = data[length:]
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
-
-	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
 
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
@@ -434,7 +449,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		if err := v.nsp.Read(data[:nspLen]); err != nil {
 			return err
 		}
-		//data = data[nspLen:]
+		// data = data[nspLen:]
 	}
 
 	return nil
@@ -814,6 +829,17 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		return func(v, w *Vector, sel int64) error {
 			ws := MustFixedCol[types.Varlena](w)
 			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_enum:
+		if typ.GetSize() == 1 {
+			return func(v, w *Vector, sel int64) error {
+				ws := MustFixedCol[uint8](w)
+				return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+			}
+		}
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[uint16](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))

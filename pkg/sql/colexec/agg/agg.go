@@ -315,12 +315,20 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	// encode the input types.
+	idata, err := types.Encode(a.ityps)
+	if err != nil {
+		return nil, err
+	}
+	odata, err := types.Encode(a.otyp)
+	if err != nil {
+		return nil, err
+	}
 	source := &EncodeAgg{
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		InputTypes: types.EncodeSlice(a.ityps),
-		OutputType: types.EncodeType(&a.otyp),
+		InputTypes: idata,
+		OutputType: odata,
 		IsCount:    a.isCount,
 	}
 	switch {
@@ -352,8 +360,12 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	a.ityps = types.DecodeSlice[types.Type](decoded.InputTypes)
-	a.otyp = types.DecodeType(decoded.OutputType)
+	if err := types.Decode(decoded.InputTypes, &a.ityps); err != nil {
+		return err
+	}
+	if err := types.Decode(decoded.OutputType, &a.otyp); err != nil {
+		return err
+	}
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
 	data = make([]byte, len(decoded.Da))

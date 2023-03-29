@@ -232,7 +232,10 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
+		// New func doesn't support enum type now.
+		typ := types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale())
+		typ.EnumValues = t.T.Typ.EnumValues
+		return vector.NewConstNull(typ, length, proc.Mp()), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {

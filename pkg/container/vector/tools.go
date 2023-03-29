@@ -209,6 +209,12 @@ func (v *Vector) setupColFromData() {
 			v.col = DecodeFixedCol[types.Rowid](v)
 		case types.T_Blockid:
 			v.col = DecodeFixedCol[types.Blockid](v)
+		case types.T_enum:
+			if len(v.GetType().EnumValues) <= 255 {
+				v.col = DecodeFixedCol[uint8](v)
+			} else {
+				v.col = DecodeFixedCol[uint16](v)
+			}
 		default:
 			panic("unknown type")
 		}
@@ -242,6 +248,11 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 		cantFreeData: true,
 		cantFreeArea: true,
 	}
+	// Check for enum type, assign the enumvalues.
+	rvec.typ.EnumValues = vec.Type.EnumValues
+	if len(rvec.typ.EnumValues) <= 255 {
+		rvec.typ.Size = 1
+	}
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {
@@ -262,9 +273,10 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) *plan.Type {
 	return &plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id:         int32(typ.Oid),
+		Width:      typ.Width,
+		Scale:      typ.Scale,
+		EnumValues: typ.EnumValues,
 	}
 }
 

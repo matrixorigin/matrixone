@@ -78,7 +78,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 	if writer.zonemap == nil {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
-		if writer.zonemap.GetType() != typ {
+		if !writer.zonemap.GetType().TypeEqual(typ) {
 			err = moerr.NewInternalErrorNoCtx("wrong type")
 			return
 		}
@@ -147,7 +147,7 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 		writer.data = values
 		return nil
 	}
-	if writer.data.GetType() != values.GetType() {
+	if !writer.data.GetType().TypeEqual(values.GetType()) {
 		return moerr.NewInternalErrorNoCtx("wrong type")
 	}
 	writer.data.Extend(values)

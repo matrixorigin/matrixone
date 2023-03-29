@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -203,12 +204,13 @@ func TestVector3(t *testing.T) {
 func TestVector4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	for _, vecType := range vecTypes {
+	for i, vecType := range vecTypes {
 		vec := MockVector(vecType, 1000, false, true, nil)
 		assert.Equal(t, 1000, vec.Length())
 		vec.Append(types.Null{})
 		w := new(bytes.Buffer)
 		_, err := vec.WriteTo(w)
+		fmt.Printf(fmt.Sprintf("%d", i))
 		assert.NoError(t, err)
 		srcBuf := w.Bytes()
 		srcSize := len(srcBuf)

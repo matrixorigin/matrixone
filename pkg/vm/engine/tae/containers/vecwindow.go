@@ -62,7 +62,7 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 	if win.Length() != o.Length() {
 		return false
 	}
-	if win.GetType() != o.GetType() {
+	if !win.GetType().TypeEqual(o.GetType()) {
 		return false
 	}
 	if win.Nullable() != o.Nullable() {
