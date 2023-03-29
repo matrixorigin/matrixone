@@ -180,6 +180,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 			tbl.ViewDef = item.ViewDef
 			tbl.TableDef = item.TableDef
 			tbl.Constraint = item.Constraint
+			tbl.Partitioned = item.Partitioned
 			tbl.Partition = item.Partition
 			tbl.CreateSql = item.CreateSql
 			tbl.PrimaryIdx = item.PrimaryIdx
@@ -256,7 +257,8 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	comments := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_COMMENT_IDX + MO_OFF))
 	createSqls := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF))
 	viewDefs := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
-	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF))
 	constraints := vector.MustBytesCol(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 
 	for i, account := range accounts {
@@ -270,6 +272,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.ViewDef = viewDefs[i]
 		item.Constraint = constraints[i]
 		item.Comment = comments[i]
+		item.Partitioned = partitioneds[i]
 		item.Partition = paritions[i]
 		item.CreateSql = createSqls[i]
 		item.PrimaryIdx = -1

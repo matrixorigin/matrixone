@@ -307,6 +307,7 @@ type Binding struct {
 	tag            int32
 	nodeId         int32
 	table          string
+	tableID        uint64
 	cols           []string
 	types          []*plan.Type
 	refCnts        []uint

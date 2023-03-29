@@ -132,7 +132,7 @@ var (
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
 
-	// defaultSessionTimeout default: 10 minutes
+	// defaultSessionTimeout default: 24 hour
 	defaultSessionTimeout = 24 * time.Hour
 
 	// defaultLogsExtension default: tae. Support val in [csv, tae]
@@ -149,6 +149,9 @@ var (
 
 	//defaultOBBufferSize, 10 << 20 = 10485760
 	defaultOBBufferSize int64 = 10485760
+
+	// defaultPrintDebugInterval default: 30 minutes
+	defaultPrintDebugInterval = 30
 )
 
 // FrontendParameters of the frontend
@@ -287,6 +290,10 @@ type FrontendParameters struct {
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
 	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+
+	PrintDebug bool `toml:"printDebug"`
+
+	PrintDebugInterval int `toml:"printDebugInterval"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -408,6 +415,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.LowerCaseTableNames == "" {
 		fp.LowerCaseTableNames = "1"
+	}
+
+	if fp.PrintDebugInterval == 0 {
+		fp.PrintDebugInterval = defaultPrintDebugInterval
 	}
 }
 

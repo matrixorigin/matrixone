@@ -264,6 +264,8 @@ message PrimaryKeyDef {
 	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
 	repeated string names = 5;
+	// Composite primary key column definition
+	ColDef comp_pkey_col = 6;
 }
 
 message IndexDef {
@@ -347,6 +349,7 @@ message PartitionByDef {
 	int64 algorithm = 7;
 	bool is_sub_partition = 8;
 	string partition_msg = 9;
+	repeated string partition_table_names = 10;
 }
 
 message PartitionExpr {
@@ -366,6 +369,7 @@ message PartitionItem {
 	string comment = 4;
 	repeated Expr less_than = 5;
 	repeated Expr in_values = 6;
+	string partition_table_name = 7;// the table name of a partition
 }
 
 
@@ -404,9 +408,8 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
-	ColDef composite_pkey = 33;
-	bool isLocked = 34;
-	TableLockType tableLockType = 35;
+	bool isLocked = 33;
+	TableLockType tableLockType = 34;
 }
 
 message TableFunction{
@@ -883,6 +886,7 @@ message CreateTable {
 	repeated string fk_tables = 7;
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 8;
+	repeated TableDef partition_tables = 9;// partition tables for partitions
 }
 
 message AlterTableDrop {
@@ -895,6 +899,7 @@ message AlterTableDrop {
 	}
 	Typ typ		= 1;
 	string name	= 2;
+	string index_table_name = 3;
 }
 
 message AlterTableAddFk {
@@ -904,11 +909,27 @@ message AlterTableAddFk {
 	ForeignKeyDef fkey 		= 4;
 }
 
+message AlterTableAddIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string	origin_table_primary_key = 3;
+	CreateTable indexInfo = 4;
+	bool index_table_exist = 5;
+}
+
+message AlterTableDropIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string index_name = 3;
+	string index_table_name = 4;
+}
+
 message AlterTable {
 	message Action {
 		oneof action {
 			AlterTableDrop drop 	= 1;
 			AlterTableAddFk add_fk 	= 2;
+			AlterTableAddIndex add_index = 3;
 		};
 	}
 	string database			= 1;
@@ -925,6 +946,7 @@ message DropTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	repeated string partition_table_names = 8;
 }
 
 message AlterView {
