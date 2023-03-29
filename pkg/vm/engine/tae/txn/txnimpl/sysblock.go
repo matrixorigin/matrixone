@@ -234,7 +234,7 @@ func (blk *txnSysBlock) getColumnTableVec(colIdx int) (colData containers.Vector
 	return
 }
 func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	view = model.NewColumnView(colIdx)
 	colData, err := blk.getColumnTableVec(colIdx)
 	view.SetData(colData)
 	return
@@ -276,7 +276,7 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	case pkgcatalog.SystemRelAttr_Constraint:
 		table.RLock()
 		defer table.RUnlock()
-		if node := table.MVCCChain.GetVisibleNode(ts); node != nil {
+		if node := table.MVCCChain.GetVisibleNodeByTS(ts); node != nil {
 			colData.Append([]byte(node.BaseNode.SchemaConstraints))
 		} else {
 			colData.Append([]byte(""))
@@ -304,7 +304,7 @@ func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData contain
 
 func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
 	ts := blk.Txn.GetStartTS()
-	view = model.NewColumnView(ts, colIdx)
+	view = model.NewColumnView(colIdx)
 	colData, err := blk.getRelTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
@@ -347,7 +347,7 @@ func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, er
 	return
 }
 func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	view = model.NewColumnView(colIdx)
 	colData, err := blk.getDBTableVec(colIdx)
 	view.SetData(colData)
 	return
@@ -377,7 +377,7 @@ func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockV
 	if !blk.isSysTable() {
 		return blk.txnBlock.GetColumnDataByNames(attrs)
 	}
-	view = model.NewBlockView(blk.Txn.GetStartTS())
+	view = model.NewBlockView()
 	ts := blk.Txn.GetStartTS()
 	switch blk.table.GetID() {
 	case pkgcatalog.MO_DATABASE_ID:

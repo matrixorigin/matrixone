@@ -131,7 +131,7 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 			return moerr.GetOkExpectedDup()
 		}
 	} else {
-		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
+		if be.ensureVisibleAndNotDropped(txn) {
 			return moerr.GetOkExpectedDup()
 		}
 	}
@@ -140,7 +140,7 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 
 func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
-	if entry.IsSameTxn(txn.GetStartTS()) {
+	if entry.IsSameTxn(txn) {
 		return false, entry
 	} else {
 		node := entry.CloneData()
@@ -187,21 +187,21 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 	return un.HasDropCommitted()
 }
 
-func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(ts types.TS) bool {
-	visible, dropped := be.GetVisibilityLocked(ts)
+func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool {
+	visible, dropped := be.GetVisibilityLocked(txn)
 	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *BaseEntryImpl[T]) GetVisibilityLocked(ts types.TS) (visible, dropped bool) {
-	un := be.GetVisibleNode(ts)
+func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, dropped bool) {
+	un := be.GetVisibleNode(txn)
 	if un == nil {
 		return
 	}
 	visible = true
-	if un.IsSameTxn(ts) {
+	if un.IsSameTxn(txn) {
 		dropped = un.HasDropIntent()
 	} else {
 		dropped = un.HasDropCommitted()
@@ -209,14 +209,14 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(ts types.TS) (visible, dropped b
 	return
 }
 
-func (be *BaseEntryImpl[T]) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(ts)
+func (be *BaseEntryImpl[T]) IsVisible(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		mu.RUnlock()
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	ok = be.ensureVisibleAndNotDropped(ts)
+	ok = be.ensureVisibleAndNotDropped(txn)
 	return
 }
 
@@ -266,14 +266,14 @@ func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
 	return un.DeletedAt
 }
 
-func (be *BaseEntryImpl[T]) GetVisibility(ts types.TS) (visible, dropped bool) {
+func (be *BaseEntryImpl[T]) GetVisibility(txn txnif.TxnReader) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
-	needWait, txnToWait := be.NeedWaitCommitting(ts)
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		be.RUnlock()
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	return be.GetVisibilityLocked(ts)
+	return be.GetVisibilityLocked(txn)
 }

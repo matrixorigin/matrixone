@@ -309,16 +309,16 @@ func (entry *BlockEntry) GetDeltaLoc() string {
 	return str
 }
 
-func (entry *BlockEntry) GetVisibleMetaLoc(ts types.TS) string {
+func (entry *BlockEntry) GetVisibleMetaLoc(txn txnif.TxnReader) string {
 	entry.RLock()
 	defer entry.RUnlock()
-	str := entry.GetVisibleNode(ts).BaseNode.MetaLoc
+	str := entry.GetVisibleNode(txn).BaseNode.MetaLoc
 	return str
 }
-func (entry *BlockEntry) GetVisibleDeltaLoc(ts types.TS) string {
+func (entry *BlockEntry) GetVisibleDeltaLoc(txn txnif.TxnReader) string {
 	entry.RLock()
 	defer entry.RUnlock()
-	str := entry.GetVisibleNode(ts).BaseNode.DeltaLoc
+	str := entry.GetVisibleNode(txn).BaseNode.DeltaLoc
 	return str
 }
 
