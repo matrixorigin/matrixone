@@ -41,7 +41,7 @@ func TestCheckpoint1(t *testing.T) {
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
 		assert.Nil(t, err)
@@ -105,7 +105,7 @@ func TestCheckpoint2(t *testing.T) {
 	)
 	{
 		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.CreateDatabase("db", "")
+		db, _ := txn.CreateDatabase("db", "", "")
 		rel1, _ := db.CreateRelation(schema1)
 		rel2, _ := db.CreateRelation(schema2)
 		meta1 = rel1.GetMeta().(*catalog.TableEntry)
@@ -179,7 +179,7 @@ func TestSchedule1(t *testing.T) {
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db", "")
+		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
 		assert.Nil(t, err)

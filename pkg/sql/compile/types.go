@@ -78,6 +78,7 @@ type Source struct {
 	Expr         *plan.Expr
 	TableDef     *plan.TableDef
 	Timestamp    timestamp.Timestamp
+	AccountId    int32
 }
 
 // Col is the information of attribute
@@ -119,8 +120,6 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
-	// AttachedScope is used to execute additional sql pipeline
-	AttachedScope *Scope
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.

@@ -157,8 +157,8 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
-	if perfCounterSet.FileServices == nil {
-		perfCounterSet.FileServices = make(map[string]*perfcounter.CounterSet)
+	if perfCounterSet.FileServiceByName == nil {
+		perfCounterSet.FileServiceByName = make(map[string]*perfcounter.CounterSet)
 	}
 
 	for _, config := range c.FileServices {
@@ -184,7 +184,7 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 			nodeUUID,
 			service.Name(),
 		}, " ")
-		perfCounterSet.FileServices[counterSetName] = counterSet
+		perfCounterSet.FileServiceByName[counterSetName] = counterSet
 		services = append(services, service)
 
 		// Create "Log Exporter" for this PerfCounter

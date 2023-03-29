@@ -15,6 +15,7 @@
 package util
 
 import (
+	"fmt"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -46,6 +47,33 @@ func SplitTableAndColumn(name string) (string, string) {
 // TableIsClusterTable check the table type is cluster table
 func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
+}
+func DbIsSystemDb(dbName string) bool {
+	if dbName == catalog.MO_CATALOG {
+		return true
+	}
+	if dbName == catalog.MO_DATABASE {
+		return true
+	}
+	if dbName == catalog.MO_TABLES {
+		return true
+	}
+	if dbName == catalog.MO_COLUMNS {
+		return true
+	}
+	if dbName == "mo_task" {
+		return true
+	}
+	if dbName == "information_schema" {
+		return true
+	}
+	if dbName == "system" {
+		return true
+	}
+	if dbName == "system_metrics" {
+		return true
+	}
+	return false
 }
 
 // Build the filter condition AST expression for mo_database, as follows:
@@ -202,4 +230,55 @@ func GetClusterTableAttributeType() *tree.T {
 
 func IsClusterTableAttribute(name string) bool {
 	return name == clusterTableAttributeName
+}
+
+const partitionDelimiter = "%!%"
+
+// IsValidNameForPartitionTable
+// the name forms the partition table does not have the partitionDelimiter
+func IsValidNameForPartitionTable(name string) bool {
+	return !strings.Contains(name, partitionDelimiter)
+}
+
+// MakeNameOfPartitionTable
+// !!!NOTE!!! With assumption: the partition name and the table name does not have partitionDelimiter.
+// partition table name format : %!%partition_name%!%table_name
+func MakeNameOfPartitionTable(partitionName, tableName string) (bool, string) {
+	if strings.Contains(partitionName, partitionDelimiter) ||
+		strings.Contains(tableName, partitionDelimiter) {
+		return false, ""
+	}
+	if len(partitionName) == 0 ||
+		len(tableName) == 0 {
+		return false, ""
+	}
+	return true, fmt.Sprintf("%s%s%s%s", partitionDelimiter, partitionName, partitionDelimiter, tableName)
+}
+
+// SplitNameOfPartitionTable splits the partition table name into partition name and origin table name
+func SplitNameOfPartitionTable(name string) (bool, string, string) {
+	if !strings.HasPrefix(name, partitionDelimiter) {
+		return false, "", ""
+	}
+	partNameIdx := len(partitionDelimiter)
+	if partNameIdx >= len(name) {
+		return false, "", ""
+	}
+	left := name[partNameIdx:]
+	secondIdx := strings.Index(left, partitionDelimiter)
+	if secondIdx < 0 {
+		return false, "", ""
+	}
+
+	if secondIdx == 0 {
+		return false, "", ""
+	}
+	partName := left[:secondIdx]
+
+	tableNameIdx := secondIdx + len(partitionDelimiter)
+	if tableNameIdx >= len(left) {
+		return false, "", ""
+	}
+	tableName := left[tableNameIdx:]
+	return true, partName, tableName
 }

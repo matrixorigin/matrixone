@@ -300,11 +300,13 @@ func Test_mce_selfhandle(t *testing.T) {
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
 		cnt := 0
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
-					return nil, nil
+					return mockDbMeta, nil
 				}
 				return nil, moerr.NewInternalError(ctx2, "fake error")
 			},
