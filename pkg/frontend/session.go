@@ -1101,10 +1101,7 @@ func (ses *Session) AuthenticateUser(userInput string, rm *RoutineManager, rt *R
 
 	//record tenatID to routine in RoutineManager
 	if rm != nil && rt != nil && tenantID != sysAccountID {
-		if rm.accountId2Routine[tenantID] == nil {
-			rm.accountId2Routine[tenantID] = make(map[*Routine]bool)
-		}
-		rm.accountId2Routine[tenantID][rt] = true
+		rm.recordRoutine(tenantID, rt)
 	}
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))

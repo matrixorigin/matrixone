@@ -3141,7 +3141,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount, rm *
 							metric.ConnectionCounter(accountName).Dec()
 						})
 						tenantId := ses.tenant.TenantID
-						delete(rm.accountId2Routine[int64(tenantId)], rt)
+						rm.deleteRoutine(int64(tenantId), rt)
 					}
 					rt.cleanup()
 				}

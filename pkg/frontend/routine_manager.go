@@ -162,13 +162,30 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				metric.ConnectionCounter(accountName).Dec()
 			})
 			tenantId := ses.tenant.TenantID
-			if rm.accountId2Routine[int64(tenantId)] != nil {
-				delete(rm.accountId2Routine[int64(tenantId)], rt)
-			}
+			rm.deleteRoutine(int64(tenantId), rt)
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
 		rt.cleanup()
 	}
+}
+
+func (rm *RoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	routines, ok := rm.accountId2Routine[tenantID]
+	if ok {
+		delete(routines, rt)
+	}
+}
+
+func (rm *RoutineManager) recordRoutine(tenantID int64, rt *Routine) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	routines, ok := rm.accountId2Routine[tenantID]
+	if !ok {
+		routines = make(map[*Routine]bool)
+	}
+	routines[rt] = true
 }
 
 /*
