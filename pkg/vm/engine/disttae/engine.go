@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"runtime"
 	"sync"
