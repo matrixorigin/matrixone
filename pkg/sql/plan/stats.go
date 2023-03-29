@@ -183,21 +183,34 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 
 }
 
-func getExprNdv(expr *plan.Expr, ndvMap map[string]float64) float64 {
+func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
+	binding := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
+		return -1
+	}
+	s := sc.GetStatsInfoMap(binding.tableID)
+	return s.NdvMap[binding.cols[col.ColPos]]
+}
+
+func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=", ">", ">=", "<=", "<":
 			//assume col is on the left side
-			return getExprNdv(exprImpl.F.Args[0], ndvMap)
+			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder)
 		case "year":
-			return getExprNdv(exprImpl.F.Args[0], ndvMap) / 365
+			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder) / 365
 		default:
 			return -1
 		}
 	case *plan.Expr_Col:
-		return ndvMap[exprImpl.Col.Name]
+		if ndvMap != nil {
+			return ndvMap[exprImpl.Col.Name]
+		}
+		return getColNdv(exprImpl.Col, nodeID, builder)
 	}
 	return -1
 }
@@ -215,7 +228,7 @@ func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, co
 	if sortOrder != -1 {
 		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 	} else {
-		ndv := getExprNdv(expr, ndvMap)
+		ndv := getExprNdv(expr, ndvMap, 0, nil)
 		if ndv > 0 {
 			return tableCnt / ndv
 		}
@@ -556,10 +569,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
+			input := childStats.Outcnt
+			output := 1.0
+			for _, groupby := range node.GroupBy {
+				output *= getExprNdv(groupby, nil, node.NodeId, builder)
+			}
+			if output > input {
+				output = input
+			}
 			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt * 0.2,
-				Cost:        childStats.Outcnt,
-				HashmapSize: childStats.Outcnt,
+				Outcnt:      output,
+				Cost:        input,
+				HashmapSize: output,
 				Selectivity: 1,
 			}
 		} else {
