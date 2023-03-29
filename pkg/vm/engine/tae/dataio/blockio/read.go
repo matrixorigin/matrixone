@@ -192,12 +192,12 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		blocks, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m, LoadZoneMapFunc)
+		meta, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m, LoadZoneMapFunc)
 		if err != nil {
 			return err
 		}
 
-		colCount := blocks[0].GetColumnCount()
+		colCount := meta.BlkMetas[0].GetColumnCount()
 		idxes = append(idxes, colCount-2) // committs
 		idxes = append(idxes, colCount-1) // aborted
 		bats, err := loadBlock(idxes)

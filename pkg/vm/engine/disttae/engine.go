@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"runtime"
 	"sync"
@@ -527,4 +528,20 @@ func (e *Engine) getDNServices() []DNStore {
 			return true
 		})
 	return values
+}
+
+func (e *Engine) cleanMemoryTable() {
+	e.Lock()
+	e.partitions = make(map[[2]uint64]Partitions)
+	e.Unlock()
+}
+
+func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
+	e.Lock()
+	// XXX it's probably not a good way to do that.
+	// after we set it to empty, actually this part of memory was not immediately released.
+	// maybe a very old transaction still using that.
+	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
+	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
