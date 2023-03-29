@@ -107,6 +107,14 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
+	// With proxy module enabled, we try to update salt value from proxy.
+	// The MySQL protocol is broken a little: when connection is built, read
+	// the salt from proxy and update the salt, then go on with the handshake
+	// phase.
+	if rm.pu.SV.ProxyEnabled {
+		pro.tryUpdateSalt(rs)
+	}
+
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
@@ -282,6 +290,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				protocol.SetTlsEstablished()
 			} else {
 				// client don't ask server to upgrade TLS
+				if err := protocol.Authenticate(ctx); err != nil {
+					return err
+				}
 				protocol.SetTlsEstablished()
 				protocol.SetEstablished()
 			}
@@ -290,6 +301,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoInfo, "error:%v", err)
+				return err
+			}
+			if err = protocol.Authenticate(ctx); err != nil {
 				return err
 			}
 			protocol.SetEstablished()
