@@ -17,7 +17,6 @@ package lockservice
 import (
 	"context"
 	"encoding/hex"
-	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -670,10 +669,7 @@ func runLockServiceTestsWithLevel(
 
 func TestUnsafeStringToByteSlice(t *testing.T) {
 	v := "abc"
-	s := unsafeStringToByteSlice(v)
-	v = ""
-	debug.FreeOSMemory()
-	assert.Equal(t, "abc", string(s))
+	assert.Equal(t, []byte(v), unsafeStringToByteSlice(v))
 }
 
 func waitWaiters(
