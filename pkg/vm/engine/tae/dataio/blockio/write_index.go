@@ -17,7 +17,9 @@ package blockio
 import (
 	"fmt"
 
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -157,4 +159,73 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 // Query is only used for testing or debugging
 func (writer *BFWriter) Query(key any) (bool, error) {
 	return writer.impl.MayContainsKey(key)
+}
+
+type ObjectColumnMetasBuilder struct {
+	totalRow uint32
+	metas    []objectio.ObjectColumnMeta
+	sks      []*hll.Sketch
+	zms      []*index.ZoneMap
+}
+
+func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
+	return &ObjectColumnMetasBuilder{
+		metas: make([]objectio.ObjectColumnMeta, colIdx),
+		sks:   make([]*hll.Sketch, colIdx),
+		zms:   make([]*index.ZoneMap, colIdx),
+	}
+}
+
+func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
+	b.totalRow += uint32(rows)
+}
+
+func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) {
+	if vec.HasNull() {
+		b.metas[idx].NullCnt += uint32(vec.NullMask().GetCardinality())
+	}
+
+	if b.zms[idx] == nil {
+		b.zms[idx] = index.NewZoneMap(vec.GetType())
+	}
+	if b.sks[idx] == nil {
+		b.sks[idx] = hll.New()
+	}
+	vec.ForeachShallow(func(v any, isnull bool, row int) error {
+		if isnull {
+			return nil
+		}
+		b.sks[idx].Insert(types.EncodeValue(v, vec.GetType()))
+		return nil
+	}, nil)
+
+}
+
+func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZoneMap) {
+	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
+	// min and max can be nil if the input vector is null vector
+	if min := zm.GetMin(); min != nil {
+		b.zms[idx].Update(min)
+	}
+	if max := zm.GetMax(); max != nil {
+		b.zms[idx].Update(max)
+	}
+}
+
+func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta) {
+	for i := range b.metas {
+		if b.sks[i] != nil { // rowid or types.TS
+			b.metas[i].Ndv = uint32(b.sks[i].Estimate())
+		}
+		if b.zms[i] != nil {
+			zmbuf, _ := b.zms[i].Marshal()
+			objzm, _ := objectio.NewZoneMap(uint16(i), zmbuf)
+			b.metas[i].Zonemap = *objzm.(*objectio.ZoneMap)
+		}
+	}
+	ret := b.metas
+	b.metas = nil
+	b.sks = nil
+	b.zms = nil
+	return b.totalRow, ret
 }
