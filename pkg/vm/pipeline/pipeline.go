@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -87,7 +88,9 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.S3IOByte(bat)
 			a.Alloc(int64(bat.Size()))
 		}
-
+		if p.attrs[0] == "a_crash" {
+			logutil.Infof("Insert: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
+		}
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {

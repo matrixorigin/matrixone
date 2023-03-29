@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -47,7 +48,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 
 	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
-
+	if arg.TableDef.Name == "t_mo_crash" {
+		logutil.Infof("before GetUpdateBatch PreInsert: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
+	}
 	//get insert batch
 	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
 	if err != nil {
@@ -76,7 +79,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
+	if arg.TableDef.Name == "t_mo_crash" {
+		logutil.Infof("PreInsert: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
+	}
 	proc.SetInputBatch(insertBatch)
 	return false, nil
 }
