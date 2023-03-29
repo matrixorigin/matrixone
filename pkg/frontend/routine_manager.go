@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -327,21 +328,37 @@ func (rm *RoutineManager) clientCount() int {
 }
 
 func (rm *RoutineManager) printDebug() {
-	bb := bytes.Buffer{}
-
-	bb.WriteString("Clients:")
+	type info struct {
+		id    uint32
+		peer  string
+		count []uint64
+	}
+	infos := list.New()
 	rm.mu.RLock()
-	bb.WriteString(fmt.Sprintf("(%d)\n", len(rm.clients)))
 	for _, routine := range rm.clients {
 		proto := routine.getProtocol()
-		bb.WriteString(fmt.Sprintf("%d|%s|", proto.ConnectionID(), proto.Peer()))
-		for i, u := range proto.resetDebugCount() {
+		infos.PushBack(&info{
+			proto.ConnectionID(),
+			proto.Peer(),
+			proto.resetDebugCount(),
+		})
+	}
+	rm.mu.RUnlock()
+
+	bb := bytes.Buffer{}
+	bb.WriteString("Clients:")
+	bb.WriteString(fmt.Sprintf("(%d)\n", infos.Len()))
+	for e := infos.Front(); e != nil; e = e.Next() {
+		d := e.Value.(*info)
+		if d == nil {
+			continue
+		}
+		bb.WriteString(fmt.Sprintf("%d|%s|", d.id, d.peer))
+		for i, u := range d.count {
 			bb.WriteString(fmt.Sprintf("%d:0x%x ", i, u))
 		}
 		bb.WriteByte('\n')
 	}
-	rm.mu.RUnlock()
-
 	logutil.Info(bb.String())
 }
 
