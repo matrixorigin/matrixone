@@ -328,3 +328,10 @@ func (nsp *Nulls) ToArray() []uint64 {
 	}
 	return nsp.Np.ToArray()
 }
+
+func (nsp *Nulls) GetCardinality() int {
+	if nsp.Np == nil {
+		return 0
+	}
+	return nsp.Np.Count()
+}
