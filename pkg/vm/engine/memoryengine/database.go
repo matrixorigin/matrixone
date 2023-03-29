@@ -133,7 +133,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		OpenRelationReq{
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
-			Name:         strings.ToLower(relName),
+			Name:         relName,
 		},
 	)
 	if err != nil {
