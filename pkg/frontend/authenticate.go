@@ -2434,7 +2434,8 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount, rm
 					if rtMap, ok := rm.accountId2Routine[int64(targetAccountId)]; ok {
 						for rt := range rtMap {
 							if rt != nil {
-								rm.Closed(rm.getIOSesion(rt))
+								rm.deleteRoutine(int64(targetAccountId), rt)
+								rt.cleanup()
 							}
 						}
 					}
@@ -3142,7 +3143,8 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount, rm *
 		if rtMap, ok := rm.accountId2Routine[accountId]; ok {
 			for rt := range rtMap {
 				if rt != nil {
-					rm.Closed(rm.getIOSesion(rt))
+					rm.deleteRoutine(accountId, rt)
+					rt.cleanup()
 				}
 			}
 		}

@@ -44,7 +44,6 @@ type RoutineManager struct {
 	skipCheckUser     atomic.Bool
 	tlsConfig         *tls.Config
 	autoIncrCaches    defines.AutoIncrCaches
-	routines          map[*Routine]goetty.IOSession
 	accountId2Routine map[int64]map[*Routine]bool
 }
 
@@ -78,18 +77,6 @@ func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
-}
-
-func (rm *RoutineManager) setIOSession(rt *Routine, rs goetty.IOSession) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	rm.routines[rt] = rs
-}
-
-func (rm *RoutineManager) getIOSesion(rt *Routine) goetty.IOSession {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	return rm.routines[rt]
 }
 
 func (rm *RoutineManager) getTlsConfig() *tls.Config {
@@ -134,7 +121,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, routine)
-	rm.setIOSession(routine, rs)
 }
 
 /*
@@ -152,7 +138,6 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rt, ok = rm.clients[rs]
 	if ok {
 		delete(rm.clients, rs)
-		delete(rm.routines, rt)
 	}
 	rm.mu.Unlock()
 
@@ -404,15 +389,15 @@ func (rm *RoutineManager) printDebug() {
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	rm := &RoutineManager{
-		ctx:      ctx,
-		clients:  make(map[goetty.IOSession]*Routine),
-		routines: make(map[*Routine]goetty.IOSession),
-		pu:       pu,
+		ctx:     ctx,
+		clients: make(map[goetty.IOSession]*Routine),
+		pu:      pu,
 	}
 
 	// Initialize auto incre cache.
 	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
 	rm.autoIncrCaches.Mu = &sync.Mutex{}
+	rm.accountId2Routine = make(map[int64]map[*Routine]bool)
 
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
