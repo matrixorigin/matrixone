@@ -246,20 +246,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropDatabase,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropDatabase,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -272,36 +272,36 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         AlterTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     AlterTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -324,20 +324,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropIndex,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropIndex,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
