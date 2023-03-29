@@ -60,6 +60,9 @@ type Vector struct {
 	isBin bool
 }
 
+func (v *Vector) GetDataLen() int {
+	return len(v.data)
+}
 func (v *Vector) UnsafeGetRawData() []byte {
 	length := 1
 	if !v.IsConst() {

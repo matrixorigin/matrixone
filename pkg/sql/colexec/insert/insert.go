@@ -58,7 +58,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		return false, nil
 	}
 	if insertArg.InsertCtx.TableDef.Name == "t_mo_crash" {
-		logutil.Infof("get batch Len:%d, a.Len:%d, b.Len:%d. ", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length())
+		logutil.Infof("get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
 	}
 	defer func() {
 		bat.Clean(proc.Mp())
