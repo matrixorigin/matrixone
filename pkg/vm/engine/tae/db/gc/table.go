@@ -23,7 +23,6 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -301,22 +300,18 @@ func (t *GCTable) replayData(ctx context.Context,
 	attrs []string,
 	types []types.Type,
 	bats []*containers.Batch,
-	bs []objectio.BlockObject) error {
+	bs []objectio.BlockObject,
+	reader *blockio.BlockReader) error {
+	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
-		col, err := bs[typ].GetColumn(uint16(i))
-		if err != nil {
-			return err
-		}
-		colData, err := col.GetData(ctx, common.DefaultAllocator)
-		if err != nil {
-			return err
-		}
-		pkgVec := vector.NewVec(types[i])
-		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
-		copy(v, colData.Entries[0].Object.([]byte))
-		if err = pkgVec.UnmarshalBinary(v); err != nil {
-			return err
-		}
+		idxes[i] = uint16(i)
+	}
+	mobat, err := reader.LoadColumns(ctx, idxes, []uint32{bs[typ].GetID()}, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	for i := range attrs {
+		pkgVec := mobat[0].Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i], false)
@@ -370,6 +365,28 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	return blocks, err
 }
 
+func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
+	reader, err := blockio.NewFileReader(fs.Service, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(ctx, size, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	bats := t.makeBatchWithGCTable()
+	defer t.closeBatch(bats)
+	pref := blockio.BuildPrefetch(reader, common.DefaultAllocator)
+	for i := range bats {
+		idxes := make([]uint16, bs[i].GetColumnCount())
+		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
+			idxes[a] = a
+		}
+		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+	}
+	return blockio.PrefetchWithMerged(pref)
+}
+
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
 	reader, err := blockio.NewFileReader(fs.Service, name)
@@ -382,23 +399,23 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTable()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}

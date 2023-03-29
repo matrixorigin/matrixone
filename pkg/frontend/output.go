@@ -166,7 +166,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 // Output value, for enum get the string values.
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
-	if vec.GetNulls().Contains(uint64(rowIndex)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
 	}

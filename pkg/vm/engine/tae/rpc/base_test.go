@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"testing"
 	"time"
 
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
 
@@ -64,6 +64,8 @@ type txnCommand struct {
 
 func (h *mockHandle) HandleClose(ctx context.Context) error {
 	err := h.Handle.HandleClose(ctx)
+	blockio.Stop()
+	blockio.ResetPipeline()
 	return err
 }
 
@@ -151,14 +153,14 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 }
 
 func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
+	blockio.Start()
 	tae := initDB(t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),
 	}
 
 	mh.Handle = &Handle{
-		eng:          moengine.NewEngine(tae),
-		jobScheduler: tasks.NewParallelJobScheduler(5),
+		eng: moengine.NewEngine(tae),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
@@ -705,6 +707,11 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
+		if err := vector.AppendFixed(bat.Vecs[idx], int8(0), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_PARTITION_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition_info
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}

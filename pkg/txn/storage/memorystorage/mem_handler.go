@@ -143,6 +143,7 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 
 	case *engine.PartitionDef:
 		// update
+		table.Partitioned = def.Partitioned
 		table.PartitionDef = []byte(def.Partition)
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
@@ -276,6 +277,8 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		ID:        req.ID,
 		AccountID: req.AccessInfo.AccountID,
 		Name:      []byte(req.Name),
+		Typ:       []byte(req.Typ),
+		CreateSql: []byte(req.CreateSql),
 	})
 	if err != nil {
 		return err
@@ -337,6 +340,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			row.Comments = []byte(def.Comment)
 
 		case *engine.PartitionDef:
+			row.Partitioned = def.Partitioned
 			row.PartitionDef = []byte(def.Partition)
 
 		case *engine.ViewDef:
@@ -871,9 +875,10 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	// partiton
-	if len(relRow.PartitionDef) != 0 {
+	if relRow.Partitioned > 0 || len(relRow.PartitionDef) != 0 {
 		resp.Defs = append(resp.Defs, &engine.PartitionDef{
-			Partition: string(relRow.PartitionDef),
+			Partitioned: relRow.Partitioned,
+			Partition:   string(relRow.PartitionDef),
 		})
 	}
 
@@ -1026,7 +1031,8 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 	}
 	resp.ID = db.ID
 	resp.Name = string(db.Name)
-
+	resp.DatTyp = string(db.Typ)
+	resp.CreateSql = string(db.CreateSql)
 	return nil
 }
 

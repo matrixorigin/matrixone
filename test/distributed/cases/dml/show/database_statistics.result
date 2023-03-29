@@ -33,8 +33,9 @@ Number of columns in columns
 show column_number from profiling;
 Number of columns in profiling
 19
-show column_number from PROCESSLIST;
-[unknown result because it is related to issue#7520]
+show column_number from processlist;
+Number of columns in processlist
+9
 show column_number from schemata;
 Number of columns in schemata
 7
@@ -323,8 +324,9 @@ Number of columns in columns
 show column_number from profiling;
 Number of columns in profiling
 19
-show column_number from PROCESSLIST;
-[unknown result because it is related to issue#7520]
+show column_number from processlist;
+Number of columns in processlist
+9
 show column_number from schemata;
 Number of columns in schemata
 7
