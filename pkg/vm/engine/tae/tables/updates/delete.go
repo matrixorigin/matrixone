@@ -15,7 +15,6 @@
 package updates
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -68,6 +67,7 @@ func NewEmptyDeleteNode() *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
+		id:          &common.ID{},
 	}
 	return n
 }
@@ -231,7 +231,7 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.chain.mvcc.GetID()))
+	cn, err := w.Write(common.EncodeID(node.chain.mvcc.GetID()))
 	if err != nil {
 		return
 	}
@@ -240,14 +240,11 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint32(len(buf))); err != nil {
+	var sn int64
+	if sn, err = common.WriteBytes(buf, w); err != nil {
 		return
 	}
-	sn := int(0)
-	if sn, err = w.Write(buf); err != nil {
-		return
-	}
-	n += int64(sn) + 4
+	n += int64(sn)
 	var sn2 int64
 	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
@@ -258,31 +255,24 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int
-	buf := make([]byte, txnbase.IDSize)
-	if sn, err = r.Read(buf); err != nil {
+	if node.id == nil {
+		node.id = &common.ID{}
+	}
+	if sn, err = r.Read(common.EncodeID(node.id)); err != nil {
 		return
 	}
-	n = int64(sn)
-	node.id = txnbase.UnmarshalID(buf)
-	cnt := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+	n += int64(sn)
+	var sn2 int64
+	var buf []byte
+	if buf, sn2, err = common.ReadBytes(r); err != nil {
 		return
 	}
-	n += 4
-	if cnt == 0 {
-		return
-	}
-	buf = make([]byte, cnt)
-	if _, err = r.Read(buf); err != nil {
-		return
-	}
-	n += int64(cnt)
+	n += sn2
 	node.mask = roaring.New()
 	err = node.mask.UnmarshalBinary(buf)
 	if err != nil {
 		return
 	}
-	var sn2 int64
 	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
 		return
 	}

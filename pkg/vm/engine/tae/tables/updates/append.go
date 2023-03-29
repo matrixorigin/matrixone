@@ -15,7 +15,6 @@
 package updates
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -92,6 +91,7 @@ func NewAppendNode(
 func NewEmptyAppendNode() *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
+		id:          &common.ID{},
 	}
 }
 func (node *AppendNode) String() string {
@@ -164,19 +164,20 @@ func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
 }
 
 func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.mvcc.GetID()))
+	cn, err := w.Write(common.EncodeID(node.mvcc.GetID()))
 	if err != nil {
 		return
 	}
 	n += int64(cn)
-	if err = binary.Write(w, binary.BigEndian, node.startRow); err != nil {
+	var sn1 int
+	if sn1, err = w.Write(types.EncodeUint32(&node.startRow)); err != nil {
 		return
 	}
-	n += 4
-	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
+	n += int64(sn1)
+	if sn1, err = w.Write(types.EncodeUint32(&node.maxRow)); err != nil {
 		return
 	}
-	n += 4
+	n += int64(sn1)
 	var sn int64
 	sn, err = node.TxnMVCCNode.WriteTo(w)
 	if err != nil {
@@ -188,20 +189,21 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int
-	buf := make([]byte, txnbase.IDSize)
-	if sn, err = r.Read(buf); err != nil {
+	if node.id == nil {
+		node.id = &common.ID{}
+	}
+	if _, err = r.Read(common.EncodeID(node.id)); err != nil {
 		return
 	}
-	n = int64(sn)
-	node.id = txnbase.UnmarshalID(buf)
-	if err = binary.Read(r, binary.BigEndian, &node.startRow); err != nil {
+	n += common.IDSize
+	if sn, err = r.Read(types.EncodeUint32(&node.startRow)); err != nil {
 		return
 	}
-	n += 4
-	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
+	n += int64(sn)
+	if sn, err = r.Read(types.EncodeUint32(&node.maxRow)); err != nil {
 		return
 	}
-	n += 4
+	n += int64(sn)
 	var sn2 int64
 	sn2, err = node.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
