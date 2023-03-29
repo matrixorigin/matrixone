@@ -1109,8 +1109,8 @@ func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.Dro
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.AlterAccount) error {
-	return doAlterAccount(ctx, mce.GetSession(), aa)
+func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.AlterAccount, rm *RoutineManager) error {
+	return doAlterAccount(ctx, mce.GetSession(), aa, rm)
 }
 
 // handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
@@ -2574,7 +2574,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.AlterAccount:
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
-			if err = mce.handleAlterAccount(requestCtx, st); err != nil {
+			if err = mce.handleAlterAccount(requestCtx, st, mce.GetRoutineManager()); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterDataBaseConfig:

@@ -41,6 +41,7 @@ type RoutineManager struct {
 	skipCheckUser     bool
 	tlsConfig         *tls.Config
 	autoIncrCaches    defines.AutoIncrCaches
+	routines          map[*Routine]goetty.IOSession
 	accountId2Routine map[int64]map[*Routine]bool
 }
 
@@ -84,6 +85,18 @@ func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	return rm.clients[rs]
+}
+
+func (rm *RoutineManager) setIOSession(rt *Routine, rs goetty.IOSession) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.routines[rt] = rs
+}
+
+func (rm *RoutineManager) getIOSesion(rt *Routine) goetty.IOSession {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.routines[rt]
 }
 
 func (rm *RoutineManager) getTlsConfig() *tls.Config {
@@ -130,6 +143,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, routine)
+	rm.setIOSession(routine, rs)
 }
 
 /*
@@ -147,6 +161,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rt, ok = rm.clients[rs]
 	if ok {
 		delete(rm.clients, rs)
+		delete(rm.routines, rt)
 	}
 	rm.mu.Unlock()
 
@@ -172,20 +187,26 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 func (rm *RoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	routines, ok := rm.accountId2Routine[tenantID]
+	if tenantID == sysAccountID {
+		return
+	}
+	_, ok := rm.accountId2Routine[tenantID]
 	if ok {
-		delete(routines, rt)
+		delete(rm.accountId2Routine[tenantID], rt)
+	}
+	if len(rm.accountId2Routine[tenantID]) == 0 {
+		rm.accountId2Routine[tenantID] = nil
 	}
 }
 
 func (rm *RoutineManager) recordRoutine(tenantID int64, rt *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	routines, ok := rm.accountId2Routine[tenantID]
+	_, ok := rm.accountId2Routine[tenantID]
 	if !ok {
-		routines = make(map[*Routine]bool)
+		rm.accountId2Routine[tenantID] = make(map[*Routine]bool)
 	}
-	routines[rt] = true
+	rm.accountId2Routine[tenantID][rt] = true
 }
 
 /*
@@ -360,9 +381,10 @@ func (rm *RoutineManager) clientCount() int {
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	rm := &RoutineManager{
-		ctx:     ctx,
-		clients: make(map[goetty.IOSession]*Routine),
-		pu:      pu,
+		ctx:      ctx,
+		clients:  make(map[goetty.IOSession]*Routine),
+		routines: make(map[*Routine]goetty.IOSession),
+		pu:       pu,
 	}
 
 	// Initialize auto incre cache.

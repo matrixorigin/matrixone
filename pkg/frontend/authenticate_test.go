@@ -5876,7 +5876,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -5923,7 +5923,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -5965,7 +5965,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6009,7 +6009,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6055,7 +6055,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6090,7 +6090,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6136,7 +6136,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6177,7 +6177,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdateCommentsOfAccount(context.TODO(), stmt.Comment.Comment, stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6218,7 +6218,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6256,7 +6256,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, stmt, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

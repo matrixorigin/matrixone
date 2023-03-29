@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -2265,7 +2264,7 @@ func normalizeNamesOfUsers(ctx context.Context, users []*tree.User) error {
 	return nil
 }
 
-func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) error {
+func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount, rm *RoutineManager) error {
 	var err error
 	var sql string
 	var erArray []ExecResult
@@ -2429,6 +2428,19 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			if err != nil {
 				goto handleFailed
 			}
+
+			if aa.StatusOption.Option == tree.AccountStatusSuspend {
+				if rm != nil {
+					if rtMap, ok := rm.accountId2Routine[int64(targetAccountId)]; ok {
+						for rt := range rtMap {
+							if rt != nil {
+								rm.Closed(rm.getIOSesion(rt))
+							}
+						}
+					}
+				}
+			}
+
 		}
 	}
 
@@ -3130,20 +3142,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount, rm *
 		if rtMap, ok := rm.accountId2Routine[accountId]; ok {
 			for rt := range rtMap {
 				if rt != nil {
-					ses := rt.getSession()
-					if ses != nil {
-						rt.decreaseCount(func() {
-							account := ses.GetTenantInfo()
-							accountName := sysAccountName
-							if account != nil {
-								accountName = account.GetTenant()
-							}
-							metric.ConnectionCounter(accountName).Dec()
-						})
-						tenantId := ses.tenant.TenantID
-						rm.deleteRoutine(int64(tenantId), rt)
-					}
-					rt.cleanup()
+					rm.Closed(rm.getIOSesion(rt))
 				}
 			}
 		}
