@@ -17,12 +17,13 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -113,8 +114,9 @@ func TestNewObjectWriter(t *testing.T) {
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
-	bs, err := objectReader.ReadMeta(context.Background(), extents, pool, nil)
+	meta, err := objectReader.ReadMeta(context.Background(), extents, pool, nil)
 	assert.Nil(t, err)
+	bs := meta.BlkMetas
 	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
@@ -146,8 +148,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReader(name, service)
 	assert.Nil(t, err)
-	bs, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
+	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
 	assert.Nil(t, err)
+	bs = meta.BlkMetas
 	assert.Equal(t, 2, len(bs))
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
