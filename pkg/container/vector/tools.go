@@ -250,7 +250,7 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	}
 	// Check for enum type, assign the enumvalues.
 	rvec.typ.EnumValues = vec.Type.EnumValues
-	if len(rvec.typ.EnumValues) <= 255 {
+	if rvec.typ.EnumValues != nil && len(rvec.typ.EnumValues) <= 255 {
 		rvec.typ.Size = 1
 	}
 	if vec.IsConst {
