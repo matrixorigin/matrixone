@@ -246,20 +246,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropDatabase,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropDatabase,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -272,25 +272,36 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			return &Scope{
-				Magic: AlterTable,
-				Plan:  pn,
-			}, nil
-		case plan.DataDefinition_DROP_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     AlterTable,
+				Plan:      pn,
+				PreScopes: preScopes,
+			}, nil
+		case plan.DataDefinition_DROP_TABLE:
+			preScopes := make([]*Scope, 0, 1)
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
+			}
+			return &Scope{
+				Magic:     DropTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -313,20 +324,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropIndex,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropIndex,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
@@ -885,6 +896,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
+		if n.ObjRef.PubAccountId != -1 {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -943,6 +957,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			AccountId:    n.ObjRef.PubAccountId,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1682,12 +1697,12 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -1719,6 +1734,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	if n.ObjRef.PubAccountId != -1 {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {

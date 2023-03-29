@@ -206,6 +206,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
+		if s.DataSource.AccountId != -1 {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId))
+		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef)
 		if err != nil {
@@ -258,6 +261,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				SchemaName:   s.DataSource.SchemaName,
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
+				AccountId:    s.DataSource.AccountId,
 			},
 			NodeInfo: s.NodeInfo,
 		}

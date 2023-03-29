@@ -108,7 +108,8 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
-	Partition        string
+	Partitioned      int8   //1 : the table has partitions ; 0 : no partition
+	Partition        string // the info about partitions when the table has partitions
 	Relkind          string
 	Createsql        string
 	View             string
