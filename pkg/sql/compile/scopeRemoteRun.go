@@ -861,9 +861,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.ExternalScan = &pipeline.ExternalScan{
 			Attrs:         t.Es.Attrs,
 			Cols:          t.Es.Cols,
+			FileSize:      t.Es.FileSize,
+			FileOffset:    t.Es.FileOffset,
 			Name2ColIndex: name2ColIndexSlice,
 			CreateSql:     t.Es.CreateSql,
 			FileList:      t.Es.FileList,
+			Filter:        t.Es.Filter.FilterExpr,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1151,6 +1154,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Es: &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:         t.Attrs,
+					FileSize:      t.FileSize,
+					FileOffset:    t.FileOffset,
 					Cols:          t.Cols,
 					CreateSql:     t.CreateSql,
 					Name2ColIndex: name2ColIndex,
@@ -1159,6 +1164,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
+					Filter: &external.FilterParam{
+						FilterExpr: t.Filter,
+					},
 				},
 			},
 		}

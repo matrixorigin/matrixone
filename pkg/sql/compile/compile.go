@@ -722,9 +722,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	}
 }
 
-func (c *Compile) constructScopeForExternal() *Scope {
-	ds := &Scope{Magic: Normal}
-	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.NumCPU()}
+func (c *Compile) constructScopeForExternal(index int, ID2Addr map[int]int) *Scope {
+	ds := &Scope{Magic: Remote}
+	ds.NodeInfo = engine.Node{Addr: c.cnList[ID2Addr[index]].Addr, Mcpu: c.NumCPU()}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
@@ -739,7 +739,15 @@ func (c *Compile) constructScopeForExternal() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
-	mcpu := c.NumCPU()
+	ID2Addr := make(map[int]int, 0)
+	mcpu := 0
+	for i := 0; i < len(c.cnList); i++ {
+		tmp := mcpu
+		mcpu += c.cnList[i].Mcpu
+		for j := tmp; j < mcpu; j++ {
+			ID2Addr[j] = i
+		}
+	}
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
@@ -753,8 +761,18 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			return nil, err
 		}
 		if param.Parallel {
-			if mcpu > external.S3_PARALLEL_MAXNUM {
-				mcpu = external.S3_PARALLEL_MAXNUM
+			mcpu = 0
+			ID2Addr = make(map[int]int, 0)
+			for i := 0; i < len(c.cnList); i++ {
+				tmp := mcpu
+				if c.cnList[i].Mcpu > external.S3_PARALLEL_MAXNUM {
+					mcpu += external.S3_PARALLEL_MAXNUM
+				} else {
+					mcpu += c.cnList[i].Mcpu
+				}
+				for j := tmp; j < mcpu; j++ {
+					ID2Addr[j] = i
+				}
 			}
 		}
 	} else {
@@ -797,7 +815,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		fileList = []string{param.Filepath}
 	}
 
-	var fileOffset [][][2]int
+	var fileOffset [][][2]int32
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
@@ -815,7 +833,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	currentFirstFlag := c.anal.isFirst
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = c.constructScopeForExternal()
+		ss[i] = c.constructScopeForExternal(i, ID2Addr)
 		var fileListTmp []string
 		if i < tag {
 			fileListTmp = fileList[index : index+cnt+1]
@@ -824,9 +842,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileListTmp = fileList[index : index+cnt]
 			index += cnt
 		}
-		offset := make([][2]int, 0)
+		offset := make([]int32, 0)
 		for j := 0; j < len(fileOffset); j++ {
-			offset = append(offset, [2]int{fileOffset[j][i][0], fileOffset[j][i][1]})
+			offset = append(offset, fileOffset[j][i][0])
+			offset = append(offset, fileOffset[j][i][1])
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.External,

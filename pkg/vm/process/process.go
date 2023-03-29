@@ -72,6 +72,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService
+	proc.LoadTag = p.LoadTag
 
 	// reg and cancel
 	proc.Ctx = newctx

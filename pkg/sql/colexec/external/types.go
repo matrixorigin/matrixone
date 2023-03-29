@@ -50,7 +50,7 @@ type ExParamConst struct {
 	OriginCols    []*plan.ColDef
 	FileList      []string
 	FileSize      []int64
-	FileOffset    [][2]int
+	FileOffset    []int32
 	Name2ColIndex map[string]int32
 	Ctx           context.Context
 	Extern        *tree.ExternParam
