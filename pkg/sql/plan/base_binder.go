@@ -677,7 +677,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "ifnull function need two args", len(astArgs))
 		}
-		elseExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
+		elseExpr := astArgs[0]
 		thenExpr := astArgs[1]
 		whenExpr := tree.NewIsNullExpr(astArgs[0])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
