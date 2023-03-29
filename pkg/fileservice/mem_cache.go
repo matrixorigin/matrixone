@@ -92,10 +92,10 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.Cache.Read.Add(numRead)
-			c.Cache.Hit.Add(numHit)
-			c.Cache.Memory.Read.Add(numRead)
-			c.Cache.Memory.Hit.Add(numHit)
+			c.FileService.Cache.Read.Add(numRead)
+			c.FileService.Cache.Hit.Add(numHit)
+			c.FileService.Cache.Memory.Read.Add(numRead)
+			c.FileService.Cache.Memory.Hit.Add(numHit)
 		}, m.counterSets...)
 	}()
 

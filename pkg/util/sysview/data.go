@@ -15,7 +15,7 @@
 package sysview
 
 var informationSchemaKeywordsData string = `
-INSERT INTO INFORMATION_SCHEMA.KEYWORDS VALUES
+INSERT INTO information_schema.KEYWORDS VALUES
 ('ACCESSIBLE'                             , 1),
 ('ACCOUNT'                                , 0),
 ('ACTION'                                 , 0),

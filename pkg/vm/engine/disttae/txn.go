@@ -108,7 +108,7 @@ func (txn *Transaction) WriteBatch(
 		txn.workspaceSize += uint64(bat.Size())
 	}
 	txn.Lock()
-	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
+	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		bat:          bat,
 		tableId:      tableId,
@@ -118,61 +118,67 @@ func (txn *Transaction) WriteBatch(
 		dnStore:      dnStore,
 	})
 	txn.Unlock()
-
-	txn.DumpBatch(false)
-
 	return nil
 }
 
-func (txn *Transaction) DumpBatch(force bool) error {
-	// if txn.workspaceSize >= colexec.WriteS3Threshold {
-	if txn.workspaceSize >= colexec.WriteS3Threshold || force && txn.workspaceSize >= colexec.TagS3Size {
-		mp := make(map[[2]string][]*batch.Batch)
-		for i := 0; i < len(txn.writes); i++ {
-			idx := -1
-			for j := 0; j < len(txn.writes[i]); j++ {
-				if txn.writes[i][j].typ == INSERT && txn.writes[i][j].fileName == "" {
-					key := [2]string{txn.writes[i][j].databaseName, txn.writes[i][j].tableName}
-					bat := txn.writes[i][j].bat
-					// skip rowid
-					bat.Attrs = bat.Attrs[1:]
-					bat.Vecs = bat.Vecs[1:]
-					mp[key] = append(mp[key], bat)
-				} else {
-					txn.writes[i][idx+1] = txn.writes[i][j]
-					idx++
-				}
-			}
-			txn.writes[i] = txn.writes[i][:idx+1]
-		}
-		for key := range mp {
-			s3Writer, tbl, err := txn.getS3Writer(key)
-			if err != nil {
-				return err
-			}
-			s3Writer.InitBuffers(mp[key][0], 0)
-			for i := 0; i < len(mp[key]); i++ {
-				s3Writer.Put(mp[key][i], 0)
-			}
-			err = s3Writer.MergeBlock(0, len(mp[key]), txn.proc, false)
+func (txn *Transaction) DumpBatch(force bool, offset int) error {
+	var size uint64
 
-			if err != nil {
-				return err
-			}
-			metaLoc := s3Writer.GetMetaLocBat()
-
-			lenVecs := len(metaLoc.Attrs)
-			// only remain the metaLoc col
-			metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
-			metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
-			metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
-			err = tbl.Write(txn.proc.Ctx, metaLoc)
-			if err != nil {
-				return err
-			}
-		}
-		txn.workspaceSize = 0
+	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
+		(force && txn.workspaceSize >= colexec.TagS3Size)) {
+		return nil
 	}
+	txn.Lock()
+	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			size += uint64(txn.writes[i].bat.Size())
+		}
+	}
+	if offset > 0 && size < txn.workspaceSize {
+		txn.Unlock()
+		return nil
+	}
+	mp := make(map[[2]string][]*batch.Batch)
+	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+			bat := txn.writes[i].bat
+			// skip rowid
+			bat.Attrs = bat.Attrs[1:]
+			bat.Vecs = bat.Vecs[1:]
+			mp[key] = append(mp[key], bat)
+			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			i--
+		}
+	}
+	txn.Unlock()
+	for key := range mp {
+		s3Writer, tbl, err := txn.getS3Writer(key)
+		if err != nil {
+			return err
+		}
+		s3Writer.InitBuffers(mp[key][0], 0)
+		for i := 0; i < len(mp[key]); i++ {
+			s3Writer.Put(mp[key][i], 0)
+		}
+		err = s3Writer.MergeBlock(0, len(mp[key]), txn.proc, false)
+
+		if err != nil {
+			return err
+		}
+		metaLoc := s3Writer.GetMetaLocBat()
+
+		lenVecs := len(metaLoc.Attrs)
+		// only remain the metaLoc col
+		metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
+		metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
+		metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
+		err = tbl.Write(txn.proc.Ctx, metaLoc)
+		if err != nil {
+			return err
+		}
+	}
+	txn.workspaceSize -= size
 	return nil
 }
 
@@ -219,7 +225,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
 	txn.readOnly = false
-	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
+	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		tableId:      tableId,
 		databaseId:   databaseId,
@@ -243,24 +249,24 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}
 
 	sels := txn.proc.Mp().GetSels()
-	for i := range txn.writes {
-		for j, e := range txn.writes[i] {
-			sels = sels[:0]
-			if e.tableId == tableId && e.databaseId == databaseId {
-				vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
-				for k, v := range vs {
-					if _, ok := mp[v]; !ok {
-						sels = append(sels, int64(k))
-					} else {
-						mp[v]++
-					}
+	txn.Lock()
+	for _, e := range txn.writes {
+		sels = sels[:0]
+		if e.tableId == tableId && e.databaseId == databaseId {
+			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
+			for k, v := range vs {
+				if _, ok := mp[v]; !ok {
+					sels = append(sels, int64(k))
+				} else {
+					mp[v]++
 				}
-				if len(sels) != len(vs) {
-					txn.writes[i][j].bat.Shrink(sels)
-				}
+			}
+			if len(sels) != len(vs) {
+				e.bat.Shrink(sels)
 			}
 		}
 	}
+	txn.Unlock()
 	sels = sels[:0]
 	for k, rowid := range rowids {
 		if mp[rowid] == 0 {

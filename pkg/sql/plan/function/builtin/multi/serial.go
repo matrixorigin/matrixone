@@ -222,5 +222,6 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 	for _, p := range ps {
 		p.FreeMem()
 	}
+	vec.SetNulls(bitMap)
 	return vec, nil
 }

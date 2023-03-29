@@ -253,6 +253,8 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 		colData.Append(table.GetDB().GetID())
 	case pkgcatalog.SystemRelAttr_Comment:
 		colData.Append([]byte(table.GetSchema().Comment))
+	case pkgcatalog.SystemRelAttr_Partitioned:
+		colData.Append(table.GetSchema().Partitioned)
 	case pkgcatalog.SystemRelAttr_Partition:
 		colData.Append([]byte(table.GetSchema().Partition))
 	case pkgcatalog.SystemRelAttr_Persistence:
