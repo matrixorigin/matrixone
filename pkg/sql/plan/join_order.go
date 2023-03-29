@@ -406,11 +406,6 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			vertices[i].pks = pks
 			tag2Vert[node.BindingTags[0]] = int32(i)
 		}
-
-		for _, filter := range node.FilterList {
-			if builder.filterOnPK(filter, vertices[i].pks) {
-			}
-		}
 	}
 
 	edgeMap := make(map[[2]int32]*joinEdge)
