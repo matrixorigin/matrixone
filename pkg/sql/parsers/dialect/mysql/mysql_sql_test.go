@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select rank() over(partition by a order by b desc) from t1",
-		output: "select rank() over (partition by a order by b desc) from t1",
+		input:  "select 1",
+		output: "select 1",
 	}
 )
 
