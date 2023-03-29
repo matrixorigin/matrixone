@@ -369,7 +369,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 			for {
 				select {
 				case <-rm.ctx.Done():
-					break
+					return
 				default:
 				}
 				rm.printDebug()
