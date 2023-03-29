@@ -104,7 +104,7 @@ func (blk *ablock) PrepareCompact() bool {
 		return false
 	}
 	blk.FreezeAppend()
-	if !blk.meta.PrepareCompact() {
+	if !blk.meta.PrepareCompact() || !blk.mvcc.PrepareCompact() {
 		return false
 	}
 	return blk.RefCount() == 0

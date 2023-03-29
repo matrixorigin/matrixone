@@ -135,6 +135,12 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	}
 	return
 }
+
+// Reschedule until all appendnode is committed.
+// Pending appendnode is not visible for compaction txn.
+func (n *MVCCHandle) PrepareCompact() bool {
+	return n.AppendCommitted()
+}
 func (n *MVCCHandle) AppendCommitted() bool {
 	return n.appends.IsCommitted()
 }
