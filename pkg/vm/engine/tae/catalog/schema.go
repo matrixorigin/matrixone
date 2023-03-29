@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -151,13 +150,15 @@ func (s *Schema) GetSingleSortKeyIdx() int         { return s.SortKey.Defs[0].Id
 func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey().Type }
 
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
+	var sn2 int
+	if sn2, err = r.Read(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &s.SegmentMaxBlocks); err != nil {
+	n += int64(sn2)
+	if sn2, err = r.Read(types.EncodeUint16(&s.SegmentMaxBlocks)); err != nil {
 		return
 	}
-	n = 4 + 4
+	n += int64(sn2)
 	var sn int64
 	if sn, err = s.AcInfo.ReadFrom(r); err != nil {
 		return
@@ -193,10 +194,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += sn
 	colCnt := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
+	if sn2, err = r.Read(types.EncodeUint16(&colCnt)); err != nil {
 		return
 	}
-	n += 2
+	n += int64(sn2)
 	colBuf := make([]byte, types.TSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
@@ -213,60 +214,46 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		if err = binary.Read(r, binary.BigEndian, &def.NullAbility); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.Hidden); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.PhyAddr); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.AutoIncrement); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.SortIdx); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.Primary); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.SortKey); err != nil {
-			return
-		}
-		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.ClusterBy); err != nil {
-			return
-		}
-		n += 1
-		length := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-			return
-		}
-		n += 8
-		def.Default = make([]byte, length)
-		var sn2 int
-		if sn2, err = r.Read(def.Default); err != nil {
+		if sn2, err = r.Read(types.EncodeBool(&def.NullAbility)); err != nil {
 			return
 		}
 		n += int64(sn2)
-
-		length = uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-			return
-		}
-		n += 8
-		def.OnUpdate = make([]byte, length)
-		if sn2, err = r.Read(def.OnUpdate); err != nil {
+		if sn2, err = r.Read(types.EncodeBool(&def.Hidden)); err != nil {
 			return
 		}
 		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeBool(&def.PhyAddr)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeBool(&def.AutoIncrement)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeInt8(&def.SortIdx)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeBool(&def.Primary)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeBool(&def.SortKey)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if sn2, err = r.Read(types.EncodeBool(&def.ClusterBy)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		if def.Default, sn, err = common.ReadBytes(r); err != nil {
+			return
+		}
+		n += sn
+		if def.OnUpdate, sn, err = common.ReadBytes(r); err != nil {
+			return
+		}
+		n += sn
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -277,10 +264,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 
 func (s *Schema) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if err = binary.Write(&w, binary.BigEndian, s.BlockMaxRows); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
 		return
 	}
-	if err = binary.Write(&w, binary.BigEndian, s.SegmentMaxBlocks); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&s.SegmentMaxBlocks)); err != nil {
 		return
 	}
 	if _, err = s.AcInfo.WriteTo(&w); err != nil {
@@ -307,7 +294,8 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = common.WriteBytes(s.Constraint, &w); err != nil {
 		return
 	}
-	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
+	length := uint16(len(s.ColDefs))
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	for _, def := range s.ColDefs {
@@ -320,42 +308,34 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = common.WriteString(def.Comment, &w); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.NullAbility); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.NullAbility)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.Hidden); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.Hidden)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.PhyAddr); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.PhyAddr)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.AutoIncrement); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.AutoIncrement)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.SortIdx); err != nil {
+		if _, err = w.Write(types.EncodeInt8(&def.SortIdx)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.Primary); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.Primary)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.SortKey)); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.ClusterBy); err != nil {
+		if _, err = w.Write(types.EncodeBool(&def.ClusterBy)); err != nil {
 			return
 		}
-		length := uint64(len(def.Default))
-		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
+		if _, err = common.WriteBytes(def.Default, &w); err != nil {
 			return
 		}
-		if _, err = w.Write(def.Default); err != nil {
-			return
-		}
-		length = uint64(len(def.OnUpdate))
-		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
-			return
-		}
-		if _, err = w.Write(def.OnUpdate); err != nil {
+		if _, err = common.WriteBytes(def.OnUpdate, &w); err != nil {
 			return
 		}
 	}

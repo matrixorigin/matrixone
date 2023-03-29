@@ -3360,7 +3360,9 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err := rel.CreateSegment(false)
 	assert.NoError(t, err)
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateMetaLoc(txn, "test_1")
+	blk, err := seg.CreateBlock(false)
+	assert.NoError(t, err)
+	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, "test_1")
 	assert.NoError(t, txn.Commit())
 
 	txn, err = tae.StartTxn(nil)
@@ -3371,7 +3373,9 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err = rel.GetSegment(seg.GetID())
 	assert.NoError(t, err)
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateDeltaLoc(txn, "test_2")
+	blk, err = seg.CreateBlock(false)
+	assert.NoError(t, err)
+	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, "test_2")
 	rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, txn.Commit())
 
