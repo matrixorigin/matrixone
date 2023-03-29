@@ -111,7 +111,8 @@ type RelationRow struct {
 	Type         memoryengine.RelationType
 	Comments     []byte
 	Properties   map[string]string
-	PartitionDef []byte
+	Partitioned  int8   // 1 : the table has partitions. 0 : no partition
+	PartitionDef []byte // partition info for the table has paritions
 	ViewDef      []byte
 	Constraint   []byte
 }
@@ -176,6 +177,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_Kind]) // tae's logic
 	case catalog.SystemRelAttr_Comment:
 		ret.Value = r.Comments
+	case catalog.SystemRelAttr_Partitioned:
+		ret.Value = r.Partitioned
 	case catalog.SystemRelAttr_Partition:
 		ret.Value = r.PartitionDef
 	case catalog.SystemRelAttr_CreateSQL:
