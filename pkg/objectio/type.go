@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,6 +52,9 @@ type Writer interface {
 	// buf is the data to write to the index
 	WriteIndex(block BlockObject, index IndexData) error
 
+	// Write metadata for every column of all blocks
+	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)
+
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
 	WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error)
@@ -77,10 +81,10 @@ type Reader interface {
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
+	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (*ObjectMeta, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
+	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (*ObjectMeta, error)
 }
 
 // BlockObject is a batch written to fileservice
