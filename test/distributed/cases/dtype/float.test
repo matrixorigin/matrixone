@@ -328,3 +328,11 @@ insert into t2 values(999.994), (-999.994), (99.005), (99);
 delete from t1;
 insert into t1 select * from t2;
 select * from t1;
+
+drop table if exists t1;
+create table t1(a float);
+insert into t1 values(3214321.213);
+select cast(a as varchar) from t1;
+insert into t1 values(1234567891234567.1234);
+insert into t1 values(0.00000000000001);
+select cast(a as varchar) from t1;
