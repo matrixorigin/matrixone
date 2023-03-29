@@ -31,12 +31,9 @@ type joinVertex struct {
 	node        *plan.Node
 	highNDVCols []int32
 	pks         []int32
-	pkSelRate   float64
-
-	children map[int32]any
-	parent   int32
-
-	joined bool
+	children    map[int32]any
+	parent      int32
+	joined      bool
 }
 
 func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
@@ -393,10 +390,9 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
-			node:      node,
-			pkSelRate: 1.0,
-			children:  make(map[int32]any),
-			parent:    -1,
+			node:     node,
+			children: make(map[int32]any),
+			parent:   -1,
 		}
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
@@ -413,7 +409,6 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 		for _, filter := range node.FilterList {
 			if builder.filterOnPK(filter, vertices[i].pks) {
-				vertices[i].pkSelRate *= 0.1
 			}
 		}
 	}
@@ -499,16 +494,10 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		dimensions = append(dimensions, vertices[child])
 	}
 	sort.Slice(dimensions, func(i, j int) bool {
-		if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
-			return true
-		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
-			return false
+		if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
+			return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
 		} else {
-			if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
-				return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
-			} else {
-				return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
-			}
+			return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
 		}
 	})
 
@@ -522,7 +511,6 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		vertex.pkSelRate *= child.pkSelRate
 		vertex.node = builder.qry.Nodes[nodeId]
 		ReCalcNodeStats(nodeId, builder, false)
 	}
