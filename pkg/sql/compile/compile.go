@@ -2021,6 +2021,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			} else {
 				vector.AppendFixed(vec, vector.MustFixedCol[uint16](tmp)[0], false, proc.Mp())
 			}
+			vec.GetType().EnumValues = tmp.GetType().EnumValues
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
