@@ -87,7 +87,7 @@ extract(DAY_MINUTE FROM "02 10:11:12")
 5811
 select extract(DAY_SECOND FROM "225 10:11:12");
 extract(DAY_SECOND FROM "225 10:11:12")
-8385959
+54101112
 select extract(HOUR_MINUTE FROM "10:11:12");
 extract(HOUR_MINUTE FROM "10:11:12")
 1011
@@ -102,7 +102,7 @@ extract(MINUTE_SECOND FROM "10:11:12")
 1112
 SELECT EXTRACT(HOUR FROM '100000:02:03');
 EXTRACT(HOUR FROM '100000:02:03')
-838
+100000
 select reverse(concat_ws(",",extract(year from 20090702)));
 invalid argument function extract, bad value [VARCHAR BIGINT]
 create table t1 (d date, dt datetime, t timestamp, c char(10));
