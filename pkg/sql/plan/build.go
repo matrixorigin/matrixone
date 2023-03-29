@@ -101,6 +101,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildCreateIndex(stmt, ctx)
 	case *tree.DropIndex:
 		return buildDropIndex(stmt, ctx)
+	case *tree.ShowAccounts:
+		return buildShowAccounts(stmt, ctx)
 	case *tree.ShowCreateDatabase:
 		return buildShowCreateDatabase(stmt, ctx)
 	case *tree.ShowCreateTable:

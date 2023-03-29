@@ -35,6 +35,77 @@ const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
 
+func buildShowAccounts(stmt *tree.ShowAccounts, ctx CompilerContext) (*Plan, error) {
+	commonSql := "select " +
+		"ma.account_name," +
+		"(select mu2.user_name as `admin_name` from mo_catalog.mo_user as mu2 join ( select min(user_id) as `min_user_id` from mo_catalog.mo_user ) as mu1 on mu2.user_id = mu1.min_user_id ) as `admin_name`," +
+		"ma.created_time as `created`," +
+		"ma.status," +
+		"ma.suspended_time," +
+		"ai.db_count," +
+		"ai.table_count," +
+		"ai.`row_count`," +
+		"ai.size," +
+		"ma.comments " +
+		"from " +
+		"mo_catalog.mo_account as ma " +
+		"join " +
+		"(" +
+		"select " +
+		"mt.account_id as `account_id`," +
+		"count(distinct mt.reldatabase) as `db_count`," +
+		"count(distinct mt.relname) as `table_count`," +
+		"sum(mo_table_rows(mt.reldatabase,mt.relname)) as `row_count`," +
+		"cast(sum(mo_table_size(mt.reldatabase,mt.relname))/1048576  as decimal(29,3)) as `size` " +
+		"from " +
+		"mo_catalog.mo_tables as mt " +
+		"group by mt.account_id " +
+		") as ai " +
+		"on " +
+		"ai.account_id = ma.account_id " +
+		"%s " +
+		";"
+
+	proc := ctx.GetProcess()
+	var stmts []tree.Statement
+	var err error
+
+	// produce query ast
+	if strings.ToLower(proc.SessionInfo.Account) == "sys" {
+		likePattern := ""
+		if stmt.Like != nil {
+			likePattern = strings.TrimSpace(stmt.Like.Right.String())
+		}
+		likeClause := ""
+		if len(likePattern) != 0 {
+			likeClause = fmt.Sprintf("where account_name like '%s'", likePattern)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, fmt.Sprintf(commonSql, likeClause), 1)
+		if err != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "build 'show accounts' failed")
+		}
+	} else {
+		if stmt.Like != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only sys account can use LIKE clause")
+		}
+		whereClause := fmt.Sprintf("where ma.account_id = %d", ctx.GetAccountId())
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, fmt.Sprintf(commonSql, whereClause), 1)
+		if err != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "build 'show accounts' failed")
+		}
+	}
+	if len(stmts) != 1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "build 'show accounts' failed")
+	}
+	queryStmt, ok := stmts[0].(*tree.Select)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "build 'show accounts' failed")
+	}
+
+	// build query plan
+	return runBuildSelectByBinder(plan.Query_SELECT, ctx, queryStmt)
+}
+
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
