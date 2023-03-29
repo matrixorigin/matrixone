@@ -180,6 +180,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 			tbl.ViewDef = item.ViewDef
 			tbl.TableDef = item.TableDef
 			tbl.Constraint = item.Constraint
+			tbl.Partitioned = item.Partitioned
 			tbl.Partition = item.Partition
 			tbl.CreateSql = item.CreateSql
 			tbl.PrimaryIdx = item.PrimaryIdx
@@ -198,6 +199,8 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.CreateSql = item.CreateSql
+			db.Typ = item.Typ
 		}
 		return false
 	})
@@ -234,6 +237,8 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Name:      item.Name,
 				Rowid:     item.Rowid,
 				AccountId: item.AccountId,
+				Typ:       item.Typ,
+				CreateSql: item.CreateSql,
 				Ts:        timestamps[i].ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
@@ -252,7 +257,8 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	comments := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_COMMENT_IDX + MO_OFF))
 	createSqls := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF))
 	viewDefs := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
-	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF))
 	constraints := vector.MustBytesCol(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 
 	for i, account := range accounts {
@@ -266,6 +272,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.ViewDef = viewDefs[i]
 		item.Constraint = constraints[i]
 		item.Comment = comments[i]
+		item.Partitioned = partitioneds[i]
 		item.Partition = paritions[i]
 		item.CreateSql = createSqls[i]
 		item.PrimaryIdx = -1
@@ -361,12 +368,16 @@ func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
 	ids := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_DATABASE_DAT_ID_IDX + MO_OFF))
+	typs := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_TYPE_IDX + MO_OFF))
+	createSqls := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_CREATESQL_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(DatabaseItem)
 		item.Id = ids[i]
 		item.Name = names[i]
 		item.AccountId = account
 		item.Ts = timestamps[i].ToTimestamp()
+		item.Typ = typs[i]
+		item.CreateSql = createSqls[i]
 		copy(item.Rowid[:], rowids[i][:])
 		cc.databases.data.Set(item)
 		cc.databases.rowidIndex.Set(item)

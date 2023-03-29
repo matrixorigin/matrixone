@@ -42,6 +42,11 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
 	return "", nil
 }
@@ -268,6 +273,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{"datname", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{"dat_createsql", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
@@ -282,18 +288,27 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 	moSchema["mo_columns"] = &Schema{
 		cols: []col{
+			{"att_uniq_name", types.T_varchar, false, 256, 0},
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"att_database_id", types.T_uint32, false, 0, 0},
 			{"att_database", types.T_varchar, false, 50, 0},
+			{"att_relname_id", types.T_uint32, false, 0, 0},
 			{"att_relname", types.T_varchar, false, 50, 0},
 			{"attname", types.T_varchar, false, 50, 0},
 			{"atttyp", types.T_int32, false, 0, 0},
 			{"attnum", types.T_int32, false, 0, 0},
 			{"att_length", types.T_int32, false, 0, 0},
 			{"attnotnull", types.T_int8, false, 0, 0},
+			{"atthasdef", types.T_int8, false, 0, 0},
+			{"att_default", types.T_varchar, false, 2048, 0},
+			{"attisdropped", types.T_int8, false, 0, 0},
 			{"att_constraint_type", types.T_varchar, false, 1, 0},
-			{"att_default", types.T_varchar, false, 1024, 0},
+			{"att_is_unsigned", types.T_int8, false, 0, 0},
+			{"att_is_auto_increment", types.T_int8, false, 0, 0},
 			{"att_comment", types.T_varchar, false, 1024, 0},
-			{"account_id", types.T_uint32, false, 0, 0},
 			{"att_is_hidden", types.T_bool, false, 0, 0},
+			{"attr_has_update", types.T_int8, false, 0, 0},
+			{"attr_update", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
@@ -348,6 +363,24 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"character_set_client", types.T_varchar, false, 64, 0},
 			{"collation_connection", types.T_varchar, false, 64, 0},
 			{"database_collation", types.T_varchar, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	moSchema["mo_indexes"] = &Schema{
+		cols: []col{
+			{"id", types.T_uint64, false, 100, 0},
+			{"table_id", types.T_uint64, false, 100, 0},
+			{"database_id", types.T_uint64, false, 100, 0},
+			{"name", types.T_varchar, false, 64, 0},
+			{"type", types.T_varchar, false, 11, 0},
+			{"is_visible", types.T_int8, false, 50, 0},
+			{"hidden", types.T_int8, false, 50, 0},
+			{"comment", types.T_varchar, false, 2048, 0},
+			{"column_name", types.T_varchar, false, 256, 0},
+			{"ordinal_position", types.T_uint32, false, 50, 0},
+			{"options", types.T_text, true, 50, 0},
+			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
@@ -556,14 +589,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			objects[tableName] = &ObjectRef{
-				Server:     0,
-				Db:         0,
-				Schema:     0,
-				Obj:        int64(tableIdx),
-				ServerName: "",
-				DbName:     "",
-				SchemaName: db,
-				ObjName:    tableName,
+				Server:       0,
+				Db:           0,
+				Schema:       0,
+				Obj:          int64(tableIdx),
+				ServerName:   "",
+				DbName:       "",
+				SchemaName:   db,
+				ObjName:      tableName,
+				PubAccountId: -1,
 			}
 
 			tableDef := &TableDef{
@@ -684,6 +718,10 @@ func (m *MockCompilerContext) DatabaseExists(name string) bool {
 	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
 }
 
+func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	return 0, nil
+}
+
 func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
 }
@@ -773,6 +811,19 @@ func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewNam
 
 func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
+}
+
+func (m *MockCompilerContext) GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error) {
+	return nil, nil
+}
+func (m *MockCompilerContext) SetQueryingSubscription(*SubscriptionMeta) {
+
+}
+func (m *MockCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
+	return nil
+}
+func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
+	return false, nil
 }
 
 type MockOptimizer struct {

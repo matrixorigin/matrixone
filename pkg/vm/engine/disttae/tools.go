@@ -20,7 +20,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -220,7 +218,12 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partitioned
+		if err := vector.AppendFixed(bat.Vecs[idx], tbl.partitioned, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_PARTITION_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition_info
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tbl.partition), false, m); err != nil {
 			return nil, err
 		}
@@ -647,22 +650,24 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 }
 */
 
-func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
-	for i := range writes {
-		for _, e := range writes[i] {
-			if e.bat.Length() == 0 {
-				continue
-			}
-			pe, err := toPBEntry(e)
-			if err != nil {
-				return nil, err
-			}
-			mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
-			if _, ok := mq[e.dnStore.ServiceID]; !ok {
-				mq[e.dnStore.ServiceID] = e.dnStore
-			}
+	v := ctx.Value(defines.PkCheckByDN{})
+	for _, e := range writes {
+		if e.bat.Length() == 0 {
+			continue
+		}
+		if v != nil {
+			e.pkChkByDN = v.(int8)
+		}
+		pe, err := toPBEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
+		if _, ok := mq[e.dnStore.ServiceID]; !ok {
+			mq[e.dnStore.ServiceID] = e.dnStore
 		}
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
@@ -731,6 +736,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
+		PkCheckByDn:  int32(e.pkChkByDN),
 	}, nil
 }
 
@@ -945,6 +951,7 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	return accountId, userId, roleId
 }
 
+/*
 func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dnNum int) ([]*batch.Batch, error) {
 	pvec, err := colexec.EvalExpr(bat, proc, expr)
 	if err != nil {
@@ -976,6 +983,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	}
 	return bats, nil
 }
+*/
 
 func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
 	txn := tbl.db.txn
@@ -1048,7 +1056,7 @@ func genBlockMetas(
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
 	{
-		mp := make(map[uint64]catalog.BlockInfo) // block list
+		mp := make(map[types.Blockid]catalog.BlockInfo) // block list
 		for i := range blockInfos {
 			if blk, ok := mp[blockInfos[i].BlockID]; ok {
 				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
@@ -1088,17 +1096,17 @@ func genBlockMetas(
 	return metas, nil
 }
 
-func inBlockMap(blk BlockMeta, blockMap map[uint64]bool) bool {
+func inBlockMap(blk BlockMeta, blockMap map[types.Blockid]bool) bool {
 	_, ok := blockMap[blk.Info.BlockID]
 	return ok
 }
 
-func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
+func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 
 	lenblks := len(modfs)
-	blockMap := make(map[uint64]bool, lenblks)
+	blockMap := make(map[types.Blockid]bool, lenblks)
 	for i := 0; i < lenblks; i++ {
 		blockMap[modfs[i].Info.BlockID] = true
 	}
@@ -1125,7 +1133,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	{
 		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < bat.Length(); i++ {
-			val := types.Rowid(uuid.New())
+			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
 			}
@@ -1162,7 +1170,7 @@ func inPartition(v types.Rowid, part *PartitionState,
 	if len(blocks) == 0 {
 		return false
 	}
-	blkId := rowIDToBlockID(RowID(v))
+	blkId := v.GetBlockid()
 	for _, blk := range blocks {
 		if blk.Info.BlockID == blkId {
 			return true

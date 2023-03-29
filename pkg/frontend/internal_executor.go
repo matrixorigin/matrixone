@@ -260,7 +260,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 
 // Peer gets the address [Host:Port] of the client
 func (ip *internalProtocol) Peer() string {
-	panic("not impl")
+	return "0.0.0.0"
 }
 
 func (ip *internalProtocol) GetDatabaseName() string {
@@ -385,5 +385,11 @@ func (ip *internalProtocol) ResetStatistics() {
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (ip *internalProtocol) incDebugCount(int) {}
+
+func (ip *internalProtocol) resetDebugCount() []uint64 {
 	return nil
 }

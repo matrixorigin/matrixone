@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package blockio
 
-import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
+type Option func(*IoPipeline)
 
-const (
-	index_TableID_PrimaryKey = memorytable.Text("table id, primary key")
-)
+func WithFetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.fetchParallism = num
+	}
+}
+
+func WithPrefetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.prefetchParallism = num
+	}
+}
+
+func WithJobFactory(factory IOJobFactory) Option {
+	return func(p *IoPipeline) {
+		p.jobFactory = factory
+	}
+}

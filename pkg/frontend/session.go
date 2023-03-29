@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -176,6 +177,13 @@ type Session struct {
 	seqLastValue string
 
 	sqlHelper *SqlHelper
+
+	// when starting a transaction in session, the snapshot ts of the transaction
+	// is to get a DN push to CN to get the maximum commitTS. but there is a problem,
+	// when the last transaction ends and the next one starts, it is possible that the
+	// log of the last transaction has not been pushed to CN, we need to wait until at
+	// least the commit of the last transaction log of the previous transaction arrives.
+	lastCommitTS timestamp.Timestamp
 }
 
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
@@ -252,6 +260,7 @@ func (ses *Session) Dispose() {
 	}
 	ses.cleanCache()
 
+	ses.statsCache = nil
 	// Clean sequence record data.
 	ses.seqCurValues = nil
 }
@@ -304,15 +313,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache:      &privilegeCache{},
-		blockIdx:   0,
-		planCache:  newPlanCache(100),
-		statsCache: plan2.NewStatsCache(),
+		cache:     &privilegeCache{},
+		blockIdx:  0,
+		planCache: newPlanCache(100),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
+		ses.statsCache = plan2.NewStatsCache()
 	}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
@@ -395,6 +404,7 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.txnCompileCtx = nil
 		bgs.Session.txnHandler = nil
 		bgs.Session.gSysVars = nil
+		bgs.Session.statsCache = nil
 	}
 	bgs = nil
 }
@@ -1269,6 +1279,8 @@ const (
 	TXN_DEFAULT QueryType = iota
 	TXN_DELETE
 	TXN_UPDATE
+	TXN_DROP
+	TXN_ALTER
 )
 
 func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
@@ -1463,4 +1475,10 @@ handleFailed:
 		return nil, rbErr
 	}
 	return nil, err
+}
+
+func (ses *Session) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
+	if lastCommitTS.Greater(ses.lastCommitTS) {
+		ses.lastCommitTS = lastCommitTS
+	}
 }

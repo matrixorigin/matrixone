@@ -31,7 +31,6 @@ type ObjectReader struct {
 	ReaderOptions
 }
 
-const ExtentTypeSize = 4 * 3
 const ExtentsLength = 20
 const FooterSize = 8 + 4
 
@@ -92,7 +91,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 					name:   r.name,
 				}
 				cache := data[size:dataLen]
-				unSize, err := block.UnMarshalMeta(cache, ZMUnmarshalFunc)
+				unSize, err := block.UnmarshalMeta(cache, ZMUnmarshalFunc)
 				if err != nil {
 					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
 					return nil, 0, err
@@ -156,6 +155,37 @@ func (r *ObjectReader) Read(ctx context.Context,
 	return data, nil
 }
 
+func (r *ObjectReader) ReadBlocks(ctx context.Context,
+	extent Extent, ids map[uint32]*ReadBlockOptions, m *mpool.MPool,
+	zoneMapFunc ZoneMapUnmarshalFunc,
+	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
+	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	data := &fileservice.IOVector{
+		FilePath: r.name,
+		Entries:  make([]fileservice.IOEntry, 0),
+	}
+	for _, block := range ids {
+		for idx := range block.Idxes {
+			col := blocks[block.Id].(*Block).columns[idx]
+			data.Entries = append(data.Entries, fileservice.IOEntry{
+				Offset: int64(col.GetMeta().location.Offset()),
+				Size:   int64(col.GetMeta().location.Length()),
+
+				ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+			})
+		}
+	}
+
+	err = r.object.fs.Read(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func (r *ObjectReader) ReadAllMeta(ctx context.Context,
 	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error) {
 	footer, err := r.readFooter(ctx, fileSize, m)
@@ -171,7 +201,7 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 
 	// I don't know how many blocks there are in the object,
 	// read "ExtentsLength" blocks by default
-	size := int64(FooterSize + ExtentsLength*ExtentTypeSize)
+	size := int64(FooterSize + ExtentsLength*ExtentSize)
 	if size > fileSize {
 		size = fileSize
 	}
@@ -180,7 +210,7 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 		return nil, err
 	}
 	if len(footer.extents) == 0 {
-		size = int64(FooterSize + footer.blockCount*ExtentTypeSize)
+		size = int64(FooterSize + footer.blockCount*ExtentSize)
 		footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
 		if err != nil {
 			return nil, err

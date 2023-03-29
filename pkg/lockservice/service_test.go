@@ -17,8 +17,6 @@ package lockservice
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -27,12 +25,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -658,54 +652,19 @@ func runLockServiceTestsWithLevel(
 	adjustConfig func(*Config)) {
 	defaultRPCTimeout = time.Second
 	defer leaktest.AfterTest(t.(testing.TB))()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
-
-	assert.NoError(t, os.RemoveAll(testSockets[:7]))
-
-	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})
-	defer func() {
-		assert.NoError(t, allocator.Close())
-	}()
-
-	services := make([]*service, 0, len(serviceIDs))
-	defer func() {
-		for _, s := range services {
-			assert.NoError(t, s.Close())
-		}
-	}()
-
-	cns := make([]metadata.CNService, 0, len(serviceIDs))
-	configs := make([]Config, 0, len(serviceIDs))
-	for _, v := range serviceIDs {
-		address := fmt.Sprintf("unix:///tmp/service-%s.sock", v)
-		assert.NoError(t, os.RemoveAll(address[7:]))
-		cns = append(cns, metadata.CNService{
-			ServiceID:          v,
-			LockServiceAddress: address,
-		})
-		configs = append(configs, Config{ServiceID: v, ListenAddress: address})
-	}
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			cns,
-			[]metadata.DNService{
-				{
-					LockServiceAddress: testSockets,
-				},
-			}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
-
-	for _, cfg := range configs {
-		if adjustConfig != nil {
-			adjustConfig(&cfg)
-		}
-		services = append(services,
-			NewLockService(cfg).(*service))
-	}
-	fn(allocator.(*lockTableAllocator), services)
+	RunLockServicesForTest(
+		level,
+		serviceIDs,
+		lockTableBindTimeout,
+		func(lta LockTableAllocator, ls []LockService) {
+			services := make([]*service, 0, len(ls))
+			for _, s := range ls {
+				services = append(services, s.(*service))
+			}
+			fn(lta.(*lockTableAllocator), services)
+		},
+		adjustConfig,
+	)
 }
 
 func waitWaiters(
@@ -714,17 +673,5 @@ func waitWaiters(
 	table uint64,
 	key []byte,
 	waitersCount int) {
-	v, err := s.getLockTable(table)
-	require.NoError(t, err)
-	lb := v.(*localLockTable)
-	lb.mu.Lock()
-	lock, ok := lb.mu.store.Get(key)
-	require.True(t, ok)
-	lb.mu.Unlock()
-	for {
-		if lock.waiter.waiters.len() == waitersCount {
-			return
-		}
-		time.Sleep(time.Millisecond * 10)
-	}
+	require.NoError(t, WaitWaiters(s, table, key, waitersCount))
 }
