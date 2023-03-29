@@ -245,7 +245,7 @@ select count(*) from t;
 insert into t select null;
 drop table t;
 # 3.compiste primary key test
-create table t_mo_crash(a_crash int,b int,primary key(a,b));
+create table t_mo_crash(a_crash int,b int,primary key(a_crash,b));
 create table temp(c int);
 insert into temp select * from generate_series(1,200000) g;
 insert into t_mo_crash select c,c from temp;
