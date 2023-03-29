@@ -185,9 +185,6 @@ func (rm *RoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	if ok {
 		delete(rm.accountId2Routine[tenantID], rt)
 	}
-	if len(rm.accountId2Routine[tenantID]) == 0 {
-		rm.accountId2Routine[tenantID] = nil
-	}
 }
 
 func (rm *RoutineManager) recordRoutine(tenantID int64, rt *Routine) {
