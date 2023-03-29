@@ -260,7 +260,9 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 		userID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).Get(i).(uint32)
 		roleID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).Get(i).(uint32)
 		createAt := ins.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).Get(i).(types.Timestamp)
-		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt)
+		createSql := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte))
+		datType := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte))
+		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -269,7 +271,9 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 	}
 }
 
-func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnbase.TxnMVCCNode, tenantID, userID, roleID uint32, createAt types.Timestamp) {
+func (catalog *Catalog) onReplayCreateDB(
+	dbid uint64, name string, txnNode *txnbase.TxnMVCCNode,
+	tenantID, userID, roleID uint32, createAt types.Timestamp, createSql, datType string) {
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
@@ -283,6 +287,8 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.catalog = catalog
 	db.ID = dbid
 	db.name = name
+	db.createSql = createSql
+	db.datType = datType
 	db.acInfo = accessInfo{
 		TenantID: tenantID,
 		UserID:   userID,
@@ -371,6 +377,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema := NewEmptySchema(name)
 		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
 		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
+		schema.Partitioned = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
 		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
 		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
 		schema.Createsql = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
@@ -1013,24 +1020,24 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 	return
 }
 
-func (catalog *Catalog) CreateDBEntry(name, createSql string, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntry(name, createSql, datTyp string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, createSql, txn)
+	entry := NewDBEntry(catalog, name, createSql, datTyp, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err
 }
 
-func (catalog *Catalog) CreateDBEntryWithID(name, createSql string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntryWithID(name, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
 	if _, exist := catalog.entries[id]; exist {
 		return nil, moerr.GetOkExpectedDup()
 	}
-	entry := NewDBEntryWithID(catalog, name, createSql, id, txn)
+	entry := NewDBEntryWithID(catalog, name, createSql, datTyp, id, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err

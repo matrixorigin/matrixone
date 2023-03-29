@@ -18,10 +18,8 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -99,17 +97,4 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
-}
-
-// Get the primary key name of the table
-func GetTablePriKeyName(pKeyDef *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
-	if pKeyDef != nil && len(pKeyDef.Names) == 1 {
-		return pKeyDef.Names[0]
-	}
-
-	if cPkeyCol != nil {
-		return cPkeyCol.Name
-	}
-
-	return ""
 }

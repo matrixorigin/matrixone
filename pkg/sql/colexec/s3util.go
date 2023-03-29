@@ -124,7 +124,8 @@ func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
 	}
 
 	// Get CPkey index
-	if tableDef.CompositePkey != nil {
+	//if tableDef.CompositePkey != nil {
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		// the serialized cpk col is located in the last of the bat.vecs
 		s3Writer.sortIndex = append(s3Writer.sortIndex, len(tableDef.Cols))
 	} else {
@@ -155,8 +156,10 @@ func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
 			s3Writer.pk[def.Name] = struct{}{}
 		}
 	}
-	if tableDef.CompositePkey != nil {
-		s3Writer.pk[tableDef.CompositePkey.Name] = struct{}{}
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		s3Writer.pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
 	}
 
 	s3Writer.resetMetaLocBat()

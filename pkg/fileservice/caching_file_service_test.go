@@ -87,8 +87,8 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
-	assert.Equal(t, int64(0), counterSet.Cache.Read.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Hit.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Read.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
 	// read, not hit
 	vec = makeVec()
@@ -99,8 +99,8 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
-	assert.Equal(t, int64(1), counterSet.Cache.Read.Load())
-	assert.Equal(t, int64(0), counterSet.Cache.Hit.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Read.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
 	// read again, hit cache
 	vec = makeVec()
@@ -111,8 +111,8 @@ func testCachingFileService(
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
-	assert.Equal(t, int64(2), counterSet.Cache.Read.Load())
-	assert.Equal(t, int64(1), counterSet.Cache.Hit.Load())
+	assert.Equal(t, int64(2), counterSet.FileService.Cache.Read.Load())
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Hit.Load())
 
 	// flush
 	fs.FlushCache()

@@ -116,7 +116,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
-			CompositePkey: node.TableDef.CompositePkey,
 			OriginCols:    node.TableDef.OriginCols,
 		}
 
@@ -1822,7 +1821,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						maskedCTEs[name] = nil
 					}
 				}
-
+				defaultDatabase := viewData.DefaultDatabase
+				if obj.PubAccountId != -1 {
+					defaultDatabase = obj.SubscriptionName
+				}
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
@@ -1831,7 +1833,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						},
 						Stmt: viewStmt.AsSource,
 					},
-					defaultDatabase: viewData.DefaultDatabase,
+					defaultDatabase: defaultDatabase,
 					maskedCTEs:      maskedCTEs,
 				}
 
@@ -1887,55 +1889,62 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
-		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
-			// add account filter for system table scan
+
+		if midNode.NodeType == plan.Node_TABLE_SCAN {
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
 			currentAccountId := builder.compCtx.GetAccountId()
-			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
-				if err != nil {
-					return 0, err
+			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
+				currentAccountId = uint32(sub.AccountId)
+				builder.qry.Nodes[nodeID].NotCacheable = true
+			}
+			if currentAccountId != catalog.System_Account {
+				// add account filter for system table scan
+				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
+					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
+					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
+					ctx.binder = NewWhereBinder(builder, ctx)
+					left := &tree.UnresolvedName{
+						NumParts: 1,
+						Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
+					}
+					currentAccountId := builder.compCtx.GetAccountId()
+					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
+					right.ValType = tree.P_uint64
+					//account_id = the accountId of the non-sys account
+					accountFilter := &tree.ComparisonExpr{
+						Op:    tree.EQUAL,
+						Left:  left,
+						Right: right,
+					}
+					accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-				ctx.binder = NewWhereBinder(builder, ctx)
-				left := &tree.UnresolvedName{
-					NumParts: 1,
-					Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
-				}
-				currentAccountId := builder.compCtx.GetAccountId()
-				right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
-				right.ValType = tree.P_uint64
-				//account_id = the accountId of the non-sys account
-				accountFilter := &tree.ComparisonExpr{
-					Op:    tree.EQUAL,
-					Left:  left,
-					Right: right,
-				}
-				accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return
@@ -2001,7 +2010,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -2039,7 +2048,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, false)
+		binding = NewBinding(tag, nodeID, table, 0, cols, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)
