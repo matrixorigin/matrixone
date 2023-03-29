@@ -82,6 +82,7 @@ type TxnManager struct {
 	IDMap           map[string]txnif.AsyncTxn
 	IdAlloc         *common.TxnIDAllocator
 	TsAlloc         *types.TsAlloctor
+	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
@@ -105,12 +106,18 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		CommitListener:  newBatchCommitListener(),
 		wg:              sync.WaitGroup{},
 	}
+	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
+}
+
+func (mgr *TxnManager) initMaxCommittedTS() {
+	now := mgr.Now()
+	mgr.MaxCommittedTS.Store(&now)
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -154,7 +161,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	txnId := mgr.IdAlloc.Alloc()
-	startTs := mgr.TsAlloc.Alloc()
+	startTs := *mgr.MaxCommittedTS.Load()
 
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
@@ -378,7 +385,10 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
 }
-
+func (mgr *TxnManager) onCommitTxn(txn txnif.AsyncTxn) {
+	commitTS := txn.GetCommitTS()
+	mgr.MaxCommittedTS.Store(&commitTS)
+}
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
 	var isAbort bool
@@ -459,6 +469,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		} else {
 			mgr.on1PCPrepared(op)
 		}
+		mgr.onCommitTxn(op.Txn)
 	}
 	logutil.Debug("[dequeuePrepared]",
 		common.NameSpaceField("txns"),
