@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"bytes"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,9 +154,6 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 func (cm *ColumnMeta) Marshal() []byte {
 	var buffer bytes.Buffer
 	buffer.Write(types.EncodeFixed[uint8](cm.typ))
-	if cm.typ == 66 {
-		fmt.Printf("Got enum")
-	}
 	buffer.Write(types.EncodeFixed[uint8](cm.alg))
 	buffer.Write(types.EncodeFixed[uint16](cm.idx))
 	buffer.Write(cm.location.Marshal())

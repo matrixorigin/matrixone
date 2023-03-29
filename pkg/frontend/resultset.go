@@ -237,8 +237,6 @@ type MysqlResultSet struct {
 
 	//data
 	Data [][]interface{}
-
-	Typs []*types.Type
 }
 
 func (mrs *MysqlResultSet) AddColumn(column Column) uint64 {

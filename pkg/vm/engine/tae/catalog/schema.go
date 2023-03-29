@@ -266,9 +266,6 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += 8
 		data := make([]byte, length)
-		if length == 123 {
-			fmt.Printf("123 got.")
-		}
 		if sn2, err = r.Read(data); err != nil {
 			return
 		}
@@ -369,13 +366,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if data, err = types.Encode(def.Type); err != nil {
 			return
 		}
-		if def.Type.Oid == types.T_enum {
-			fmt.Printf("")
-		}
 		length = uint64(len(data))
-		if length == 120 {
-			fmt.Printf("Got 120")
-		}
 		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
 			return
 		}
