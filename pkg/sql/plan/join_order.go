@@ -544,11 +544,6 @@ func containsAllPKs(cols, pks []int32) bool {
 	return true
 }
 
-func (builder *QueryBuilder) filterOnPK(filter *plan.Expr, pks []int32) bool {
-	// FIXME better handle expressions
-	return len(pks) > 0
-}
-
 func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {
 	var tags []int32
 
