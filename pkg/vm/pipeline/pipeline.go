@@ -88,7 +88,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.S3IOByte(bat)
 			a.Alloc(int64(bat.Size()))
 		}
-		if p.attrs[0] == "a_crash" && len(bat.Vecs) > 1 {
+		if p.attrs[0] == "a_crash" && bat != nil && len(bat.Vecs) > 1 {
 			logutil.Infof("Insert: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
 		}
 		proc.SetInputBatch(bat)
