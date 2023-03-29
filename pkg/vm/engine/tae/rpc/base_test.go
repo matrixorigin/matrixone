@@ -707,6 +707,11 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
+		if err := vector.AppendFixed(bat.Vecs[idx], int8(0), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_PARTITION_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition_info
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
