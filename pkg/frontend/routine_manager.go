@@ -15,12 +15,15 @@
 package frontend
 
 import (
+	"bytes"
+	"container/list"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -34,42 +37,32 @@ import (
 )
 
 type RoutineManager struct {
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	ctx            context.Context
 	clients        map[goetty.IOSession]*Routine
 	pu             *config.ParameterUnit
-	skipCheckUser  bool
+	skipCheckUser  atomic.Bool
 	tlsConfig      *tls.Config
 	autoIncrCaches defines.AutoIncrCaches
 }
 
 func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	return rm.autoIncrCaches
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	rm.skipCheckUser = b
+	rm.skipCheckUser.Store(b)
 }
 
 func (rm *RoutineManager) GetSkipCheckUser() bool {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	return rm.skipCheckUser
+	return rm.skipCheckUser.Load()
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	return rm.pu
 }
 
 func (rm *RoutineManager) getCtx() context.Context {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	return rm.ctx
 }
 
@@ -80,14 +73,12 @@ func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
 }
 
 func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	return rm.clients[rs]
 }
 
 func (rm *RoutineManager) getTlsConfig() *tls.Config {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	return rm.tlsConfig
 }
 
@@ -173,14 +164,14 @@ if killConnection is false, only the query will be canceled. the connection keep
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
 	var rt *Routine = nil
-	rm.mu.Lock()
+	rm.mu.RLock()
 	for _, value := range rm.clients {
 		if uint64(value.getConnectionID()) == id {
 			rt = value
 			break
 		}
 	}
-	rm.mu.Unlock()
+	rm.mu.RUnlock()
 
 	killMyself := idThatKill == id
 	if rt != nil {
@@ -314,7 +305,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := routine.getProtocol().GetRequest(payload)
+	req := protocol.GetRequest(payload)
 	req.seq = seq
 
 	//handle request
@@ -330,10 +321,45 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 // clientCount returns the count of the clients
 func (rm *RoutineManager) clientCount() int {
 	var count int
-	rm.mu.Lock()
+	rm.mu.RLock()
 	count = len(rm.clients)
-	rm.mu.Unlock()
+	rm.mu.RUnlock()
 	return count
+}
+
+func (rm *RoutineManager) printDebug() {
+	type info struct {
+		id    uint32
+		peer  string
+		count []uint64
+	}
+	infos := list.New()
+	rm.mu.RLock()
+	for _, routine := range rm.clients {
+		proto := routine.getProtocol()
+		infos.PushBack(&info{
+			proto.ConnectionID(),
+			proto.Peer(),
+			proto.resetDebugCount(),
+		})
+	}
+	rm.mu.RUnlock()
+
+	bb := bytes.Buffer{}
+	bb.WriteString("Clients:")
+	bb.WriteString(fmt.Sprintf("(%d)\n", infos.Len()))
+	for e := infos.Front(); e != nil; e = e.Next() {
+		d := e.Value.(*info)
+		if d == nil {
+			continue
+		}
+		bb.WriteString(fmt.Sprintf("%d|%s|", d.id, d.peer))
+		for i, u := range d.count {
+			bb.WriteString(fmt.Sprintf("%d:0x%x ", i, u))
+		}
+		bb.WriteByte('\n')
+	}
+	logutil.Info(bb.String())
 }
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
@@ -345,13 +371,28 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 
 	// Initialize auto incre cache.
 	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
-	rm.autoIncrCaches.Mu = &rm.mu
+	rm.autoIncrCaches.Mu = &sync.Mutex{}
 
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	//add debug routine
+	if pu.SV.PrintDebug {
+		go func() {
+			for {
+				select {
+				case <-rm.ctx.Done():
+					return
+				default:
+				}
+				rm.printDebug()
+				time.Sleep(time.Duration(pu.SV.PrintDebugInterval) * time.Minute)
+			}
+		}()
 	}
 	return rm, nil
 }
