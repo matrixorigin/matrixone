@@ -120,7 +120,8 @@ type CommentDef struct {
 }
 
 type PartitionDef struct {
-	Partition string
+	Partitioned int8
+	Partition   string
 }
 
 type ViewDef struct {

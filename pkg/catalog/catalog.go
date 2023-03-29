@@ -109,9 +109,10 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				}
 				cmds[i].Defs = append(cmds[i].Defs, c)
 			}
-			if len(cmds[i].Partition) > 0 {
+			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
 				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partition: cmds[i].Partition,
+					Partitioned: cmds[i].Partitioned,
+					Partition:   cmds[i].Partition,
 				})
 			}
 			pro := new(engine.PropertiesDef)
@@ -184,7 +185,8 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
-		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
+		cmds[i].Partitioned = row[MO_TABLES_PARTITIONED_IDX].(int8)
+		cmds[i].Partition = string(row[MO_TABLES_PARTITION_INFO_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
