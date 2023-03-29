@@ -168,12 +168,15 @@ func containColname(col string) bool {
 	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
 }
 
+// GetAccountPrefix check expr is "account = ?". if yes, then return true with target account val.
 func GetAccountPrefix(expr *plan.Expr) (bool, string) {
 	if expr_F, ok := expr.Expr.(*plan.Expr_F); ok {
 		f := expr_F.F
 		if f.Func.ObjName == "=" && len(f.Args) == 2 {
+			// col is {table}.account
 			if colName, isCol := f.Args[0].Expr.(*plan.Expr_Col); isCol {
 				if strings.HasSuffix(colName.Col.Name, STATEMENT_ACCOUNT) {
+					// target value is const string.
 					if val, isConst := f.Args[1].Expr.(*plan.Expr_C); isConst {
 						if str, isString := val.C.Value.(*plan.Const_Sval); isString {
 							return true, str.Sval
@@ -218,8 +221,10 @@ func FormatFilePathWithAccountFilterCondition(ctx context.Context, n *plan.Node,
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, strings.ToLower(defines.ETLFileServiceName)+":") {
 		if len(filePath) > 4 && filePath[4] == '/' {
+			// origin filePath start with "etl:/"
 			filePath = filePath[5:]
 		} else {
+			// origin filePath start with "etl:"
 			filePath = filePath[4:]
 		}
 		builder := table.NewAccountDatePathBuilder()
@@ -229,6 +234,7 @@ func FormatFilePathWithAccountFilterCondition(ctx context.Context, n *plan.Node,
 		} else if p.GetAccount() != table.ETLParamAccountAll {
 			logutil.Warn("should not use with filter condition `account=?`", trace.ContextField(ctx), logutil.PathField(filePath))
 		} else {
+			// find the first `account = ?` filter condition, and modify param.Filepath
 			for i := 0; i < len(n.FilterList); i++ {
 				fl := n.FilterList[i]
 				if judgeContainColname(fl) {
