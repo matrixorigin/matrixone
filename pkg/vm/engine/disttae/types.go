@@ -186,7 +186,8 @@ type txnTable struct {
 	clusterByIdx int // -1 means no clusterBy key
 	viewdef      string
 	comment      string
-	partition    string
+	partitioned  int8   //1 : the table has partitions ; 0 : no partition
+	partition    string // the info about partitions when the table has partitions
 	relKind      string
 	createSql    string
 	constraint   []byte

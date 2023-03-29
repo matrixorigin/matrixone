@@ -28,7 +28,7 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show columns from mo_tables;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
+rel_id    BIGINT UNSIGNED(0)    YES    PRI    null
 relname    VARCHAR(5000)    YES        null        
 reldatabase    VARCHAR(5000)    YES        null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
@@ -40,9 +40,10 @@ created_time    TIMESTAMP(0)    YES        null
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 account_id    INT UNSIGNED(0)    YES        null        
-partitioned    BLOB(0)    YES        null        
+partitioned    TINYINT(0)    YES        null
+partition_info    BLOB(0)    YES        null
 viewdef    BLOB(0)    YES        null        
-constraint    VARCHAR(5000)    YES        null        
+constraint    VARCHAR(5000)    YES        null
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system;

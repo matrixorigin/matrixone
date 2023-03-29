@@ -312,8 +312,9 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		commentDef.Comment = tbl.comment
 		defs = append(defs, commentDef)
 	}
-	if tbl.partition != "" {
+	if tbl.partitioned > 0 || tbl.partition != "" {
 		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partitioned = tbl.partitioned
 		partitionDef.Partition = tbl.partition
 		defs = append(defs, partitionDef)
 	}
