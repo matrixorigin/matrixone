@@ -142,9 +142,9 @@ func (w *waiter) add(
 	logWaitersAdded(serviceID, w, waiters...)
 }
 
-func (w *waiter) moveTo(to *waiter) {
-	// TODO:
-	111
+func (w *waiter) moveTo(serviceID string, to *waiter) {
+	to.waiters.beginChange()
+	to.add(serviceID, w.waiters.all()...)
 }
 
 func (w *waiter) getStatus() waiterStatus {

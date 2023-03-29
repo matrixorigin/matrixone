@@ -372,3 +372,7 @@ type remote struct {
 func unsafeByteSliceToString(key []byte) string {
 	return *(*string)(unsafe.Pointer(&key))
 }
+
+func unsafeStringToByteSlice(key string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&key))
+}

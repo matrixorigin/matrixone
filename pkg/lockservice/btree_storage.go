@@ -79,6 +79,15 @@ func (k *btreeBasedStorage) Seek(key []byte) ([]byte, Lock, bool) {
 	return result.key, result.value, !result.isEmpty()
 }
 
+func (k *btreeBasedStorage) Prev(key []byte) ([]byte, Lock, bool) {
+	var result treeItem
+	k.tree.AscendLessThan(treeItem{key: key}, func(item treeItem) bool {
+		result = item
+		return false
+	})
+	return result.key, result.value, !result.isEmpty()
+}
+
 func (k *btreeBasedStorage) Range(
 	start, end []byte,
 	fn func([]byte, Lock) bool) {
