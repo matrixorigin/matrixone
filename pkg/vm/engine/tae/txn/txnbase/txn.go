@@ -97,6 +97,14 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start, snapshot
 	return txn
 }
 
+func MockTxnReaderWithStartTS(startTS types.TS) *Txn {
+	return &Txn{
+		TxnCtx: &TxnCtx{
+			StartTS: startTS,
+		},
+	}
+}
+
 func NewPersistedTxn(
 	mgr *TxnManager,
 	ctx *TxnCtx,

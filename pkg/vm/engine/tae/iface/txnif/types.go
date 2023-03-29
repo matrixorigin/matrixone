@@ -68,7 +68,7 @@ type TxnReader interface {
 	GetLSN() uint64
 	GetMemo() *TxnMemo
 
-	SameTxn(startTs types.TS) bool
+	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
 }

@@ -29,6 +29,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+func mockTxn() *txnbase.Txn {
+	txn := new(txnbase.Txn)
+	txn.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), types.TS{})
+	return txn
+}
+
+func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
+	txn := mockTxn()
+	txn.StartTS = ts
+	return txn
+}
+
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
@@ -75,10 +87,10 @@ func (chain *DeleteChain) IsDeleted(row uint32, txn txnif.TxnReader, rwlocker *s
 	if deleteNode == nil {
 		return false, nil
 	}
-	needWait, txn := deleteNode.NeedWaitCommitting(txn.GetStartTS())
+	needWait, waitTxn := deleteNode.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		rwlocker.RUnlock()
-		txn.GetTxnState(true)
+		waitTxn.GetTxnState(true)
 		rwlocker.RLock()
 	}
 	return deleteNode.IsVisible(txn), nil

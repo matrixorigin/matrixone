@@ -451,10 +451,10 @@ func (blk *ablock) getInMemoryRowByFilter(
 	for i := len(rows) - 1; i >= 0; i-- {
 		row = rows[i]
 		appendnode := blk.mvcc.GetAppendNodeByRow(row)
-		needWait, txn := appendnode.NeedWaitCommitting(txn.GetStartTS())
+		needWait, waitTxn := appendnode.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			blk.RUnlock()
-			txn.GetTxnState(true)
+			waitTxn.GetTxnState(true)
 			blk.RLock()
 		}
 		if appendnode.IsAborted() || !appendnode.IsVisible(txn) {

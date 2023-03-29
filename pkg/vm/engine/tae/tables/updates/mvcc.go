@@ -209,10 +209,10 @@ func (n *MVCCHandle) GetVisibleRowLocked(txn txnif.TxnReader) (maxrow uint32, vi
 	anToWait := make([]*AppendNode, 0)
 	txnToWait := make([]txnif.TxnReader, 0)
 	n.appends.ForEach(func(an *AppendNode) bool {
-		needWait, txn := an.NeedWaitCommitting(txn.GetStartTS())
+		needWait, waitTxn := an.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			anToWait = append(anToWait, an)
-			txnToWait = append(txnToWait, txn)
+			txnToWait = append(txnToWait, waitTxn)
 			return true
 		}
 		if an.IsVisible(txn) {
