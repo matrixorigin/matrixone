@@ -464,6 +464,11 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if err != nil {
 			return nil, err
 		}
+
+		err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -476,6 +481,59 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+// addPartitionTableDef constructs the table def for the partition table
+func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
+	//add partition table
+	//there is no index for the partition table
+	//there is no foreign key for the partition table
+	if !util.IsValidNameForPartitionTable(mainTableName) {
+		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
+	}
+
+	//common properties
+	partitionProps := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemPartitionRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: "",
+		},
+	}
+	partitionPropsDef := &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: partitionProps,
+			},
+		}}
+
+	partitionDef := createTable.TableDef.Partition
+	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
+
+	partitionTableNames := make([]string, partitionDef.PartitionNum)
+	for i := 0; i < int(partitionDef.PartitionNum); i++ {
+		part := partitionDef.Partitions[i]
+		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
+		if !ok {
+			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
+		}
+
+		//save the table name for a partition
+		part.PartitionTableName = partitionTableName
+		partitionTableNames[i] = partitionTableName
+
+		partitionTableDefs[i] = &TableDef{
+			Name: partitionTableName,
+			Cols: createTable.TableDef.Cols, //same as the main table's column defs
+		}
+		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
+	}
+	partitionDef.PartitionTableNames = partitionTableNames
+	createTable.PartitionTables = partitionTableDefs
+	return nil
 }
 
 // buildPartitionByClause build partition by clause info and semantic check.
@@ -1200,13 +1258,19 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
+		if tableDef.GetPartition() != nil {
+			dropTable.PartitionTableNames = tableDef.GetPartition().GetPartitionTableNames()
+		}
+
 		// Check whether the table definition contains index constraints
-		if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
-			var err error
-			sql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tableDef.TblId)
-			attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-			if err != nil {
-				return nil, err
+		if dropTable.Database != catalog.MO_CATALOG && dropTable.Table != catalog.MO_INDEXES {
+			if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
+				var err error
+				sql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tableDef.TblId)
+				attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1223,46 +1287,12 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-type DeleteIndexMode int
-
-const (
-	DROP_INDEX DeleteIndexMode = iota
-	DROP_TABLE
-	DROP_DATABASE
-	TRUNCATE_TABLE
-	ALTER_INDEX
-)
-
 var (
 	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 )
-
-// Build a plan to delete index metadata
-//func buildDeleteIndexMetaPlan(indexName string, tblId uint64, databaseId uint64, mode DeleteIndexMode, ctx CompilerContext) (*Plan, error) {
-//	var sql string
-//	switch mode {
-//	case DROP_INDEX:
-//		sql = fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tblId, indexName)
-//	case DROP_TABLE:
-//		sql = fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tblId)
-//	case DROP_DATABASE:
-//		sql = fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
-//	case ALTER_INDEX:
-//		sql = fmt.Sprintf(updateMoIndexesVisibleFormat, tblId, indexName)
-//	}
-//	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-//	if err != nil {
-//		return nil, err
-//	}
-//	if deleteStmt, ok := stmt.(*tree.Delete); ok {
-//		return buildDelete(deleteStmt, ctx)
-//	} else {
-//		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not delete syntax tree")
-//	}
-//}
 
 // Build a plan to modify index metadata
 func buildIndexMetadataPlan(sql string, ctx CompilerContext) (*Plan, error) {
