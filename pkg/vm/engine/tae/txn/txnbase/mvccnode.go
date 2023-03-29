@@ -248,6 +248,10 @@ func (un *TxnMVCCNode) IsSameTxn(txn txnif.TxnReader) bool {
 	if un.Txn == nil {
 		return false
 	}
+	// for appendnode test
+	if txn == nil {
+		return false
+	}
 	return un.Txn.GetID() == txn.GetID()
 }
 

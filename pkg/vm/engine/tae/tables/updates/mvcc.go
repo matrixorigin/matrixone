@@ -124,11 +124,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
 	startRow uint32,
 	maxRow uint32) (an *AppendNode, created bool) {
-	var ts types.TS
-	if txn != nil {
-		ts = txn.GetStartTS()
-	}
-	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().Start.Equal(ts) {
+	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().IsSameTxn(txn) {
 		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends.InsertNode(an)
 		created = true
