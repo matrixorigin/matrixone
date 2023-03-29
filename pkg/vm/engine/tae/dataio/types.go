@@ -16,6 +16,7 @@ package dataio
 
 import (
 	"context"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+type ColMeta struct {
+	NullCnt uint32
+	Ndv     uint32
+	Zm      Index
+}
+
+// a quick wrapper for metas from object
+type ObjectMeta struct {
+	Rows     uint32
+	ColMetas []ColMeta
+	Zms      [][]Index
+}
 
 // Reader is the only interface that mo provides for CN/DN/ETL... modules to read data
 type Reader interface {
@@ -53,6 +67,7 @@ type Reader interface {
 	MvccLoadColumns(ctx context.Context, idxes []uint16, info catalog.BlockInfo,
 		ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error)
 
+	LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*ObjectMeta, error)
 	// FIXME: The following are temp interfaces
 	LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error)
 	LoadAllColumns(ctx context.Context, idxes []uint16,
