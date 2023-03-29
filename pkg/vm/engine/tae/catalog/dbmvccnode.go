@@ -20,31 +20,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type DBMVCCNode struct{}
+type EmptyMVCCNode struct{}
 
-func NewEmptyDBMVCCNode() *DBMVCCNode {
-	return &DBMVCCNode{}
+func NewEmptyEmptyMVCCNode() *EmptyMVCCNode {
+	return &EmptyMVCCNode{}
 }
 
-func (e *DBMVCCNode) CloneAll() *DBMVCCNode {
-	node := &DBMVCCNode{}
+func (e *EmptyMVCCNode) CloneAll() *EmptyMVCCNode {
+	node := &EmptyMVCCNode{}
 	return node
 }
 
-func (e *DBMVCCNode) CloneData() *DBMVCCNode {
-	return &DBMVCCNode{}
+func (e *EmptyMVCCNode) CloneData() *EmptyMVCCNode {
+	return &EmptyMVCCNode{}
 }
 
-func (e *DBMVCCNode) String() string {
+func (e *EmptyMVCCNode) String() string {
 	return ""
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) Update(vun *DBMVCCNode) {}
+func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode) {}
 
-func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
+func (e *EmptyMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 
-func (e *DBMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
+func (e *EmptyMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
 
 type DBNode struct {
 	acInfo    accessInfo

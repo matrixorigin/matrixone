@@ -203,7 +203,7 @@ func (catalog *Catalog) ReplayCmd(
 			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
 	case CmdUpdateDatabase:
-		cmd := txncmd.(*EntryCommand[*DBMVCCNode, *DBNode])
+		cmd := txncmd.(*EntryCommand[*EmptyMVCCNode, *DBNode])
 		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
 	case CmdUpdateTable:
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
@@ -219,7 +219,7 @@ func (catalog *Catalog) ReplayCmd(
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*DBMVCCNode, *DBNode], idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DBID)
 	var err error
 	un := cmd.mvccNode
@@ -301,7 +301,7 @@ func (catalog *Catalog) onReplayCreateDB(
 		name:      name,
 	}
 	_ = catalog.AddEntryLocked(db, nil, true)
-	un := &MVCCNode[*DBMVCCNode]{
+	un := &MVCCNode[*EmptyMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
@@ -325,7 +325,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		return
 	}
 	prev := db.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*DBMVCCNode]{
+	un := &MVCCNode[*EmptyMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: db.GetCreatedAt(),
 			DeletedAt: txnNode.End,

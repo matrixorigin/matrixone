@@ -113,7 +113,7 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) 
 	}
 	var err error
 	switch cmd := txncmd.(type) {
-	case *catalog.EntryCommand[*catalog.DBMVCCNode, *catalog.DBNode],
+	case *catalog.EntryCommand[*catalog.EmptyMVCCNode, *catalog.DBNode],
 		*catalog.EntryCommand[*catalog.TableMVCCNode, *catalog.TableNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.SegmentNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:

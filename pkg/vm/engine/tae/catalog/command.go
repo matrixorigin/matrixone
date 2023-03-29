@@ -48,7 +48,7 @@ func CmdName(t int16) string {
 func init() {
 	txnif.RegisterCmdFactory(CmdUpdateDatabase, func(cmdType int16) txnif.TxnCmd {
 		return newEmptyEntryCmd(cmdType,
-			NewEmptyMVCCNodeFactory(NewEmptyDBMVCCNode),
+			NewEmptyMVCCNodeFactory(NewEmptyEmptyMVCCNode),
 			func() *DBNode { return &DBNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateTable, func(cmdType int16) txnif.TxnCmd {
@@ -129,8 +129,8 @@ func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand[*Tab
 	return impl
 }
 
-func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand[*DBMVCCNode, *DBNode] {
-	impl := &EntryCommand[*DBMVCCNode, *DBNode]{
+func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand[*EmptyMVCCNode, *DBNode] {
+	impl := &EntryCommand[*EmptyMVCCNode, *DBNode]{
 		DBID:     entry.ID,
 		ID:       &common.ID{},
 		cmdType:  cmdType,
@@ -215,19 +215,16 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, cmd.GetType()); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.DBID); err != nil {
+	n += 2
+	var sn2 int
+	if sn2, err = w.Write(types.EncodeUint64(&cmd.DBID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.ID.TableID); err != nil {
+	n += int64(sn2)
+	if sn2, err = w.Write(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.ID.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, cmd.ID.BlockID); err != nil {
-		return
-	}
-	n = 2 + 8 + 8 + int64(types.UuidSize) + int64(types.BlockidSize)
+	n += int64(sn2)
 	var sn int64
 	if sn, err = cmd.mvccNode.WriteTo(w); err != nil {
 		return
@@ -248,22 +245,15 @@ func (cmd *EntryCommand[T, N]) Marshal() (buf []byte, err error) {
 	return
 }
 func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
+	var sn2 int
+	if sn2, err = r.Read(types.EncodeUint64(&cmd.DBID)); err != nil {
 		return
 	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &cmd.ID.TableID); err != nil {
+	n += int64(sn2)
+	if sn2, err = r.Read(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &cmd.ID.SegmentID); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &cmd.ID.BlockID); err != nil {
-		return
-	}
-	n += 8
+	n += int64(sn2)
 	var sn int64
 	if sn, err = cmd.mvccNode.ReadFrom(r); err != nil {
 		return

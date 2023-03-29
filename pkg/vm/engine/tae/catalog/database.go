@@ -60,7 +60,7 @@ func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) 
 
 type DBEntry struct {
 	ID uint64
-	*BaseEntryImpl[*DBMVCCNode]
+	*BaseEntryImpl[*EmptyMVCCNode]
 	catalog *Catalog
 	*DBNode
 	fullName string
@@ -83,7 +83,7 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 	e := &DBEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *DBMVCCNode { return &DBMVCCNode{} }),
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
 		catalog: catalog,
 		DBNode: &DBNode{
 			name:      name,
@@ -99,7 +99,7 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn, &DBMVCCNode{})
+	e.CreateWithTxn(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -110,7 +110,7 @@ func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.Asyn
 	e := &DBEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *DBMVCCNode { return &DBMVCCNode{} }),
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
 		catalog: catalog,
 		DBNode: &DBNode{
 			name:      name,
@@ -126,7 +126,7 @@ func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.Asyn
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn, &DBMVCCNode{})
+	e.CreateWithTxn(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -137,7 +137,7 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 	e := &DBEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *DBMVCCNode { return &DBMVCCNode{} }),
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
 		catalog: catalog,
 		DBNode: &DBNode{
 			name: name,
@@ -146,7 +146,7 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 		nameNodes: make(map[string]*nodeList[*TableEntry]),
 		link:      common.NewGenericSortedDList(compareTableFn),
 	}
-	e.CreateWithTS(ts, &DBMVCCNode{})
+	e.CreateWithTS(ts, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -155,8 +155,8 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	entry := &DBEntry{
 		ID: pkgcatalog.MO_CATALOG_ID,
 		BaseEntryImpl: NewBaseEntry(
-			func() *DBMVCCNode {
-				return &DBMVCCNode{}
+			func() *EmptyMVCCNode {
+				return &EmptyMVCCNode{}
 			}),
 		catalog: catalog,
 		DBNode: &DBNode{
@@ -168,14 +168,14 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		link:      common.NewGenericSortedDList(compareTableFn),
 		isSys:     true,
 	}
-	entry.CreateWithTS(types.SystemDBTS, &DBMVCCNode{})
+	entry.CreateWithTS(types.SystemDBTS, &EmptyMVCCNode{})
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
-			func() *DBMVCCNode { return &DBMVCCNode{} }),
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
 		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes: make(map[string]*nodeList[*TableEntry]),
 		link:      common.NewGenericSortedDList(compareTableFn),
