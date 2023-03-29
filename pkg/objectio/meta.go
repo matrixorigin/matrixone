@@ -16,9 +16,8 @@ package objectio
 
 import (
 	"bytes"
-	"unsafe"
-
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
