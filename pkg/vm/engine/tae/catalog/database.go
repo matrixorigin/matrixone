@@ -16,10 +16,10 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
+	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,30 +34,22 @@ type accessInfo struct {
 	CreateAt                 types.Timestamp
 }
 
+const (
+	AccessInfoSize int64 = int64(unsafe.Sizeof(accessInfo{}))
+)
+
+func EncodeAccessInfo(ai *accessInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(ai)), AccessInfoSize)
+}
+
 func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
-	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
-		if err = binary.Write(w, binary.BigEndian, id); err != nil {
-			return
-		}
-	}
-	if err = binary.Write(w, binary.BigEndian, int64(ai.CreateAt)); err != nil {
-		return
-	}
-	return 20, nil
+	w.Write(EncodeAccessInfo(ai))
+	return AccessInfoSize, nil
 }
 
 func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
-	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
-		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
-			return
-		}
-	}
-	at := int64(0)
-	if err = binary.Read(r, binary.BigEndian, &at); err != nil {
-		return
-	}
-	ai.CreateAt = types.Timestamp(at)
-	return 20, nil
+	r.Read(EncodeAccessInfo(ai))
+	return AccessInfoSize, nil
 }
 
 func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (visible, dropped bool) {

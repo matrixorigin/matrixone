@@ -15,11 +15,11 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type MetadataMVCCNode struct {
@@ -64,64 +64,28 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 }
 
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	length := uint32(len([]byte(e.MetaLoc)))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	var sn int64
+	if sn, err = common.WriteString(e.MetaLoc, w); err != nil {
 		return
 	}
-	n += 4
-	var n2 int
-	n2, err = w.Write([]byte(e.MetaLoc))
-	if err != nil {
+	n += sn
+	if sn, err = common.WriteString(e.DeltaLoc, w); err != nil {
 		return
 	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	n += int64(n2)
-	length = uint32(len([]byte(e.DeltaLoc)))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
-		return
-	}
-	n += 4
-	n2, err = w.Write([]byte(e.DeltaLoc))
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	n += int64(n2)
+	n += sn
 	return
 }
 
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	var sn int64
+	if e.MetaLoc, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n += 4
-	buf := make([]byte, length)
-	var n2 int
-	n2, err = r.Read(buf)
-	if err != nil {
+	n += sn
+	if e.DeltaLoc, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	e.MetaLoc = string(buf)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-		return
-	}
-	buf = make([]byte, length)
-	n2, err = r.Read(buf)
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	e.DeltaLoc = string(buf)
+	n += sn
 	return
 }
 
@@ -137,43 +101,24 @@ type SegmentNode struct {
 	sorted        bool // deprecated
 }
 
+const (
+	SegmentNodeSize int64 = int64(unsafe.Sizeof(SegmentNode{}))
+	BlockNodeSize   int64 = int64(unsafe.Sizeof(BlockNode{}))
+)
+
+func EncodeSegmentNode(node *SegmentNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), SegmentNodeSize)
+}
+
 func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &node.state); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Read(r, binary.BigEndian, &node.sorted); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Read(r, binary.BigEndian, &node.SortHint); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &node.IsLocal); err != nil {
-		return
-	}
-	n += 1
+	_, err = r.Read(EncodeSegmentNode(node))
+	n = SegmentNodeSize
 	return
 }
 
 func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, node.state); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Write(w, binary.BigEndian, node.sorted); err != nil {
-		return
-	}
-	n += 1
-	if err = binary.Write(w, binary.BigEndian, node.SortHint); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, node.IsLocal); err != nil {
-		return
-	}
-	n += 1
+	_, err = w.Write(EncodeSegmentNode(node))
+	n = SegmentNodeSize
 	return
 }
 func (node *SegmentNode) String() string {
@@ -188,18 +133,22 @@ type BlockNode struct {
 	state EntryState
 }
 
+func EncodeBlockNode(node *BlockNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), BlockNodeSize)
+}
+
 func (node *BlockNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &node.state); err != nil {
+	if _, err = r.Read(EncodeBlockNode(node)); err != nil {
 		return
 	}
-	n += 1
+	n += BlockNodeSize
 	return
 }
 
 func (node *BlockNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, node.state); err != nil {
+	if _, err = w.Write(EncodeBlockNode(node)); err != nil {
 		return
 	}
-	n += 1
+	n += BlockNodeSize
 	return
 }

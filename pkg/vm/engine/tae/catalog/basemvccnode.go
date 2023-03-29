@@ -15,9 +15,9 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -25,8 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+const (
+	EntryMVCCNodeSize int = int(unsafe.Sizeof(EntryMVCCNode{}))
+)
+
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
+}
+
+func EncodeEntryMVCCNode(node *EntryMVCCNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), EntryMVCCNodeSize)
+}
+
+func DecodeEntryMVCCNode(v []byte) *EntryMVCCNode {
+	return (*EntryMVCCNode)(unsafe.Pointer(&v[0]))
 }
 
 // Dropped committed
@@ -70,25 +82,19 @@ func (un *EntryMVCCNode) Delete() {
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &un.CreatedAt); err != nil {
+	var sn int
+	if sn, err = r.Read(EncodeEntryMVCCNode(un)); err != nil {
 		return
 	}
-	n += 12
-	if err = binary.Read(r, binary.BigEndian, &un.DeletedAt); err != nil {
-		return
-	}
-	n += 12
+	n += int64(sn)
 	return
 }
 func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, un.CreatedAt); err != nil {
+	var sn int
+	if sn, err = w.Write(EncodeEntryMVCCNode(un)); err != nil {
 		return
 	}
-	n += 12
-	if err = binary.Write(w, binary.BigEndian, un.DeletedAt); err != nil {
-		return
-	}
-	n += 12
+	n += int64(sn)
 	return
 }
 func (un *EntryMVCCNode) PrepareCommit() (err error) {

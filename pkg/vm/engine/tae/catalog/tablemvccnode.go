@@ -15,11 +15,9 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type TableMVCCNode struct {
@@ -54,36 +52,12 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 }
 
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	condata := []byte(e.SchemaConstraints)
-	l := uint32(len(condata))
-	if err = binary.Write(w, binary.BigEndian, l); err != nil {
-		return
-	}
-	n += 4
-	var n1 int
-	if n1, err = w.Write(condata); err != nil {
-		return
-	}
-	n += int64(n1)
+	n, err = common.WriteString(e.SchemaConstraints, w)
 	return
 }
 
 func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-		return
-	}
-	n += 4
-	buf := make([]byte, length)
-	var n2 int
-	n2, err = r.Read(buf)
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	e.SchemaConstraints = string(buf)
+	e.SchemaConstraints, n, err = common.ReadString(r)
 	return
 }
 

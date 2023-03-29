@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"sync"
 
@@ -246,11 +245,12 @@ func (be *MVCCChain[T]) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 }
 
 func (be *MVCCChain[T]) WriteAllTo(w io.Writer) (n int64, err error) {
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, uint64(be.MVCC.Depth())); err != nil {
+	depth := uint64(be.MVCC.Depth())
+	var sn int
+	if sn, err = w.Write(types.EncodeUint64(&depth)); err != nil {
 		return
 	}
-	n += 8
+	n += int64(sn)
 	be.MVCC.Loop(func(node *common.GenericDLNode[T]) bool {
 		var n2 int64
 		n2, err = node.GetPayload().WriteTo(w)
@@ -277,10 +277,11 @@ func (be *MVCCChain[T]) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 
 func (be *MVCCChain[T]) ReadAllFrom(r io.Reader) (n int64, err error) {
 	var depth uint64
-	if err = binary.Read(r, binary.BigEndian, &depth); err != nil {
+	var sn int
+	if sn, err = r.Read(types.EncodeUint64(&depth)); err != nil {
 		return
 	}
-	n += 8
+	n += int64(sn)
 	for i := 0; i < int(depth); i++ {
 		var n2 int64
 		un := be.newnodefn()
