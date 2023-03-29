@@ -138,7 +138,12 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			for j := 0; j < columnCount; j++ {
 				fromVec := insertBatch.Vecs[j]
 				toVec := newBatch.Vecs[j+columnCount]
+				toVec2 := insertBatch.Vecs[j+columnCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				err = toVec2.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
 					return nil, err
 				}
