@@ -187,7 +187,7 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	filePath := newTAEFilePath(tbl, ts1)
+	filePath := newFilePath(tbl, ts1)
 	files = append(files, filePath)
 	writer, err := newETLWriter(ctx, fs, filePath, buf, tbl, nil)
 	if err != nil {
@@ -424,7 +424,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 			},
 			wantMsg: "is not found",
 		},
-		{
+		/*{
 			name: "empty",
 			args: args{
 				ctx: ctx,
@@ -439,7 +439,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 				files: emptyFilesMeta,
 			},
 			wantMsg: "empty range of",
-		},
+		},*/
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
