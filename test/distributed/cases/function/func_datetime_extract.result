@@ -104,7 +104,8 @@ SELECT EXTRACT(HOUR FROM '100000:02:03');
 EXTRACT(HOUR FROM '100000:02:03')
 100000
 select reverse(concat_ws(",",extract(year from 20090702)));
-internal error: invalid input
+reverse(concat_ws(,, extract(year, 20090702)))
+9002
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");";
