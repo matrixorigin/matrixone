@@ -297,24 +297,18 @@ func ExtractFromTime(unit string, times []types.Time, results []string) ([]strin
 
 func ExtractFromString(unit string, times []string, results []string, scale int32) ([]string, error) {
 	for i, t := range times {
-		if types.IsDateType(t) {
-			value, err := types.ParseDatetime(t, scale)
-			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
-			}
+		if value, err := types.ParseDatetime(t, scale); err == nil {
 			results[i], err = extractFromDatetme(unit, value)
 			if err != nil {
 				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
 			}
-		} else {
-			value, err := types.ParseTime(t, scale)
-			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
-			}
+		} else if value, err := types.ParseTime(t, scale); err == nil {
 			results[i], err = extractFromTime(unit, value)
 			if err != nil {
 				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
 			}
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid unit")
 		}
 	}
 	return results, nil
