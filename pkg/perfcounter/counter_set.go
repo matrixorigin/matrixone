@@ -15,6 +15,9 @@
 package perfcounter
 
 import (
+	"fmt"
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -72,4 +75,55 @@ type DistTAECounterSet struct {
 		ActiveRows   stats.Counter
 		InsertBlocks stats.Counter
 	}
+}
+
+var statsCounterType = reflect.TypeOf((*stats.Counter)(nil)).Elem()
+
+type IterFieldsFunc func(path []string, counter *stats.Counter) error
+
+func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
+	return iterFields(
+		reflect.ValueOf(c),
+		[]string{},
+		fn,
+	)
+}
+
+func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
+
+	if v.Type() == statsCounterType {
+		return fn(path, v.Addr().Interface().(*stats.Counter))
+	}
+
+	t := v.Type()
+
+	switch t.Kind() {
+
+	case reflect.Pointer:
+		iterFields(v.Elem(), path, fn)
+
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if err := iterFields(v.Field(i), append(path, field.Name), fn); err != nil {
+				return err
+			}
+		}
+
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			panic(fmt.Sprintf("unknown type: %v", v.Type()))
+		}
+		iter := v.MapRange()
+		for iter.Next() {
+			if err := iterFields(iter.Value(), append(path, iter.Key().String()), fn); err != nil {
+				return err
+			}
+		}
+
+	default:
+		panic(fmt.Sprintf("unknown type: %v", v.Type()))
+	}
+
+	return nil
 }
