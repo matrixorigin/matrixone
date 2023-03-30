@@ -392,6 +392,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = buf[:types.RowidSize]
 		return nil
+	case types.T_Blockid:
+		zm.min = buf[:types.BlockidSize]
+		buf = buf[32:]
+		zm.max = buf[:types.BlockidSize]
+		return nil
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minBuf := make([]byte, buf[31]&0x7f)
