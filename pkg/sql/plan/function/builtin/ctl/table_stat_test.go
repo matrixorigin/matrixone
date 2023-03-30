@@ -16,6 +16,9 @@ package ctl
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestMoTableRowsAndTableSize(t *testing.T) {
@@ -43,7 +44,7 @@ func TestMoTableRowsAndTableSize(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()

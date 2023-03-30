@@ -20,9 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +77,7 @@ func TestSubscribedTable(t *testing.T) {
 }
 
 func TestReconnectRace(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	pClient := pushClient{
 		receivedLogTailTime: syncLogTailTimestamp{},
 		subscribed:          subscribedTable{},
@@ -82,7 +85,7 @@ func TestReconnectRace(t *testing.T) {
 			lockSubscriber: make(chan func(context.Context, api.TableID) error, 1),
 		},
 	}
-	pClient.receivedLogTailTime.initLogTailTimestamp()
+	pClient.receivedLogTailTime.initLogTailTimestamp(client.NewTimestampWaiter())
 	pClient.subscribed.initTableSubscribeRecord()
 	pClient.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
 		return nil

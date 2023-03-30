@@ -161,6 +161,9 @@ type Config struct {
 		Isolation string `toml:"isolation"`
 		// Mode txn mode. optimistic or pessimistic, default is optimistic
 		Mode string `toml:"mode"`
+		// NonFreshness true means use the largest commit ts already on the current cn
+		// as the start time of the transaction.
+		NonFreshness bool `toml:"non-freshness"`
 	} `toml:"txn"`
 }
 
@@ -265,6 +268,7 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
+	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService

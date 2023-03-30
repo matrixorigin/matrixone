@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,7 +33,11 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if proc.TxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "must set txn client")
 	}
-	txn, err = proc.TxnClient.New()
+	var minSnapshotTS timestamp.Timestamp
+	if proc.TxnOperator != nil {
+		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
+	}
+	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
 	if err != nil {
 		return nil, err
 	}

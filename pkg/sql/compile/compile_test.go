@@ -79,7 +79,7 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		c := New("test", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)

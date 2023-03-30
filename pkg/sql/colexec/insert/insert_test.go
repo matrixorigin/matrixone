@@ -56,7 +56,7 @@ func TestInsertOperator(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

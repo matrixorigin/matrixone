@@ -46,7 +46,10 @@ func NewStorageTxnClient(
 
 var _ client.TxnClient = new(StorageTxnClient)
 
-func (s *StorageTxnClient) New(options ...client.TxnOption) (client.TxnOperator, error) {
+func (s *StorageTxnClient) New(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	options ...client.TxnOption) (client.TxnOperator, error) {
 	now, _ := s.clock.Now()
 	meta := txn.TxnMeta{
 		ID:         []byte(uuid.NewString()),

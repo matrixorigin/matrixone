@@ -15,8 +15,11 @@
 package client
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -35,13 +38,21 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 	}
 }
 
+// WithTimestampWaiter setup timestamp waiter
+func WithTimestampWaiter(timestampWaiter TimestampWaiter) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.timestampWaiter = timestampWaiter
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	rt          runtime.Runtime
-	sender      rpc.TxnSender
-	generator   TxnIDGenerator
-	lockService lockservice.LockService
+	rt              runtime.Runtime
+	sender          rpc.TxnSender
+	generator       TxnIDGenerator
+	lockService     lockservice.LockService
+	timestampWaiter TimestampWaiter
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
@@ -66,7 +77,10 @@ func (client *txnClient) adjust() {
 	}
 }
 
-func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
+func (client *txnClient) New(
+	ctx context.Context,
+	commitTS timestamp.Timestamp,
+	options ...TxnOption) (TxnOperator, error) {
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
 	now, _ := client.rt.Clock().Now()
@@ -74,6 +88,9 @@ func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
+	if client.timestampWaiter != nil {
+		client.timestampWaiter.GetTimestamp(ctx, commitTS)
+	}
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
 	options = append(options,

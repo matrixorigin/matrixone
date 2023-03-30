@@ -416,14 +416,15 @@ func TestAddLockTable(t *testing.T) {
 }
 
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	ts := newTestTxnSender()
 	c := NewTxnClient(
 		runtime.DefaultRuntime(),
 		ts)
-	txn, err := c.New(options...)
+	txn, err := c.New(ctx, newTestTimestamp(0), options...)
 	assert.Nil(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
 
 	tc(ctx, txn.(*txnOperator), ts)
 }

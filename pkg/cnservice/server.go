@@ -17,8 +17,9 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -435,6 +436,8 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
+		s.timestampWaiter = client.NewTimestampWaiter()
+
 		rt := runtime.ProcessLevelRuntime()
 		client.SetupRuntimeTxnOptions(
 			rt,
@@ -446,10 +449,16 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
+		var opts []client.TxnClientCreateOption
+		if s.cfg.Txn.NonFreshness {
+			opts = append(opts,
+				client.WithTimestampWaiter(s.timestampWaiter))
+		}
+		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
 			rt,
 			sender,
-			client.WithLockService(s.lockService))
+			opts...)
 		s._txnClient = c
 	})
 	c = s._txnClient

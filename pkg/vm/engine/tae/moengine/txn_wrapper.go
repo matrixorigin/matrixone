@@ -37,7 +37,10 @@ func EngineToTxnClient(engine TxnEngine) client.TxnClient {
 
 var _ client.TxnClient = new(wrappedEngine)
 
-func (w *wrappedEngine) New(options ...client.TxnOption) (client.TxnOperator, error) {
+func (w *wrappedEngine) New(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	options ...client.TxnOption) (client.TxnOperator, error) {
 	tx, err := w.engine.StartTxn(nil)
 	if err != nil {
 		panic(err)

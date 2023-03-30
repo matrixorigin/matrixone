@@ -15,8 +15,10 @@
 package moengine
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -29,7 +31,7 @@ func TestTxnCleintNewWithSnapshot(t *testing.T) {
 	e := NewEngine(tae)
 	txnClient := EngineToTxnClient(e)
 
-	txn, err := txnClient.New()
+	txn, err := txnClient.New(context.Background(), timestamp.Timestamp{})
 	assert.Nil(t, err)
 	id := txn.Txn().ID
 

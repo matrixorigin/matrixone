@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,7 +46,9 @@ func TestNewTxn(t *testing.T) {
 			return 1
 		}, 0)))
 	c := NewTxnClient(rt, newTestTxnSender())
-	tx, err := c.New()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
@@ -60,7 +63,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 			return 1
 		}, 0)))
 	c := NewTxnClient(rt, newTestTxnSender())
-	tx, err := c.New(WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)

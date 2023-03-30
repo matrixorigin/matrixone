@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
@@ -58,7 +59,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {
-				v, err := proc.TxnClient.New()
+				v, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 				if err != nil {
 					return nil, err
 				}

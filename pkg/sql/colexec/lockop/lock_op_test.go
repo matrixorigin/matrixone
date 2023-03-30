@@ -117,7 +117,7 @@ func runLockOpTest(
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()
-			txnOp, err := c.New()
+			txnOp, err := c.New(ctx, timestamp.Timestamp{})
 			require.NoError(t, err)
 
 			proc := process.New(

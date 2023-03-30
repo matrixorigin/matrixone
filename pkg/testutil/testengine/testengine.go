@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -79,7 +80,7 @@ func New(
 		clusterservice.GetMOCluster(),
 	)
 
-	txnOp, err := client.New()
+	txnOp, err := client.New(ctx, timestamp.Timestamp{})
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +110,7 @@ func New(
 		panic(err)
 	}
 
-	txnOp, err = client.New()
+	txnOp, err = client.New(ctx, timestamp.Timestamp{})
 	if err != nil {
 		panic(err)
 	}

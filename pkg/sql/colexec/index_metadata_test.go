@@ -228,7 +228,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -333,7 +333,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
