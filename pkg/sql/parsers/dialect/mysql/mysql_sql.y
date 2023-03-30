@@ -61,6 +61,12 @@ import (
     funcArgDecl *tree.FunctionArgDecl
     funcReturn *tree.ReturnType
 
+    procName *tree.ProcedureName
+    procArg tree.ProcedureArg
+    procArgs tree.ProcedureArgs
+    procArgDecl *tree.ProcedureArgDecl
+    procArgType tree.InOutArgType
+
     from *tree.From
     where *tree.Where
     groupBy tree.GroupBy
@@ -257,6 +263,8 @@ import (
 %right <str> INTERVAL
 %nonassoc <str> '.' ','
 
+%token <str> OUT INOUT
+
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
@@ -388,14 +396,17 @@ import (
 // Declare
 %token <str> DECLARE
 
+// Call
+%token <str> CALL
+
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_sequence_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -414,6 +425,7 @@ import (
 %type <statement> do_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
+%type <statement> call_stmt
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
@@ -449,6 +461,12 @@ import (
 %type <funcArgDecl> func_arg_decl
 %type <funcReturn> func_return
 %type <str> func_lang extension_lang extension_name
+
+%type <procName> proc_name
+%type <procArgs> proc_args_list_opt proc_args_list
+%type <procArg> proc_arg
+%type <procArgDecl> proc_arg_decl
+%type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
@@ -670,7 +688,8 @@ stmt_list:
     }
 
 stmt:
-    create_stmt
+    call_stmt
+|   create_stmt
 |   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
@@ -762,6 +781,15 @@ statement_id_opt:
         StatementId: $1,
     }
 }
+
+call_stmt:
+    CALL proc_name '(' expression_list_opt ')'
+    {
+        $$ = &tree.CallStmt{
+            Name: $2,
+            Args: $4,
+        }
+    }
 
 mo_dump_stmt:
    MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
@@ -2910,6 +2938,7 @@ drop_ddl_stmt:
 |   drop_function_stmt
 |   drop_sequence_stmt
 |   drop_publication_stmt
+|   drop_procedure_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -3006,6 +3035,22 @@ drop_function_stmt:
         $$ = &tree.DropFunction{
             Name: $3,
             Args: $5,
+        }
+    }
+
+drop_procedure_stmt:
+    DROP PROCEDURE proc_name
+    {
+        $$ = &tree.DropProcedure{
+            Name: $3,
+            IfExists: false,
+        }
+    }
+|    DROP PROCEDURE IF EXISTS proc_name
+    {
+        $$ = &tree.DropProcedure{
+            Name: $5,
+            IfExists: true,
         }
     }
 
@@ -4357,6 +4402,7 @@ create_ddl_stmt:
 |   create_function_stmt
 |   create_extension_stmt
 |   create_sequence_stmt
+|   create_procedure_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -4378,6 +4424,73 @@ extension_name:
     ident
     {
         $$ = $1.Compare()
+    }
+
+create_procedure_stmt:
+    CREATE PROCEDURE proc_name '(' proc_args_list_opt ')' STRING
+    {
+        $$ = &tree.CreateProcedure{
+            Name: $3,
+            Args: $5,
+            Body: $7,
+        }
+    }
+
+proc_name:
+    ident
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewProcedureName(tree.Identifier($1.ToLower()), prefix)
+    }
+|   ident '.' ident
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLower()), ExplicitSchema: true}
+        $$ = tree.NewProcedureName(tree.Identifier($3.ToLower()), prefix)
+    }
+
+proc_args_list_opt:
+    {
+        $$ = tree.ProcedureArgs(nil)
+    }
+|   proc_args_list
+
+proc_args_list:
+    proc_arg
+    {
+        $$ = tree.ProcedureArgs{$1}
+    }
+|   proc_args_list ',' proc_arg
+    {
+        $$ = append($1, $3)
+    }
+
+proc_arg:
+    proc_arg_decl
+    {
+        $$ = tree.ProcedureArg($1)
+    }
+
+proc_arg_decl:
+    proc_arg_in_out_type column_name column_type
+    {
+        $$ = tree.NewProcedureArgDecl($1, $2, $3)
+    }
+
+proc_arg_in_out_type:
+    {
+        $$ = tree.TYPE_IN
+    }
+|   IN
+    {
+        $$ = tree.TYPE_IN
+    }
+|   OUT
+    {
+        $$ = tree.TYPE_OUT
+    }
+|   INOUT
+    {
+        $$ = tree.TYPE_INOUT
     }
 
 
