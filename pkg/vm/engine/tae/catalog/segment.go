@@ -16,9 +16,7 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,37 +40,30 @@ func compareSegmentFn(a, b *SegmentEntry) int {
 }
 
 type SegmentEntry struct {
-	*MetaBaseEntry
-	table    *TableEntry
-	ID       types.Uuid
-	IsLocal  bool   // this segment is hold by a localsegment
-	SortHint uint64 // sort segment by create time, make iteration on segment determined
-	// used in appendable segment, bump this if creating a new block, and
-	// the block will be eventually flushed to a s3 file.
-	// for non-appendable segment, this field makes no sense, because if we
-	// decide to create a new non-appendable segment, its content is all set.
-	nextObjectIdx uint16
-	sorted        bool // deprecated
-
+	ID types.Uuid
+	*BaseEntryImpl[*MetadataMVCCNode]
+	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
-	link  *common.GenericSortedDList[*BlockEntry]
-	state EntryState
-
+	link *common.GenericSortedDList[*BlockEntry]
+	*SegmentNode
 	segData data.Segment
 }
 
 func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(),
-		ID:            id,
-		SortHint:      table.GetDB().catalog.NextSegment(),
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
-		state:         state,
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		SegmentNode: &SegmentNode{
+			state:    state,
+			SortHint: table.GetDB().catalog.NextSegment(),
+		},
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &MetadataMVCCNode{})
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -81,37 +72,43 @@ func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewReplayMetaBaseEntry(),
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
 }
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(),
-		ID:            common.NewSegmentid(),
-		IsLocal:       true,
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
-		state:         ES_Appendable,
+		ID: common.NewSegmentid(),
+		BaseEntryImpl: NewBaseEntry(
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		SegmentNode: &SegmentNode{
+			state:   ES_Appendable,
+			IsLocal: true,
+		},
 	}
-	e.CreateWithTS(ts)
+	e.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e := &SegmentEntry{
-		MetaBaseEntry: NewMetaBaseEntry(),
-		ID:            id,
-		table:         table,
-		link:          common.NewGenericSortedDList(compareBlockFn),
-		entries:       make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
-		state:         ES_Appendable,
+		BaseEntryImpl: NewBaseEntry(
+			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList(compareBlockFn),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		SegmentNode: &SegmentNode{
+			state: ES_Appendable,
+		},
 	}
-	e.CreateWithTS(types.SystemDBTS)
+	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid types.Blockid
 	if table.schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
@@ -125,43 +122,6 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
-}
-
-func (entry *SegmentEntry) WriteAddonInfo(w io.Writer) (n int64, err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	if err = binary.Write(w, binary.BigEndian, entry.SortHint); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, entry.IsLocal); err != nil {
-		return
-	}
-	n += 1
-	return
-}
-
-func (entry *SegmentEntry) ReadAddonInfo(r io.Reader) (n int64, err error) {
-	//
-	// called during replay, no need to lock
-	//
-	if err = binary.Read(r, binary.BigEndian, &entry.SortHint); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &entry.IsLocal); err != nil {
-		return
-	}
-	n += 1
-	return
-}
-
-func (entry *SegmentEntry) AddonInfoStringLocked() string {
-	sorted := "US"
-	if entry.sorted {
-		sorted = "S"
-	}
-	return fmt.Sprintf("%s/%d/%d", sorted, entry.SortHint, entry.nextObjectIdx)
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {
@@ -218,7 +178,7 @@ func (entry *SegmentEntry) StringLocked() string {
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), entry.AddonInfoStringLocked(), id.String())
+	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), entry.SegmentNode.String(), id.String())
 }
 
 func (entry *SegmentEntry) String() string {
@@ -236,17 +196,9 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
-			entry.state.Repr(),
-			entry.AddonInfoStringLocked(),
-			entry.ID.ToString(),
-			entry.GetCreatedAt().ToString(),
-			entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s-%s]SEG[%s]%s",
-		entry.state.Repr(),
-		entry.AddonInfoStringLocked(),
-		entry.ID.ToString(),
-		entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -327,7 +279,11 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	return
 }
 
-func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory, opts *common.CreateBlockOpt) (created *BlockEntry, err error) {
+func (entry *SegmentEntry) CreateBlock(
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+	opts *common.CreateBlockOpt) (created *BlockEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id types.Blockid
@@ -395,7 +351,7 @@ func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   entry.GetTable().GetID(),
+		TableID:   entry.GetTable().ID,
 		SegmentID: entry.ID,
 	}
 }
@@ -433,7 +389,7 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 
 func (entry *SegmentEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	if isEmpty, err = entry.MetaBaseEntry.PrepareRollback(); err != nil {
+	if isEmpty, err = entry.BaseEntryImpl.PrepareRollback(); err != nil {
 		return
 	}
 	if isEmpty {
@@ -448,14 +404,14 @@ func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
 	return entry.GetTable().GetCatalog().GetScheduler()
 }
 
-func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEntry) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
+func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImpl[*MetadataMVCCNode]) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
 	blks := make([]*BlockEntry, 0)
 	blkIt := entry.MakeBlockIt(true)
 	for blkIt.Valid() {
 		blk := blkIt.Get().GetPayload()
 		blk.RLock()
 		if commitFilter != nil && blockFilter != nil {
-			if commitFilter(blk.MetaBaseEntry) && blockFilter(blk) {
+			if commitFilter(blk.BaseEntryImpl) && blockFilter(blk) {
 				blks = append(blks, blk)
 			}
 		} else if blockFilter != nil {
@@ -463,7 +419,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEnt
 				blks = append(blks, blk)
 			}
 		} else if commitFilter != nil {
-			if commitFilter(blk.MetaBaseEntry) {
+			if commitFilter(blk.BaseEntryImpl) {
 				blks = append(blks, blk)
 			}
 		}
@@ -486,13 +442,13 @@ func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	table := entry.GetTable()
 	db := table.GetDB()
 	if db.HasDropCommittedLocked() {
-		return db.DBBaseEntry
+		return db.BaseEntryImpl
 	}
 	if table.HasDropCommittedLocked() {
-		return table.TableBaseEntry
+		return table.BaseEntryImpl
 	}
 	if entry.HasDropCommittedLocked() {
-		return entry.MetaBaseEntry
+		return entry.BaseEntryImpl
 	}
 	return nil
 }
