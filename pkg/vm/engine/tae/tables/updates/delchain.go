@@ -31,9 +31,9 @@ import (
 
 type DeleteChain struct {
 	*sync.RWMutex
-	*txnbase.MVCCChain
+	*txnbase.MVCCChain[*DeleteNode]
 	mvcc  *MVCCHandle
-	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
+	links map[uint32]*common.GenericSortedDList[*DeleteNode]
 	cnt   atomic.Uint32
 }
 
@@ -44,7 +44,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
-		links:     make(map[uint32]*common.GenericSortedDList[txnif.MVCCNode]),
+		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
 		mvcc:      mvcc,
 	}
 	return chain
@@ -60,8 +60,7 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 func (chain *DeleteChain) StringLocked() string {
 	msg := "DeleteChain:"
 	line := 1
-	chain.LoopChain(func(vn txnif.MVCCNode) bool {
-		n := vn.(*DeleteNode)
+	chain.LoopChain(func(n *DeleteNode) bool {
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
 		line++
 		return true
@@ -87,8 +86,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMu
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
 	chain.LoopChain(
-		func(vn txnif.MVCCNode) bool {
-			n := vn.(*DeleteNode)
+		func(n *DeleteNode) bool {
 			overlap := n.HasOverlapLocked(start, end)
 			if overlap {
 				err = txnif.ErrTxnWWConflict
@@ -115,7 +113,7 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	return node
 }
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
-	var link *common.GenericSortedDList[txnif.MVCCNode]
+	var link *common.GenericSortedDList[*DeleteNode]
 	if link = chain.links[row]; link == nil {
 		link = common.NewGenericSortedDList(compareDeleteNode)
 		n := link.Insert(deleteNode)
@@ -151,8 +149,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.mvcc.RLock()
 	// chain.RLock()
-	chain.LoopChain(func(vn txnif.MVCCNode) bool {
-		n := vn.(*DeleteNode)
+	chain.LoopChain(func(n *DeleteNode) bool {
 		// Already have a latest merged node
 		if n.IsMerged() && merged == nil {
 			return false
@@ -211,8 +208,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 // any uncommited node, return true
 // any committed node with prepare ts within [from, to], return true
 func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found bool) {
-	chain.LoopChain(func(vn txnif.MVCCNode) bool {
-		n := vn.(*DeleteNode)
+	chain.LoopChain(func(n *DeleteNode) bool {
 		if n.IsMerged() {
 			found, _ = n.PreparedIn(from, to)
 			return false
@@ -237,8 +233,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
-	chain.LoopChain(func(vn txnif.MVCCNode) bool {
-		n := vn.(*DeleteNode)
+	chain.LoopChain(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
 			if n.GetCommitTSLocked().Greater(ts) {
@@ -272,8 +267,8 @@ func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
 	if link == nil {
 		return
 	}
-	link.Loop(func(vn *common.GenericDLNode[txnif.MVCCNode]) bool {
-		n = vn.GetPayload().(*DeleteNode)
+	link.Loop(func(vn *common.GenericDLNode[*DeleteNode]) bool {
+		n = vn.GetPayload()
 		return n.Aborted
 	}, false)
 	return

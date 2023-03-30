@@ -15,16 +15,30 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+)
+
+const (
+	EntryMVCCNodeSize int = int(unsafe.Sizeof(EntryMVCCNode{}))
 )
 
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
+}
+
+func EncodeEntryMVCCNode(node *EntryMVCCNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), EntryMVCCNodeSize)
+}
+
+func DecodeEntryMVCCNode(v []byte) *EntryMVCCNode {
+	return (*EntryMVCCNode)(unsafe.Pointer(&v[0]))
 }
 
 // Dropped committed
@@ -68,25 +82,19 @@ func (un *EntryMVCCNode) Delete() {
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &un.CreatedAt); err != nil {
+	var sn int
+	if sn, err = r.Read(EncodeEntryMVCCNode(un)); err != nil {
 		return
 	}
-	n += 12
-	if err = binary.Read(r, binary.BigEndian, &un.DeletedAt); err != nil {
-		return
-	}
-	n += 12
+	n += int64(sn)
 	return
 }
 func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, un.CreatedAt); err != nil {
+	var sn int
+	if sn, err = w.Write(EncodeEntryMVCCNode(un)); err != nil {
 		return
 	}
-	n += 12
-	if err = binary.Write(w, binary.BigEndian, un.DeletedAt); err != nil {
-		return
-	}
-	n += 12
+	n += int64(sn)
 	return
 }
 func (un *EntryMVCCNode) PrepareCommit() (err error) {
@@ -103,4 +111,139 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 		un.DeletedAt = ts
 	}
 	return nil
+}
+
+type BaseNode[T any] interface {
+	CloneAll() T
+	CloneData() T
+	String() string
+	Update(vun T)
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+}
+
+type MVCCNode[T BaseNode[T]] struct {
+	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
+	BaseNode T
+}
+
+func NewEmptyMVCCNodeFactory[T BaseNode[T]](factory func() T) func() *MVCCNode[T] {
+	return func() *MVCCNode[T] {
+		return &MVCCNode[T]{
+			EntryMVCCNode: &EntryMVCCNode{},
+			TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+			BaseNode:      factory(),
+		}
+	}
+}
+
+func CompareBaseNode[T BaseNode[T]](e, o *MVCCNode[T]) int {
+	return e.Compare(o.TxnMVCCNode)
+}
+
+func (e *MVCCNode[T]) CloneAll() *MVCCNode[T] {
+	node := &MVCCNode[T]{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+		BaseNode:      e.BaseNode.CloneAll(),
+	}
+	return node
+}
+
+func (e *MVCCNode[T]) CloneData() *MVCCNode[T] {
+	return &MVCCNode[T]{
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+		BaseNode:      e.BaseNode.CloneData(),
+	}
+}
+func (e *MVCCNode[T]) IsNil() bool {
+	return e == nil
+}
+func (e *MVCCNode[T]) String() string {
+
+	return fmt.Sprintf("%s%s%s",
+		e.TxnMVCCNode.String(),
+		e.EntryMVCCNode.String(),
+		e.BaseNode.String())
+}
+
+// for create drop in one txn
+func (e *MVCCNode[T]) Update(un *MVCCNode[T]) {
+	e.CreatedAt = un.CreatedAt
+	e.DeletedAt = un.DeletedAt
+	e.BaseNode.Update(un.BaseNode)
+}
+
+func (e *MVCCNode[T]) ApplyCommit(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return err
+}
+func (e *MVCCNode[T]) PrepareRollback() (err error) {
+	return e.TxnMVCCNode.PrepareRollback()
+}
+func (e *MVCCNode[T]) ApplyRollback(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return
+}
+
+func (e *MVCCNode[T]) PrepareCommit() (err error) {
+	_, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.PrepareCommit()
+	return
+}
+
+func (e *MVCCNode[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int64
+	sn, err = e.EntryMVCCNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+
+	sn, err = e.BaseNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+	return
+}
+
+func (e *MVCCNode[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	sn, err = e.EntryMVCCNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.BaseNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	return
 }

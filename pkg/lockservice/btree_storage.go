@@ -65,8 +65,9 @@ func (k *btreeBasedStorage) Len() int {
 	return k.tree.Len()
 }
 
-func (k *btreeBasedStorage) Delete(key []byte) {
-	k.tree.Delete(treeItem{key: key})
+func (k *btreeBasedStorage) Delete(key []byte) (Lock, bool) {
+	item, ok := k.tree.Delete(treeItem{key: key})
+	return item.value, ok
 }
 
 func (k *btreeBasedStorage) Seek(key []byte) ([]byte, Lock, bool) {
@@ -76,6 +77,26 @@ func (k *btreeBasedStorage) Seek(key []byte) ([]byte, Lock, bool) {
 		return false
 	})
 	return result.key, result.value, !result.isEmpty()
+}
+
+func (k *btreeBasedStorage) Prev(key []byte) ([]byte, Lock, bool) {
+	var result treeItem
+	k.tree.AscendLessThan(treeItem{key: key}, func(item treeItem) bool {
+		result = item
+		return false
+	})
+	return result.key, result.value, !result.isEmpty()
+}
+
+func (k *btreeBasedStorage) Range(
+	start, end []byte,
+	fn func([]byte, Lock) bool) {
+	k.tree.AscendRange(
+		treeItem{key: start},
+		treeItem{key: end},
+		func(item treeItem) bool {
+			return fn(item.key, item.value)
+		})
 }
 
 func (k *btreeBasedStorage) Iter(fn func([]byte, Lock) bool) {

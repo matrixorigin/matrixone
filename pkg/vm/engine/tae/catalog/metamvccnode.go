@@ -15,191 +15,140 @@
 package catalog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type MetadataMVCCNode struct {
-	*EntryMVCCNode
-	*txnbase.TxnMVCCNode
 	MetaLoc  string
 	DeltaLoc string
 }
 
-func NewEmptyMetadataMVCCNode() txnif.MVCCNode {
-	return &MetadataMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-	}
+func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+	return &MetadataMVCCNode{}
 }
 
-func CompareMetaBaseNode(e, o txnif.MVCCNode) int {
-	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
-}
-
-func (e *MetadataMVCCNode) CloneAll() txnif.MVCCNode {
+func (e *MetadataMVCCNode) CloneAll() *MetadataMVCCNode {
 	node := &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
-		MetaLoc:       e.MetaLoc,
-		DeltaLoc:      e.DeltaLoc,
+		MetaLoc:  e.MetaLoc,
+		DeltaLoc: e.DeltaLoc,
 	}
 	return node
 }
 
-func (e *MetadataMVCCNode) CloneData() txnif.MVCCNode {
+func (e *MetadataMVCCNode) CloneData() *MetadataMVCCNode {
 	return &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-		MetaLoc:       e.MetaLoc,
-		DeltaLoc:      e.DeltaLoc,
+		MetaLoc:  e.MetaLoc,
+		DeltaLoc: e.DeltaLoc,
 	}
 }
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s%s[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
-		e.TxnMVCCNode.String(),
-		e.EntryMVCCNode.String(),
+	return fmt.Sprintf("[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
 		e.MetaLoc,
 		e.DeltaLoc)
 }
-func (e *MetadataMVCCNode) UpdateMetaLoc(metaLoc string) {
-	e.MetaLoc = metaLoc
-}
-func (e *MetadataMVCCNode) UpdateDeltaLoc(deltaLoc string) {
-	e.DeltaLoc = deltaLoc
-}
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) Update(vun txnif.MVCCNode) {
-	un := vun.(*MetadataMVCCNode)
-	e.CreatedAt = un.CreatedAt
-	e.DeletedAt = un.DeletedAt
-	e.MetaLoc = un.MetaLoc
-	e.DeltaLoc = un.DeltaLoc
-}
-
-func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
-	if err != nil {
-		return
+func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
+	if un.MetaLoc != "" {
+		e.MetaLoc = un.MetaLoc
 	}
-	err = e.EntryMVCCNode.ApplyCommit(commitTS)
-	return err
-}
-func (e *MetadataMVCCNode) PrepareRollback() (err error) {
-	return e.TxnMVCCNode.PrepareRollback()
-}
-func (e *MetadataMVCCNode) ApplyRollback(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
-	if err != nil {
-		return
+	if un.DeltaLoc != "" {
+		e.DeltaLoc = un.DeltaLoc
 	}
-	err = e.EntryMVCCNode.ApplyCommit(commitTS)
-	return
-}
-
-func (e *MetadataMVCCNode) PrepareCommit() (err error) {
-	_, err = e.TxnMVCCNode.PrepareCommit()
-	if err != nil {
-		return
-	}
-	err = e.EntryMVCCNode.PrepareCommit()
-	return
 }
 
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryMVCCNode.WriteTo(w)
-	if err != nil {
+	if sn, err = common.WriteString(e.MetaLoc, w); err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.WriteTo(w)
-	if err != nil {
+	if sn, err = common.WriteString(e.DeltaLoc, w); err != nil {
 		return
 	}
 	n += sn
-
-	length := uint32(len([]byte(e.MetaLoc)))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
-		return
-	}
-	n += 4
-	var n2 int
-	n2, err = w.Write([]byte(e.MetaLoc))
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	n += int64(n2)
-	length = uint32(len([]byte(e.DeltaLoc)))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
-		return
-	}
-	n += 4
-	n2, err = w.Write([]byte(e.DeltaLoc))
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	n += int64(n2)
 	return
 }
 
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryMVCCNode.ReadFrom(r)
-	if err != nil {
+	if e.MetaLoc, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.ReadFrom(r)
-	if err != nil {
+	if e.DeltaLoc, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
+	return
+}
 
-	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+type SegmentNode struct {
+	state    EntryState
+	IsLocal  bool   // this segment is hold by a localsegment
+	SortHint uint64 // sort segment by create time, make iteration on segment determined
+	// used in appendable segment, bump this if creating a new block, and
+	// the block will be eventually flushed to a s3 file.
+	// for non-appendable segment, this field makes no sense, because if we
+	// decide to create a new non-appendable segment, its content is all set.
+	nextObjectIdx uint16
+	sorted        bool // deprecated
+}
+
+const (
+	SegmentNodeSize int64 = int64(unsafe.Sizeof(SegmentNode{}))
+	BlockNodeSize   int64 = int64(unsafe.Sizeof(BlockNode{}))
+)
+
+func EncodeSegmentNode(node *SegmentNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), SegmentNodeSize)
+}
+
+func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
+	_, err = r.Read(EncodeSegmentNode(node))
+	n = SegmentNodeSize
+	return
+}
+
+func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
+	_, err = w.Write(EncodeSegmentNode(node))
+	n = SegmentNodeSize
+	return
+}
+func (node *SegmentNode) String() string {
+	sorted := "US"
+	if node.sorted {
+		sorted = "S"
+	}
+	return fmt.Sprintf("%s/%d/%d", sorted, node.SortHint, node.nextObjectIdx)
+}
+
+type BlockNode struct {
+	state EntryState
+}
+
+func EncodeBlockNode(node *BlockNode) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(node)), BlockNodeSize)
+}
+
+func (node *BlockNode) ReadFrom(r io.Reader) (n int64, err error) {
+	if _, err = r.Read(EncodeBlockNode(node)); err != nil {
 		return
 	}
-	n += 4
-	buf := make([]byte, length)
-	var n2 int
-	n2, err = r.Read(buf)
-	if err != nil {
+	n += BlockNodeSize
+	return
+}
+
+func (node *BlockNode) WriteTo(w io.Writer) (n int64, err error) {
+	if _, err = w.Write(EncodeBlockNode(node)); err != nil {
 		return
 	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	e.MetaLoc = string(buf)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-		return
-	}
-	buf = make([]byte, length)
-	n2, err = r.Read(buf)
-	if err != nil {
-		return
-	}
-	if n2 != int(length) {
-		panic(moerr.NewInternalErrorNoCtx("logic err %d!=%d, %v", n2, length, err))
-	}
-	e.DeltaLoc = string(buf)
+	n += BlockNodeSize
 	return
 }
