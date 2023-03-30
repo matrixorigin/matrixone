@@ -205,7 +205,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
 		res.Arg = &projection.Argument{
-			Es: t.Es,
+			Es:  t.Es,
+			Sql: t.Sql,
 		}
 	case vm.Restrict:
 		t := sourceIns.Arg.(*restrict.Argument)
