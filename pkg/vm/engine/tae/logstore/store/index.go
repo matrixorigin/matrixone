@@ -15,15 +15,23 @@
 package store
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 )
 
 type Index struct {
 	LSN  uint64
 	CSN  uint32
 	Size uint32
+}
+
+const (
+	IndexSize int64 = int64(unsafe.Sizeof(Index{}))
+)
+
+func EncodeIndex(idx *Index) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(idx)), IndexSize)
 }
 
 func NewIndex(lsn uint64, csn, size uint32) *Index {
@@ -49,30 +57,18 @@ func (index *Index) Compare(o *Index) int {
 }
 
 func (index *Index) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, index.LSN); err != nil {
+	if _, err = w.Write(EncodeIndex(index)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, index.CSN); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, index.Size); err != nil {
-		return
-	}
-	n = 16
+	n = IndexSize
 	return
 }
 
 func (index *Index) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &index.LSN); err != nil {
+	if _, err = r.Read(EncodeIndex(index)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &index.CSN); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &index.Size); err != nil {
-		return
-	}
-	n = 16
+	n = IndexSize
 	return
 }
 
