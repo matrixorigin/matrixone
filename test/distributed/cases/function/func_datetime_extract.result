@@ -17,7 +17,7 @@ select extract(SECOND FROM "1999-01-02 10:11:12");
 extract(SECOND FROM "1999-01-02 10:11:12")
 12
 select extract(MONTH FROM "2001-02-00");
-invalid input: invalid datatime value 2001-02-00
+internal error: invalid input
 SELECT EXTRACT(QUARTER FROM '2004-01-15') AS quarter;
 quarter
 1
@@ -104,7 +104,7 @@ SELECT EXTRACT(HOUR FROM '100000:02:03');
 EXTRACT(HOUR FROM '100000:02:03')
 100000
 select reverse(concat_ws(",",extract(year from 20090702)));
-invalid argument function extract, bad value [VARCHAR BIGINT]
+internal error: invalid input
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");";
