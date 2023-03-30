@@ -1969,7 +1969,14 @@ var (
 			input: "alter table tbl1 drop column col1",
 		},
 		{
+			input: "alter table tbl1 drop column col1, drop column col2",
+		},
+		{
 			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input:  "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = 'aa'",
+			output: "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = aa",
 		},
 		{
 			input: "alter table tbl1 drop key idx_name",
