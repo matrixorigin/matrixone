@@ -2318,7 +2318,6 @@ alter_table_drop:
             Typ:  tree.AlterTableDropPrimaryKey,
         }
     }
-    
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
