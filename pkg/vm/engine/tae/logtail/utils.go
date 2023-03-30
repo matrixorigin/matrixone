@@ -77,10 +77,9 @@ const (
 const MaxIDX = BLKCNMetaInsertIDX + 1
 
 type checkpointDataItem struct {
-	schema    *catalog.Schema
-	types     []types.Type
-	attrs     []string
-	nullables []bool
+	schema *catalog.Schema
+	types  []types.Type
+	attrs  []string
 }
 
 var checkpointDataSchemas [MaxIDX]*catalog.Schema
@@ -119,7 +118,6 @@ func init() {
 			schema,
 			append(BaseTypes, schema.Types()...),
 			append(BaseAttr, schema.AllNames()...),
-			append([]bool{false, false}, schema.AllNullables()...),
 		}
 	}
 }
