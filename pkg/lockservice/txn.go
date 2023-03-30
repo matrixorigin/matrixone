@@ -54,6 +54,33 @@ func newActiveTxn(
 	return txn
 }
 
+func (txn *activeTxn) lockRemoved(
+	serviceID string,
+	table uint64,
+	removedLocks map[string]struct{},
+	locked bool) {
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
+	}
+
+	v, ok := txn.holdLocks[table]
+	if !ok {
+		return
+	}
+	newV := newCowSlice(txn.fsp, nil)
+	s := v.slice()
+	defer s.unref()
+	s.iter(func(v []byte) bool {
+		if _, ok := removedLocks[unsafeByteSliceToString(v)]; !ok {
+			newV.append([][]byte{v})
+		}
+		return true
+	})
+	v.close()
+	txn.holdLocks[table] = newV
+}
+
 func (txn *activeTxn) lockAdded(
 	serviceID string,
 	table uint64,

@@ -667,6 +667,11 @@ func runLockServiceTestsWithLevel(
 	)
 }
 
+func TestUnsafeStringToByteSlice(t *testing.T) {
+	v := "abc"
+	assert.Equal(t, []byte(v), unsafeStringToByteSlice(v))
+}
+
 func waitWaiters(
 	t *testing.T,
 	s *service,
