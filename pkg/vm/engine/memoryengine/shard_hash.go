@@ -581,7 +581,20 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 			Value:  vector.MustFixedCol[types.Rowid](vec)[i],
 		}
 		return
-
+	case types.T_Blockid:
+		if vec.IsConstNull() {
+			var zero types.Blockid
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vector.MustFixedCol[types.Blockid](vec)[i],
+		}
+		return
 	case types.T_uuid:
 		if vec.IsConstNull() {
 			var zero types.Uuid
