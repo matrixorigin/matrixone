@@ -336,7 +336,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	defer cacheFileData.Reset()
 	var reader ETLReader
 	var fileRows int
-	var readRows int = 0
+	var readRows = 0
 	for _, path := range files {
 		// open reader
 		fileRows = 0

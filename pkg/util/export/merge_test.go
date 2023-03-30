@@ -139,12 +139,6 @@ var newFilePath = func(tbl *table.Table, ts time.Time) string {
 	filepath := path.Join(p, filename)
 	return filepath
 }
-var newTAEFilePath = func(tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.TaeExtension)
-	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
-	filepath := path.Join(p, filename)
-	return filepath
-}
 
 func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
@@ -388,14 +382,6 @@ func TestNewMergeNOFiles(t *testing.T) {
 	_, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
 	require.Nil(t, err)
 
-	emptyFilesMeta := []*FileMeta{}
-	rootPath := "test/logs/2021/01/01/tbl_dummy/"
-	entry, err := fs.List(ctx, rootPath)
-	for _, e := range entry {
-		emptyFilesMeta = append(emptyFilesMeta, &FileMeta{path.Join(rootPath, e.Name), e.Size})
-		t.Logf("name: %s, size: %d, dir: %v", e.Name, e.Size, e.IsDir)
-	}
-
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
@@ -424,22 +410,6 @@ func TestNewMergeNOFiles(t *testing.T) {
 			},
 			wantMsg: "is not found",
 		},
-		/*{
-			name: "empty",
-			args: args{
-				ctx: ctx,
-				opts: []MergeOption{
-					WithFileService(fs),
-					WithTable(dummyTable),
-					WithMaxFileSize(1),
-					WithMinFilesMerge(1),
-					WithMaxFileSize(16 * mpool.MB),
-					WithMaxMergeJobs(16),
-				},
-				files: emptyFilesMeta,
-			},
-			wantMsg: "empty range of",
-		},*/
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
