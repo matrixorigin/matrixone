@@ -131,6 +131,10 @@ type fixedSlice struct {
 	}
 }
 
+func (s *fixedSlice) all() [][]byte {
+	return s.values[:s.len()]
+}
+
 func (s *fixedSlice) join(
 	other *fixedSlice,
 	values [][]byte) {
@@ -213,6 +217,9 @@ func newFixedSlicePool(max int) *fixedSlicePool {
 }
 
 func (sp *fixedSlicePool) acquire(n int) *fixedSlice {
+	if n == 0 {
+		n = 4
+	}
 	sp.acquireV.Add(1)
 	n = roundUp(n)
 	i := int(math.Log2(float64(n)))
