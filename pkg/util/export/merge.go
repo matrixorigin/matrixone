@@ -326,6 +326,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, mergedExtension)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := newETLWriter(ctx, m.FS, mergeFilepath, buf, m.Table, m.mp)
+	m.logger.Info("start merge", logutil.TableField(m.Table.GetIdentify()), logutil.PathField(mergeFilepath),
+		zap.String("metadata.ID", m.Task.Metadata.ID))
 
 	// Step 3. do simple merge
 	cacheFileData := newRowCache(m.Table)
