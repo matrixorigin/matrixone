@@ -294,3 +294,46 @@ func ExtractFromTime(unit string, times []types.Time, results []string) ([]strin
 	}
 	return results, nil
 }
+
+func ExtractFromString(unit string, times []string, results []string, scale int32) ([]string, error) {
+	for i, t := range times {
+		if types.IsDateType(t) {
+			value, err := types.ParseDatetime(t, scale)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
+			}
+			results[i], err = extractFromDatetme(unit, value)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
+			}
+		} else {
+			value, err := types.ParseTime(t, scale)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
+			}
+			results[i], err = extractFromTime(unit, value)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("invalid unit")
+			}
+		}
+	}
+	return results, nil
+}
+
+func extractFromDatetme(unit string, datetime types.Datetime) (string, error) {
+	result := make([]string, 1)
+	result, err := ExtractFromDatetime(unit, []types.Datetime{datetime}, result)
+	if err != nil {
+		return "", err
+	}
+	return result[0], nil
+}
+
+func extractFromTime(unit string, time types.Time) (string, error) {
+	result := make([]string, 1)
+	result, err := ExtractFromTime(unit, []types.Time{time}, result)
+	if err != nil {
+		return "", err
+	}
+	return result[0], nil
+}

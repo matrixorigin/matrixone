@@ -104,7 +104,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 
 	// handle date&time part
 	// If the input string have date, make sure it is valid.
-	if isDateType(timeString) {
+	if IsDateType(timeString) {
 		// The date type format must be "yyyy-mm-dd hh:mm:ss" and
 		// it can be handled like Datetime
 		dt, err := ParseDatetime(s, scale)
@@ -404,7 +404,7 @@ func ValidTime(h, m, s uint64) bool {
 	return true
 }
 
-func isDateType(s string) bool {
+func IsDateType(s string) bool {
 	strArr := strings.Split(s, " ")
 	if len(strArr) > 1 {
 		if _, err := strconv.ParseUint(strArr[0], 10, 64); err != nil {
