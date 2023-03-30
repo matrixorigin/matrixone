@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -990,6 +991,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			IsFirst: currentFirstFlag,
 			Arg:     constructProjection(n),
 		})
+		ss[i].Instructions[len(ss[i].Instructions)-1].Arg.(*projection.Argument).Sql = c.sql
 	}
 	c.anal.isFirst = false
 	return ss
@@ -1448,7 +1450,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg: &merge.Argument{
+			Sql: c.sql,
+		},
 	})
 	c.anal.isFirst = false
 

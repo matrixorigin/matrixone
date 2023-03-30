@@ -100,6 +100,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)
+	if ap.Sql == "insert into t_mo_crash select c,c from temp" {
+		if len(ap.Es) == 2 {
+			bat := rbat
+			logutil.Infof("Project: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
+		} else if len(ap.Es) == 1 {
+			bat := rbat
+			logutil.Infof("Project: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length())
+		}
+	}
+
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

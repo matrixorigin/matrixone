@@ -77,6 +77,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		anal.Input(bat, isFirst)
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)
+
+		if ap.Sql == "insert into t_mo_crash select c,c from temp" {
+			logutil.Infof("Merge: get batch Len:%d, a.Len:%d, b.Len:%d. b.data.len:%d", bat.Length(), bat.Vecs[0].Length(), bat.Vecs[1].Length(), bat.Vecs[1].GetDataLen())
+		}
+
 		return false, nil
 	}
 }

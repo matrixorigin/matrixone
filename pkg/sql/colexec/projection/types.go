@@ -20,7 +20,8 @@ import (
 )
 
 type Argument struct {
-	Es []*plan.Expr
+	Es  []*plan.Expr
+	Sql string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
