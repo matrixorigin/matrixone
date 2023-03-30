@@ -29,10 +29,11 @@ import (
 )
 
 type BlockWriter struct {
-	writer  objectio.Writer
-	isSetPK bool
-	pk      uint16
-	name    string
+	writer         objectio.Writer
+	objMetaBuilder *ObjectColumnMetasBuilder
+	isSetPK        bool
+	pk             uint16
+	name           string
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -64,11 +65,19 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	if err != nil {
 		return nil, err
 	}
+	if w.objMetaBuilder == nil {
+		w.objMetaBuilder = NewObjectColumnMetasBuilder(len(batch.Vecs))
+	}
 	for i, vec := range batch.Vecs {
+		if i == 0 {
+			w.objMetaBuilder.AddRowCnt(vec.Length())
+		}
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
 		columnData := containers.NewVectorWithSharedMemory(vec, true)
+		// update null count and distinct value
+		w.objMetaBuilder.InspectVector(i, columnData)
 		zmPos := 0
 		zoneMapWriter := NewZMWriter()
 		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
@@ -79,6 +88,8 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 		err = zoneMapWriter.Finalize()
+		// update zonemap
+		w.objMetaBuilder.UpdateZm(i, zoneMapWriter.zonemap)
 		if err != nil {
 			return nil, err
 		}
@@ -112,6 +123,10 @@ func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.Block
 }
 
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
+	if w.objMetaBuilder != nil {
+		cnt, meta := w.objMetaBuilder.Build()
+		w.writer.WriteObjectMeta(ctx, cnt, meta)
+	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
 		logutil.Info("[WriteEnd]", common.OperationField(w.name),

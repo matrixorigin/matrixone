@@ -37,3 +37,8 @@ func (c *Counter) Load() int64 {
 func (c *Counter) SwapW(new int64) int64 {
 	return c.window.Swap(new)
 }
+
+// LoadW returns current window value
+func (c *Counter) LoadW() int64 {
+	return c.window.Load()
+}

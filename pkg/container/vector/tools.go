@@ -16,9 +16,6 @@ package vector
 
 import (
 	"context"
-	"strings"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -26,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
+	"strings"
 )
 
 func MustFixedCol[T any](v *Vector) []T {
@@ -124,27 +122,27 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	return
 }
 
-func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *Vector, err error) {
-	vec = NewVec(typ)
-	vec.cantFreeData = true
-	vec.cantFreeArea = true
-	if typ.IsString() {
-		if len(header) > 0 {
-			vec.col = header
-			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
-			vec.area = storage
-			vec.capacity = cap(header)
-			vec.length = len(header)
-		}
-	} else {
-		if len(storage) > 0 {
-			vec.data = storage
-			vec.length = len(storage) / typ.TypeSize()
-			vec.setupColFromData()
-		}
-	}
-	return
-}
+//func FromDNVector(typ types.Type, header []types.Varlena, storage []byte, cantFree bool) (vec *Vector, err error) {
+//	vec = NewVec(typ)
+//	vec.cantFreeData = cantFree
+//	vec.cantFreeArea = cantFree
+//	if typ.IsString() {
+//		if len(header) > 0 {
+//			vec.col = header
+//			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
+//			vec.area = storage
+//			vec.capacity = cap(header)
+//			vec.length = len(header)
+//		}
+//	} else {
+//		if len(storage) > 0 {
+//			vec.data = storage
+//			vec.length = len(storage) / typ.TypeSize()
+//			vec.setupColFromData()
+//		}
+//	}
+//	return
+//}
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {

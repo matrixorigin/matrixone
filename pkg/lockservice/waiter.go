@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 var (
@@ -142,6 +143,11 @@ func (w *waiter) add(
 	logWaitersAdded(serviceID, w, waiters...)
 }
 
+func (w *waiter) moveTo(serviceID string, to *waiter) {
+	to.waiters.beginChange()
+	to.add(serviceID, w.waiters.all()...)
+}
+
 func (w *waiter) getStatus() waiterStatus {
 	return waiterStatus(w.status.Load())
 }
@@ -235,16 +241,21 @@ func (w *waiter) wait(
 
 // notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(serviceID string, value notifyValue) bool {
+	debug := ""
+	if getLogger().Enabled(zap.DebugLevel) {
+		debug = w.String()
+	}
+
 	for {
 		status := w.getStatus()
 		// already notified, no wait on w
 		if status == notified {
-			logWaiterNotifySkipped(serviceID, w, "already notified")
+			logWaiterNotifySkipped(serviceID, debug, "already notified")
 			return false
 		}
 		if status == completed {
 			// wait already completed, wait timeout or wait a result.
-			logWaiterNotifySkipped(serviceID, w, "already completed")
+			logWaiterNotifySkipped(serviceID, debug, "already completed")
 			return false
 		}
 
@@ -255,7 +266,7 @@ func (w *waiter) notify(serviceID string, value notifyValue) bool {
 			w.mustSendNotification(serviceID, value)
 			return true
 		}
-		logWaiterNotifySkipped(serviceID, w, "concurrently issued")
+		logWaiterNotifySkipped(serviceID, debug, "concurrently issued")
 	}
 }
 

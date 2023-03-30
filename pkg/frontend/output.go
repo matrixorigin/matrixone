@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"strconv"
 )
 
 var _ outputPool = &outputQueue{}
@@ -164,7 +165,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
-	if vec.GetNulls().Contains(uint64(rowIndex)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
 	}

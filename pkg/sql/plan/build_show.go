@@ -461,11 +461,11 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
+			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
 	} else {
-		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
-			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
+			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
 	}
 
 	// Do not show sequences.

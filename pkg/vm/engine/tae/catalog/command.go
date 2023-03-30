@@ -47,143 +47,141 @@ func CmdName(t int16) string {
 
 func init() {
 	txnif.RegisterCmdFactory(CmdUpdateDatabase, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType)
+		return newEmptyEntryCmd(cmdType,
+			NewEmptyMVCCNodeFactory(NewEmptyEmptyMVCCNode),
+			func() *DBNode { return &DBNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateTable, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType)
+		return newEmptyEntryCmd(cmdType,
+			NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
+			func() *TableNode { return &TableNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateSegment, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType)
+		return newEmptyEntryCmd(cmdType,
+			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
+			func() *SegmentNode { return &SegmentNode{} })
 	})
 	txnif.RegisterCmdFactory(CmdUpdateBlock, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType)
+		return newEmptyEntryCmd(cmdType,
+			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
+			func() *BlockNode { return &BlockNode{} })
 	})
 }
 
-type EntryCommand struct {
-	*txnbase.BaseCustomizedCmd
-	cmdType   int16
-	entry     BaseEntry
-	DBID      uint64
-	TableID   uint64
-	SegmentID types.Uuid
-	DB        *DBEntry
-	Table     *TableEntry
-	Segment   *SegmentEntry
-	Block     *BlockEntry
+type Node interface {
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
 }
 
-func newEmptyEntryCmd(cmdType int16) *EntryCommand {
-	impl := &EntryCommand{
-		DB:      nil,
-		cmdType: cmdType,
+type EntryCommand[T BaseNode[T], N Node] struct {
+	*txnbase.BaseCustomizedCmd
+	cmdType  int16
+	DBID     uint64
+	ID       *common.ID
+	mvccNode *MVCCNode[T]
+	node     N
+}
+
+func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType int16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N) *EntryCommand[T, N] {
+	impl := &EntryCommand[T, N]{
+		cmdType:  cmdType,
+		ID:       &common.ID{},
+		mvccNode: mvccNodeFactory(),
+		node:     nodeFactory(),
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, impl)
 	return impl
 }
 
-func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand {
-	impl := &EntryCommand{
-		DB:      entry.GetSegment().GetTable().GetDB(),
-		Table:   entry.GetSegment().GetTable(),
-		Segment: entry.GetSegment(),
-		Block:   entry,
-		cmdType: cmdType,
-		entry:   entry.MetaBaseEntry,
+func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
+	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
+		DBID:     entry.GetSegment().GetTable().GetDB().ID,
+		ID:       entry.AsCommonID(),
+		cmdType:  cmdType,
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
+		node:     entry.BlockNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
 
-func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand {
-	impl := &EntryCommand{
-		DB:      entry.GetTable().GetDB(),
-		Table:   entry.GetTable(),
-		Segment: entry,
-		cmdType: cmdType,
-		entry:   entry.MetaBaseEntry,
+func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
+	impl := &EntryCommand[*MetadataMVCCNode, *SegmentNode]{
+		DBID:     entry.GetTable().GetDB().ID,
+		ID:       entry.AsCommonID(),
+		cmdType:  cmdType,
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
+		node:     entry.SegmentNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
 
-func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand {
-	impl := &EntryCommand{
-		DB:      entry.GetDB(),
-		Table:   entry,
-		cmdType: cmdType,
-		entry:   entry.TableBaseEntry,
+func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand[*TableMVCCNode, *TableNode] {
+	impl := &EntryCommand[*TableMVCCNode, *TableNode]{
+		DBID:     entry.GetDB().ID,
+		ID:       entry.AsCommonID(),
+		cmdType:  cmdType,
+		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
+		node:     entry.TableNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
 
-func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
-	impl := &EntryCommand{
-		DB:      entry,
-		cmdType: cmdType,
+func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand[*EmptyMVCCNode, *DBNode] {
+	impl := &EntryCommand[*EmptyMVCCNode, *DBNode]{
+		DBID:     entry.ID,
+		ID:       &common.ID{},
+		cmdType:  cmdType,
+		node:     entry.DBNode,
+		mvccNode: entry.GetLatestNodeLocked(),
 	}
-	if entry != nil {
-		impl.entry = entry.DBBaseEntry
-	}
+	// if entry != nil {
+	// 	impl.mvccNode = entry.BaseEntryImpl.GetLatestNodeLocked().(*MVCCNode[*DBMVCCNode])
+	// }
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
 
-func (cmd *EntryCommand) Desc() string {
+func (cmd *EntryCommand[T, N]) Desc() string {
 	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID)
 	return s
 }
 
-func (cmd *EntryCommand) GetLogIndex() *wal.Index {
-	if cmd.entry == nil {
+func (cmd *EntryCommand[T, N]) GetLogIndex() *wal.Index {
+	if cmd.mvccNode == nil {
 		return nil
 	}
-	return cmd.entry.GetLatestNodeLocked().GetLogIndex()
+	return cmd.mvccNode.GetLogIndex()
 }
-func (cmd *EntryCommand) SetReplayTxn(txn txnif.AsyncTxn) {
-	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateSegment:
-		cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode).Txn = txn
-	case CmdUpdateTable:
-		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).Txn = txn
-	case CmdUpdateDatabase:
-		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).Txn = txn
-	default:
-		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+
+func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
+	cmd.mvccNode.Txn = txn
+}
+
+func (cmd *EntryCommand[T, N]) ApplyCommit() {
+	if cmd.mvccNode.Is1PC() {
+		return
+	}
+	if err := cmd.mvccNode.ApplyCommit(nil); err != nil {
+		panic(err)
 	}
 }
-func (cmd *EntryCommand) ApplyCommit() {
-	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
-		node := cmd.entry.GetLatestNodeLocked()
-		if node.Is1PC() {
-			return
-		}
-		if err := node.ApplyCommit(nil); err != nil {
-			panic(err)
-		}
-	default:
-		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+
+func (cmd *EntryCommand[T, N]) ApplyRollback() {
+	if cmd.mvccNode.Is1PC() {
+		return
 	}
+	cmd.mvccNode.ApplyRollback(nil)
 }
-func (cmd *EntryCommand) ApplyRollback() {
-	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
-		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
-		if node.Is1PC() {
-			return
-		}
-		node.ApplyRollback(nil)
-	default:
-		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
-	}
-}
-func (cmd *EntryCommand) GetTs() types.TS {
-	ts := cmd.entry.GetLatestNodeLocked().GetPrepare()
+
+func (cmd *EntryCommand[T, N]) GetTs() types.TS {
+	ts := cmd.mvccNode.GetPrepare()
 	return ts
 }
-func (cmd *EntryCommand) IDString() string {
+
+func (cmd *EntryCommand[T, N]) IDString() string {
 	s := ""
 	dbid, id := cmd.GetID()
 	switch cmd.cmdType {
@@ -198,177 +196,47 @@ func (cmd *EntryCommand) IDString() string {
 	}
 	return s
 }
-func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
-	id := &common.ID{}
-	dbid := uint64(0)
-	switch cmd.cmdType {
-	case CmdUpdateDatabase:
-		dbid = cmd.entry.GetID()
-	case CmdUpdateTable:
-		if cmd.DBID != 0 {
-			dbid = cmd.DBID
-			id.TableID = cmd.Table.ID
-		} else {
-			dbid = cmd.Table.db.ID
-			id.TableID = cmd.entry.GetID()
-		}
-	case CmdUpdateSegment:
-		if cmd.DBID != 0 {
-			dbid = cmd.DBID
-			id.TableID = cmd.TableID
-			id.SegmentID = cmd.Segment.ID
-		} else {
-			dbid = cmd.DB.ID
-			id.TableID = cmd.Table.ID
-			id.SegmentID = cmd.Segment.ID
-		}
-	case CmdUpdateBlock:
-		if cmd.DBID != 0 {
-			dbid = cmd.DBID
-			id.TableID = cmd.TableID
-			id.SegmentID = cmd.SegmentID
-			id.BlockID = cmd.Block.ID
-		} else {
-			dbid = cmd.DB.ID
-			id.TableID = cmd.Table.ID
-			id.SegmentID = cmd.Segment.ID
-			id.BlockID = cmd.Block.ID
-		}
-	}
-	return dbid, id
+func (cmd *EntryCommand[T, N]) GetID() (uint64, *common.ID) {
+	return cmd.DBID, cmd.ID
 }
 
-func (cmd *EntryCommand) String() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
+func (cmd *EntryCommand[T, N]) String() string {
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
 	return s
 }
 
-func (cmd *EntryCommand) VerboseString() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
-	switch cmd.cmdType {
-	case CmdUpdateTable:
-		s = fmt.Sprintf("%s;Schema=%v", s, cmd.Table.schema.String())
-	}
+func (cmd *EntryCommand[T, N]) VerboseString() string {
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
 	return s
 }
-func (cmd *EntryCommand) GetType() int16 { return cmd.cmdType }
+func (cmd *EntryCommand[T, N]) GetType() int16 { return cmd.cmdType }
 
-func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
+func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, cmd.GetType()); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.ID); err != nil {
+	n += 2
+	var sn2 int
+	if sn2, err = w.Write(types.EncodeUint64(&cmd.DBID)); err != nil {
 		return
 	}
-	var sn int64
-	n = 4 + 2
-
-	switch cmd.GetType() {
-	case CmdUpdateDatabase:
-		// write db id
-		if err = binary.Write(w, binary.BigEndian, cmd.entry.GetID()); err != nil {
-			return
-		}
-		n += 8
-		if sn, err = common.WriteString(cmd.DB.name, w); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = common.WriteString(cmd.DB.createSql, w); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = common.WriteString(cmd.DB.datType, w); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = cmd.DB.acInfo.WriteTo(w); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = cmd.DB.WriteOneNodeTo(w); err != nil {
-			return
-		}
-		n += sn
-	case CmdUpdateTable:
-		// write table id
-		if err = binary.Write(w, binary.BigEndian, cmd.entry.GetID()); err != nil {
-			return
-		}
-		n += 8
-		if err = binary.Write(w, binary.BigEndian, cmd.Table.db.ID); err != nil {
-			return
-		}
-		n += 8
-		if sn, err = cmd.Table.WriteOneNodeTo(w); err != nil {
-			return
-		}
-		n += sn
-		var schemaBuf []byte
-		if schemaBuf, err = cmd.Table.schema.Marshal(); err != nil {
-			return
-		}
-		if _, err = w.Write(schemaBuf); err != nil {
-			return
-		}
-		n += int64(len(schemaBuf))
-	case CmdUpdateSegment:
-		// write segment id
-		if _, err = w.Write(cmd.Segment.ID[:]); err != nil {
-			return
-		}
-		n += int64(types.UuidSize)
-
-		if err = binary.Write(w, binary.BigEndian, cmd.DB.ID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, cmd.Table.ID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, cmd.Segment.state); err != nil {
-			return
-		}
-		var n2 int64
-		if n2, err = cmd.Segment.WriteAddonInfo(w); err != nil {
-			return
-		}
-		n += 8 + 8 + 1 + n2
-		n2, err = cmd.entry.WriteOneNodeTo(w)
-		if err != nil {
-			return
-		}
-		n += n2
-	case CmdUpdateBlock:
-		// write block id
-		if _, err = w.Write(cmd.Block.ID[:]); err != nil {
-			return
-		}
-		n += int64(types.BlockidSize)
-		if err = binary.Write(w, binary.BigEndian, cmd.DB.ID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, cmd.Table.ID); err != nil {
-			return
-		}
-		if _, err = w.Write(cmd.Segment.ID[:]); err != nil {
-			return
-		}
-		n += int64(types.UuidSize)
-		n += 8 + 8
-		if err = binary.Write(w, binary.BigEndian, cmd.Block.state); err != nil {
-			return
-		}
-		n += 1
-		var n2 int64
-		n2, err = cmd.entry.WriteOneNodeTo(w)
-		if err != nil {
-			return
-		}
-		n += n2
+	n += int64(sn2)
+	if sn2, err = w.Write(common.EncodeID(cmd.ID)); err != nil {
+		return
 	}
+	n += int64(sn2)
+	var sn int64
+	if sn, err = cmd.mvccNode.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = cmd.node.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
 	return
 }
-func (cmd *EntryCommand) Marshal() (buf []byte, err error) {
+func (cmd *EntryCommand[T, N]) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
@@ -376,140 +244,29 @@ func (cmd *EntryCommand) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
-	// read command id
-	if err = binary.Read(r, binary.BigEndian, &cmd.ID); err != nil {
+func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn2 int
+	if sn2, err = r.Read(types.EncodeUint64(&cmd.DBID)); err != nil {
 		return
 	}
-	n += 4
-	var sn int64
-	switch cmd.GetType() {
-	case CmdUpdateDatabase:
-		entry := NewReplayDBBaseEntry()
-		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
-			return
-		}
-		n += 8
-		cmd.entry = entry
-		cmd.DB = NewReplayDBEntry()
-		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
-			return
-		}
-		n += sn
-		if cmd.DB.createSql, sn, err = common.ReadString(r); err != nil {
-			return
-		}
-		n += sn
-		if cmd.DB.datType, sn, err = common.ReadString(r); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = cmd.DB.acInfo.ReadFrom(r); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = cmd.entry.ReadOneNodeFrom(r); err != nil {
-			return
-		}
-		n += sn
-		cmd.DB.DBBaseEntry = cmd.entry.(*DBBaseEntry)
-	case CmdUpdateTable:
-		entry := NewReplayTableBaseEntry()
-		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
-			return
-		}
-		n += 8
-		cmd.entry = entry
-		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
-			return
-		}
-
-		n += 8
-		if sn, err = cmd.entry.ReadOneNodeFrom(r); err != nil {
-			return
-		}
-		n += sn
-		cmd.Table = NewReplayTableEntry()
-		cmd.Table.TableBaseEntry = cmd.entry.(*TableBaseEntry)
-		cmd.Table.schema = NewEmptySchema("")
-		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
-			return
-		}
-		n += sn
-	case CmdUpdateSegment:
-		entry := NewReplayMetaBaseEntry()
-		cmd.entry = entry
-		cmd.Segment = NewReplaySegmentEntry()
-
-		var segid types.Uuid
-		if _, err = r.Read(segid[:]); err != nil {
-			return
-		}
-		n += int64(types.UuidSize)
-		cmd.Segment.ID = segid
-
-		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
-			return
-		}
-		n += 8
-		if err = binary.Read(r, binary.BigEndian, &cmd.TableID); err != nil {
-			return
-		}
-		n += 8
-		if err = binary.Read(r, binary.BigEndian, &cmd.Segment.state); err != nil {
-			return
-		}
-		n += 1
-
-		if sn, err = cmd.Segment.ReadAddonInfo(r); err != nil {
-			return
-		}
-		n += sn
-		if sn, err = cmd.entry.ReadOneNodeFrom(r); err != nil {
-			return
-		}
-		n += sn
-
-		cmd.Segment.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
-	case CmdUpdateBlock:
-		entry := NewReplayMetaBaseEntry()
-		var blockid types.Blockid
-		if _, err = r.Read(blockid[:]); err != nil {
-			return
-		}
-		n += int64(types.BlockidSize)
-		cmd.entry = entry
-		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
-			return
-		}
-		if err = binary.Read(r, binary.BigEndian, &cmd.TableID); err != nil {
-			return
-		}
-		var segid types.Uuid
-		if _, err = r.Read(segid[:]); err != nil {
-			return
-		}
-		n += int64(types.UuidSize)
-		cmd.SegmentID = segid
-		var state EntryState
-		if err = binary.Read(r, binary.BigEndian, &state); err != nil {
-			return
-		}
-		var n2 int64
-		n2, err = cmd.entry.ReadOneNodeFrom(r)
-		if err != nil {
-			return
-		}
-		n += n2
-		cmd.Block = NewReplayBlockEntry()
-		cmd.Block.ID = blockid
-		cmd.Block.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
-		cmd.Block.state = state
+	n += int64(sn2)
+	if sn2, err = r.Read(common.EncodeID(cmd.ID)); err != nil {
+		return
 	}
+	n += int64(sn2)
+	var sn int64
+	if sn, err = cmd.mvccNode.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = cmd.node.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
 	return
 }
 
-func (cmd *EntryCommand) Unmarshal(buf []byte) (err error) {
+func (cmd *EntryCommand[T, N]) Unmarshal(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)
 	return
