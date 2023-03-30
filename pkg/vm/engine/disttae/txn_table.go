@@ -312,8 +312,9 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		commentDef.Comment = tbl.comment
 		defs = append(defs, commentDef)
 	}
-	if tbl.partition != "" {
+	if tbl.partitioned > 0 || tbl.partition != "" {
 		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partitioned = tbl.partitioned
 		partitionDef.Partition = tbl.partition
 		defs = append(defs, partitionDef)
 	}
@@ -771,6 +772,11 @@ func (tbl *txnTable) updateLocalState(
 
 	if bat.Vecs[0].GetType().Oid != types.T_Rowid {
 		// skip
+		return nil
+	}
+
+	if tbl.primaryIdx < 0 {
+		// no primary key, skip
 		return nil
 	}
 

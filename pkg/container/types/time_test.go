@@ -229,6 +229,23 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			scale:    3,
 			isErr:    false,
 		},
+		// ==================== Time format: 'xx hh:mm:ss' ====================
+		{
+			name: "TestParse5-NoPrecision01",
+			//  58:11:12
+			inputStr: "02 10:11:12",
+			expected: TimeFromClock(false, 58, 11, 12, 0),
+			scale:    0,
+			isErr:    false,
+		},
+		{
+			name: "TestParse5-NoPrecision02",
+			// 6130:11:12
+			inputStr: "255 10:11:12",
+			expected: TimeFromClock(false, 6130, 11, 12, 0),
+			scale:    0,
+			isErr:    false,
+		},
 	}
 
 	for _, c := range testCases {

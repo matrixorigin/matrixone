@@ -166,6 +166,7 @@ mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
 mo_pubs
+mo_stored_procedure
 mo_database
 mo_columns
 select user_name,authentication_string,owner from mo_user;

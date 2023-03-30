@@ -15,112 +15,80 @@
 package catalog
 
 import (
-	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type DBMVCCNode struct {
-	*EntryMVCCNode
-	*txnbase.TxnMVCCNode
+type EmptyMVCCNode struct{}
+
+func NewEmptyEmptyMVCCNode() *EmptyMVCCNode {
+	return &EmptyMVCCNode{}
 }
 
-func NewEmptyDBMVCCNode() txnif.MVCCNode {
-	return &DBMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-	}
-}
-
-func CompareDBBaseNode(e, o txnif.MVCCNode) int {
-	return e.(*DBMVCCNode).Compare(o.(*DBMVCCNode).TxnMVCCNode)
-}
-
-func (e *DBMVCCNode) CloneAll() txnif.MVCCNode {
-	node := &DBMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
-	}
+func (e *EmptyMVCCNode) CloneAll() *EmptyMVCCNode {
+	node := &EmptyMVCCNode{}
 	return node
 }
 
-func (e *DBMVCCNode) CloneData() txnif.MVCCNode {
-	return &DBMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-	}
+func (e *EmptyMVCCNode) CloneData() *EmptyMVCCNode {
+	return &EmptyMVCCNode{}
 }
 
-func (e *DBMVCCNode) String() string {
-
-	return fmt.Sprintf("%s%s",
-		e.TxnMVCCNode.String(),
-		e.EntryMVCCNode.String())
+func (e *EmptyMVCCNode) String() string {
+	return ""
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) Update(vun txnif.MVCCNode) {
-	un := vun.(*DBMVCCNode)
-	e.CreatedAt = un.CreatedAt
-	e.DeletedAt = un.DeletedAt
+func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode) {}
+
+func (e *EmptyMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
+
+func (e *EmptyMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
+
+type DBNode struct {
+	acInfo    accessInfo
+	name      string
+	datType   string
+	createSql string
 }
 
-func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
-	if err != nil {
-		return
-	}
-	e.EntryMVCCNode.ApplyCommit(commitTS)
-	return nil
-}
-func (e *DBMVCCNode) ApplyRollback(index *wal.Index) (err error) {
-	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
-	if err != nil {
-		return
-	}
-	e.EntryMVCCNode.ApplyCommit(commitTS)
-	return nil
-}
-
-func (e *DBMVCCNode) PrepareCommit() (err error) {
-	_, err = e.TxnMVCCNode.PrepareCommit()
-	if err != nil {
-		return
-	}
-	err = e.EntryMVCCNode.PrepareCommit()
-	return
-}
-
-func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
+func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryMVCCNode.WriteTo(w)
-	if err != nil {
+	if node.name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.WriteTo(w)
-	if err != nil {
+	if sn, err = node.acInfo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
+	if node.createSql, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if node.datType, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
 	return
 }
 
-func (e *DBMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryMVCCNode.ReadFrom(r)
-	if err != nil {
+	if sn, err = common.WriteString(node.name, w); err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.ReadFrom(r)
-	if err != nil {
+	if sn, err = node.acInfo.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = common.WriteString(node.createSql, w); err != nil {
+		return
+	}
+	n += sn
+	if sn, err = common.WriteString(node.datType, w); err != nil {
 		return
 	}
 	n += sn
