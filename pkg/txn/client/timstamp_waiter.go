@@ -17,7 +17,6 @@ package client
 import (
 	"context"
 	"runtime"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -34,10 +33,10 @@ type timestampWaiter struct {
 	stopper   stopper.Stopper
 	notifiedC chan timestamp.Timestamp
 	latestTS  atomic.Pointer[timestamp.Timestamp]
-
-	mu struct {
-		sync.RWMutex
-		waiters []*waiter
+	mu        struct {
+		sync.Mutex
+		waiters      []*waiter
+		lastNotified timestamp.Timestamp
 	}
 }
 
@@ -63,9 +62,11 @@ func (tw *timestampWaiter) GetTimestamp(
 	}
 
 	w := tw.addToWait(ts)
-	defer w.close()
-	if err := w.wait(ctx); err != nil {
-		return timestamp.Timestamp{}, err
+	if w != nil {
+		defer w.close()
+		if err := w.wait(ctx); err != nil {
+			return timestamp.Timestamp{}, err
+		}
 	}
 	v := tw.latestTS.Load()
 	return *v, nil
@@ -80,30 +81,36 @@ func (tw *timestampWaiter) Close() {
 }
 
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) *waiter {
-	w := newWaiter(ts)
-	w.ref()
-
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
+	if tw.mu.lastNotified.Greater(ts) {
+		return nil
+	}
+
+	w := newWaiter(ts)
+	w.ref()
 	tw.mu.waiters = append(tw.mu.waiters, w)
-	sort.Slice(
-		tw.mu.waiters,
-		func(i, j int) bool {
-			return tw.mu.waiters[i].waitAfter.Less(tw.mu.waiters[j].waitAfter)
-		})
 	return w
 }
 
 func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
-	tw.mu.RLock()
-	defer tw.mu.RUnlock()
-	for i := len(tw.mu.waiters) - 1; i >= 0; i-- {
-		w := tw.mu.waiters[i]
-		if ts.Greater(w.waitAfter) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	waiters := tw.mu.waiters[:0]
+	for idx, w := range tw.mu.waiters {
+		if w != nil && ts.Greater(w.waitAfter) {
 			w.notify()
 			w.unref()
+			tw.mu.waiters[idx] = nil
+			w = nil
+		}
+		if w != nil {
+			waiters = append(waiters, w)
 		}
 	}
+
+	tw.mu.waiters = waiters
+	tw.mu.lastNotified = ts
 }
 
 func (tw *timestampWaiter) handleNotify(ctx context.Context) {
@@ -114,21 +121,10 @@ func (tw *timestampWaiter) handleNotify(ctx context.Context) {
 			return
 		case ts := <-tw.notifiedC:
 			ts = tw.fetchLatestTS(ts)
-			if latest.GreaterEq(ts) {
-				break
-			}
-			latest = ts
-			tw.latestTS.Store(&ts)
-
-			n := tw.waiters.Len()
-			for i := uint64(0); i < n; i++ {
-				w := tw.waiters.MustGet()
-				if ts.Greater(w.waitAfter) {
-					w.notify()
-					w.unref()
-				} else {
-					tw.waiters.Put(w)
-				}
+			if latest.Less(ts) {
+				latest = ts
+				tw.latestTS.Store(&ts)
+				tw.notifyWaiters(ts)
 			}
 		}
 	}

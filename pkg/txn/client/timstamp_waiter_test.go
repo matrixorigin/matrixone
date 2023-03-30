@@ -80,6 +80,33 @@ func TestGetTimestampWithNotified(t *testing.T) {
 	)
 }
 
+func TestNotifyWaiters(t *testing.T) {
+	tw := &timestampWaiter{}
+	var values []*waiter
+	values = append(values, tw.addToWait(newTestTimestamp(1)))
+	values = append(values, tw.addToWait(newTestTimestamp(6)))
+	values = append(values, tw.addToWait(newTestTimestamp(3)))
+	values = append(values, tw.addToWait(newTestTimestamp(2)))
+	values = append(values, tw.addToWait(newTestTimestamp(5)))
+
+	var wg sync.WaitGroup
+	for _, w := range values {
+		wg.Add(1)
+		go func(w *waiter) {
+			defer wg.Done()
+			w.wait(context.Background())
+		}(w)
+	}
+	tw.notifyWaiters(newTestTimestamp(4))
+	assert.Equal(t, 2, len(tw.mu.waiters))
+	assert.Equal(t, newTestTimestamp(6), tw.mu.waiters[0].waitAfter)
+	assert.Equal(t, newTestTimestamp(5), tw.mu.waiters[1].waitAfter)
+
+	tw.notifyWaiters(newTestTimestamp(7))
+	wg.Wait()
+	assert.Equal(t, 0, len(tw.mu.waiters))
+}
+
 func BenchmarkGetTimestampWithWaitNotify(b *testing.B) {
 	runTimestampWaiterTests(
 		b,
