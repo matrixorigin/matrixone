@@ -23,23 +23,33 @@ type waiterQueue interface {
 	reset()
 	pop() (*waiter, []*waiter)
 	put(...*waiter)
+	all() []*waiter
 	iter(func([]byte) bool)
+
+	beginChange()
+	commitChange()
+	rollbackChange()
 }
 
 func newWaiterQueue() *sliceBasedWaiterQueue {
-	return &sliceBasedWaiterQueue{}
+	return &sliceBasedWaiterQueue{beginChangeIdx: -1}
 }
 
 type sliceBasedWaiterQueue struct {
 	sync.RWMutex
-	offset  int
-	waiters []*waiter
+	offset         int
+	beginChangeIdx int
+	waiters        []*waiter
 }
 
 func (q *sliceBasedWaiterQueue) len() int {
 	q.RLock()
 	defer q.RUnlock()
 	return len(q.waiters) - q.offset
+}
+
+func (q *sliceBasedWaiterQueue) all() []*waiter {
+	return q.waiters[q.offset:]
 }
 
 func (q *sliceBasedWaiterQueue) pop() (*waiter, []*waiter) {
@@ -81,4 +91,34 @@ func (q *sliceBasedWaiterQueue) reset() {
 	defer q.Unlock()
 	q.waiters = q.waiters[:0]
 	q.offset = 0
+	q.beginChangeIdx = -1
+}
+
+func (q *sliceBasedWaiterQueue) beginChange() {
+	q.Lock()
+	defer q.Unlock()
+
+	if q.beginChangeIdx == -1 {
+		q.beginChangeIdx = len(q.waiters)
+	}
+}
+
+func (q *sliceBasedWaiterQueue) commitChange() {
+	q.Lock()
+	defer q.Unlock()
+	q.beginChangeIdx = -1
+}
+
+func (q *sliceBasedWaiterQueue) rollbackChange() {
+	q.Lock()
+	defer q.Unlock()
+
+	if q.beginChangeIdx > -1 {
+		n := len(q.waiters)
+		for i := q.beginChangeIdx; i < n; i++ {
+			q.waiters[i] = nil
+		}
+		q.waiters = q.waiters[:q.beginChangeIdx]
+		q.beginChangeIdx = -1
+	}
 }

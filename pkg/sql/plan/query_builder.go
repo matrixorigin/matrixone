@@ -709,8 +709,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId, _ = builder.pushdownFilters(rootId, nil, false)
 		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
-		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
+		ReCalcNodeStats(rootId, builder, true)
+		rootId = builder.applySwapRuleByStats(rootId, true)
+		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)

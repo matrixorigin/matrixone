@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -92,6 +93,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
 
 	msg, ok := message.(*pipeline.Message)
@@ -101,7 +103,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)

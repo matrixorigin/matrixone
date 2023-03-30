@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
@@ -37,9 +38,10 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts t
 }
 
 type TableEntry struct {
-	*TableBaseEntry
+	*BaseEntryImpl[*TableMVCCNode]
+	*TableNode
+	ID      uint64
 	db      *DBEntry
-	schema  *Schema
 	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
 	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
@@ -69,28 +71,36 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(tableId),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		ID: tableId,
+		BaseEntryImpl: NewBaseEntry(
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		db: db,
+		TableNode: &TableNode{
+			schema: schema,
+		},
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
-	e.CreateWithTxn(txnCtx, schema)
+	e.CreateWithTxnAndSchema(txnCtx, schema)
 	return e
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		db: db,
+		TableNode: &TableNode{
+			schema: schema,
+		},
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
-	e.CreateWithTS(types.SystemDBTS)
+	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{})
 	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -108,22 +118,27 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		TableBaseEntry: NewReplayTableBaseEntry(),
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		TableNode: &TableNode{
+			schema: schema,
+		},
+		link:    common.NewGenericSortedDList(compareSegmentFn),
+		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
-
+func (entry *TableEntry) GetID() uint64 { return entry.ID }
 func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
 		return false
@@ -161,7 +176,11 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
-func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory, opts *common.CreateSegOpt) (created *SegmentEntry, err error) {
+func (entry *TableEntry) CreateSegment(
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory SegmentDataFactory,
+	opts *common.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id types.Uuid
@@ -256,7 +275,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
 			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TBL%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), entry.schema.Name)
 }
 
 func (entry *TableEntry) StringLocked() string {
@@ -297,7 +316,7 @@ func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
 
 func (entry *TableEntry) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID: entry.GetID(),
+		TableID: entry.ID,
 	}
 }
 
@@ -369,7 +388,7 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 
 func (entry *TableEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	isEmpty, err = entry.TableBaseEntry.PrepareRollback()
+	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
 		return
 	}
@@ -400,4 +419,39 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry.RUnlock()
 
 	return
+}
+
+func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txnToWait.GetTxnState(true)
+		entry.Lock()
+	}
+	err = entry.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	var node *MVCCNode[*TableMVCCNode]
+	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	node.BaseNode.Update(
+		&TableMVCCNode{
+			SchemaConstraints: string(cstr),
+		})
+	return
+}
+
+func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Schema) {
+	node := &MVCCNode[*TableMVCCNode]{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		BaseNode: &TableMVCCNode{
+			SchemaConstraints: string(schema.Constraint),
+		},
+	}
+	entry.Insert(node)
 }
