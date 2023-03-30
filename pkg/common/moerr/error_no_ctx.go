@@ -295,3 +295,7 @@ func NewUDFAlreadyExistsNoCtx(f string) *Error {
 func NewNoUDFNoCtx(f string) *Error {
 	return newError(Context(), ErrDropNonExistsFunction, f)
 }
+
+func NewProcedureAlreadyExistsNoCtx(f string) *Error {
+	return newError(Context(), ErrProcedureAlreadyExists, f)
+}

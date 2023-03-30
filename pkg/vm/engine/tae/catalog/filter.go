@@ -14,7 +14,7 @@
 
 package catalog
 
-func ActiveWithNoTxnFilter(be *MetaBaseEntry) bool {
+func ActiveWithNoTxnFilter(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
@@ -27,18 +27,18 @@ func NonAppendableBlkFilter(be *BlockEntry) bool {
 }
 
 type ComposedFilter struct {
-	CommitFilters []func(*MetaBaseEntry) bool
+	CommitFilters []func(*BaseEntryImpl[*MetadataMVCCNode]) bool
 	BlockFilters  []func(*BlockEntry) bool
 }
 
 func NewComposedFilter() *ComposedFilter {
 	return &ComposedFilter{
-		CommitFilters: make([]func(*MetaBaseEntry) bool, 0),
+		CommitFilters: make([]func(*BaseEntryImpl[*MetadataMVCCNode]) bool, 0),
 		BlockFilters:  make([]func(*BlockEntry) bool, 0),
 	}
 }
 
-func (filter *ComposedFilter) AddCommitFilter(f func(*MetaBaseEntry) bool) {
+func (filter *ComposedFilter) AddCommitFilter(f func(*BaseEntryImpl[*MetadataMVCCNode]) bool) {
 	filter.CommitFilters = append(filter.CommitFilters, f)
 }
 
@@ -46,7 +46,7 @@ func (filter *ComposedFilter) AddBlockFilter(f func(*BlockEntry) bool) {
 	filter.BlockFilters = append(filter.BlockFilters, f)
 }
 
-func (filter *ComposedFilter) FilteCommit(be *MetaBaseEntry) bool {
+func (filter *ComposedFilter) FilteCommit(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
 	ret := false
 	for _, f := range filter.CommitFilters {
 		if !f(be) {
