@@ -220,30 +220,33 @@ func judgeContainColname(expr *plan.Expr) bool {
 func FormatFilePathWithAccountFilterCondition(ctx context.Context, n *plan.Node, param *tree.ExternParam) {
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, strings.ToLower(defines.ETLFileServiceName)+":") {
-		if len(filePath) > 4 && filePath[4] == '/' {
-			// origin filePath start with "etl:/"
-			filePath = filePath[5:]
-		} else {
-			// origin filePath start with "etl:"
-			filePath = filePath[4:]
-		}
-		builder := table.NewAccountDatePathBuilder()
-		p, err := builder.ParsePath(ctx, filePath)
-		if err != nil {
-			logutil.Warn("unknown etl filepath", trace.ContextField(ctx), logutil.PathField(filePath), logutil.ErrorField(err))
-		} else if p.GetAccount() != table.ETLParamAccountAll {
-			logutil.Warn("should not use with filter condition `account=?`", trace.ContextField(ctx), logutil.PathField(filePath))
-		} else {
-			// find the first `account = ?` filter condition, and modify param.Filepath
-			for i := 0; i < len(n.FilterList); i++ {
-				fl := n.FilterList[i]
-				if judgeContainColname(fl) {
-					exist, account := GetAccountPrefix(fl)
-					if exist {
+		// find the first `account = ?` filter condition
+		for i := 0; i < len(n.FilterList); i++ {
+			exp := n.FilterList[i]
+			if judgeContainColname(exp) {
+				// get the target account
+				exist, account := GetAccountPrefix(exp)
+				if exist {
+					// parse filePath
+					if len(filePath) > 4 && filePath[4] == '/' {
+						// origin filePath start with "etl:/"
+						filePath = filePath[5:]
+					} else {
+						// origin filePath start with "etl:"
+						filePath = filePath[4:]
+					}
+					builder := table.NewAccountDatePathBuilder()
+					p, err := builder.ParsePath(ctx, filePath)
+					if err != nil {
+						logutil.Warn("unknown etl filepath", trace.ContextField(ctx), logutil.PathField(filePath), logutil.ErrorField(err))
+					} else if p.GetAccount() != table.ETLParamAccountAll {
+						logutil.Warn("should not use with filter condition `account=?`", trace.ContextField(ctx), logutil.PathField(filePath))
+					} else {
+						// replace etl:/*/... ==> etl:/{account}/...
 						p.SetAccount(account)
 						param.Filepath = strings.ToLower(defines.ETLFileServiceName) + ":" + "/" + p.ToString()
-						break
 					}
+					return
 				}
 			}
 		}
