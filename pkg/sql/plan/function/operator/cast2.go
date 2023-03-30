@@ -1835,8 +1835,7 @@ func signedToStr[T constraints.Integer](
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			var v1 []byte
-			v1 = []byte(strconv.FormatInt(int64(v), 10))
+			v1 := []byte(strconv.FormatInt(int64(v), 10))
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -1880,8 +1879,7 @@ func unsignedToStr[T constraints.Unsigned](
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			var v1 []byte
-			v1 = []byte(strconv.FormatUint(uint64(v), 10))
+			v1 := []byte(strconv.FormatUint(uint64(v), 10))
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -1926,7 +1924,6 @@ func floatToStr[T constraints.Float](
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
 			v1 := floatToBytes(float64(v), bitSize)
-			v1 = []byte(strconv.FormatUint(uint64(v), 10))
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
