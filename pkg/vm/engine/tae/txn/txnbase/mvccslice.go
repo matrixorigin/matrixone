@@ -22,19 +22,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type MVCCSlice struct {
-	MVCC      []txnif.MVCCNode
-	comparefn func(txnif.MVCCNode, txnif.MVCCNode) int
+type MVCCSlice[T txnif.MVCCNode[T]] struct {
+	MVCC      []T
+	comparefn func(T, T) int
+	zero      T
 }
 
-func NewMVCCSlice(newnodefn func() txnif.MVCCNode,
-	comparefn func(txnif.MVCCNode, txnif.MVCCNode) int) *MVCCSlice {
-	return &MVCCSlice{
-		MVCC:      make([]txnif.MVCCNode, 0),
+func NewMVCCSlice[T txnif.MVCCNode[T]](newnodefn func() T,
+	comparefn func(T, T) int) *MVCCSlice[T] {
+	return &MVCCSlice[T]{
+		MVCC:      make([]T, 0),
 		comparefn: comparefn,
 	}
 }
-func (be *MVCCSlice) StringLocked() string {
+func (be *MVCCSlice[T]) StringLocked() string {
 	var w bytes.Buffer
 
 	length := len(be.MVCC)
@@ -47,30 +48,30 @@ func (be *MVCCSlice) StringLocked() string {
 }
 
 // for replay
-func (be *MVCCSlice) GetTs() types.TS {
+func (be *MVCCSlice[T]) GetTs() types.TS {
 	return be.GetUpdateNodeLocked().GetEnd()
 }
 
 // func (be *MVCCSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
 
-func (be *MVCCSlice) InsertNode(un txnif.MVCCNode) {
+func (be *MVCCSlice[T]) InsertNode(un T) {
 	be.MVCC = append(be.MVCC, un)
 }
 
 // GetUpdateNode gets the latest UpdateNode.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *MVCCSlice) GetUpdateNodeLocked() txnif.MVCCNode {
+func (be *MVCCSlice[T]) GetUpdateNodeLocked() T {
 	length := len(be.MVCC)
 	if length == 0 {
-		return nil
+		return be.zero
 	}
 	return be.MVCC[length-1]
 }
 
 // GetCommittedNode gets the latest committed UpdateNode.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MVCCSlice) GetCommittedNode() (node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) GetCommittedNode() (node T) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -81,7 +82,7 @@ func (be *MVCCSlice) GetCommittedNode() (node txnif.MVCCNode) {
 	}
 	return
 }
-func (be *MVCCSlice) DeleteNode(node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) DeleteNode(node T) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -94,7 +95,7 @@ func (be *MVCCSlice) DeleteNode(node txnif.MVCCNode) {
 		}
 	}
 }
-func (be *MVCCSlice) SearchNode(o txnif.MVCCNode) (node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) SearchNode(o T) (node T) {
 	for _, n := range be.MVCC {
 		if be.comparefn(n, o) == 0 {
 			node = n
@@ -104,7 +105,7 @@ func (be *MVCCSlice) SearchNode(o txnif.MVCCNode) (node txnif.MVCCNode) {
 	return
 }
 
-func (be *MVCCSlice) GetVisibleNode(ts types.TS) (node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) GetVisibleNode(ts types.TS) (node T) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -117,7 +118,7 @@ func (be *MVCCSlice) GetVisibleNode(ts types.TS) (node txnif.MVCCNode) {
 	return
 }
 
-func (be *MVCCSlice) GetLastNonAbortedNode() (node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) GetLastNonAbortedNode() (node T) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -129,7 +130,7 @@ func (be *MVCCSlice) GetLastNonAbortedNode() (node txnif.MVCCNode) {
 	return
 }
 
-func (be *MVCCSlice) SearchNodeByTS(ts types.TS) (node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) SearchNodeByTS(ts types.TS) (node T) {
 	for _, n := range be.MVCC {
 		if n.GetStart().Equal(ts) {
 			node = n
@@ -138,14 +139,14 @@ func (be *MVCCSlice) SearchNodeByTS(ts types.TS) (node txnif.MVCCNode) {
 	}
 	return
 }
-func (be *MVCCSlice) ForEach(fn func(un txnif.MVCCNode) bool, reverse bool) {
+func (be *MVCCSlice[T]) ForEach(fn func(un T) bool, reverse bool) {
 	if reverse {
 		be.forEachReverse(fn)
 	} else {
 		be.forEach(fn)
 	}
 }
-func (be *MVCCSlice) forEach(fn func(un txnif.MVCCNode) bool) {
+func (be *MVCCSlice[T]) forEach(fn func(un T) bool) {
 	for i := len(be.MVCC) - 1; i >= 0; i-- {
 		n := be.MVCC[i]
 		gonext := fn(n)
@@ -154,7 +155,7 @@ func (be *MVCCSlice) forEach(fn func(un txnif.MVCCNode) bool) {
 		}
 	}
 }
-func (be *MVCCSlice) forEachReverse(fn func(un txnif.MVCCNode) bool) {
+func (be *MVCCSlice[T]) forEachReverse(fn func(un T) bool) {
 	for _, n := range be.MVCC {
 		gonext := fn(n)
 		if !gonext {
@@ -167,9 +168,9 @@ func (be *MVCCSlice) forEachReverse(fn func(un txnif.MVCCNode) bool) {
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
 // todo getend or getcommitts
-func (be *MVCCSlice) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node T) {
 	if len(be.MVCC) == 0 {
-		return 0, nil
+		return 0, be.zero
 	}
 	lastAppend := be.MVCC[len(be.MVCC)-1]
 
@@ -191,7 +192,7 @@ func (be *MVCCSlice) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node txn
 	}
 	if mid == 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
 		// 2. The first node is found and it was committed after ts
-		return 0, nil
+		return 0, be.zero
 	} else if mid != 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
@@ -199,15 +200,15 @@ func (be *MVCCSlice) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node txn
 	return mid, be.MVCC[mid]
 }
 
-func (be *MVCCSlice) SearchNodeByCompareFn(fn func(a txnif.MVCCNode) int) (offset int, node txnif.MVCCNode) {
+func (be *MVCCSlice[T]) SearchNodeByCompareFn(fn func(a T) int) (offset int, node T) {
 	if len(be.MVCC) == 0 {
-		return 0, nil
+		return 0, be.zero
 	}
 	lastAppend := be.MVCC[len(be.MVCC)-1]
 
 	// 1. Last append node is in the window and it was already committed
 	if fn(lastAppend) < 0 {
-		return 0, nil
+		return 0, be.zero
 	}
 	start, end := 0, len(be.MVCC)-1
 	var mid int
@@ -222,38 +223,38 @@ func (be *MVCCSlice) SearchNodeByCompareFn(fn func(a txnif.MVCCNode) int) (offse
 		}
 	}
 	if fn(be.MVCC[mid]) != 0 {
-		return 0, nil
+		return 0, be.zero
 	}
 	return mid, be.MVCC[mid]
 }
 
-func (be *MVCCSlice) IsEmpty() bool {
+func (be *MVCCSlice[T]) IsEmpty() bool {
 	return len(be.MVCC) == 0
 }
 
-func (be *MVCCSlice) IsCommitting() bool {
+func (be *MVCCSlice[T]) IsCommitting() bool {
 	node := be.GetUpdateNodeLocked()
-	if node == nil {
+	if node.IsNil() {
 		return false
 	}
 	return node.IsCommitting()
 }
 
-func (be *MVCCSlice) IsCommitted() bool {
+func (be *MVCCSlice[T]) IsCommitted() bool {
 	un := be.GetUpdateNodeLocked()
-	if un == nil {
+	if un.IsNil() {
 		return false
 	}
 	return un.IsCommitted()
 }
 
-func (be *MVCCSlice) LoopInRange(start, end types.TS, fn func(txnif.MVCCNode) bool) (indexes []*wal.Index) {
+func (be *MVCCSlice[T]) LoopInRange(start, end types.TS, fn func(T) bool) (indexes []*wal.Index) {
 	startOffset, node := be.GetNodeToReadByPrepareTS(start)
-	if node != nil && node.GetPrepare().Less(start) {
+	if node.IsNil() && node.GetPrepare().Less(start) {
 		startOffset++
 	}
 	endOffset, node := be.GetNodeToReadByPrepareTS(end)
-	if node == nil {
+	if node.IsNil() {
 		return nil
 	}
 	for i := endOffset; i >= startOffset; i-- {
@@ -264,7 +265,7 @@ func (be *MVCCSlice) LoopInRange(start, end types.TS, fn func(txnif.MVCCNode) bo
 	return
 }
 
-func (be *MVCCSlice) LoopOffsetRange(start, end int, fn func(txnif.MVCCNode) bool) {
+func (be *MVCCSlice[T]) LoopOffsetRange(start, end int, fn func(T) bool) {
 	for i := start; i <= end; i++ {
 		if !fn(be.MVCC[i]) {
 			break
@@ -272,6 +273,6 @@ func (be *MVCCSlice) LoopOffsetRange(start, end int, fn func(txnif.MVCCNode) boo
 	}
 }
 
-func (be *MVCCSlice) GetNodeByOffset(offset int) txnif.MVCCNode {
+func (be *MVCCSlice[T]) GetNodeByOffset(offset int) T {
 	return be.MVCC[offset]
 }
