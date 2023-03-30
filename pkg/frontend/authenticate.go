@@ -6175,7 +6175,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) error {
+func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -6200,7 +6200,7 @@ func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) e
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	bh := NewBackgroundHandler(ctx, ctx, mp, pu, autoincrcaches)
+	bh := NewBackgroundHandler(ctx, ctx, mp, pu, aicm)
 	defer bh.Close()
 
 	//USE the mo_catalog

@@ -84,28 +84,26 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account           string
-	User              string
-	Host              string
-	Role              string
-	ConnectionID      uint64
-	AccountId         uint32
-	RoleId            uint32
-	UserId            uint32
-	LastInsertID      uint64
-	Database          string
-	Version           string
-	TimeZone          *time.Location
-	StorageEngine     engine.Engine
-	QueryId           []string
-	ResultColTypes    []types.Type
-	AutoIncrCaches    defines.AutoIncrCaches
-	AutoIncrCacheSize uint64
-	SeqCurValues      map[uint64]string
-	SeqDeleteKeys     []uint64
-	SeqAddValues      map[uint64]string
-	SeqLastValue      []string
-	SqlHelper         sqlHelper
+	Account        string
+	User           string
+	Host           string
+	Role           string
+	ConnectionID   uint64
+	AccountId      uint32
+	RoleId         uint32
+	UserId         uint32
+	LastInsertID   uint64
+	Database       string
+	Version        string
+	TimeZone       *time.Location
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
+	SeqCurValues   map[uint64]string
+	SeqDeleteKeys  []uint64
+	SeqAddValues   map[uint64]string
+	SeqLastValue   []string
+	SqlHelper      sqlHelper
 }
 
 // AnalyzeInfo  analyze information for query
@@ -178,6 +176,8 @@ type Process struct {
 	LoadLocalReader *io.PipeReader
 
 	DispatchNotifyCh chan WrapCs
+
+	Aicm *defines.AutoIncrCacheManager
 }
 
 type sqlHelper interface {
