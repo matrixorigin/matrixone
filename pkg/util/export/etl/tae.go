@@ -163,8 +163,9 @@ func (w *TAEWriter) writeBatch() error {
 	// check if empty
 	w.flushRows += len(w.rows)
 	// clean
-	for _, row := range w.rows {
+	for idx, row := range w.rows {
 		row.Free()
+		w.rows[idx] = nil
 	}
 	w.rows = w.rows[:0]
 	batch.Clean(w.mp)
@@ -206,7 +207,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			case int64:
 				cols[rowIdx] = field.(int64)
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
+				return moerr.NewInternalError(ctx, "not Support integer type %v", t)
 			}
 		case types.T_uint64:
 			cols := vector.MustFixedCol[uint64](vec)
@@ -220,7 +221,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			case uint64:
 				cols[rowIdx] = field.(uint64)
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
+				return moerr.NewInternalError(ctx, "not Support integer type %v", t)
 			}
 		case types.T_float64:
 			cols := vector.MustFixedCol[float64](vec)
@@ -229,7 +230,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			case float64:
 				cols[rowIdx] = field.(float64)
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support float64 type %v", t))
+				return moerr.NewInternalError(ctx, "not Support float64 type %v", t)
 			}
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
@@ -240,7 +241,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 					return err
 				}
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support string type %v", t))
+				return moerr.NewInternalError(ctx, "not Support string type %v", t)
 			}
 		case types.T_json:
 			switch t := field.(type) {
@@ -258,7 +259,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 					return err
 				}
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support json type %v", t))
+				return moerr.NewInternalError(ctx, "not Support json type %v", t)
 			}
 
 		case types.T_datetime:
@@ -283,7 +284,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 					cols[rowIdx] = d
 				}
 			default:
-				panic(moerr.NewInternalError(ctx, "not Support datetime type %v", t))
+				return moerr.NewInternalError(ctx, "not Support datetime type %v", t)
 			}
 		default:
 			return moerr.NewInternalError(ctx, "the value type %s is not support now", *vec.GetType())
