@@ -38,7 +38,7 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 }
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
-	vec := MakeVector(*v.GetType(), nullable)
+	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
 }

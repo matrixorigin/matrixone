@@ -294,7 +294,7 @@ func NewBatchBlock(
 	colTypes []types.Type,
 	nullables []bool,
 	opts containers.Options) *BatchBlock {
-	bat := containers.BuildBatch(attrs, colTypes, nullables, opts)
+	bat := containers.BuildBatch(attrs, colTypes, opts)
 	block := &BatchBlock{
 		Batch: bat,
 		ID:    id,

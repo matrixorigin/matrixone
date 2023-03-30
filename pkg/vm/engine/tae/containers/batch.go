@@ -185,7 +185,7 @@ func (bat *Batch) Equals(o *Batch) bool {
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType(), false)
+	buffer := MakeVector(types.T_varchar.ToType())
 	defer buffer.Close()
 	// 1. Vector cnt
 	// if nr, err = w.Write(types.EncodeFixed(uint16(len(bat.Vecs)))); err != nil {
@@ -236,7 +236,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 
 func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType(), false)
+	buffer := MakeVector(types.T_varchar.ToType())
 	defer buffer.Close()
 	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
@@ -258,7 +258,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 		pos++
 	}
 	for _, vecType := range vecTypes {
-		vec := MakeVector(vecType, true)
+		vec := MakeVector(vecType)
 		if tmpn, err = vec.ReadFrom(r); err != nil {
 			return
 		}

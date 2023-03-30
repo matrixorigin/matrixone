@@ -52,7 +52,7 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 
 func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) (vec Vector) {
 	rand.Seed(time.Now().UnixNano())
-	vec = MakeVector(t, nullable)
+	vec = MakeVector(t)
 	if provider != nil {
 		vec.Extend(provider)
 		return
@@ -227,7 +227,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 }
 
 func MockVector2(typ types.Type, rows int, offset int) Vector {
-	vec := MakeVector(typ, true)
+	vec := MakeVector(typ)
 	switch typ.Oid {
 	case types.T_bool:
 		for i := 0; i < rows; i++ {
@@ -315,7 +315,7 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 }
 
 func MockVector3(typ types.Type, rows int) Vector {
-	vec := MakeVector(typ, true)
+	vec := MakeVector(typ)
 	switch typ.Oid {
 	case types.T_int32:
 		for i := 0; i < rows; i++ {
