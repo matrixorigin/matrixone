@@ -79,8 +79,8 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.Ta
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	blk := iblk.(*catalog.BlockEntry)
-	node := blk.GetLatestNodeLocked().(*catalog.MetadataMVCCNode)
-	if node.MetaLoc == "" {
+	node := blk.GetLatestNodeLocked()
+	if node.BaseNode.MetaLoc == "" {
 		return
 	}
 	if b.batches[blkMetaInsBatch] == nil {
@@ -137,7 +137,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(deletes []uint32, prefix []byte) {
 
 func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 	tbl := itbl.(*catalog.TableEntry)
-	node := tbl.GetLatestNodeLocked().(*catalog.TableMVCCNode)
+	node := tbl.GetLatestNodeLocked()
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnDelBatch] == nil {
 			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
@@ -187,7 +187,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 }
 func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	db := idb.(*catalog.DBEntry)
-	node := db.GetLatestNodeLocked().(*catalog.DBMVCCNode)
+	node := db.GetLatestNodeLocked()
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbDelBatch] == nil {
 			b.batches[dbDelBatch] = makeRespBatchFromSchema(DelSchema)
