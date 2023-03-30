@@ -6529,6 +6529,12 @@ when_clause:
 
 mo_cast_type:
     column_type
+{
+   t := $$ 
+   if t.InternalType.FamilyString == "binary" || t.InternalType.FamilyString == "BINARY" {
+        t.InternalType.Scale = -1
+   }
+}
 |   SIGNED integer_opt
     {
         name := $1
