@@ -381,7 +381,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		if fileRows == 0 {
 			m.logger.Warn("read empty file",
 				logutil.TableField(m.Table.GetIdentify()),
-				logutil.PathField(path.FilePath))
+				logutil.PathField(path.FilePath),
+				zap.Int64("size", path.FileSize))
 		}
 	}
 	// flush cache data
@@ -391,6 +392,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 				logutil.PathField(mergeFilepath), zap.Error(err))
 			return err
 		}
+	} else {
+		m.logger.Warn("no remain cache data", logutil.PathField(mergeFilepath), zap.Int("readRows", readRows))
 	}
 	// close writer
 	if _, err = newFileWriter.FlushAndClose(); err != nil {
