@@ -16,8 +16,12 @@ package projection
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -76,6 +80,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			anal.Alloc(int64(vec.Size()))
 		}
 	}
+	if len(ap.Es) > 0 {
+		if col, ok := ap.Es[0].Expr.(*plan.Expr_Col); ok {
+			if len(rbat.Vecs) > 1 {
+				if rbat.Vecs[1].Length() == 0 {
+					fmt.Println("error copy")
+				}
+				s := strings.Split(col.Col.Name, ".")
+				if len(s) > 1 && s[1] == "a_crash" {
+					if rbat.Vecs[1].Length() == 0 {
+						logutil.Infof("eval crash: ")
+					}
+				}
+			}
+		}
+	}
+
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
