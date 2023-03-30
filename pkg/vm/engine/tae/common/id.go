@@ -16,6 +16,7 @@ package common
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -39,6 +40,14 @@ type ID struct {
 	Idx uint16
 	// Iter is used for MVCC
 	Iter uint8
+}
+
+const (
+	IDSize int64 = int64(unsafe.Sizeof(ID{}))
+)
+
+func EncodeID(id *ID) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(id)), IDSize)
 }
 
 func (id *ID) AsBlockID() ID {

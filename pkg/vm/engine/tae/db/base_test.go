@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,7 @@ type testEngine struct {
 }
 
 func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+	blockio.Start()
 	db := initDB(t, opts)
 	return &testEngine{
 		DB: db,
@@ -82,7 +84,10 @@ func (e *testEngine) restart() {
 }
 
 func (e *testEngine) Close() error {
-	return e.DB.Close()
+	err := e.DB.Close()
+	blockio.Stop()
+	blockio.ResetPipeline()
+	return err
 }
 
 func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
@@ -304,7 +309,7 @@ func printCheckpointStats(t *testing.T, tae *DB) {
 func createDB(t *testing.T, e *DB, dbName string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
-	_, err = txn.CreateDatabase(dbName, "")
+	_, err = txn.CreateDatabase(dbName, "", "")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
@@ -327,7 +332,7 @@ func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName, "")
+		db, err = txn.CreateDatabase(dbName, "", "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)
@@ -350,7 +355,7 @@ func createRelationAndAppend(
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName, "")
+		db, err = txn.CreateDatabase(dbName, "", "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)

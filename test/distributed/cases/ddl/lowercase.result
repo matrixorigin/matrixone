@@ -570,9 +570,9 @@ not connect to a database
 INSERT INTO `t21` VALUES (1);
 no such table .t21
 CREATE VIEW `view1` AS SELECT t20.a, T21.a AS b FROM t20 LEFT JOIN t21 USING(a);
-SQL parser error: table "t20" does not exist
+not connect to a database
 CREATE VIEW `VIEW1` AS SELECT t20.a, t21.a AS b FROM t20 LEFT JOIN t21 USING(a);
-SQL parser error: table "t20" does not exist
+not connect to a database
 SELECT * FROM `view1`;
 SQL parser error: table "view1" does not exist
 DROP VIEW `view1`;
@@ -588,7 +588,7 @@ not connect to a database
 INSERT INTO TAB VALUES(10);
 no such table .tab
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
-SQL parser error: table "tab" does not exist
+not connect to a database
 show CREATE TABLE `VIe`;
 no such table .vie
 DROP view `VIE`;
@@ -602,7 +602,7 @@ not connect to a database
 INSERT INTO `t22` VALUES(1),(2),(3),(4);
 no such table .t22
 CREATE VIEW `view01` AS SELECT * FROM `t22`;
-SQL parser error: table "t22" does not exist
+not connect to a database
 ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
 invalid view '.view01'
 SELECT * FROM `view01`;
@@ -617,7 +617,7 @@ CREATE DATABASE `test07`;
 USE `test03`;
 invalid database test03
 CREATE TEMPORARY TABLE `t1`(a float);
-ExpectedEOB
+not connect to a database
 INSERT INTO `T1` VALUES(213823.12);
 no such table .t1
 INSERT INTO `t1` VALUES(-45412.38920);
@@ -632,7 +632,7 @@ DROP TABLE IF EXISTS `t5`;
 CREATE TABLE `t4`(a int primary key,b varchar(5));
 not connect to a database
 CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
-no such table .t4
+not connect to a database
 ALTER table `t5` DROP FOREIGN KEY fC;
 no such table .t5
 ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);

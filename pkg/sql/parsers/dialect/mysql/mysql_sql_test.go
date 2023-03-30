@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select rank() over(partition by a order by b desc) from t1",
-		output: "select rank() over (partition by a order by b desc) from t1",
+		input:  "select 1",
+		output: "select 1",
 	}
 )
 
@@ -2066,6 +2066,26 @@ var (
 		{
 			input:  "show table_size from mo_role from mo_catalog",
 			output: "show table size from mo_role from mo_catalog",
+		},
+		{
+			input:  "create procedure test1 (in param1 int) 'test test'",
+			output: "create procedure test1 (in param1 int) 'test test'",
+		},
+		{
+			input:  "create procedure test2 (param1 int, inout param2 char(5)) 'test test'",
+			output: "create procedure test2 (in param1 int, inout param2 char(5)) 'test test'",
+		},
+		{
+			input:  "drop procedure test1",
+			output: "drop procedure test1",
+		},
+		{
+			input:  "call test1()",
+			output: "call test1()",
+		},
+		{
+			input:  "call test1(@session, @increment)",
+			output: "call test1(@session, @increment)",
 		},
 	}
 )

@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
+
+const (
+	JTLoad tasks.JobType = 200 + iota
+	JTFlush
+)
+
+func init() {
+	tasks.RegisterJobType(JTLoad, "LoadJob")
+	tasks.RegisterJobType(JTFlush, "FlushJob")
+}
 
 const (
 	CheckpointExt = "ckp"

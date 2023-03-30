@@ -246,20 +246,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropDatabase,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropDatabase,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -272,25 +272,36 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			return &Scope{
-				Magic: AlterTable,
-				Plan:  pn,
-			}, nil
-		case plan.DataDefinition_DROP_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     AlterTable,
+				Plan:      pn,
+				PreScopes: preScopes,
+			}, nil
+		case plan.DataDefinition_DROP_TABLE:
+			preScopes := make([]*Scope, 0, 1)
+			if pn.AttachedPlan != nil {
+				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
+				if err != nil {
+					return attachedScope, err
+				}
+				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
+			}
+			return &Scope{
+				Magic:     DropTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -313,20 +324,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropIndex,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropIndex,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
@@ -879,6 +890,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
+		if n.ObjRef.PubAccountId != -1 {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -937,6 +951,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			AccountId:    n.ObjRef.PubAccountId,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1714,6 +1729,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
+	if n.ObjRef.PubAccountId != -1 {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
@@ -1749,18 +1767,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
-	logutil.Infof("cn generateNodes-1, tbl %d ranges is %d", tblId, expectedLen)
-	defer func() {
-		if expectedLen != 0 {
-			sum := 0
-			for i := range nodes {
-				sum += len(nodes[i].Data)
-			}
-			if sum != expectedLen {
-				logutil.Errorf("cn generateNodes-2, tbl %d, need %d, but %d", tblId, expectedLen, sum)
-			}
-		}
-	}()
+	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, it's temporary table ?
 	// XXX the code is too confused. should be removed once we remove the memory-engine.

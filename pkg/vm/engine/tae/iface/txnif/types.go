@@ -77,8 +77,8 @@ type TxnHandle interface {
 	BindAccessInfo(tenantID, userID, roleID uint32)
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
@@ -160,12 +160,23 @@ type DeleteChain interface {
 	DepthLocked() int
 	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
-type MVCCNode interface {
+type BaseNode[T any] interface {
+	Update(o T)
+	CloneData() T
+	CloneAll() T
+}
+
+type MVCCNode[T any] interface {
+	BaseMVCCNode
+	BaseNode[T]
+}
+
+type BaseMVCCNode interface {
 	String() string
+	IsNil() bool
 
 	IsVisible(ts types.TS) (visible bool)
 	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
@@ -192,18 +203,16 @@ type MVCCNode interface {
 
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
 }
 type AppendNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -240,8 +249,8 @@ type TxnStore interface {
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 	GetRelationByID(dbId uint64, tid uint64) (handle.Relation, error)
 
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)

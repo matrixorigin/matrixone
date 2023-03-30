@@ -414,14 +414,21 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	txnHandler := ses.GetTxnHandler()
 	var txn TxnOperator
 	var err error
+	var dbMeta engine.Database
 	txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if _, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
+	}
+	if dbMeta.IsSubscription(ctx) {
+		_, err = checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx))
+		if err != nil {
+			return err
+		}
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
@@ -1155,6 +1162,21 @@ func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.Dr
 	return doDropFunction(ctx, mce.GetSession(), df)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitProcedure(ctx, ses, tenant, cp)
+}
+
+func (mce *MysqlCmdExecutor) handleDropProcedure(ctx context.Context, dp *tree.DropProcedure) error {
+	return doDropProcedure(ctx, mce.GetSession(), dp)
+}
+
+func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt) error {
+	return doInterpretCall(ctx, mce.GetSession(), call)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
@@ -1232,6 +1254,23 @@ func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tre
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err = doShowPublications(ctx, ses, sp)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tree.ShowSubscriptions, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowSubscriptions(ctx, ses, ss)
 	if err != nil {
 		return err
 	}
@@ -2400,6 +2439,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				return err
 			}
+			if st.SubscriptionOption != nil && !ses.GetTenantInfo().IsAdminRole() {
+				err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
+				return err
+			}
 		case *tree.DropDatabase:
 			err := inputNameIsInvalid(proc.Ctx, string(st.Name))
 			if err != nil {
@@ -2480,6 +2523,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 			case *tree.DropTable, *tree.DropIndex:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
+			case *tree.AlterTable:
+				ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
@@ -2492,6 +2537,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 		case *tree.DropTable, *tree.DropIndex:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
+		case *tree.AlterTable:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
@@ -2520,6 +2567,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowCreatePublications:
 			selfHandle = true
 			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowSubscriptions:
+			selfHandle = true
+			if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.CreateAccount:
@@ -2586,6 +2638,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.DropFunction:
 			selfHandle = true
 			if err = mce.handleDropFunction(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateProcedure:
+			selfHandle = true
+			if err = mce.handleCreateProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropProcedure:
+			selfHandle = true
+			if err = mce.handleDropProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CallStmt:
+			selfHandle = true
+			if err = mce.handleCallProcedure(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
@@ -2947,6 +3014,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
+			*tree.CreateProcedure, *tree.DropProcedure, *tree.CallStmt,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3080,6 +3148,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
+				return false
+			}
+			if node.ObjRef != nil && len(node.ObjRef.SubscriptionName) > 0 {
 				return false
 			}
 		}
