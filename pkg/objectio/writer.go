@@ -17,26 +17,27 @@ package objectio
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/pierrec/lz4"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/pierrec/lz4"
 )
 
 type ObjectWriter struct {
 	sync.RWMutex
-	object *Object
-	blocks []BlockObject
-	buffer *ObjectBuffer
-	name   string
-	lastId uint32
+	object   *Object
+	blocks   []BlockObject
+	totalRow uint32
+	colmeta  []ObjectColumnMeta
+	buffer   *ObjectBuffer
+	name     string
+	lastId   uint32
 }
 
 func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
@@ -58,8 +59,8 @@ func (w *ObjectWriter) WriteHeader() error {
 		header bytes.Buffer
 	)
 	h := Header{magic: Magic, version: Version}
-	header.Write(types.EncodeFixed[uint64](h.magic))
-	header.Write(types.EncodeFixed[uint16](h.version))
+	header.Write(types.EncodeFixed(h.magic))
+	header.Write(types.EncodeFixed(h.version))
 	header.Write(make([]byte, 22))
 	_, _, err = w.buffer.Write(header.Bytes())
 	return err
@@ -107,6 +108,11 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 	return err
 }
 
+func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ObjectColumnMeta) {
+	w.totalRow = totalrow
+	w.colmeta = metas
+}
+
 func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
 	var err error
 	w.RLock()
@@ -114,27 +120,58 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if len(w.blocks) == 0 {
 		logutil.Warn("object io: no block needs to be written")
 	}
-	var buf bytes.Buffer
-	metaLen := 0
-	start := 0
+
+	// [total row 4B][blkMetaSize 4B][BlkMeta * blkCnt][ObjectColumnMeta * colCnt][footer: metaStart 4B | metaLen 4B | colCnt 2B |blkCnt 4B | Magic 4B]
+
+	// write total rows and blk meta size
+	var uint32buf [2]uint32
+	uint32buf[0] = w.totalRow
+
+	// write block meta
+	metabuf := &bytes.Buffer{}
 	for _, block := range w.blocks {
 		meta := block.(*Block).MarshalMeta()
-		offset, length, err := w.buffer.Write(meta)
 		if err != nil {
 			return nil, err
 		}
-		if start == 0 {
-			start = offset
+		if _, err := metabuf.Write(meta); err != nil {
+			return nil, err
 		}
-		metaLen += length
-		buf.Write(types.EncodeFixed[uint32](block.GetID()))
-		buf.Write(types.EncodeFixed[uint32](uint32(offset)))
-		buf.Write(types.EncodeFixed[uint32](uint32(length)))
-		buf.Write(types.EncodeFixed[uint32](uint32(length)))
 	}
-	buf.Write(types.EncodeFixed[uint32](uint32(len(w.blocks))))
-	buf.Write(types.EncodeFixed[uint64](uint64(Magic)))
-	_, _, err = w.buffer.Write(buf.Bytes())
+	uint32buf[1] = uint32(metabuf.Len())
+
+	// write column meta
+	for _, colmeta := range w.colmeta {
+		if err = colmeta.Write(metabuf); err != nil {
+			return nil, err
+		}
+	}
+
+	// begin write
+	start, _, err := w.buffer.Write(types.EncodeSlice(uint32buf[:]))
+	if err != nil {
+		return nil, err
+	}
+	metaLen := 8 + metabuf.Len()
+
+	_, length, err := w.buffer.Write(metabuf.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	if length+8 != metaLen {
+		panic("bad write")
+	}
+
+	// write footer
+	footer := Footer{
+		metaStart: uint32(start),
+		metaLen:   uint32(metaLen),
+		magic:     Magic,
+	}
+
+	if _, _, err = w.buffer.Write(footer.Marshal()); err != nil {
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}

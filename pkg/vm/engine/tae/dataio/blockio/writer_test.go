@@ -21,11 +21,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -36,28 +34,13 @@ const (
 	ModuleName = "BlockIO"
 )
 
-func newBatch() *batch.Batch {
-	mp := mpool.MustNewZero()
-	types := []types.Type{
-		types.T_int32.ToType(),
-		types.T_int16.ToType(),
-		types.T_int32.ToType(),
-		types.T_int64.ToType(),
-		types.T_uint16.ToType(),
-		types.T_uint32.ToType(),
-		types.T_uint8.ToType(),
-		types.T_uint64.ToType(),
-	}
-	return testutil.NewBatch(types, false, int(40000*2), mp)
-}
-
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
-	bat := newBatch()
+
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
@@ -66,27 +49,46 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 	writer, _ := NewBlockWriter(service, name)
-	idxs := make([]uint16, 3)
-	idxs[0] = 0
-	idxs[1] = 2
-	idxs[2] = 4
-	_, err = writer.WriteBatch(bat)
+
+	schema := catalog.MockSchemaAll(13, 2)
+	bats := catalog.MockBatch(schema, 40000*2).Split(2)
+
+	_, err = writer.WriteBlock(bats[0])
+	assert.Nil(t, err)
+	_, err = writer.WriteBlock(bats[1])
 	assert.Nil(t, err)
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(blocks))
+	assert.Equal(t, 2, len(blocks))
 	fd := blocks[0]
-	col, err := fd.GetColumn(0)
+	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	zm := index.NewZoneMap(*bat.Vecs[0].GetType())
+	zm := index.NewZoneMap(bats[0].Vecs[2].GetType())
 	colZoneMap := col.GetMeta().GetZoneMap()
 
 	err = zm.Unmarshal(colZoneMap.GetData().([]byte))
 	require.NoError(t, err)
 	res := zm.Contains(int32(500))
 	require.True(t, res)
-	res = zm.Contains(int32(79999))
+	res = zm.Contains(int32(39999))
 	require.True(t, res)
-	res = zm.Contains(int32(100000))
+	res = zm.Contains(int32(40000))
 	require.False(t, res)
+
+	mp := mpool.MustNewZero()
+	metaloc, err := EncodeLocation(blocks[0].GetExtent(), 40000, blocks)
+	require.NoError(t, err)
+	reader, err := NewObjectReader(service, metaloc)
+	require.NoError(t, err)
+	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
+	require.NoError(t, err)
+	require.Equal(t, uint32(80000), meta.Rows)
+	t.Log(meta.ColMetas[0].Ndv, meta.ColMetas[1].Ndv, meta.ColMetas[2].Ndv)
+	require.True(t, meta.ColMetas[2].Zm.Contains(int32(40000)))
+	require.False(t, meta.ColMetas[2].Zm.Contains(int32(100000)))
+	require.True(t, meta.Zms[0][2].Contains(int32(39999)))
+	require.False(t, meta.Zms[0][2].Contains(int32(40000)))
+	require.True(t, meta.Zms[1][2].Contains(int32(40000)))
+	require.True(t, meta.Zms[1][2].Contains(int32(79999)))
+	require.False(t, meta.Zms[1][2].Contains(int32(80000)))
 }

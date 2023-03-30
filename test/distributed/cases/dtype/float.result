@@ -615,3 +615,16 @@ a
 -999.99
 99.00
 99.00
+drop table if exists t1;
+create table t1(a float);
+insert into t1 values(3214321.213);
+select cast(a as varchar) from t1;
+cast(a as varchar)
+3214321.2
+insert into t1 values(1234567891234567.1234);
+insert into t1 values(0.00000000000001);
+select cast(a as varchar) from t1;
+cast(a as varchar)
+3214321.2
+1.234568E+15
+1E-14

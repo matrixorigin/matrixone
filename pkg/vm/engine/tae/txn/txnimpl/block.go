@@ -173,14 +173,14 @@ func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
 }
 func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
 	return
 }
@@ -226,7 +226,7 @@ func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), entry, readed)
+	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().ID, entry, readed)
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {

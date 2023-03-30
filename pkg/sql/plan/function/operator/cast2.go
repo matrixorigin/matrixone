@@ -1877,7 +1877,13 @@ func floatToStr[T constraints.Float](
 				return err
 			}
 		} else {
-			result := []byte(strconv.FormatFloat(float64(v), 'G', -1, bitSize))
+			// float to string, [-14,15] convert to exponent.
+			var result []byte
+			if float64(v) >= float64(1e15) || float64(v) < float64(1e-13) {
+				result = []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
+			} else {
+				result = []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
