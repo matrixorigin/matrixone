@@ -430,7 +430,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-x", true, nil},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
@@ -481,7 +481,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 			})},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
