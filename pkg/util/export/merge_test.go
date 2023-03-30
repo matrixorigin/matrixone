@@ -139,6 +139,12 @@ var newFilePath = func(tbl *table.Table, ts time.Time) string {
 	filepath := path.Join(p, filename)
 	return filepath
 }
+var newTAEFilePath = func(tbl *table.Table, ts time.Time) string {
+	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.TaeExtension)
+	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
+	filepath := path.Join(p, filename)
+	return filepath
+}
 
 func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
 	mux.Lock()
@@ -181,15 +187,18 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	filePath := newFilePath(tbl, ts1)
+	filePath := newTAEFilePath(tbl, ts1)
 	files = append(files, filePath)
-	writer, err := newETLWriter(ctx, fs, filePath, buf, nil, nil)
+	writer, err := newETLWriter(ctx, fs, filePath, buf, tbl, nil)
 	if err != nil {
 		return nil, err
 	}
 	_, err = writer.FlushAndClose()
 	if err != nil {
-		return nil, err
+		var e *moerr.Error
+		if !errors.As(err, &e) || e.ErrorCode() != moerr.ErrEmptyRange {
+			return nil, err
+		}
 	}
 
 	return files, nil
@@ -370,19 +379,34 @@ func TestNewMergeNOFiles(t *testing.T) {
 	defer mergeLock.Unlock()
 	fs := testutil.NewFS()
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+	dummyFilePath := newFilePath(dummyTable, ts)
 
 	ctx := trace.Generate(context.Background())
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	_, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
+	require.Nil(t, err)
+
+	emptyFilesMeta := []*FileMeta{}
+	rootPath := "test/logs/2021/01/01/tbl_dummy/"
+	entry, err := fs.List(ctx, rootPath)
+	for _, e := range entry {
+		emptyFilesMeta = append(emptyFilesMeta, &FileMeta{path.Join(rootPath, e.Name), e.Size})
+		t.Logf("name: %s, size: %d, dir: %v", e.Name, e.Size, e.IsDir)
+	}
+
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
+		// files
+		files []*FileMeta
 	}
 	tests := []struct {
 		name string
 		args args
-		want *Merge
+		// wantMsg
+		wantMsg string
 	}{
 		{
 			name: "normal",
@@ -396,22 +420,36 @@ func TestNewMergeNOFiles(t *testing.T) {
 					WithMaxFileSize(16 * mpool.MB),
 					WithMaxMergeJobs(16),
 				},
+				files: []*FileMeta{&FileMeta{dummyFilePath, 0}},
 			},
-			want: nil,
+			wantMsg: "is not found",
+		},
+		{
+			name: "empty",
+			args: args{
+				ctx: ctx,
+				opts: []MergeOption{
+					WithFileService(fs),
+					WithTable(dummyTable),
+					WithMaxFileSize(1),
+					WithMinFilesMerge(1),
+					WithMaxFileSize(16 * mpool.MB),
+					WithMaxMergeJobs(16),
+				},
+				files: emptyFilesMeta,
+			},
+			wantMsg: "empty range of",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filePath := newFilePath(dummyTable, ts)
-			fm := &FileMeta{filePath, 0}
-			files := []*FileMeta{fm}
 
 			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
 			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
-			require.Equal(t, true, strings.Contains(err.Error(), "is not found"))
+			err = got.doMergeFiles(ctx, dummyTable.Table, tt.args.files, 0)
+			require.Equal(t, true, strings.Contains(err.Error(), tt.wantMsg))
 
 		})
 	}

@@ -46,6 +46,8 @@ type TAEWriter struct {
 	//writer       objectio.Writer
 	writer *blockio.BlockWriter
 	rows   []*table.Row
+
+	flushRows int
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
@@ -158,6 +160,8 @@ func (w *TAEWriter) writeBatch() error {
 	if err != nil {
 		return err
 	}
+	// check if empty
+	w.flushRows += len(w.rows)
 	// clean
 	for _, row := range w.rows {
 		row.Free()
@@ -168,10 +172,16 @@ func (w *TAEWriter) writeBatch() error {
 }
 
 func (w *TAEWriter) flush() error {
-	w.writeBatch()
-	_, _, err := w.writer.Sync(w.ctx)
+	err := w.writeBatch()
 	if err != nil {
 		return err
+	}
+	_, _, err = w.writer.Sync(w.ctx)
+	if err != nil {
+		return err
+	}
+	if w.flushRows == 0 {
+		return moerr.NewEmptyRange(w.ctx, w.filename)
 	}
 	return nil
 }

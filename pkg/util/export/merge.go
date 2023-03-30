@@ -223,7 +223,7 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 	if m.datetime.IsZero() {
 		return moerr.NewInternalError(ctx, "Merge Task missing input 'datetime'")
 	}
-	accounts, err := m.FS.List(m.ctx, "/")
+	accounts, err := m.FS.List(ctx, "/")
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 		rootPath := m.pathBuilder.Build(account.Name, table.MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 		// get all file entry
 
-		fileEntrys, err := m.FS.List(m.ctx, rootPath)
+		fileEntrys, err := m.FS.List(ctx, rootPath)
 		if err != nil {
 			// fixme: m.logger.Error()
 			return err
@@ -325,7 +325,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, mergedExtension)
 	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter, _ := newETLWriter(m.ctx, m.FS, mergeFilepath, buf, m.Table, m.mp)
+	newFileWriter, _ := newETLWriter(ctx, m.FS, mergeFilepath, buf, m.Table, m.mp)
 
 	// Step 3. do simple merge
 	cacheFileData := newRowCache(m.Table)
@@ -333,9 +333,12 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	defer row.Free()
 	defer cacheFileData.Reset()
 	var reader ETLReader
+	var fileRows int
+	var readRows int = 0
 	for _, path := range files {
 		// open reader
-		reader, err = newETLReader(m.ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
+		fileRows = 0
+		reader, err = newETLReader(ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
@@ -345,6 +348,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		var line []string
 		line, err = reader.ReadLine()
 		for ; line != nil && err == nil; line, err = reader.ReadLine() {
+			fileRows++
 			if err = row.ParseRow(line); err != nil {
 				m.logger.Error("parse ETL rows failed",
 					logutil.TableField(m.Table.GetIdentify()),
@@ -373,6 +377,12 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			}
 		}
 		reader.Close()
+		readRows += fileRows
+		if fileRows == 0 {
+			m.logger.Warn("read empty file",
+				logutil.TableField(m.Table.GetIdentify()),
+				logutil.PathField(path.FilePath))
+		}
 	}
 	// flush cache data
 	if !cacheFileData.IsEmpty() {
@@ -388,13 +398,17 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			logutil.PathField(mergeFilepath), zap.Error(err))
 		return err
 	}
+	if readRows == 0 {
+		m.logger.Error("read empty file", logutil.PathField(mergeFilepath))
+		return moerr.NewEmptyRange(ctx, mergeFilepath)
+	}
 
 	// step 4. delete old files
 	paths := make([]string, len(files))
 	for idx, f := range files {
 		paths[idx] = f.FilePath
 	}
-	if err = m.FS.Delete(m.ctx, paths...); err != nil {
+	if err = m.FS.Delete(ctx, paths...); err != nil {
 		m.logger.Warn("failed to delete input files", zap.Error(err))
 		return err
 	}
