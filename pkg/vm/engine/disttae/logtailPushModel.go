@@ -39,11 +39,9 @@ const (
 	maxBlockTimeToNewTransaction = 1 * time.Minute
 	periodToCheckTxnTimestamp    = 1 * time.Millisecond
 
-	// if we didn't receive response within time maxTimeToWaitServerResponse.
-	// we assume that client has lost connect to server.
-	// and will reconnect in a period of periodToReconnectDnLogServer.
-	maxTimeToWaitServerResponse  = 60 * time.Second
-	periodToReconnectDnLogServer = 10 * time.Second
+	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
+	// we assume that client has lost connect to server and will start a reconnect.
+	maxTimeToWaitServerResponse = 60 * time.Second
 
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
