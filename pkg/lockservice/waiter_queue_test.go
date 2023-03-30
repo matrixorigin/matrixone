@@ -74,3 +74,18 @@ func TestIterTxns(t *testing.T) {
 	})
 	assert.Equal(t, [][]byte{[]byte("w"), []byte("w1")}, values)
 }
+
+func TestQueueChange(t *testing.T) {
+	q := newWaiterQueue()
+	q.put(acquireWaiter("s1", []byte("w")))
+
+	q.beginChange()
+	assert.Equal(t, 1, q.beginChangeIdx)
+
+	q.put(acquireWaiter("s1", []byte("w1")))
+	q.put(acquireWaiter("s1", []byte("w2")))
+	assert.Equal(t, 3, q.len())
+
+	q.rollbackChange()
+	assert.Equal(t, 1, q.len())
+}

@@ -16,14 +16,60 @@ package objectio
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"io"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const HeaderSize = 64
 const ColumnMetaSize = 136
 const ExtentSize = 16
+
+const ObjectColumnMetaSize = 72
+const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
+
+type ObjectMeta struct {
+	Rows     uint32             // total rows
+	ColMetas []ObjectColumnMeta // meta for every column of all blocks
+	BlkMetas []BlockObject      // meta for every block
+}
+
+// 4 + 4 + 64 = 72 bytes
+type ObjectColumnMeta struct {
+	Ndv     uint32
+	NullCnt uint32
+	Zonemap ZoneMap
+}
+
+func (meta *ObjectColumnMeta) Write(w io.Writer) (err error) {
+	if _, err = w.Write(types.EncodeUint32(&meta.Ndv)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint32(&meta.NullCnt)); err != nil {
+		return
+	}
+
+	var zmbuf []byte
+	if meta.Zonemap.data == nil {
+		var buf [ZoneMapMinSize + ZoneMapMaxSize]byte
+		zmbuf = buf[:]
+	} else {
+		zmbuf = meta.Zonemap.data.([]byte)
+	}
+	if _, err = w.Write(zmbuf); err != nil {
+		return
+	}
+	return
+}
+
+func (meta *ObjectColumnMeta) Read(bs []byte) (err error) {
+	meta.Ndv = types.DecodeUint32(bs)
+	meta.NullCnt = types.DecodeUint32(bs[4:])
+	bs = bs[8:]
+	meta.Zonemap.data = bs[:64]
+	return
+}
 
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
@@ -152,9 +198,9 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 
 func (cm *ColumnMeta) Marshal() []byte {
 	var buffer bytes.Buffer
-	buffer.Write(types.EncodeFixed[uint8](cm.typ))
-	buffer.Write(types.EncodeFixed[uint8](cm.alg))
-	buffer.Write(types.EncodeFixed[uint16](cm.idx))
+	buffer.Write(types.EncodeFixed(cm.typ))
+	buffer.Write(types.EncodeFixed(cm.alg))
+	buffer.Write(types.EncodeFixed(cm.idx))
 	buffer.Write(cm.location.Marshal())
 	var buf []byte
 	if cm.zoneMap.data == nil {
@@ -165,7 +211,7 @@ func (cm *ColumnMeta) Marshal() []byte {
 	buffer.Write(cm.bloomFilter.Marshal())
 	dummy := make([]byte, 32)
 	buffer.Write(dummy)
-	buffer.Write(types.EncodeFixed[uint32](cm.checksum))
+	buffer.Write(types.EncodeFixed(cm.checksum))
 	return buffer.Bytes()
 }
 
@@ -198,39 +244,24 @@ type Header struct {
 }
 
 type Footer struct {
-	magic      uint64
-	blockCount uint32
-	extents    []Extent
+	magic     uint64
+	metaStart uint32
+	metaLen   uint32
 }
 
-func (f *Footer) UnMarshalFooter(data []byte) error {
-	var err error
-	footer := data[len(data)-FooterSize:]
-	f.blockCount = types.DecodeUint32(footer[:4])
-	footer = footer[4:]
-	f.magic = types.DecodeUint64(footer[:8])
-	if f.magic != uint64(Magic) {
-		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
-	}
-	if f.blockCount*ExtentSize+FooterSize > uint32(len(data)) {
-		return nil
-	} else {
-		f.extents = make([]Extent, f.blockCount)
-	}
-	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentSize):]
-	size := uint32(0)
-	for i := 0; i < int(f.blockCount); i++ {
-		f.extents[i].Unmarshal(extents)
-		f.extents[i].id = uint32(i)
-		extents = extents[ExtentSize:]
-		size += f.extents[i].originSize
-	}
+func (f *Footer) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeUint32(&f.metaStart))
+	buffer.Write(types.EncodeUint32(&f.metaLen))
+	buffer.Write(types.EncodeUint64(&f.magic))
+	return buffer.Bytes()
+}
 
-	for i := 0; i < int(f.blockCount); i++ {
-		f.extents[i].offset = f.extents[0].offset
-		f.extents[i].length = size
-		f.extents[i].originSize = size
-	}
-
-	return err
+func (f *Footer) Unmarshal(data []byte) error {
+	f.metaStart = types.DecodeUint32(data)
+	data = data[4:]
+	f.metaLen = types.DecodeUint32(data)
+	data = data[4:]
+	f.magic = types.DecodeUint64(data)
+	return nil
 }

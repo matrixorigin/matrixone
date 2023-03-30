@@ -1162,6 +1162,21 @@ func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.Dr
 	return doDropFunction(ctx, mce.GetSession(), df)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitProcedure(ctx, ses, tenant, cp)
+}
+
+func (mce *MysqlCmdExecutor) handleDropProcedure(ctx context.Context, dp *tree.DropProcedure) error {
+	return doDropProcedure(ctx, mce.GetSession(), dp)
+}
+
+func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt) error {
+	return doInterpretCall(ctx, mce.GetSession(), call)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
@@ -2625,6 +2640,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropFunction(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateProcedure:
+			selfHandle = true
+			if err = mce.handleCreateProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropProcedure:
+			selfHandle = true
+			if err = mce.handleDropProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CallStmt:
+			selfHandle = true
+			if err = mce.handleCallProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -2984,6 +3014,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
+			*tree.CreateProcedure, *tree.DropProcedure, *tree.CallStmt,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
