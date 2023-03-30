@@ -775,6 +775,11 @@ func (tbl *txnTable) updateLocalState(
 		return nil
 	}
 
+	if tbl.primaryIdx < 0 {
+		// no primary key, skip
+		return nil
+	}
+
 	if tbl.localState == nil {
 		tbl.localState = NewPartitionState(true)
 	}
