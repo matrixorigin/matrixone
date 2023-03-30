@@ -406,7 +406,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 					WithMaxFileSize(16 * mpool.MB),
 					WithMaxMergeJobs(16),
 				},
-				files: []*FileMeta{&FileMeta{dummyFilePath, 0}},
+				files: []*FileMeta{{dummyFilePath, 0}},
 			},
 			wantMsg: "is not found",
 		},
