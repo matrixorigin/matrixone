@@ -493,6 +493,8 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 		return NewConstFixed(v.typ, v.col.([]types.TS)[row], length, mp)
 	case types.T_Rowid:
 		return NewConstFixed(v.typ, v.col.([]types.Rowid)[row], length, mp)
+	case types.T_Blockid:
+		return NewConstFixed(v.typ, v.col.([]types.Blockid)[row], length, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
 	}
@@ -658,6 +660,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.TS](v, sels, mp)
 	case types.T_Rowid:
 		shuffleFixed[types.Rowid](v, sels, mp)
+	case types.T_Blockid:
+		shuffleFixed[types.Blockid](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -810,6 +814,11 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_Rowid:
 		return func(v, w *Vector, sel int64) error {
 			ws := MustFixedCol[types.Rowid](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_Blockid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Blockid](w)
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
@@ -1091,6 +1100,8 @@ func (v *Vector) String() string {
 		return vecToString[types.TS](v)
 	case types.T_Rowid:
 		return vecToString[types.Rowid](v)
+	case types.T_Blockid:
+		return vecToString[types.Blockid](v)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCol(v)
 		if len(col) == 1 {
