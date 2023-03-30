@@ -1925,8 +1925,7 @@ func floatToStr[T constraints.Float](
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			var v1 []byte
-			floatToBytes(v1, float64(v), bitSize)
+			v1 := floatToBytes(float64(v), bitSize)
 			v1 = []byte(strconv.FormatUint(uint64(v), 10))
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
@@ -1942,8 +1941,7 @@ func floatToStr[T constraints.Float](
 			}
 		} else {
 			// float to string, [-14,15] convert to exponent.
-			var result []byte
-			floatToBytes(result, float64(v), bitSize)
+			result := floatToBytes(float64(v), bitSize)
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Float", "truncated for binary/varbinary")
@@ -4197,10 +4195,10 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 	return nil
 }
 
-func floatToBytes(result []byte, v float64, bitSize int) {
+func floatToBytes(v float64, bitSize int) []byte {
 	if v >= float64(1e15) || v < float64(1e-13) {
-		result = []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
+		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
 	} else {
-		result = []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
 	}
 }
