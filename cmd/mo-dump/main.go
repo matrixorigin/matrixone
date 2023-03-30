@@ -46,7 +46,7 @@ func main() {
 		createDb                           string
 		createTable                        []string
 		err                                error
-		toCsv                              bool
+		toCsv, localInfile                 bool
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -61,6 +61,9 @@ func main() {
 		}
 		if err == nil {
 			fmt.Fprintf(os.Stdout, "/* MODUMP SUCCESS, COST %v */\n", time.Since(dumpStart))
+			if toCsv {
+				fmt.Fprintf(os.Stdout, "/* !!!MUST KEEP FILE IN CURRENT DIRECTORY, OR YOU SHOULD CHANGE THE PATH IN LOAD DATA STMT!!! */ \n")
+			}
 		}
 	}()
 
@@ -73,6 +76,7 @@ func main() {
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
+	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
 	flag.Parse()
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
@@ -136,7 +140,7 @@ func main() {
 		case catalog.SystemOrdinaryRel:
 			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 			showCreateTable(create, false)
-			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv)
+			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
 			if err != nil {
 				return
 			}
@@ -288,7 +292,7 @@ func showInsert(r *sql.Rows, args []any, cols []*Column, tbl string, bufPool *sy
 	return nil
 }
 
-func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string) error {
+func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, localInfile bool) error {
 	fname := fmt.Sprintf("%s_%s.%s", db, tbl, "csv")
 	pwd := os.Getenv("PWD")
 	f, err := os.Create(fname)
@@ -318,11 +322,15 @@ func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string) er
 			}
 		}
 	}
-	fmt.Printf("LOAD DATA LOCAL INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
+	if localInfile {
+		fmt.Printf("LOAD DATA LOCAL INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
+	} else {
+		fmt.Printf("LOAD DATA INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
+	}
 	return nil
 }
 
-func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, toCsv bool) error {
+func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, toCsv bool, localInfile bool) error {
 	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "`")
 	if err != nil {
 		return err
@@ -346,7 +354,7 @@ func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, t
 	if !toCsv {
 		return showInsert(r, args, cols, tbl, bufPool, netBufferLength)
 	}
-	return showLoad(r, args, cols, db, tbl)
+	return showLoad(r, args, cols, db, tbl, localInfile)
 }
 
 func convertValue(v any, typ string) string {
