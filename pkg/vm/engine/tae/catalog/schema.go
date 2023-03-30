@@ -348,7 +348,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if data, err = types.Encode(def.Type); err != nil {
 			return
 		}
-		length = uint64(len(data))
+		length := uint64(len(data))
 		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
 			return
 		}
