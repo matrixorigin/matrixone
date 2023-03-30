@@ -32,7 +32,7 @@ func TestSort1(t *testing.T) {
 	// sort not null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, nil)
-		vec2 := containers.MakeVector(vecType, false)
+		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
 			vec2.Append(vec.Get(i))
 		}
@@ -48,7 +48,7 @@ func TestSort1(t *testing.T) {
 		vec := containers.MockVector(vecType, 10, false, nil)
 		vec.Update(rand.Intn(10), types.Null{})
 		vec.Update(rand.Intn(10), types.Null{})
-		vec2 := containers.MakeVector(vecType, true)
+		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
 			vec2.Append(vec.Get(i))
 		}
@@ -82,11 +82,11 @@ func TestMerge1(t *testing.T) {
 		vec2 := containers.MockVector(vecType, 5, false, nil)
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0)
-		vec3 := containers.MakeVector(vecType, false)
+		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
 			vec3.Append(vec.Get(i))
 		}
-		vec4 := containers.MakeVector(vecType, false)
+		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
 			vec4.Append(vec2.Get(i))
 		}
@@ -115,11 +115,11 @@ func TestMerge1(t *testing.T) {
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0)
 
-		vec3 := containers.MakeVector(vecType, true)
+		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
 			vec3.Append(vec.Get(i))
 		}
-		vec4 := containers.MakeVector(vecType, true)
+		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
 			vec4.Append(vec2.Get(i))
 		}
