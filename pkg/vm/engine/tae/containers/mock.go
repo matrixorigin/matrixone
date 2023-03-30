@@ -50,7 +50,7 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 	return p.providers[colIdx]
 }
 
-func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) (vec Vector) {
+func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vector) {
 	rand.Seed(time.Now().UnixNano())
 	vec = MakeVector(t)
 	if provider != nil {
@@ -341,18 +341,18 @@ func MockVector3(typ types.Type, rows int) Vector {
 	return vec
 }
 
-func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
-	bat = MockNullableBatch(vecTypes, nullables, rows, uniqueIdx, provider)
+func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = MockNullableBatch(vecTypes, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
 	return
 }
 
-func MockNullableBatch(vecTypes []types.Type, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+func MockNullableBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
 	bat = NewEmptyBatch()
 	for idx := range vecTypes {
 		attr := "mock_" + strconv.Itoa(idx)
 		unique := uniqueIdx == idx
-		vec := MockVector(vecTypes[idx], rows, unique, nullables[idx], provider.GetColumnProvider(idx))
+		vec := MockVector(vecTypes[idx], rows, unique, provider.GetColumnProvider(idx))
 		bat.AddVector(attr, vec)
 	}
 	return bat
@@ -363,8 +363,7 @@ func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDat
 	for idx := range vecTypes {
 		attr := "mock_" + strconv.Itoa(idx)
 		unique := uniqueIdx == idx
-		nullable := !unique
-		vec := MockVector(vecTypes[idx], rows, unique, nullable, provider.GetColumnProvider(idx))
+		vec := MockVector(vecTypes[idx], rows, unique, provider.GetColumnProvider(idx))
 		bat.AddVector(attr, vec)
 	}
 	return bat

@@ -70,7 +70,6 @@ func TestVector1(t *testing.T) {
 	vec := MakeVector(types.T_int32.ToType(), opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
-	//assert.False(t, vec.Nullable())
 	vec.AppendMany(int32(1), int32(100))
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, int32(12), vec.Get(0).(int32))
@@ -96,7 +95,6 @@ func TestVector2(t *testing.T) {
 	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int64.ToType(), opt)
 	t.Log(vec.String())
-	//assert.True(t, vec.Nullable())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
 		vec.Append(int64(i))
@@ -180,7 +178,7 @@ func TestVector5(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 10, false, true, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
 		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
@@ -221,7 +219,7 @@ func TestVector6(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	f := func(vecType types.Type, nullable bool) {
-		vec := MockVector(vecType, 10, false, nullable, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
 			vec.Update(4, types.Null{})
 		}
@@ -306,11 +304,11 @@ func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	testF := func(typ types.Type, nullable bool) {
-		vec := MockVector(typ, 10, false, nullable, nil)
+		vec := MockVector(typ, 10, false, nil)
 		if nullable {
 			vec.Append(types.Null{})
 		}
-		vec2 := MockVector(typ, 10, false, nullable, nil)
+		vec2 := MockVector(typ, 10, false, nil)
 		vec3 := MakeVector(typ)
 		vec3.Extend(vec)
 		assert.Equal(t, vec.Length(), vec3.Length())
@@ -434,8 +432,8 @@ func TestCompact(t *testing.T) {
 }
 
 func BenchmarkVectorExtend(t *testing.B) {
-	vec1 := MockVector(types.T_int32.ToType(), 0, true, false, nil)
-	vec2 := MockVector(types.T_int32.ToType(), 1, true, false, nil)
+	vec1 := MockVector(types.T_int32.ToType(), 0, true, nil)
+	vec2 := MockVector(types.T_int32.ToType(), 1, true, nil)
 	defer vec1.Close()
 	defer vec2.Close()
 

@@ -186,7 +186,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if err != nil {
 		return
 	}
-	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], false)
+	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0])
 	return
 }
 

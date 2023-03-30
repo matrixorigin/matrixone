@@ -454,13 +454,7 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(
-	cxt context.Context,
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	reader dataio.Reader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, block objectio.BlockObject, reader dataio.Reader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	if block.GetExtent().End() == 0 {
 		return bat, nil
@@ -478,9 +472,9 @@ func LoadBlkColumnsByMeta(
 		pkgVec := ioResult[0].Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
+			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
+			vec = containers.NewVectorWithSharedMemory(pkgVec)
 		}
 		bat.AddVector(colNames[idx], vec)
 		bat.Vecs[i] = vec
@@ -522,7 +516,7 @@ func (data *CheckpointData) ReadFrom(
 
 	for idx, item := range checkpointDataRefer {
 		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, metas[idx], reader)
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, metas[idx], reader)
 		if err != nil {
 			return
 		}

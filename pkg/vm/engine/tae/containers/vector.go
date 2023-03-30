@@ -27,16 +27,11 @@ import (
 )
 
 // DN vector is different from CN vector by
-// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable. (Will be removed in future PR)
 // 2. Window - DN uses shared-memory Window
 // 3. Mpool  - DN stores mpool reference within the vector
 // 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
 type vector[T any] struct {
 	downstreamVector *cnVector.Vector
-
-	// isNullable mainly used in Equals() Note:
-	//1. We can't use cnVector.Nsp.Np to replace this flag, as this information will be lost in Marshalling/UnMarshalling.
-	isNullable bool
 
 	// Used in Append()
 	mpool *mpool.MPool

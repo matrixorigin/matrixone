@@ -373,7 +373,7 @@ func TestCopy1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	t1 := types.T_varchar.ToType()
-	v1 := containers.MockVector(t1, 10, false, true, nil)
+	v1 := containers.MockVector(t1, 10, false, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
 	mv1 := containers.CopyToMoVec(v1)
@@ -382,7 +382,7 @@ func TestCopy1(t *testing.T) {
 	}
 
 	t2 := types.T_date.ToType()
-	v2 := containers.MockVector(t2, 20, false, true, nil)
+	v2 := containers.MockVector(t2, 20, false, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})
 	mv2 := containers.CopyToMoVec(v2)

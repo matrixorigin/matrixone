@@ -97,7 +97,7 @@ func InsertOp[T comparable](
 }
 
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
-	vec := containers.MakeVector(kType, false)
+	vec := containers.MakeVector(kType)
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
@@ -113,7 +113,7 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 }
 
 func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector {
-	vec := containers.MakeVector(kType, false)
+	vec := containers.MakeVector(kType)
 	var vecs []containers.Vector
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
@@ -121,7 +121,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(txnbase.MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType, false)
+				vec = containers.MakeVector(kType)
 			}
 			vec.Append([]byte(k.(string)))
 		}
@@ -129,7 +129,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(txnbase.MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType, false)
+				vec = containers.MakeVector(kType)
 			}
 			vec.Append(k)
 		}

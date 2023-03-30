@@ -288,12 +288,7 @@ type BatchBlock struct {
 	ID uint64
 }
 
-func NewBatchBlock(
-	id uint64,
-	attrs []string,
-	colTypes []types.Type,
-	nullables []bool,
-	opts containers.Options) *BatchBlock {
+func NewBatchBlock(id uint64, attrs []string, colTypes []types.Type, opts containers.Options) *BatchBlock {
 	bat := containers.BuildBatch(attrs, colTypes, opts)
 	block := &BatchBlock{
 		Batch: bat,
