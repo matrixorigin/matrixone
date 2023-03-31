@@ -16,12 +16,43 @@ package plan
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-func shouldAggPushDown(agg, join, leftChild *plan.Node) bool {
-	//this is for debug , will change
-	if leftChild.NodeType != plan.Node_TABLE_SCAN {
+// some restrictions for agg pushdown to make it easier to acheive
+// will remove some restrictions in the future
+func shouldAggPushDown(agg, join, leftChild, rightChild *plan.Node, builder *QueryBuilder) bool {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || rightChild.NodeType != plan.Node_TABLE_SCAN {
 		return false
 	}
-	if leftChild.TableDef.Name != "lineorder" {
+	if len(agg.GroupBy) != 0 {
+		return false
+	}
+	if len(agg.AggList) != 1 {
+		return false
+	}
+	aggFunc, ok := agg.AggList[0].Expr.(*plan.Expr_F)
+	if !ok {
+		return false
+	}
+	if aggFunc.F.Func.ObjName != "sum" {
+		return false
+	}
+	colAgg, ok := aggFunc.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		return false
+	}
+	leftChildTag := leftChild.BindingTags[0]
+	if colAgg.Col.RelPos != leftChildTag {
+		return false
+	}
+
+	if !IsEquiJoin(join.OnList) || len(join.OnList) != 1 {
+		return false
+	}
+	colGroupBy, ok := filterTag(join.OnList[0], leftChildTag).Expr.(*plan.Expr_Col)
+	if !ok {
+		return false
+	}
+	ndv := getColNdv(colGroupBy.Col, join.NodeId, builder)
+	if ndv < 0 || ndv > join.Stats.Outcnt {
 		return false
 	}
 	return true
@@ -107,15 +138,15 @@ func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
-
-	leftChild := builder.qry.Nodes[join.Children[0]]
-
-	if !shouldAggPushDown(node, join, leftChild) {
-		return nodeID
-	}
-
 	//make sure left child is bigger and  agg pushdown to left child
 	builder.applySwapRuleByStats(join.NodeId, false)
+
+	leftChild := builder.qry.Nodes[join.Children[0]]
+	rightChild := builder.qry.Nodes[join.Children[0]]
+
+	if !shouldAggPushDown(node, join, leftChild, rightChild, builder) {
+		return nodeID
+	}
 
 	createNewAggNode(node, join, leftChild, builder)
 	return nodeID
