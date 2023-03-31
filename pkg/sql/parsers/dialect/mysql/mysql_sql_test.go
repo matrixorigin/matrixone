@@ -2095,6 +2095,10 @@ var (
 			output: "call test1(@session, @increment)",
 		},
 		{
+			input:  "select cast(123 as binary)",
+			output: "select cast(123 as binary)",
+		},
+		{
 			input:  "select BINARY 124",
 			output: "select binary(124)",
 		},
