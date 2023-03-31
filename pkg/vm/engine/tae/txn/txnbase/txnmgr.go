@@ -405,6 +405,7 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
+	mgr.onCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
