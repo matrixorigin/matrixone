@@ -104,6 +104,18 @@ func (ar *AccountRoutineManager) cleanKillQueue() {
 	ar.killIdQueue = make([]int64, 0)
 }
 
+func (ar *AccountRoutineManager) getKillQueue() []int64 {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+	return ar.killIdQueue
+}
+
+func (ar *AccountRoutineManager) getAccountId2Routine() map[int64]map[*Routine]bool {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+	return ar.accountId2Routine
+}
+
 func (rm *RoutineManager) GetAccountRoutine() *AccountRoutineManager {
 	return rm.accountRoutine
 }
@@ -465,11 +477,11 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 	//add kill connect routine
 	go func() {
 		for {
-			if len(rm.accountRoutine.killIdQueue) != 0 {
+			if len(rm.GetAccountRoutine().getKillQueue()) != 0 {
 
-				for _, account := range rm.accountRoutine.killIdQueue {
+				for _, account := range rm.GetAccountRoutine().getKillQueue() {
 					//kill all routine to this account
-					if rtMap, ok := rm.accountRoutine.accountId2Routine[account]; ok {
+					if rtMap, ok := rm.GetAccountRoutine().getAccountId2Routine()[account]; ok {
 						for rt := range rtMap {
 							if rt != nil {
 								// kill connect of this routine
