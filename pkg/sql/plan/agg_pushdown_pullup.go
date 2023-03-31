@@ -69,6 +69,8 @@ func replaceCol(expr *plan.Expr, oldRelPos, oldColPos, newRelPos, newColPos int3
 		}
 
 	case *plan.Expr_Col:
+		//for now, shouldAggPushDown make sure only one column in expr,and only one expr in exprlist, so new colpos is always 0
+		//if multi expr in agg list and group list supported in the future, this need to be fixed
 		if exprImpl.Col.RelPos == oldRelPos {
 			exprImpl.Col.RelPos = newRelPos
 			exprImpl.Col.ColPos = 0
@@ -111,12 +113,10 @@ func createNewAggNode(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 		},
 		builder.ctxByNode[join.NodeId])
 
-	newBinding := builder.ctxByNode[newNodeID].bindingByTag
-	newBinding[newGroupTag] = newBinding[leftChildTag]
-	newBinding[newAggTag] = newBinding[leftChildTag]
-
 	//set child pointer
 	join.Children[0] = newNodeID
+
+	//replace relpos for exprs in join and agg node
 	replaceCol(join.OnList[0], leftChildTag, 0, newGroupTag, 0)
 	replaceCol(agg.AggList[0], leftChildTag, 0, newAggTag, 0)
 }
