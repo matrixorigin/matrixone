@@ -475,15 +475,15 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 								// kill connect of this routine
 								rt.killConnection(false)
 								//remove  routine record of this routine
-								rm.accountRoutine.deleteRoutine(account, rt)
+								rm.GetAccountRoutine().deleteRoutine(account, rt)
 							}
 						}
 						//remove accountRoutineMap  for the account
-						rm.accountRoutine.clearAccountRoutineMap(account)
+						rm.GetAccountRoutine().clearAccountRoutineMap(account)
 					}
 				}
 				//clean kill queue
-				rm.accountRoutine.cleanKillQueue()
+				rm.GetAccountRoutine().cleanKillQueue()
 
 			}
 			time.Sleep(time.Duration(1 * time.Minute))
