@@ -609,7 +609,9 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
-				entry, DelSchema,
+				entry,
+				node,
+				DelSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
 				dbNode.GetEnd(),
@@ -619,6 +621,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		} else {
 			catalogEntry2Batch(collector.data.bats[DBInsertIDX],
 				entry,
+				node,
 				catalog.SystemDBSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
@@ -676,6 +679,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			catalogEntry2Batch(
 				collector.data.bats[TBLInsertIDX],
 				entry,
+				node,
 				catalog.SystemTableSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
@@ -701,7 +705,9 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 			catalogEntry2Batch(
 				collector.data.bats[TBLDeleteIDX],
-				entry, DelSchema,
+				entry,
+				node,
+				DelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),
