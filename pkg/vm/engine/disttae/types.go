@@ -164,8 +164,10 @@ type databaseKey struct {
 
 // block list information of table
 type tableMeta struct {
-	tableName     string
-	blocks        [][]BlockMeta
+	tableName string
+	// 全量non-append blocks(没有appendBlocks)
+	blocks [][]BlockMeta
+	// 有被删除过的non-append Blocks
 	modifedBlocks [][]ModifyBlockMeta
 	defs          []engine.TableDef
 }

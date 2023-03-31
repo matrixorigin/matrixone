@@ -145,7 +145,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
-
+	// 下面是莫尘写的，上面不知道
 	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err

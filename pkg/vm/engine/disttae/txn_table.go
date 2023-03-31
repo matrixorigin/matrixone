@@ -192,7 +192,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
 	}
 	tbl.db.txn.Unlock()
-
+	// 去从DN拿到blocklist
 	err := tbl.updateMeta(ctx, expr)
 	if err != nil {
 		return nil, err
@@ -211,6 +211,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
+		// snapshot的blockList
 		blocks := tbl.meta.blocks[i]
 		blks := make([]BlockMeta, 0, len(blocks))
 		deletes := make(map[types.Blockid][]int)
@@ -221,15 +222,24 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				// if cn can see a appendable block, this block must contain all updates
 				// in cache, no need to do merge read, BlockRead will filter out
 				// invisible and deleted rows with respect to the timestamp
-				if !blocks[i].Info.EntryState {
+				if !blocks[i].Info.EntryState { // cn只读内存的数据，blockList里面的appendBlcok跳过
 					if blocks[i].Info.CommitTs.ToTimestamp().Less(ts) { // hack
+						// 排查自己能够看到的non-appendblock，
 						ids[i] = blocks[i].Info.BlockID
 					}
 				}
 			}
 
+			// 现在已经把blockList能够读到的block都已经筛选出来
+			// 放到了ids里面，接下来看这些里面有没有某些block被
+			// 删除过
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
+				// 有被删除过的block他们的删除行号都是保存在在对应
+				// 表的partition里面(在拉logtail的时候做的)
+				// parts[i]看作一个kv,它里面存储了blockId_offset这样的
+				// 作为key, value就是rowId.(备注:blockId不会重复)
+				// blockId当作一个key(s3 Snapshot)
 				iter := tbl.parts[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
@@ -239,6 +249,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				iter.Close()
 			}
 
+			// workspace(这里也DN的RowId)(事务的batch的rowId在delBatch就已经过滤过了)
 			for _, entry := range tbl.writes {
 				if entry.typ == DELETE {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -248,18 +259,27 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 					}
 				}
 			}
+			// 把没有有删除的block放在这里blks里面
 			for i := range blocks {
 				if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
 					blks = append(blks, blocks[i])
 				}
 			}
 		}
+		// 处理没有有删除的snapshot 的block
 		for _, blk := range blks {
+			// skipBlocks的存的是包含没有删除的block
 			tbl.skipBlocks[blk.Info.BlockID] = 0
+			// exprMono:a > 1是单调的，而sin(a)不是单调的
+			// 本质上这里就是根据expr看这个block是不是真的要读.
+			// 要读就是全量读，否则就是都不读
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
+		// 拿到有删除的block,这里面也会更加表达式初步的把block
+		// 可以不读的过滤掉,然后把真正要读的block把deletes也
+		// 放进modifyBlock
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
@@ -497,10 +517,16 @@ func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 	return tbl.tableId
 }
 
+// 这个是接口的NewReader
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+	// ========================================== 忽略
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
+	// ========================================== 忽略
+
+	// 读内存数据(本质上就是PartitionRead)以及本地读modifyBlocks
+	// 本地
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
