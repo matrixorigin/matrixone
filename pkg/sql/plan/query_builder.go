@@ -708,7 +708,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId, _ = builder.pushdownFilters(rootId, nil, false)
 		ReCalcNodeStats(rootId, builder, true, true)
-		rootId = builder.agg_pushdown(rootId)
+		rootId = builder.aggPushDown(rootId)
 		ReCalcNodeStats(rootId, builder, true, false)
 		rootId = builder.determineJoinOrder(rootId)
 		ReCalcNodeStats(rootId, builder, true, false)

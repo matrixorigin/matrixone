@@ -121,13 +121,13 @@ func createNewAggNode(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 	replaceCol(agg.AggList[0], leftChildTag, 0, newAggTag, 0)
 }
 
-func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
+func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType != plan.Node_AGG {
 		if len(node.Children) > 0 {
 			for i, child := range node.Children {
-				node.Children[i] = builder.agg_pushdown(child)
+				node.Children[i] = builder.aggPushDown(child)
 			}
 		}
 		return nodeID
@@ -142,7 +142,7 @@ func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
 	builder.applySwapRuleByStats(join.NodeId, false)
 
 	leftChild := builder.qry.Nodes[join.Children[0]]
-	rightChild := builder.qry.Nodes[join.Children[0]]
+	rightChild := builder.qry.Nodes[join.Children[1]]
 
 	if !shouldAggPushDown(node, join, leftChild, rightChild, builder) {
 		return nodeID
