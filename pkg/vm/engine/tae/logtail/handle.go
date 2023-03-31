@@ -652,7 +652,7 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, readerMetas[i][idx], readers[i])
+			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
 			if err != nil {
 				return
 			}

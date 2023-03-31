@@ -248,17 +248,17 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 func (t *GCTable) collectData(files []string) []*containers.Batch {
 	bats := t.makeBatchWithGCTable()
 	for i, attr := range BlockSchemaAttr {
-		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
-		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
+		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
 	}
 	for i, attr := range DropTableSchemaAttr {
-		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
+		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i]))
 	}
 	for i, attr := range DropDBSchemaAtt {
-		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i], false))
+		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i]))
 	}
 	for i, attr := range DeleteFileSchemaAtt {
-		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i], false))
+		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i]))
 	}
 	for did, entry := range t.dbs {
 		if entry.drop {
@@ -314,9 +314,9 @@ func (t *GCTable) replayData(ctx context.Context,
 		pkgVec := mobat[0].Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(types[i], false)
+			vec = containers.MakeVector(types[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, false)
+			vec = containers.NewVectorWithSharedMemory(pkgVec)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}

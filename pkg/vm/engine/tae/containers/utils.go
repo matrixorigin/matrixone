@@ -37,8 +37,8 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
-	vec := MakeVector(*v.GetType(), nullable)
+func NewVectorWithSharedMemory(v *movec.Vector) Vector {
+	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
 }
@@ -266,7 +266,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
-		v := NewVectorWithSharedMemory(b.Vecs[i], false)
+		v := NewVectorWithSharedMemory(b.Vecs[i])
 		bat.AddVector(attr, v)
 	}
 	return bat
