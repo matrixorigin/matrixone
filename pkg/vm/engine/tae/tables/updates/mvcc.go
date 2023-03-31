@@ -142,6 +142,8 @@ func (n *MVCCHandle) PrepareCompact() bool {
 	return n.AppendCommitted()
 }
 func (n *MVCCHandle) AppendCommitted() bool {
+	n.RLock()
+	defer n.RUnlock()
 	return n.appends.IsCommitted()
 }
 func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
