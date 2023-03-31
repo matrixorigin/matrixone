@@ -84,11 +84,10 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
 	var fs fileservice.FileService
-	var fromName, toName string
+	var toName string
 
 	fromBlockEntry := entry.from.GetMeta().(*catalog.BlockEntry)
 	fs = fromBlockEntry.GetBlockData().GetFs().Service
-	fromName = fromBlockEntry.ID.ObjectString()
 
 	if entry.to != nil {
 		toBlockEntry := entry.to.GetMeta().(*catalog.BlockEntry)
@@ -96,9 +95,8 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	}
 
 	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
-		if fromName != "" {
-			_ = fs.Delete(context.TODO(), fromName)
-		}
+		// do not delete `from` block file because it can be written again if it has deletes
+		// while it is totally safe to delete the brand new `to` block file
 		if toName != "" {
 			_ = fs.Delete(context.TODO(), toName)
 		}

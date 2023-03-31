@@ -70,10 +70,11 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,8 +120,12 @@ func HandleSyncLogTailReq(
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
+		if elapsed := time.Since(now); elapsed > 5*time.Second {
+			logutil.Infof("[Logtail] long pull cost %v, %v: %+v, %v ", elapsed, canRetry, req, err)
+		}
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
