@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"math"
 	"math/bits"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2475,6 +2476,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if alter account suspend, add the account to kill queue
+	if accountExist {
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
+			ses.rm.accountRoutine.enKillQueue(int64(targetAccountId))
+		}
+	}
+
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -3317,6 +3326,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if drop the account, add the account to kill queue
+	ses.rm.accountRoutine.enKillQueue(accountId)
 	return err
 
 handleFailed:
