@@ -28,11 +28,11 @@ import (
 )
 
 func getCurrentAutoIncrement(e engine.Engine, proc *process.Process, colName string, dbName, tblName string) (uint64, error) {
-	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
-	if autoIncrCaches.AutoIncrCaches != nil {
-		autoIncrCaches.Mu.Lock()
-		defer autoIncrCaches.Mu.Unlock()
-		if autoincrcache, ok := autoIncrCaches.AutoIncrCaches[colName]; ok {
+	aicm := proc.Aicm
+	if aicm.AutoIncrCaches != nil {
+		aicm.Mu.Lock()
+		defer aicm.Mu.Unlock()
+		if autoincrcache, ok := aicm.AutoIncrCaches[colName]; ok {
 			return autoincrcache.CurNum, nil
 		} else {
 			// Not cached yet or the cache is ran out.
