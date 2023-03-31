@@ -27,19 +27,67 @@ func shouldAggPushDown(agg, join, leftChild *plan.Node) bool {
 	return true
 }
 
+func replaceCol(expr *plan.Expr, oldRelPos, oldColPos, newRelPos, newColPos int32) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			replaceCol(arg, oldRelPos, oldColPos, newRelPos, newColPos)
+		}
+
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == oldRelPos {
+			exprImpl.Col.RelPos = newRelPos
+			exprImpl.Col.ColPos = 0
+		}
+	}
+}
+
+func filterTag(expr *Expr, tag int32) *Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			retExpr := filterTag(arg, tag)
+			if retExpr != nil {
+				return retExpr
+			}
+		}
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == tag {
+			return expr
+		}
+	}
+	return nil
+}
+
 func createNewAggNode(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
+	leftChildTag := leftChild.BindingTags[0]
 	newAggList := DeepCopyExprList(agg.AggList)
-	newGroupBy := DeepCopyExprList(agg.GroupBy)
-	newNodeID := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_AGG,
-		Children:    []int32{leftChild.NodeId},
-		GroupBy:     newGroupBy,
-		AggList:     newAggList,
-		BindingTags: agg.BindingTags,
-	}, builder.ctxByNode[agg.NodeId])
+	//newGroupBy := DeepCopyExprList(agg.GroupBy)
+	newGroupBy := []*plan.Expr{DeepCopyExpr(filterTag(join.OnList[0], leftChildTag))}
+
+	newGroupTag := builder.genNewTag()
+	newAggTag := builder.genNewTag()
+	newNodeID := builder.appendNode(
+		&plan.Node{
+			NodeType:    plan.Node_AGG,
+			Children:    []int32{leftChild.NodeId},
+			GroupBy:     newGroupBy,
+			AggList:     newAggList,
+			BindingTags: []int32{newGroupTag, newAggTag},
+		},
+		builder.ctxByNode[join.NodeId])
+
+	newBinding := builder.ctxByNode[newNodeID].bindingByTag
+	newBinding[newGroupTag] = newBinding[leftChildTag]
+	newBinding[newAggTag] = newBinding[leftChildTag]
 
 	//set child pointer
 	join.Children[0] = newNodeID
+	replaceCol(join.OnList[0], leftChildTag, 0, newGroupTag, 0)
+	replaceCol(agg.AggList[0], leftChildTag, 0, newAggTag, 0)
 }
 
 func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
@@ -66,6 +114,9 @@ func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
 		return nodeID
 	}
 
-	//createNewAggNode(node, join, leftChild, builder)
+	//make sure left child is bigger and  agg pushdown to left child
+	builder.applySwapRuleByStats(join.NodeId, false)
+
+	createNewAggNode(node, join, leftChild, builder)
 	return nodeID
 }
