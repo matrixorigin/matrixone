@@ -297,10 +297,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:    node.NotCacheable,
+		SourceStep:      node.SourceStep,
+		TargetSteps:     make([]int32, len(node.TargetSteps)),
 	}
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
+	copy(newNode.TargetSteps, node.TargetSteps)
 
 	for idx, expr := range node.ProjectList {
 		newNode.ProjectList[idx] = DeepCopyExpr(expr)
