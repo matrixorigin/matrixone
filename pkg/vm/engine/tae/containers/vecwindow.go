@@ -17,41 +17,29 @@ package containers
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"unsafe"
-
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"io"
 )
 
 type windowBase struct {
 	offset, length int
 }
 
-func (win *windowBase) IsView() bool                         { return true }
-func (win *windowBase) Update(i int, v any)                  { panic("cannot modify window") }
-func (win *windowBase) Delete(i int)                         { panic("cannot modify window") }
-func (win *windowBase) Compact(deletes *roaring.Bitmap)      { panic("cannot modify window") }
-func (win *windowBase) Append(v any)                         { panic("cannot modify window") }
-func (win *windowBase) AppendMany(vs ...any)                 { panic("cannot modify window") }
-func (win *windowBase) AppendNoNulls(s any)                  { panic("cannot modify window") }
-func (win *windowBase) Extend(o Vector)                      { panic("cannot modify window") }
-func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int)  { panic("cannot modify window") }
-func (win *windowBase) Length() int                          { return win.length }
-func (win *windowBase) Capacity() int                        { return win.length }
-func (win *windowBase) Allocated() int                       { return 0 }
-func (win *windowBase) DataWindow(offset, length int) []byte { panic("cannot window a window") }
-func (win *windowBase) Close()                               {}
-func (win *windowBase) ReadFrom(io.Reader) (int64, error)    { panic("cannot modify window") }
-
-func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error {
-	panic("cannot modify window")
-}
-func (win *windowBase) Reset()                                  { panic("cannot modify window") }
-func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot modify window") }
+func (win *windowBase) Update(i int, v any)                 { panic("cannot modify window") }
+func (win *windowBase) Delete(i int)                        { panic("cannot modify window") }
+func (win *windowBase) Compact(deletes *roaring.Bitmap)     { panic("cannot modify window") }
+func (win *windowBase) Append(v any)                        { panic("cannot modify window") }
+func (win *windowBase) AppendMany(vs ...any)                { panic("cannot modify window") }
+func (win *windowBase) Extend(o Vector)                     { panic("cannot modify window") }
+func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int) { panic("cannot modify window") }
+func (win *windowBase) Length() int                         { return win.length }
+func (win *windowBase) Allocated() int                      { return 0 }
+func (win *windowBase) Close()                              {}
+func (win *windowBase) ReadFrom(io.Reader) (int64, error)   { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
@@ -72,13 +60,13 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		return false
 	}
 	if win.HasNull() {
-		if !win.NullMask().Equals(o.NullMask()) {
+		if !win.NullMask().IsSame(o.NullMask()) {
 			return false
 		}
 	}
 	mask := win.NullMask()
 	for i := 0; i < win.Length(); i++ {
-		if mask != nil && mask.ContainsInt(i) {
+		if mask != nil && mask.Contains(uint64(i)) {
 			continue
 		}
 		var v T
@@ -120,22 +108,8 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 
 }
 
-func (win *vectorWindow[T]) GetView() VectorView {
-	return &vectorWindow[T]{
-		ref: win.ref,
-		windowBase: &windowBase{
-			offset: win.offset,
-			length: win.length,
-		},
-	}
-}
-
 func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
-}
-
-func (win *vectorWindow[T]) Data() []byte {
-	return win.ref.DataWindow(win.offset, win.length)
 }
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
@@ -146,13 +120,14 @@ func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
 func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
-func (win *vectorWindow[T]) NullMask() *roaring64.Bitmap {
+func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
 	mask := win.ref.NullMask()
 	if win.offset == 0 || mask == nil {
 		return mask
 	}
-	return common.BM64Window(mask, win.offset, win.offset+win.length)
+	return cnNulls.Range(mask, uint64(win.offset), uint64(win.offset+win.length), 0, cnNulls.NewWithSize(0))
 }
+
 func (win *vectorWindow[T]) IsNull(i int) bool {
 	return win.ref.IsNull(i + win.offset)
 }
@@ -167,37 +142,30 @@ func (win *vectorWindow[T]) PPString(num int) string {
 	return s
 }
 func (win *vectorWindow[T]) Slice() any {
-	return win.ref.fastSlice()[win.offset : win.offset+win.length]
-}
-func (win *vectorWindow[T]) SlicePtr() unsafe.Pointer {
-	slice := win.ref.fastSlice()[win.offset : win.offset+win.length]
-	return unsafe.Pointer(&slice[0])
-}
-func (win *vectorWindow[T]) Bytes() *Bytes {
-	bs := win.ref.Bytes()
-	bs = bs.Window(win.offset, win.length)
-	return bs
+	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
 }
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
-	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
 }
+
 func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	if offset+length > win.length {
 		panic("bad param")
 	}
-	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
 }
 
 func (win *vectorWindow[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
-	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
 }
 
 func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	if offset+length > win.length {
 		panic("bad param")
 	}
-	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
 }
+
 func (win *vectorWindow[T]) WriteTo(w io.Writer) (n int64, err error) { panic("implement me") }
 func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	if offset+length > win.length {
@@ -210,4 +178,14 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 			length: length,
 		},
 	}
+}
+
+func (win *vectorWindow[T]) getDownstreamVector() *cnVector.Vector {
+	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
+	return res
+}
+
+func (win *vectorWindow[T]) setDownstreamVector(vec *cnVector.Vector) {
+	// Windows are read only
+	panic("cannot modify window")
 }

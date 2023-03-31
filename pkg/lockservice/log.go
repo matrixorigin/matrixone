@@ -520,14 +520,14 @@ func logWaiterNotified(
 
 func logWaiterNotifySkipped(
 	serviceID string,
-	w *waiter,
+	w string,
 	reason string) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter notify skipped",
 			serviceIDField(serviceID),
 			zap.String("reason", reason),
-			zap.Stringer("waiter", w))
+			zap.String("waiter", w))
 	}
 }
 

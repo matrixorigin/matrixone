@@ -99,3 +99,6 @@ select timediff(t1,NULL),timediff(NULL,t2)from time_01;
 select timediff('20',NULL) , timediff('20','24:59:09.8453');
 select timediff('12:00','24:59:09.8453'),timediff('-838:59:59.0000','-1122');
 select * from (select timediff(t1,t2) from time_01) as t;
+
+select cast('02 10:11:12' as time);
+select cast('255 10:11:12' as time);

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -105,6 +106,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	// with values
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.ctx = c.proc.Ctx
 
 	// session info and callback function to write back query result.
 	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
@@ -1767,18 +1771,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
-	logutil.Infof("cn generateNodes-1, tbl %d ranges is %d", tblId, expectedLen)
-	defer func() {
-		if expectedLen != 0 {
-			sum := 0
-			for i := range nodes {
-				sum += len(nodes[i].Data)
-			}
-			if sum != expectedLen {
-				logutil.Errorf("cn generateNodes-2, tbl %d, need %d, but %d", tblId, expectedLen, sum)
-			}
-		}
-	}()
+	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, it's temporary table ?
 	// XXX the code is too confused. should be removed once we remove the memory-engine.

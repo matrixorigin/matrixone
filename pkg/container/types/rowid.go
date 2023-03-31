@@ -36,6 +36,29 @@ const ObjectBytesSize = 18
 
 type ObjectBytes = [ObjectBytesSize]byte
 
+// BuildTestRowid used only in unit test.
+func BuildTestRowid(a, b int64) (ret Rowid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[8:16], EncodeInt64(&b))
+	copy(ret[20:], EncodeInt64(&b))
+	return
+}
+
+// BuildTestBlockid used only in unit test
+func BuildTestBlockid(a, b int64) (ret Blockid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[8:16], EncodeInt64(&b))
+	return
+}
+
+func CompareRowidRowidAligned(a, b Rowid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
+
+func CompareBlockidBlockidAligned(a, b Blockid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
+
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
