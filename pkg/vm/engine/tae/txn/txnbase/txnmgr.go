@@ -381,6 +381,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
+	mgr.onCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
@@ -469,7 +470,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		} else {
 			mgr.on1PCPrepared(op)
 		}
-		mgr.onCommitTxn(op.Txn)
 	}
 	logutil.Debug("[dequeuePrepared]",
 		common.NameSpaceField("txns"),
