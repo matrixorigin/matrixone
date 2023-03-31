@@ -15,6 +15,8 @@
 package perfcounter
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"go.uber.org/zap"
 )
@@ -33,24 +35,21 @@ func NewCounterLogExporter(counter *CounterSet) stats.LogExporter {
 func (c *CounterLogExporter) Export() []zap.Field {
 	var fields []zap.Field
 
-	reads := c.counter.FileService.Cache.Read.SwapW(0)
-	hits := c.counter.FileService.Cache.Hit.SwapW(0)
-	memReads := c.counter.FileService.Cache.Memory.Read.SwapW(0)
-	memHits := c.counter.FileService.Cache.Memory.Hit.SwapW(0)
-	diskReads := c.counter.FileService.Cache.Disk.Read.SwapW(0)
-	diskHits := c.counter.FileService.Cache.Disk.Hit.SwapW(0)
+	fields = append(fields, zap.Any("FileService Cache Hit Rate",
+		float64(c.counter.FileService.Cache.Hit.LoadW())/
+			float64(c.counter.FileService.Cache.Read.LoadW())))
+	fields = append(fields, zap.Any("FileService Cache Memory Hit Rate",
+		float64(c.counter.FileService.Cache.Memory.Hit.LoadW())/
+			float64(c.counter.FileService.Cache.Memory.Read.LoadW())))
+	fields = append(fields, zap.Any("FileService Cache Disk Hit Rate",
+		float64(c.counter.FileService.Cache.Disk.Hit.LoadW())/
+			float64(c.counter.FileService.Cache.Disk.Read.LoadW())))
 
-	fields = append(fields, zap.Any("reads", reads))
-	fields = append(fields, zap.Any("hits", hits))
-	fields = append(fields, zap.Any("hit rate", float64(hits)/float64(reads)))
-	fields = append(fields, zap.Any("mem reads", memReads))
-	fields = append(fields, zap.Any("mem hits", memHits))
-	fields = append(fields, zap.Any("mem hit rate", float64(memHits)/float64(memReads)))
-
-	fields = append(fields, zap.Any("disk reads", diskReads))
-	fields = append(fields, zap.Any("disk hits", diskHits))
-
-	fields = append(fields, zap.Any("disk hit rate", float64(diskHits)/float64(diskReads)))
+	// all fields in CounterSet
+	_ = c.counter.IterFields(func(path []string, counter *stats.Counter) error {
+		fields = append(fields, zap.Any(strings.Join(path, "."), counter.SwapW(0)))
+		return nil
+	})
 
 	return fields
 }

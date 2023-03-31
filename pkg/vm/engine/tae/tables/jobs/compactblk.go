@@ -62,12 +62,12 @@ func NewCompactBlockTask(
 		meta:      meta,
 		scheduler: scheduler,
 	}
-	dbId := meta.GetSegment().GetTable().GetDB().GetID()
+	dbId := meta.GetSegment().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	tableId := meta.GetSegment().GetTable().GetID()
+	tableId := meta.GetSegment().GetTable().ID
 	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return

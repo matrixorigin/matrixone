@@ -15,7 +15,6 @@
 package txnbase
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -322,18 +321,19 @@ func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (ts types.TS, err error) 
 }
 
 func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
+	var sn1 int
+	if sn1, err = w.Write(un.Start[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Write(w, binary.BigEndian, un.Prepare); err != nil {
+	n += int64(sn1)
+	if sn1, err = w.Write(un.Prepare[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Write(w, binary.BigEndian, un.End); err != nil {
+	n += int64(sn1)
+	if sn1, err = w.Write(un.End[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
+	n += int64(sn1)
 	var sn int64
 	logIndex := un.LogIndex
 	if logIndex == nil {
@@ -344,47 +344,40 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	is1PC := uint8(0)
-	if un.is1PC {
-		is1PC = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, is1PC); err != nil {
+	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
-	n += 1
+	n += int64(sn1)
 	return
 }
 
 func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
+	var sn int
+	if sn, err = r.Read(un.Start[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Read(r, binary.BigEndian, &un.Prepare); err != nil {
+	n += int64(sn)
+	if sn, err = r.Read(un.Prepare[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Read(r, binary.BigEndian, &un.End); err != nil {
+	n += int64(sn)
+	if sn, err = r.Read(un.End[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
+	n += int64(sn)
 
-	var sn int64
+	var sn2 int64
 	un.LogIndex = &store.Index{}
-	sn, err = un.LogIndex.ReadFrom(r)
+	sn2, err = un.LogIndex.ReadFrom(r)
 	if err != nil {
 		return
 	}
-	n += sn
+	n += sn2
 
-	is1PC := uint8(0)
-	if err = binary.Read(r, binary.BigEndian, &is1PC); err != nil {
+	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
-	n += 1
-	if is1PC == 1 {
-		un.is1PC = true
-	}
+	n += int64(sn)
 	return
 }
 

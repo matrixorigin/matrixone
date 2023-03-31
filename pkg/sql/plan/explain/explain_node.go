@@ -435,8 +435,8 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 }
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "ns" +
-		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "ns" +
+	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed/1000000, 10) + "ms" +
+		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed/1000000, 10) + "ms" +
 		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
