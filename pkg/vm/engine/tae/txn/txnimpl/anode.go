@@ -93,11 +93,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)
 		}
-		n.storage.mnode.data = containers.BuildBatch(
-			schema.AllNames(),
-			schema.AllTypes(),
-			schema.AllNullables(),
-			opts)
+		n.storage.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
 	from := uint32(n.storage.mnode.data.Length())

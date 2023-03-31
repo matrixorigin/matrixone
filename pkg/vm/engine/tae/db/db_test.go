@@ -4731,7 +4731,7 @@ func TestAppendBat(t *testing.T) {
 
 	run := func() {
 		defer wg.Done()
-		b := containers.BuildBatch(schema.Attrs(), schema.Types(), schema.Nullables(), containers.Options{
+		b := containers.BuildBatch(schema.Attrs(), schema.Types(), containers.Options{
 			Allocator: common.DefaultAllocator})
 		defer b.Close()
 		for i := 0; i < bat.Length(); i++ {
