@@ -224,7 +224,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				}
 				metric.ConnectionCounter(accountName).Dec()
 				tenantID := ses.GetTenantInfo().GetTenantID()
-				rm.accountRoutine.deleteRoutine(int64(tenantID), rt)
+				rm.GetAccountRoutine().deleteRoutine(int64(tenantID), rt)
 			})
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
@@ -253,7 +253,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 		if killConnection {
 			logutil.Infof("kill connection %d", id)
 			rt.killConnection(killMyself)
-			rm.accountRoutine.deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
+			rm.GetAccountRoutine().deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
 		} else {
 			logutil.Infof("kill query %s on the connection %d", statementId, id)
 			rt.killQuery(killMyself, statementId)
