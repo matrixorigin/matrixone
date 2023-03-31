@@ -474,11 +474,12 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 								rm.accountRoutine.deleteRoutine(account, rt)
 							}
 						}
-						//deKillQueue this account
-						rm.accountRoutine.cleanKillQueue()
+						//remove accountRoutineMap  for the account
 						rm.accountRoutine.clearAccountRoutineMap(account)
 					}
 				}
+				//clean kill queue
+				rm.accountRoutine.cleanKillQueue()
 
 			}
 			time.Sleep(time.Duration(1 * time.Minute))
