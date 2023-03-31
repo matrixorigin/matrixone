@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"go.uber.org/zap"
 )
 
 const (
@@ -208,8 +207,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		return
 	}
 	apiBat, err := containersBatchToProtoBatch(bat)
-	logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tid, tableName,
-		DebugBatchToString("catalog", bat, false, zap.DebugLevel))
+	logutil.Debugf("[logtail] from table %d-%s, delete %v, batch length %d", tid, tableName, delete, bat.Length())
 	if err != nil {
 		panic(err)
 	}
