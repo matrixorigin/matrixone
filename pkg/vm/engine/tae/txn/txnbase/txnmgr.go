@@ -170,6 +170,25 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	return
 }
 
+// StartTxn starts a local transaction initiated by DN
+func (mgr *TxnManager) StartTxnWithNow(info []byte) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txnId := mgr.IdAlloc.Alloc()
+	startTs := mgr.TsAlloc.Alloc()
+
+	store := mgr.TxnStoreFactory()
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
+	store.BindTxn(txn)
+	mgr.IDMap[string(txnId)] = txn
+	return
+}
+
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
 func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	info []byte,
