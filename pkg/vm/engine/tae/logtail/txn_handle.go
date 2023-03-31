@@ -105,7 +105,7 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	bat := ibat.(*containers.Batch)
 	mybat := containers.NewBatch()
 	mybat.AddVector(catalog.AttrRowID, bat.GetVectorByName(catalog.AttrRowID).CloneWindow(0, bat.Length()))
-	commitVec := containers.MakeVector(types.T_TS.ToType(), false)
+	commitVec := containers.MakeVector(types.T_TS.ToType())
 	for i := 0; i < bat.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS())
 	}

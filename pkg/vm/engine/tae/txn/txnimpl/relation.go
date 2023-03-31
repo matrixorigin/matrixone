@@ -242,7 +242,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 				return err
 			}
 		}
-		vec := containers.MakeVector(def.Type, def.Nullable())
+		vec := containers.MakeVector(def.Type)
 		vec.Append(colVal)
 		bat.AddVector(def.Name, vec)
 	}
