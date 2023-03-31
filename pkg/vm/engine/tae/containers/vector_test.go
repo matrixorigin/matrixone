@@ -35,7 +35,7 @@ func TestVectorShallowForeach(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
 	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
-		vec := MakeVector(typ, true, opt)
+		vec := MakeVector(typ, opt)
 		for i := 0; i < 10; i++ {
 			if i%2 == 0 {
 				vec.Append(types.Null{})
@@ -67,17 +67,16 @@ func TestVectorShallowForeach(t *testing.T) {
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int32.ToType(), false, opt)
+	vec := MakeVector(types.T_int32.ToType(), opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
-	assert.False(t, vec.Nullable())
 	vec.AppendMany(int32(1), int32(100))
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, int32(12), vec.Get(0).(int32))
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
 	assert.Equal(t, int32(1), vec.Get(2).(int32))
 	assert.Equal(t, int32(100), vec.Get(3).(int32))
-	vec2 := NewVector[int32](types.T_int32.ToType(), false)
+	vec2 := NewVector[int32](types.T_int32.ToType())
 	vec2.Extend(vec)
 	assert.Equal(t, 4, vec2.Length())
 	assert.Equal(t, int32(12), vec2.Get(0).(int32))
@@ -94,9 +93,8 @@ func TestVector1(t *testing.T) {
 func TestVector2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int64.ToType(), true, opt)
+	vec := MakeVector(types.T_int64.ToType(), opt)
 	t.Log(vec.String())
-	assert.True(t, vec.Nullable())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
 		vec.Append(int64(i))
@@ -151,7 +149,7 @@ func TestVector2(t *testing.T) {
 func TestVector3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
+	vec1 := MakeVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i))
 	}
@@ -162,7 +160,7 @@ func TestVector3(t *testing.T) {
 
 	r := bytes.NewBuffer(w.Bytes())
 
-	vec2 := MakeVector(types.T_int32.ToType(), false, opts)
+	vec2 := MakeVector(types.T_int32.ToType(), opts)
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 
@@ -180,7 +178,7 @@ func TestVector5(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 10, false, true, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
 		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
@@ -221,7 +219,7 @@ func TestVector6(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	f := func(vecType types.Type, nullable bool) {
-		vec := MockVector(vecType, 10, false, nullable, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
 			vec.Update(4, types.Null{})
 		}
@@ -306,12 +304,12 @@ func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	testF := func(typ types.Type, nullable bool) {
-		vec := MockVector(typ, 10, false, nullable, nil)
+		vec := MockVector(typ, 10, false, nil)
 		if nullable {
 			vec.Append(types.Null{})
 		}
-		vec2 := MockVector(typ, 10, false, nullable, nil)
-		vec3 := MakeVector(typ, nullable)
+		vec2 := MockVector(typ, 10, false, nil)
+		vec3 := MakeVector(typ)
 		vec3.Extend(vec)
 		assert.Equal(t, vec.Length(), vec3.Length())
 		vec3.Extend(vec2)
@@ -324,7 +322,7 @@ func TestVector7(t *testing.T) {
 			}
 		}
 
-		vec4 := MakeVector(typ, nullable)
+		vec4 := MakeVector(typ)
 		cnt := 5
 		if nullable {
 			cnt = 6
@@ -349,7 +347,7 @@ func TestVector7(t *testing.T) {
 
 func TestVector8(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vec := MakeVector(types.T_int32.ToType(), true)
+	vec := MakeVector(types.T_int32.ToType())
 	defer vec.Close()
 	vec.Append(int32(0))
 	vec.Append(int32(1))
@@ -379,7 +377,7 @@ func TestVector8(t *testing.T) {
 func TestVector9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
 	vec.Append([]byte("h333"))
@@ -398,7 +396,7 @@ func TestVector9(t *testing.T) {
 func TestCompact(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), opts)
 
 	vec.Append(types.Null{})
 	t.Log(vec.String())
@@ -434,8 +432,8 @@ func TestCompact(t *testing.T) {
 }
 
 func BenchmarkVectorExtend(t *testing.B) {
-	vec1 := MockVector(types.T_int32.ToType(), 0, true, false, nil)
-	vec2 := MockVector(types.T_int32.ToType(), 1, true, false, nil)
+	vec1 := MockVector(types.T_int32.ToType(), 0, true, nil)
+	vec2 := MockVector(types.T_int32.ToType(), 1, true, nil)
 	defer vec1.Close()
 	defer vec2.Close()
 

@@ -765,10 +765,9 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 
 func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
 	bat *batch.Batch) *containers.Batch {
-	allNullables := schema.AllNullables()
 	taeBatch := containers.NewEmptyBatch()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
+		v := containers.NewVectorWithSharedMemory(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return taeBatch
