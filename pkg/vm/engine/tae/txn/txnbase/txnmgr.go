@@ -368,6 +368,7 @@ func (mgr *TxnManager) onPrepare2PC(op *OpTxn, ts types.TS) {
 func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	var err error
 	var isAbort bool
+	mgr.onCommitTxn(op.Txn)
 	switch op.Op {
 	case OpCommit:
 		isAbort = false
@@ -381,7 +382,6 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
-	mgr.onCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
@@ -393,6 +393,7 @@ func (mgr *TxnManager) onCommitTxn(txn txnif.AsyncTxn) {
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
 	var isAbort bool
+	mgr.onCommitTxn(op.Txn)
 	switch op.Op {
 	// case OpPrepare:
 	// 	if err = op.Txn.ToPrepared(); err != nil {
@@ -405,7 +406,6 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
-	mgr.onCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
