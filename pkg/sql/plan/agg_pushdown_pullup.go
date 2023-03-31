@@ -66,6 +66,6 @@ func (builder *QueryBuilder) agg_pushdown(nodeID int32) int32 {
 		return nodeID
 	}
 
-	createNewAggNode(node, join, leftChild, builder)
+	//createNewAggNode(node, join, leftChild, builder)
 	return nodeID
 }
