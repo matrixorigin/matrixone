@@ -6647,6 +6647,12 @@ when_clause:
 
 mo_cast_type:
     column_type
+{
+   t := $$ 
+   if strings.ToLower(t.InternalType.FamilyString) == "binary" {
+        t.InternalType.Scale = -1
+   }
+}
 |   SIGNED integer_opt
     {
         name := $1
@@ -7346,12 +7352,32 @@ function_call_keyword:
             Exprs: es,
         }
     }
-|   BINARY '(' expression_list ')' 
+|   BINARY '(' expression_list ')'
     {
         name := tree.SetUnresolvedName("binary")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+        }
+    }
+|   BINARY literal
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+           Func: tree.FuncName2ResolvableFunctionReference(name), 
+           Exprs: exprs, 
+        }
+    }
+|   BINARY column_name
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name), 
+            Exprs: exprs,
         }
     }
 |   CHAR '(' expression_list ')'
