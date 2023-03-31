@@ -7349,11 +7349,11 @@ function_call_keyword:
             Exprs: $3,
         }
     }
-|   BINARY STRING
+|   BINARY literal
     {
         name := tree.SetUnresolvedName("binary")
         exprs := make([]tree.Expr, 1)
-        exprs[0] = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
+        exprs[0] = $2
         $$ = &tree.FuncExpr{
            Func: tree.FuncName2ResolvableFunctionReference(name), 
            Exprs: exprs, 
