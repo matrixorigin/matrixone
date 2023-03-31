@@ -645,6 +645,10 @@ message Node {
 	ClusterTable cluster_table = 27;
 	bool not_cacheable = 28;
 	InsertCtx insert_ctx = 29;
+
+	// used to connect two plans[steps]
+	int32 source_step = 30;
+	repeated int32 target_steps = 31;
 }
 
 message IdList {
