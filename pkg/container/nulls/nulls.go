@@ -308,3 +308,30 @@ func (nsp *Nulls) Or(m *Nulls) *Nulls {
 		return nsp
 	}
 }
+
+func (nsp *Nulls) IsSame(m *Nulls) bool {
+	switch {
+	case nsp == nil && m == nil:
+		return true
+	case nsp.Np == nil && m.Np == nil:
+		return true
+	case nsp.Np != nil && m.Np != nil:
+		return nsp.Np.IsSame(m.Np)
+	default:
+		return false
+	}
+}
+
+func (nsp *Nulls) ToArray() []uint64 {
+	if nsp.Np == nil {
+		return []uint64{}
+	}
+	return nsp.Np.ToArray()
+}
+
+func (nsp *Nulls) GetCardinality() int {
+	if nsp.Np == nil {
+		return 0
+	}
+	return nsp.Np.Count()
+}
