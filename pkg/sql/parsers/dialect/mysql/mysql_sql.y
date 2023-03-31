@@ -7346,12 +7346,32 @@ function_call_keyword:
             Exprs: es,
         }
     }
-|   BINARY '(' expression_list ')' 
+|   BINARY '(' expression_list ')'
     {
         name := tree.SetUnresolvedName("binary")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+        }
+    }
+|   BINARY literal
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+           Func: tree.FuncName2ResolvableFunctionReference(name), 
+           Exprs: exprs, 
+        }
+    }
+|   BINARY column_name
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name), 
+            Exprs: exprs,
         }
     }
 |   CHAR '(' expression_list ')'

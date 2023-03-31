@@ -2094,6 +2094,10 @@ var (
 			input:  "call test1(@session, @increment)",
 			output: "call test1(@session, @increment)",
 		},
+		{
+			input:  "select BINARY 124",
+			output: "select binary(124)",
+		},
 	}
 )
 
