@@ -771,7 +771,7 @@ func int64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
 	case types.T_enum:
-		if len(toType.EnumValues) == 2 {
+		if len(toType.EnumValues) > 255 {
 			rs := vector.MustFunctionResult[uint16](result)
 			return integerToEnum(ctx, source, rs, length)
 		}
@@ -1448,7 +1448,7 @@ func strTypeToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_enum:
-		if len(toType.EnumValues) == 2 {
+		if len(toType.EnumValues) > 255 {
 			rs := vector.MustFunctionResult[uint16](result)
 			return strToEnum(ctx, source, rs, length)
 		}
