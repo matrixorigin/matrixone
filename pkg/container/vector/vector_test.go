@@ -366,6 +366,16 @@ func TestShrink(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // blockid
+		vs := make([]types.Blockid, 4)
+		v := NewVec(types.T_Blockid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.Shrink([]int64{1, 2}, false)
+		require.Equal(t, vs[1:3], MustFixedCol[types.Blockid](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 }
 
 func TestShuffle(t *testing.T) {
@@ -599,6 +609,17 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Rowid](v))
 		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // blockid
+		vs := make([]types.Blockid, 4)
+		v := NewVec(types.T_Blockid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.Shuffle([]int64{1, 2}, mp)
+		require.Equal(t, vs[1:3], MustFixedCol[types.Blockid](v))
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

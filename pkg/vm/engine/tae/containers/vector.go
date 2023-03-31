@@ -16,53 +16,469 @@ package containers
 
 import (
 	"bytes"
-	"io"
-	"unsafe"
-
+	"fmt"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
+	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
+	"io"
 )
 
-type internalVector interface {
-	Vector
-	forEachWindowWithBias(offset, length int, op ItOp,
-		sels *roaring.Bitmap, bias int, shallow bool) (err error)
-}
-
+// DN vector is different from CN vector by
+// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable. (Will be removed in future PR)
+// 2. Window - DN uses shared-memory Window
+// 3. Mpool  - DN stores mpool reference within the vector
+// 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
 type vector[T any] struct {
-	stlvec    stl.Vector[T]
-	impl      internalVector
-	typ       types.Type
-	nulls     *roaring64.Bitmap
-	roStorage []byte
+	downstreamVector *cnVector.Vector
+
+	// isNullable mainly used in Equals() Note:
+	//1. We can't use cnVector.Nsp.Np to replace this flag, as this information will be lost in Marshalling/UnMarshalling.
+	isNullable bool
+
+	// Used in Append()
+	mpool *mpool.MPool
+
+	// isOwner is used to implement the SharedMemory Logic from the previous DN vector implementation.
+	isOwner bool
 }
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
 	vec := &vector[T]{
-		stlvec: containers.NewVector[T](opts...),
-		typ:    typ,
+		downstreamVector: cnVector.NewVec(typ),
+		isNullable:       nullable,
 	}
-	if nullable {
-		vec.impl = newNullableVecImpl(vec)
-	} else {
-		vec.impl = newVecImpl(vec)
+
+	// setting mpool variables
+	var alloc *mpool.MPool
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
 	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec.mpool = alloc
+
+	// So far no mpool allocation. So isOwner defaults to false.
+	vec.isOwner = false
+
 	return vec
 }
 
-// func NewEmptyVector[T any](typ types.Type, opts ...*Options) *vector[T] {
-// 	vec := new(vector[T])
-// 	vec.typ = typ
-// 	vec.stlvec = container.NewVector[T](opts...)
-// 	return vec
-// }
+func (vec *vector[T]) Get(i int) any {
+	if vec.IsNull(i) {
+		return types.Null{}
+	}
 
+	if vec.GetType().IsVarlen() {
+		bs := vec.ShallowGet(i).([]byte)
+		ret := make([]byte, len(bs))
+		copy(ret, bs)
+		return any(ret).(T)
+	}
+
+	return getNonNullValue(vec.downstreamVector, uint32(i))
+}
+
+func (vec *vector[T]) ShallowGet(i int) any {
+	if vec.IsNull(i) {
+		return types.Null{}
+	}
+	return getNonNullValue(vec.downstreamVector, uint32(i))
+}
+
+func (vec *vector[T]) Length() int {
+	return vec.downstreamVector.Length()
+}
+
+func (vec *vector[T]) Append(v any) {
+	vec.tryCoW()
+
+	_, isNull := v.(types.Null)
+	var err error
+	if isNull {
+		err = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
+	} else {
+		err = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
+	}
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (vec *vector[T]) Nullable() bool {
+	return vec.isNullable
+}
+
+func (vec *vector[T]) GetAllocator() *mpool.MPool {
+	return vec.mpool
+}
+
+func (vec *vector[T]) IsNull(i int) bool {
+	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
+}
+
+func (vec *vector[T]) NullMask() *cnNulls.Nulls {
+	return vec.downstreamVector.GetNulls()
+}
+
+func (vec *vector[T]) GetType() types.Type {
+	return *vec.downstreamVector.GetType()
+}
+
+func (vec *vector[T]) Extend(src Vector) {
+	vec.ExtendWithOffset(src, 0, src.Length())
+}
+
+func (vec *vector[T]) Update(i int, v any) {
+	vec.tryCoW()
+	UpdateValue(vec.downstreamVector, uint32(i), v)
+}
+
+func (vec *vector[T]) Slice() any {
+	return cnVector.MustFixedCol[T](vec.downstreamVector)
+}
+
+func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	// 1. Nullable Flag [1 byte]
+	buf := types.EncodeFixed(vec.Nullable())
+
+	// 2. Vector bytes
+	var vecBytes []byte
+	if vecBytes, err = vec.downstreamVector.MarshalBinary(); err != nil {
+		return 0, err
+	}
+	buf = append(buf, vecBytes...)
+
+	//0. Length of vector bytes [8 bytes]
+	i64 := int64(len(buf))
+	buf = append(types.EncodeInt64(&i64), buf...)
+
+	var writtenBytes int
+	if writtenBytes, err = w.Write(buf); err != nil {
+		return 0, err
+	}
+
+	return int64(writtenBytes), nil
+}
+
+func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	// 0. Length [8 bytes]
+	lengthBytes := make([]byte, 8)
+	if _, err = r.Read(lengthBytes); err != nil {
+		return 0, err
+	}
+	length := types.DecodeInt64(lengthBytes[:8])
+	n += 8
+
+	// Whole DN Vector
+	buf := make([]byte, length)
+	if _, err = r.Read(buf); err != nil {
+		return 0, err
+	}
+
+	n += int64(len(buf))
+
+	// 1. Nullable flag [1 byte]
+	isNullable := types.DecodeFixed[bool](buf[:1])
+	vec.isNullable = isNullable
+
+	//2. Vector
+	buf = buf[1:]
+
+	vec.releaseDownstream()
+	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
+		return 0, err
+	}
+
+	return n, nil
+}
+
+func (vec *vector[T]) HasNull() bool {
+	return vec.NullMask() != nil && vec.NullMask().Any()
+}
+
+func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+	return vec.ForeachWindow(0, vec.Length(), op, sels)
+}
+func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
+	return
+}
+func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
+	return vec.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
+	return vec.forEachWindowWithBias(offset, length, op, sels, 0, true)
+}
+
+func (vec *vector[T]) Close() {
+	vec.releaseDownstream()
+}
+
+func (vec *vector[T]) releaseDownstream() {
+	if vec.isOwner {
+		vec.downstreamVector.Free(vec.mpool)
+		vec.isOwner = false
+	}
+}
+
+func (vec *vector[T]) Allocated() int {
+	if !vec.isOwner {
+		return 0
+	}
+	return vec.downstreamVector.Size()
+}
+
+// When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
+func (vec *vector[T]) tryCoW() {
+
+	if !vec.isOwner {
+		newCnVector, err := vec.downstreamVector.Dup(vec.mpool)
+		if err != nil {
+			panic(err)
+		}
+		vec.downstreamVector = newCnVector
+		vec.isOwner = true
+	}
+}
+
+func (vec *vector[T]) Window(offset, length int) Vector {
+
+	// In DN Vector, we are using SharedReference for Window.
+	// In CN Vector, we are creating a new Clone for Window.
+	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
+	return &vectorWindow[T]{
+		ref: vec,
+		windowBase: &windowBase{
+			offset: offset,
+			length: length,
+		},
+	}
+}
+
+func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	opts := Options{}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
+	}
+
+	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+	var err error
+	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
+	if err != nil {
+		panic(err)
+	}
+	cloned.isOwner = true
+
+	return cloned
+}
+
+func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	if srcLen <= 0 {
+		return
+	}
+
+	sels := make([]int32, srcLen)
+	for j := 0; j < srcLen; j++ {
+		sels[j] = int32(j) + int32(srcOff)
+	}
+	err := vec.downstreamVector.Union(src.getDownstreamVector(), sels, vec.GetAllocator())
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
+
+	if !vec.HasNull() {
+		var v T
+		if _, ok := any(v).([]byte); !ok {
+			// Optimization for :- Vectors which are 1. not containing nulls & 2. not byte[]
+			slice := vec.Slice().([]T)
+			slice = slice[offset+bias : offset+length+bias]
+			if sels == nil || sels.IsEmpty() {
+				for i, elem := range slice {
+					var vv any
+					isNull := false
+					if vec.IsNull(i + offset + bias) {
+						isNull = true
+						vv = types.Null{}
+					} else {
+						vv = elem
+					}
+					if err = op(vv, isNull, i+offset); err != nil {
+						break
+					}
+				}
+			} else {
+				idxes := sels.ToArray()
+				end := offset + length
+				for _, idx := range idxes {
+					if int(idx) < offset {
+						continue
+					} else if int(idx) >= end {
+						break
+					}
+
+					var vv any
+					isNull := false
+					if vec.IsNull(int(idx) + bias) {
+						isNull = true
+						vv = types.Null{}
+					} else {
+						vv = slice[int(idx)-offset]
+					}
+					if err = op(vv, isNull, int(idx)); err != nil {
+						break
+					}
+				}
+			}
+			return
+		}
+
+	}
+	if sels == nil || sels.IsEmpty() {
+		for i := offset; i < offset+length; i++ {
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(i + bias)
+			} else {
+				elem = vec.Get(i + bias)
+			}
+			if err = op(elem, vec.IsNull(i+bias), i); err != nil {
+				break
+			}
+		}
+	} else {
+
+		idxes := sels.ToArray()
+		end := offset + length
+		for _, idx := range idxes {
+			if int(idx) < offset {
+				continue
+			} else if int(idx) >= end {
+				break
+			}
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(int(idx) + bias)
+			} else {
+				elem = vec.Get(int(idx) + bias)
+			}
+
+			if err = op(elem, vec.IsNull(int(idx)+bias), int(idx)); err != nil {
+				break
+			}
+		}
+	}
+	return
+}
+
+func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
+	vec.tryCoW()
+
+	var dels []int64
+	itr := deletes.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		dels = append(dels, int64(r))
+	}
+
+	vec.downstreamVector.Shrink(dels, true)
+}
+
+func (vec *vector[T]) getDownstreamVector() *cnVector.Vector {
+	return vec.downstreamVector
+}
+
+func (vec *vector[T]) setDownstreamVector(dsVec *cnVector.Vector) {
+	vec.isOwner = false
+	vec.downstreamVector = dsVec
+}
+
+/****** Below functions are not used in critical path. Used mainly for testing */
+
+// String value of vector
+// Deprecated: Only use for test functions
+func (vec *vector[T]) String() string {
+	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
+
+	end := 100
+	if vec.Length() < end {
+		end = vec.Length()
+	}
+	if end == 0 {
+		return s
+	}
+
+	data := "Vals=["
+	for i := 0; i < end; i++ {
+		data = fmt.Sprintf("%s %v", data, vec.Get(i))
+	}
+	if vec.Length() > end {
+		s = fmt.Sprintf("%s %s...]", s, data)
+	} else {
+		s = fmt.Sprintf("%s %s]", s, data)
+	}
+
+	return s
+}
+
+// PPString Pretty Print
+// Deprecated: Only use for test functions
+func (vec *vector[T]) PPString(num int) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
+	limit := vec.Length()
+	if num > 0 && num < limit {
+		limit = num
+	}
+	size := vec.Length()
+	long := false
+	if size > limit {
+		long = true
+		size = limit
+	}
+	for i := 0; i < size; i++ {
+		if vec.IsNull(i) {
+			_, _ = w.WriteString("null")
+			continue
+		}
+		if vec.GetType().IsVarlen() {
+			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
+		} else {
+			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
+		}
+	}
+	if long {
+		_, _ = w.WriteString("...")
+	}
+	_, _ = w.WriteString(")]")
+	return w.String()
+}
+
+// AppendMany appends multiple values
+// Deprecated: Only use for test functions
+func (vec *vector[T]) AppendMany(vs ...any) {
+	for _, v := range vs {
+		vec.Append(v)
+	}
+}
+
+// Delete Deletes an item from vector
+// Deprecated: Only use for test functions
+func (vec *vector[T]) Delete(delRowId int) {
+	deletes := roaring.BitmapOf(uint32(delRowId))
+	vec.Compact(deletes)
+}
+
+// Equals Compares two vectors
+// Deprecated: Only use for test functions
 func (vec *vector[T]) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
@@ -77,13 +493,13 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		return false
 	}
 	if vec.HasNull() {
-		if !vec.NullMask().Equals(o.NullMask()) {
+		if !vec.NullMask().IsSame(o.NullMask()) {
 			return false
 		}
 	}
 	mask := vec.NullMask()
 	for i := 0; i < vec.Length(); i++ {
-		if mask != nil && mask.ContainsInt(i) {
+		if mask != nil && mask.Contains(uint64(i)) {
 			continue
 		}
 		var v T
@@ -122,305 +538,4 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		}
 	}
 	return true
-}
-func (vec *vector[T]) IsView() bool                { return vec.impl.IsView() }
-func (vec *vector[T]) Nullable() bool              { return vec.impl.Nullable() }
-func (vec *vector[T]) IsNull(i int) bool           { return vec.impl.IsNull(i) }
-func (vec *vector[T]) HasNull() bool               { return vec.impl.HasNull() }
-func (vec *vector[T]) NullMask() *roaring64.Bitmap { return vec.impl.NullMask() }
-func (vec *vector[T]) Bytes() *Bytes               { return vec.impl.Bytes() }
-func (vec *vector[T]) Data() []byte                { return vec.impl.Data() }
-func (vec *vector[T]) DataWindow(offset, length int) []byte {
-	return vec.impl.DataWindow(offset, length)
-}
-func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	opts := Options{}
-	if len(allocator) == 0 {
-		opts.Allocator = vec.GetAllocator()
-	} else {
-		opts.Allocator = allocator[0]
-	}
-	cloned := NewVector[T](vec.typ, vec.Nullable(), opts)
-	if vec.nulls != nil {
-		if offset == 0 || length == vec.Length() {
-			cloned.nulls = vec.nulls.Clone()
-			if length < vec.Length() {
-				cloned.nulls.RemoveRange(uint64(length), uint64(vec.Length()))
-			}
-		} else {
-			cloned.nulls = roaring64.New()
-			for i := offset; i < offset+length; i++ {
-				if vec.nulls.ContainsInt(i) {
-					cloned.nulls.AddInt(i - offset)
-				}
-			}
-		}
-	}
-	cloned.stlvec.Close()
-	cloned.stlvec = vec.stlvec.Clone(offset, length, allocator...)
-	return cloned
-}
-func (vec *vector[T]) fastSlice() []T {
-	return vec.stlvec.Slice()
-}
-func (vec *vector[T]) Slice() any {
-	return vec.stlvec.Slice()
-}
-func (vec *vector[T]) SlicePtr() unsafe.Pointer {
-	return vec.stlvec.SlicePtr()
-}
-
-func (vec *vector[T]) Get(i int) (v any)               { return vec.impl.Get(i) }
-func (vec *vector[T]) ShallowGet(i int) (v any)        { return vec.impl.ShallowGet(i) }
-func (vec *vector[T]) Update(i int, v any)             { vec.impl.Update(i, v) }
-func (vec *vector[T]) Delete(i int)                    { vec.impl.Delete(i) }
-func (vec *vector[T]) Compact(deletes *roaring.Bitmap) { vec.impl.Compact(deletes) }
-func (vec *vector[T]) Append(v any)                    { vec.impl.Append(v) }
-func (vec *vector[T]) AppendMany(vs ...any)            { vec.impl.AppendMany(vs...) }
-func (vec *vector[T]) AppendNoNulls(s any)             { vec.impl.AppendNoNulls(s) }
-func (vec *vector[T]) Extend(o Vector)                 { vec.impl.Extend(o) }
-func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-	vec.impl.ExtendWithOffset(src, srcOff, srcLen)
-}
-
-// func (vec *vector[T]) ExtendView(o VectorView) { vec.impl.ExtendView(o) }
-func (vec *vector[T]) Length() int    { return vec.impl.Length() }
-func (vec *vector[T]) Capacity() int  { return vec.impl.Capacity() }
-func (vec *vector[T]) Allocated() int { return vec.impl.Allocated() }
-
-func (vec *vector[T]) GetAllocator() *mpool.MPool { return vec.stlvec.GetAllocator() }
-func (vec *vector[T]) GetType() types.Type        { return vec.typ }
-func (vec *vector[T]) String() string             { return vec.impl.String() }
-func (vec *vector[T]) PPString(num int) string    { return vec.impl.PPString(num) }
-func (vec *vector[T]) Close()                     { vec.impl.Close() }
-
-func (vec *vector[T]) cow() {
-	vec.stlvec = vec.stlvec.Clone(0, vec.stlvec.Length())
-	vec.releaseRoStorage()
-}
-func (vec *vector[T]) releaseRoStorage() {
-	if vec.roStorage != nil {
-		vec.GetAllocator().Free(vec.roStorage)
-	}
-	vec.roStorage = nil
-}
-
-func (vec *vector[T]) Window(offset, length int) Vector {
-	return &vectorWindow[T]{
-		ref: vec,
-		windowBase: &windowBase{
-			offset: offset,
-			length: length,
-		},
-	}
-}
-
-func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
-	var nr int
-	var tmpn int64
-	// 1. Vector type
-	vt := vec.GetType()
-	if nr, err = w.Write(types.EncodeType(&vt)); err != nil {
-		return
-	}
-	n += int64(nr)
-	// 2. Nullable
-	if nr, err = w.Write(types.EncodeFixed(vec.Nullable())); err != nil {
-		return
-	}
-	n += int64(nr)
-	// 3. Vector data
-	if tmpn, err = vec.stlvec.WriteTo(w); err != nil {
-		return
-	}
-	n += tmpn
-	if !vec.Nullable() {
-		return
-	}
-	// 4. Nulls
-	var nullBuf []byte
-	if vec.nulls != nil {
-		if nullBuf, err = vec.nulls.ToBytes(); err != nil {
-			return
-		}
-	}
-	if nr, err = w.Write(types.EncodeFixed(uint32(len(nullBuf)))); err != nil {
-		return
-	}
-	n += int64(nr)
-	if len(nullBuf) == 0 {
-		return
-	}
-	if nr, err = w.Write(nullBuf); err != nil {
-		return
-	}
-	n += int64(nr)
-
-	return
-}
-
-func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	vec.releaseRoStorage()
-	var tmpn int64
-	// 1. Vector type
-	typeBuf := make([]byte, types.TSize)
-	if _, err = r.Read(typeBuf); err != nil {
-		return
-	}
-	vec.typ = types.DecodeType(typeBuf)
-	n += int64(len(typeBuf))
-
-	// 2. Nullable
-	oneBuf := make([]byte, 1)
-	if _, err = r.Read(oneBuf); err != nil {
-		return
-	}
-	nullable := types.DecodeFixed[bool](oneBuf)
-	n += 1
-
-	if nullable {
-		vec.impl = newNullableVecImpl(vec)
-	} else {
-		vec.impl = newVecImpl(vec)
-	}
-
-	// 3. Data
-	if tmpn, err = vec.stlvec.ReadFrom(r); err != nil {
-		return
-	}
-	n += tmpn
-
-	// 4. Null
-	if !nullable {
-		return
-	}
-	fourBuf := make([]byte, int(unsafe.Sizeof(uint32(0))))
-	if _, err = r.Read(fourBuf); err != nil {
-		return
-	}
-	n += int64(len(fourBuf))
-	nullSize := types.DecodeFixed[uint32](fourBuf)
-	if nullSize == 0 {
-		return
-	}
-	vec.nulls = roaring64.New()
-	if tmpn, err = vec.nulls.ReadFrom(r); err != nil {
-		return
-	}
-	n += tmpn
-	return
-}
-
-func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
-	vec.releaseRoStorage()
-	stat := f.Stat()
-	var n []byte
-	var buf []byte
-	var tmpNode []byte
-	if stat.CompressAlgo() != compress.None {
-		osize := int(stat.OriginSize())
-		size := stat.Size()
-		tmpNode, err = vec.GetAllocator().Alloc(int(size))
-		if err != nil {
-			return
-		}
-		defer vec.GetAllocator().Free(tmpNode)
-		srcBuf := tmpNode[:size]
-		if _, err = f.Read(srcBuf); err != nil {
-			return
-		}
-		if buffer == nil {
-			n, err = vec.GetAllocator().Alloc(osize)
-			if err != nil {
-				return
-			}
-			buf = n[:osize]
-		} else {
-			buffer.Reset()
-			if osize > buffer.Cap() {
-				buffer.Grow(osize)
-			}
-			buf = buffer.Bytes()[:osize]
-		}
-		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
-			if n != nil {
-				vec.GetAllocator().Free(n)
-			}
-			return
-		}
-	}
-	vec.typ = types.DecodeType(buf[:types.TSize])
-	buf = buf[types.TSize:]
-
-	nullable := types.DecodeFixed[bool](buf[:1])
-	buf = buf[1:]
-
-	if nullable {
-		vec.impl = newNullableVecImpl(vec)
-	} else {
-		vec.impl = newVecImpl(vec)
-	}
-	var nr int64
-	if nr, err = vec.stlvec.InitFromSharedBuf(buf); err != nil {
-		if n != nil {
-			vec.GetAllocator().Free(n)
-		}
-		return
-	}
-	buf = buf[nr:]
-	if !nullable {
-		vec.roStorage = n
-		return
-	}
-
-	nullSize := types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	if nullSize > 0 {
-		nullBuf := buf[:nullSize]
-		nulls := roaring64.New()
-		r := bytes.NewBuffer(nullBuf)
-		if _, err = nulls.ReadFrom(r); err != nil {
-			if n != nil {
-				vec.GetAllocator().Free(n)
-			}
-			return
-		}
-		vec.nulls = nulls
-	}
-	vec.roStorage = n
-	return
-}
-
-func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
-	return vec.impl.ForeachWindow(0, vec.Length(), op, sels)
-}
-
-func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	return vec.impl.ForeachWindow(offset, length, op, sels)
-}
-
-func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
-	return vec.impl.ForeachWindowShallow(0, vec.Length(), op, sels)
-}
-
-func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	return vec.impl.ForeachWindowShallow(offset, length, op, sels)
-}
-
-func (vec *vector[T]) GetView() (view VectorView) {
-	return newVecView(vec)
-}
-
-func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-	vec.releaseRoStorage()
-	if vec.Nullable() {
-		vec.nulls = nulls
-	}
-	vec.stlvec.ReadBytes(bs, true)
-}
-
-func (vec *vector[T]) Reset() {
-	vec.releaseRoStorage()
-	vec.stlvec.Reset()
-	vec.nulls = nil
 }

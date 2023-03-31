@@ -16,10 +16,10 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
+	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,30 +34,22 @@ type accessInfo struct {
 	CreateAt                 types.Timestamp
 }
 
+const (
+	AccessInfoSize int64 = int64(unsafe.Sizeof(accessInfo{}))
+)
+
+func EncodeAccessInfo(ai *accessInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(ai)), AccessInfoSize)
+}
+
 func (ai *accessInfo) WriteTo(w io.Writer) (n int64, err error) {
-	for _, id := range []uint32{ai.TenantID, ai.UserID, ai.RoleID} {
-		if err = binary.Write(w, binary.BigEndian, id); err != nil {
-			return
-		}
-	}
-	if err = binary.Write(w, binary.BigEndian, int64(ai.CreateAt)); err != nil {
-		return
-	}
-	return 20, nil
+	w.Write(EncodeAccessInfo(ai))
+	return AccessInfoSize, nil
 }
 
 func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
-	for _, idPtr := range []*uint32{&ai.TenantID, &ai.UserID, &ai.RoleID} {
-		if err = binary.Read(r, binary.BigEndian, idPtr); err != nil {
-			return
-		}
-	}
-	at := int64(0)
-	if err = binary.Read(r, binary.BigEndian, &at); err != nil {
-		return
-	}
-	ai.CreateAt = types.Timestamp(at)
-	return 20, nil
+	r.Read(EncodeAccessInfo(ai))
+	return AccessInfoSize, nil
 }
 
 func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (visible, dropped bool) {
@@ -67,14 +59,12 @@ func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) 
 }
 
 type DBEntry struct {
-	*DBBaseEntry
-	catalog   *Catalog
-	acInfo    accessInfo
-	name      string
-	createSql string
-	fullName  string
-	isSys     bool
-	datType   string
+	ID uint64
+	*BaseEntryImpl[*EmptyMVCCNode]
+	catalog *Catalog
+	*DBNode
+	fullName string
+	isSys    bool
 
 	entries   map[uint64]*common.GenericDLNode[*TableEntry]
 	nameNodes map[string]*nodeList[*TableEntry]
@@ -84,28 +74,32 @@ type DBEntry struct {
 }
 
 func compareTableFn(a, b *TableEntry) int {
-	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
+	return CompareUint64(a.ID, b.ID)
 }
 
 func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
 	//id := catalog.NextDB()
 
 	e := &DBEntry{
-		DBBaseEntry: NewDBBaseEntry(id),
-		catalog:     catalog,
-		name:        name,
-		createSql:   createSql,
-		datType:     datTyp,
-		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:   make(map[string]*nodeList[*TableEntry]),
-		link:        common.NewGenericSortedDList(compareTableFn),
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		catalog: catalog,
+		DBNode: &DBNode{
+			name:      name,
+			createSql: createSql,
+			datType:   datTyp,
+		},
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	if txn != nil {
 		// Only in unit test, txn can be nil
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -114,21 +108,25 @@ func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.Asyn
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		DBBaseEntry: NewDBBaseEntry(id),
-		catalog:     catalog,
-		name:        name,
-		datType:     datTyp,
-		createSql:   createSql,
-		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:   make(map[string]*nodeList[*TableEntry]),
-		link:        common.NewGenericSortedDList(compareTableFn),
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		catalog: catalog,
+		DBNode: &DBNode{
+			name:      name,
+			createSql: createSql,
+			datType:   datTyp,
+		},
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	if txn != nil {
 		// Only in unit test, txn can be nil
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn)
+	e.CreateWithTxn(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -137,43 +135,54 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		DBBaseEntry: NewDBBaseEntry(id),
-		catalog:     catalog,
-		name:        name,
-		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:   make(map[string]*nodeList[*TableEntry]),
-		link:        common.NewGenericSortedDList(compareTableFn),
+		ID: id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		catalog: catalog,
+		DBNode: &DBNode{
+			name: name,
+		},
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
-	e.CreateWithTS(ts)
+	e.CreateWithTS(ts, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	entry := &DBEntry{
-		DBBaseEntry: NewDBBaseEntry(pkgcatalog.MO_CATALOG_ID),
-		catalog:     catalog,
-		name:        pkgcatalog.MO_CATALOG,
-		createSql:   "create database " + pkgcatalog.MO_CATALOG,
-		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:   make(map[string]*nodeList[*TableEntry]),
-		link:        common.NewGenericSortedDList(compareTableFn),
-		isSys:       true,
+		ID: pkgcatalog.MO_CATALOG_ID,
+		BaseEntryImpl: NewBaseEntry(
+			func() *EmptyMVCCNode {
+				return &EmptyMVCCNode{}
+			}),
+		catalog: catalog,
+		DBNode: &DBNode{
+			name:      pkgcatalog.MO_CATALOG,
+			createSql: "create database " + pkgcatalog.MO_CATALOG,
+		},
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
+		isSys:     true,
 	}
-	entry.CreateWithTS(types.SystemDBTS)
+	entry.CreateWithTS(types.SystemDBTS, &EmptyMVCCNode{})
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		DBBaseEntry: NewReplayDBBaseEntry(),
-		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes:   make(map[string]*nodeList[*TableEntry]),
-		link:        common.NewGenericSortedDList(compareTableFn),
+		BaseEntryImpl: NewReplayBaseEntry(
+			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	return entry
 }
-
+func (e *DBEntry) GetID() uint64    { return e.ID }
 func (e *DBEntry) IsSystemDB() bool { return e.isSys }
 func (e *DBEntry) CoarseTableCnt() int {
 	e.RLock()
@@ -216,9 +225,9 @@ func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
-			e.DBBaseEntry.ID, e.GetFullName(), e.GetCreatedAt().ToString(), e.GetDeleteAt().ToString())
+			e.ID, e.GetFullName(), e.GetCreatedAt().ToString(), e.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("DB%s[name=%s]", e.DBBaseEntry.StringLocked(), e.GetFullName())
+	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntryImpl.StringLocked(), e.GetFullName())
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableEntry] {
@@ -393,16 +402,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		common.OperandField(table.String()))
 	e.Lock()
 	defer e.Unlock()
-	if n, ok := e.entries[table.GetID()]; !ok {
+	if n, ok := e.entries[table.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
 		nn := e.nameNodes[table.GetFullName()]
-		nn.DeleteNode(table.GetID())
+		nn.DeleteNode(table.ID)
 		e.link.Delete(n)
 		if nn.Length() == 0 {
 			delete(e.nameNodes, table.GetFullName())
 		}
-		delete(e.entries, table.GetID())
+		delete(e.entries, table.ID)
 	}
 	return
 }
@@ -429,7 +438,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 	nn := e.nameNodes[fullName]
 	if nn == nil {
 		n := e.link.Insert(table)
-		e.entries[table.GetID()] = n
+		e.entries[table.ID] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
 			tableVisibilityFn[*TableEntry],
@@ -437,7 +446,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 			fullName)
 		e.nameNodes[fullName] = nn
 
-		nn.CreateNode(table.GetID())
+		nn.CreateNode(table.ID)
 	} else {
 		node := nn.GetNode()
 		if !skipDedup {
@@ -448,8 +457,8 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 			}
 		}
 		n := e.link.Insert(table)
-		e.entries[table.GetID()] = n
-		nn.CreateNode(table.GetID())
+		e.entries[table.ID] = n
+		nn.CreateNode(table.ID)
 	}
 	return
 }
@@ -494,7 +503,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 
 func (e *DBEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	if isEmpty, err = e.DBBaseEntry.PrepareRollback(); err != nil {
+	if isEmpty, err = e.BaseEntryImpl.PrepareRollback(); err != nil {
 		return
 	}
 	if isEmpty {

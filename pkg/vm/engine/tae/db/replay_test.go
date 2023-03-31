@@ -1333,3 +1333,36 @@ func TestReplaySnapshots(t *testing.T) {
 
 	tae.Close()
 }
+
+func TestReplayDatabaseEntry(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	datypStr := "datyp"
+	createSqlStr := "createSql"
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", createSqlStr, datypStr)
+	assert.NoError(t, err)
+	dbID := db.GetID()
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+	t.Log(tae.Catalog.SimplePPString(3))
+	dbEntry, err := tae.Catalog.GetDatabaseByID(dbID)
+	assert.NoError(t, err)
+	assert.Equal(t, datypStr, dbEntry.GetDatType())
+	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.NoError(t, err)
+
+	tae.restart()
+	dbEntry, err = tae.Catalog.GetDatabaseByID(dbID)
+	assert.NoError(t, err)
+	assert.Equal(t, datypStr, dbEntry.GetDatType())
+	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
+}
