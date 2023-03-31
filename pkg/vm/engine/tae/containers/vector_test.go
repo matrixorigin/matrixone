@@ -21,10 +21,8 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,22 +30,6 @@ func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
 	return opt
 }
-
-// func checkFullyEqualVector(t *testing.T, v1, v2 Vector) {
-// 	checkEqualVector(t, v1, v2)
-// 	assert.Equal(t, v1.Capacity(), v2.Capacity())
-// 	assert.Equal(t, v1.Allocated(), v2.Allocated())
-// }
-
-// func checkEqualVector(t *testing.T, v1, v2 Vector) {
-// 	assert.Equal(t, v1.GetType(), v2.GetType())
-// 	assert.Equal(t, v1.Length(), v2.Length())
-// 	assert.Equal(t, v1.HasNull(), v2.HasNull())
-// 	assert.Equal(t, v1.Nullable(), v2.Nullable())
-// 	for i := 0; i < v1.Length(); i++ {
-// 		assert.Equal(t, v1.Get(i), v2.Get(i))
-// 	}
-// }
 
 func TestVectorShallowForeach(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -74,13 +56,6 @@ func TestVectorShallowForeach(t *testing.T) {
 		}, nil)
 
 		vec.ForeachShallow(func(v any, isNull bool, row int) error {
-			if row%2 == 0 {
-				assert.True(t, isNull)
-			}
-			return nil
-		}, nil)
-
-		vec.GetView().ForeachShallow(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
 				assert.True(t, isNull)
 			}
@@ -200,52 +175,6 @@ func TestVector3(t *testing.T) {
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
-func TestVector4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, nil)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
-	buffer := new(bytes.Buffer)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, buffer)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
-}
-
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
@@ -299,7 +228,6 @@ func TestVector6(t *testing.T) {
 		bias := 0
 		win := vec.Window(bias, 8)
 		assert.Equal(t, 8, win.Length())
-		assert.Equal(t, 8, win.Capacity())
 		rows := make([]int, 0)
 		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)

@@ -1109,7 +1109,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 			}
 		}
 	}
-
+	mp.incDebugCount(1)
 	return nil
 }
 
@@ -1173,6 +1173,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 	}
 
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
+	mp.incDebugCount(0)
 	if err = mp.authenticateUser(ctx, authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
@@ -1186,8 +1187,11 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 		return false, err
 	}
 
-	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	mp.incDebugCount(2)
+	logInfof(mp.getDebugStringUnsafe(), "handle handshake end")
 	err = mp.sendOKPacket(0, 0, 0, 0, "")
+	mp.incDebugCount(3)
+	logInfof(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {
 		return false, err
 	}
@@ -2221,7 +2225,9 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 		mp.flushCount++
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
 		// FIXME: use a suitable timeout value
+		mp.incDebugCount(8)
 		err := mp.tcpConn.Flush(0)
+		mp.incDebugCount(9)
 		if err != nil {
 			return err
 		}
@@ -2505,7 +2511,9 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		//send packet
 		var packet = append(header[:], payload[i:i+curLen]...)
 
+		mp.incDebugCount(4)
 		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
+		mp.incDebugCount(5)
 		if err != nil {
 			return err
 		}
@@ -2517,9 +2525,10 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			header[1] = 0
 			header[2] = 0
 			header[3] = mp.GetSequenceId()
-
+			mp.incDebugCount(6)
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
+			mp.incDebugCount(7)
 			if err != nil {
 				return err
 			}

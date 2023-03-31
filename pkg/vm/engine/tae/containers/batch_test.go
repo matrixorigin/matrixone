@@ -18,19 +18,18 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBatch1(t *testing.T) {
+func TestBatch1a(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(4)[2:]
+	vecTypes := types.MockColTypes(4)[2:] // int32, int64
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
-	opts := containers.Options{}
+	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, nullable, opts)
 	bat.Vecs[0].Append(int32(1))
@@ -60,6 +59,40 @@ func TestBatch1(t *testing.T) {
 	bat.Close()
 }
 
+func TestBatch1b(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes(14)[12:] // Varchar, Char
+	attrs := []string{"attr1", "attr2"}
+	nullable := []bool{false, true}
+	opts := Options{}
+	opts.Capacity = 0
+	bat := BuildBatch(attrs, vecTypes, nullable, opts)
+	bat.Vecs[0].Append([]byte("a"))
+	bat.Vecs[0].Append([]byte("b"))
+	bat.Vecs[0].Append([]byte("c"))
+	bat.Vecs[1].Append([]byte("1"))
+	bat.Vecs[1].Append([]byte("2"))
+	bat.Vecs[1].Append([]byte("3"))
+
+	assert.Equal(t, 3, bat.Length())
+	assert.False(t, bat.HasDelete())
+	bat.Delete(1)
+	assert.Equal(t, 3, bat.Length())
+	assert.True(t, bat.HasDelete())
+	assert.True(t, bat.IsDeleted(1))
+
+	w := new(bytes.Buffer)
+	_, err := bat.WriteTo(w)
+	assert.NoError(t, err)
+
+	r := bytes.NewBuffer(w.Bytes())
+	bat2 := NewEmptyBatch()
+	_, err = bat2.ReadFrom(r)
+	assert.NoError(t, err)
+	assert.True(t, bat.Equals(bat2))
+
+	bat.Close()
+}
 func TestBatch2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)

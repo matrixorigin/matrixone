@@ -160,12 +160,23 @@ type DeleteChain interface {
 	DepthLocked() int
 	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
-type MVCCNode interface {
+type BaseNode[T any] interface {
+	Update(o T)
+	CloneData() T
+	CloneAll() T
+}
+
+type MVCCNode[T any] interface {
+	BaseMVCCNode
+	BaseNode[T]
+}
+
+type BaseMVCCNode interface {
 	String() string
+	IsNil() bool
 
 	IsVisible(ts types.TS) (visible bool)
 	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
@@ -192,18 +203,16 @@ type MVCCNode interface {
 
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
 }
 type AppendNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain

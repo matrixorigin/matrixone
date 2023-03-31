@@ -400,6 +400,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, s, *toType, result, length)
+	case types.T_Blockid:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Blockid](from)
+		err = blockidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
@@ -1438,6 +1441,17 @@ func rowidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
 }
 
+func blockidToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Blockid],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	if toType.Oid == types.T_Blockid {
+		rs := vector.MustFunctionResult[types.Blockid](result)
+		rs.SetFromParameter(source)
+		return nil
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from blockid to %s", toType))
+}
+
 func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
@@ -1877,7 +1891,13 @@ func floatToStr[T constraints.Float](
 				return err
 			}
 		} else {
-			result := []byte(strconv.FormatFloat(float64(v), 'G', -1, bitSize))
+			// float to string, [-14,15] convert to exponent.
+			var result []byte
+			if float64(v) >= float64(1e15) || float64(v) < float64(1e-13) {
+				result = []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
+			} else {
+				result = []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {

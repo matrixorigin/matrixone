@@ -137,10 +137,11 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 
 func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
+	blocks := meta.BlkMetas
 	if blocks[0].GetExtent().End() == 0 {
 		return nil, nil
 	}
@@ -167,13 +168,13 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
-	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
 	blocksZoneMap := make([][]dataio.Index, len(ids))
 	for i, id := range ids {
-		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, meta.BlkMetas[id], m)
 		if err != nil {
 			return nil, err
 		}
@@ -181,19 +182,51 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	return blocksZoneMap, nil
 }
 
+func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
+	objmeta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	meta := &dataio.ObjectMeta{}
+	meta.Rows = objmeta.Rows
+	for _, colmeta := range objmeta.ColMetas {
+		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(*BlockIndex)})
+	}
+	var idxs []uint16
+	for _, blkmeta := range objmeta.BlkMetas {
+		if idxs == nil {
+			idxs = make([]uint16, blkmeta.GetColumnCount())
+			for i := 0; i < len(idxs); i++ {
+				idxs[i] = uint16(i)
+			}
+		}
+		zm, err := r.LoadZoneMap(ctx, idxs, blkmeta, m)
+		meta.Zms = append(meta.Zms, zm)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return meta, nil
+}
+
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
 	_, locs, err := DecodeLocationToMetas(r.key)
 	if err != nil {
 		return nil, err
 	}
-	return r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
-}
-
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
+	return meta.BlkMetas, nil
+}
+
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	blocks := meta.BlkMetas
 	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
@@ -225,13 +258,13 @@ func (r *BlockReader) LoadZoneMap(
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
-	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
 	blocksBloomFilters := make([]index.StaticFilter, len(ids))
 	for i, id := range ids {
-		column, err := blocks[id].GetColumn(idx)
+		column, err := meta.BlkMetas[id].GetColumn(idx)
 		if err != nil {
 			return nil, err
 		}
