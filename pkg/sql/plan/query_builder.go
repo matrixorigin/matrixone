@@ -707,10 +707,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId, _ = builder.pushdownFilters(rootId, nil, false)
-		ReCalcNodeStats(rootId, builder, true)
+		ReCalcNodeStats(rootId, builder, true, true)
+		rootId = builder.aggPushDown(rootId)
+		ReCalcNodeStats(rootId, builder, true, false)
 		rootId = builder.determineJoinOrder(rootId)
+		ReCalcNodeStats(rootId, builder, true, false)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
-		ReCalcNodeStats(rootId, builder, true)
+		ReCalcNodeStats(rootId, builder, true, false)
 		rootId = builder.applySwapRuleByStats(rootId, true)
 		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		builder.qry.Steps[i] = rootId
@@ -1632,7 +1635,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
-	ReCalcNodeStats(nodeID, builder, false)
+	ReCalcNodeStats(nodeID, builder, false, true)
 	return nodeID
 }
 
