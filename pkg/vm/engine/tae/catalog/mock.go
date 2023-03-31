@@ -280,8 +280,8 @@ func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
 func MockBatch(schema *Schema, rows int) *containers.Batch {
 	if schema.HasSortKey() {
 		sortKey := schema.GetSingleSortKey()
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, sortKey.Idx, nil)
 	} else {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, schema.PhyAddrKey.Idx, nil)
 	}
 }

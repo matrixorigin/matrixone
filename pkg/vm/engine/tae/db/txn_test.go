@@ -417,13 +417,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := containers.MockBatchWithAttrs(
-		user.Types(),
-		user.Attrs(),
-		user.Nullables(),
-		conf.Users,
-		user.GetSingleSortKeyIdx(),
-		provider)
+	userData := containers.MockBatchWithAttrs(user.Types(), user.Attrs(), conf.Users, user.GetSingleSortKeyIdx(), provider)
 	defer userData.Close()
 
 	for i := 0; i < conf.Users; i++ {
@@ -437,7 +431,7 @@ func (app1 *APP1) Init(factor int) {
 	if err = userRel.Append(userData); err != nil {
 		panic(err)
 	}
-	price := containers.MakeVector(goods.ColDefs[2].Type, goods.ColDefs[2].Nullable())
+	price := containers.MakeVector(goods.ColDefs[2].Type)
 	defer price.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodPrice := float64(rand.Intn(1000)+20) / float64(rand.Intn(10)+1) / float64(20)
@@ -449,20 +443,14 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := containers.MockBatchWithAttrs(
-		goods.Types(),
-		goods.Attrs(),
-		goods.Nullables(),
-		conf.GoodKinds,
-		goods.GetSingleSortKeyIdx(),
-		provider)
+	goodsData := containers.MockBatchWithAttrs(goods.Types(), goods.Attrs(), conf.GoodKinds, goods.GetSingleSortKeyIdx(), provider)
 	defer goodsData.Close()
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
 
 	goodIds := goodsData.Vecs[0]
-	count := containers.MakeVector(repertory.ColDefs[2].Type, repertory.ColDefs[2].Nullable())
+	count := containers.MakeVector(repertory.ColDefs[2].Type)
 	defer count.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodCount := rand.Intn(1000) + 100
@@ -477,13 +465,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := containers.MockBatchWithAttrs(
-		repertory.Types(),
-		repertory.Attrs(),
-		repertory.Nullables(),
-		int(conf.GoodKinds),
-		repertory.GetSingleSortKeyIdx(),
-		provider)
+	repertoryData := containers.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), int(conf.GoodKinds), repertory.GetSingleSortKeyIdx(), provider)
 	defer repertoryData.Close()
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {

@@ -219,7 +219,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 }
 func (blk *txnSysBlock) getColumnTableVec(colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(col.Type, col.Nullable())
+	colData = containers.MakeVector(col.Type)
 	tableFn := func(table *catalog.TableEntry) error {
 		FillColumnRow(table, col.Name, colData)
 		return nil
@@ -286,7 +286,7 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 
 func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(colDef.Type, colDef.Nullable())
+	colData = containers.MakeVector(colDef.Type)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
 		node := table.GetVisibleNodeByTS(ts)
@@ -337,7 +337,7 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 }
 func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(colDef.Type, colDef.Nullable())
+	colData = containers.MakeVector(colDef.Type)
 	fn := func(db *catalog.DBEntry) error {
 		FillDBRow(db, nil, colDef.Name, colData, blk.Txn.GetStartTS())
 		return nil

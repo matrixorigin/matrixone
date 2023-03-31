@@ -282,8 +282,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 	maxRow = node.maxRow
 
 	abortedBitmap = roaring.NewBitmap()
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
-	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	commitTSVec = containers.MakeVector(types.T_TS.ToType())
+	abortVec = containers.MakeVector(types.T_bool.ToType())
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,
@@ -316,9 +316,9 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 		return
 	}
 
-	rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), false)
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
-	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
+	commitTSVec = containers.MakeVector(types.T_TS.ToType())
+	abortVec = containers.MakeVector(types.T_bool.ToType())
 	abortedBitmap = roaring.NewBitmap()
 	prefix := n.meta.MakeKey()
 
