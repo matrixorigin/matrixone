@@ -469,6 +469,23 @@ func hideAccessKey(sql string) string {
 				sql = sql[:start+1] + "******" + sql[end:]
 			}
 		}
+
+		index = strings.Index(sql, "identified with")
+		if index > 0 {
+			start := index + 15
+			for start < sqlLen && sql[start] != '\'' {
+				start++
+			}
+
+			end := start + 1
+			for end < sqlLen && sql[end] != '\'' {
+				end++
+			}
+
+			if end < sqlLen {
+				sql = sql[:start+1] + "******" + sql[end:]
+			}
+		}
 	}
 	if sqlLen > 15 {
 		index := strings.Index(sql, "'access_key_id'")
