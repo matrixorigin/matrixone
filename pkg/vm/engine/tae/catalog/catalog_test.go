@@ -52,7 +52,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.Equal(t, 2, len(catalog.entries))
 	cnt := 0
 	catalog.link.Loop(func(n *common.GenericDLNode[*DBEntry]) bool {
-		t.Log(n.GetPayload().GetID())
+		t.Log(n.GetPayload().ID)
 		cnt++
 		return true
 	}, true)

@@ -176,9 +176,9 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
-	if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
-		return nil, err
-	}
+	// if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
+	// 	return nil, err
+	// }
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
@@ -312,8 +312,9 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		commentDef.Comment = tbl.comment
 		defs = append(defs, commentDef)
 	}
-	if tbl.partition != "" {
+	if tbl.partitioned > 0 || tbl.partition != "" {
 		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partitioned = tbl.partitioned
 		partitionDef.Partition = tbl.partition
 		defs = append(defs, partitionDef)
 	}
@@ -447,7 +448,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
-	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
+	return nil
+	// return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -771,6 +773,11 @@ func (tbl *txnTable) updateLocalState(
 
 	if bat.Vecs[0].GetType().Oid != types.T_Rowid {
 		// skip
+		return nil
+	}
+
+	if tbl.primaryIdx < 0 {
+		// no primary key, skip
 		return nil
 	}
 

@@ -307,6 +307,7 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 			},
 		},
 	}
+	logutil.Infof("wangjian sql5 is", param.FileOffset, time.Now())
 	if param.Extern.Parallel {
 		vec.Entries[0].Offset = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)])
 		vec.Entries[0].Size = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)+1] - param.FileOffset[2*(param.Fileparam.FileIndex-1)])
@@ -563,6 +564,7 @@ func GetMOcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	return plh, nil
 }
 
+var totalCnt int
 func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
@@ -579,6 +581,8 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	plh := param.plh
 	finish := false
 	cnt, finish, err = plh.moCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
+	totalCnt += cnt
+	logutil.Infof("wangjian sql4 is", totalCnt, time.Now())
 	if err != nil {
 		return nil, err
 	}

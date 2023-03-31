@@ -229,6 +229,12 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 			v.(types.Rowid),
 			types.CompareRowidRowidAligned,
 			skipmask)
+	case types.T_Blockid:
+		return GetOffsetWithFunc(
+			data.Slice().([]types.Blockid),
+			v.(types.Blockid),
+			types.CompareBlockidBlockidAligned,
+			skipmask)
 	case types.T_uuid:
 		return GetOffsetWithFunc(
 			data.Slice().([]types.Uuid),

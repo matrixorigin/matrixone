@@ -156,7 +156,7 @@ LAUNCH ?= "launch-tae-CN-tae-DN"
 ci:
 	@rm -rf $(ROOT_DIR)/tester-log
 	@docker image prune -f
-	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
+	@docker build -t maomao/matrixone:0405 -f ./optools/images/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
 	@docker run --name tester -it \
 			-e LAUNCH=$(LAUNCH) \
 			-e UT_PARALLEL=$(UT_PARALLEL) \

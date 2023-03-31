@@ -21,6 +21,9 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -105,6 +108,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	// with values
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.ctx = c.proc.Ctx
 
 	// session info and callback function to write back query result.
 	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
@@ -246,20 +252,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropDatabase,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropDatabase,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return &Scope{
@@ -272,36 +278,36 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         AlterTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     AlterTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropTable,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropTable,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return &Scope{
@@ -324,20 +330,20 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			var attachedScope *Scope
-			var err error
+			preScopes := make([]*Scope, 0, 1)
 			if pn.AttachedPlan != nil {
 				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err = c.compileQuery(ctx, query.Query)
+				attachedScope, err := c.compileQuery(ctx, query.Query)
 				if err != nil {
 					return attachedScope, err
 				}
 				attachedScope.Plan = pn.AttachedPlan
+				preScopes = append(preScopes, attachedScope)
 			}
 			return &Scope{
-				Magic:         DropIndex,
-				Plan:          pn,
-				AttachedScope: attachedScope,
+				Magic:     DropIndex,
+				Plan:      pn,
+				PreScopes: preScopes,
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
@@ -726,6 +732,7 @@ func (c *Compile) constructScopeForExternal(index int, ID2Addr map[int]int) *Sco
 	ds := &Scope{Magic: Remote}
 	ds.NodeInfo = engine.Node{Addr: c.cnList[ID2Addr[index]].Addr, Mcpu: c.NumCPU()}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
@@ -738,7 +745,10 @@ func (c *Compile) constructScopeForExternal(index int, ID2Addr map[int]int) *Sco
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
-	defer span.End()
+	defer func() {
+		span.End()
+		logutil.Infof("wangjian sql2z is", time.Now())
+	}()
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -781,6 +791,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	logutil.Infof("wangjian sql2 is", mcpu, time.Now())
 	if n.ObjRef != nil {
 		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
@@ -1786,18 +1797,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
-	logutil.Infof("cn generateNodes-1, tbl %d ranges is %d", tblId, expectedLen)
-	defer func() {
-		if expectedLen != 0 {
-			sum := 0
-			for i := range nodes {
-				sum += len(nodes[i].Data)
-			}
-			if sum != expectedLen {
-				logutil.Errorf("cn generateNodes-2, tbl %d, need %d, but %d", tblId, expectedLen, sum)
-			}
-		}
-	}()
+	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, it's temporary table ?
 	// XXX the code is too confused. should be removed once we remove the memory-engine.
@@ -1951,6 +1951,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
+	return addr == currentCNAddr
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
 		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)

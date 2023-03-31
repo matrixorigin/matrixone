@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,6 +48,7 @@ type cnInformation struct {
 	storeEngine engine.Engine
 	fileService fileservice.FileService
 	lockService lockservice.LockService
+	aicm        *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -59,6 +61,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	loadTag          bool
 }
 
 // messageSenderOnClient is a structure
@@ -198,7 +201,8 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	txnClient client.TxnClient) messageReceiverOnServer {
+	txnClient client.TxnClient,
+	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
 		ctx:             ctx,
@@ -214,6 +218,7 @@ func newMessageReceiverOnServer(
 		storeEngine: storeEngine,
 		fileService: fileService,
 		lockService: lockService,
+		aicm:        aicm,
 	}
 
 	switch m.GetCmd() {
@@ -265,11 +270,13 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		cnInfo.fileService,
-		cnInfo.lockService)
+		cnInfo.lockService,
+		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
+	proc.LoadTag = pHelper.loadTag
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i] = &process.AnalyzeInfo{
@@ -399,6 +406,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		unixTime:         procInfo.UnixTime,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
+		loadTag:          procInfo.LoadTag,
 	}
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
 	if err != nil {

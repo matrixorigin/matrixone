@@ -76,7 +76,20 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rbat = bats[0]
+	metaVecs := make([]*vector.Vector, len(bats[0].Vecs))
+	for i, vec := range bats[0].Vecs {
+		if vec.NeedDup() {
+			metaVecs[i], err = vec.Dup(proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		} else {
+			metaVecs[i] = vec
+		}
+	}
+	rbat = &batch.Batch{
+		Vecs: metaVecs,
+	}
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
 	rbat.InitZsOne(1)
