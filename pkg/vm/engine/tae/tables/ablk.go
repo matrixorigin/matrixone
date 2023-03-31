@@ -329,6 +329,12 @@ func (blk *ablock) getInMemoryValue(
 	}
 	defer view.Close()
 	v = view.GetValue(row)
+	//switch val := v.(type) {
+	//case []byte:
+	//	myVal := make([]byte, len(val))
+	//	copy(myVal, val)
+	//	v = myVal
+	//}
 	return
 }
 

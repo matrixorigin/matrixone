@@ -217,9 +217,9 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		// A mock autoIncrCaches.
-		aic := defines.AutoIncrCaches{}
+		aicm := &defines.AutoIncrCacheManager{}
 
-		err = InitSysTenant(ctx, aic)
+		err = InitSysTenant(ctx, aicm)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -6574,7 +6574,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false)
+	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,

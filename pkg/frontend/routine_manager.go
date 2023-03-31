@@ -37,17 +37,17 @@ import (
 )
 
 type RoutineManager struct {
-	mu             sync.RWMutex
-	ctx            context.Context
-	clients        map[goetty.IOSession]*Routine
-	pu             *config.ParameterUnit
-	skipCheckUser  atomic.Bool
-	tlsConfig      *tls.Config
-	autoIncrCaches defines.AutoIncrCaches
+	mu            sync.RWMutex
+	ctx           context.Context
+	clients       map[goetty.IOSession]*Routine
+	pu            *config.ParameterUnit
+	skipCheckUser atomic.Bool
+	tlsConfig     *tls.Config
+	aicm          *defines.AutoIncrCacheManager
 }
 
-func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
-	return rm.autoIncrCaches
+func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
+	return rm.aicm
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -96,14 +96,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
-
-	// Add  autoIncrCaches in session structure.
-	ses.SetAutoIncrCaches(rm.autoIncrCaches)
 
 	routine.setSession(ses)
 	pro.SetSession(ses)
@@ -362,17 +359,14 @@ func (rm *RoutineManager) printDebug() {
 	logutil.Info(bb.String())
 }
 
-func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
 	rm := &RoutineManager{
 		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
 
-	// Initialize auto incre cache.
-	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
-	rm.autoIncrCaches.Mu = &sync.Mutex{}
-
+	rm.aicm = aicm
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {
