@@ -79,11 +79,13 @@ loc varchar(50),
 unique key(deptno)
 );
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+desc mo_catalog.mo_indexes;
 
 --accountadmin删除/回收,切换到普通account验证
 create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 -- @session:id=2&user=accx11:admin&password=123456
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
+desc mo_catalog.mo_indexes;
 -- @session
 
 drop account if exists account1;
