@@ -1042,3 +1042,17 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
+
+func BenchmarkMarshalBinary(b *testing.B) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_text.ToType())
+	err := AppendBytesList(v, [][]byte{[]byte("x"), []byte("y")}, nil, mp)
+	require.NoError(b, err)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := v.MarshalBinary()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

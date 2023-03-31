@@ -293,8 +293,12 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeArea = false
 }
 
+var sizeOfVectorStruct = int(unsafe.Sizeof(Vector{}))
+
 func (v *Vector) MarshalBinary() ([]byte, error) {
-	var buf bytes.Buffer
+	buf := bytes.NewBuffer(
+		make([]byte, 0, sizeOfVectorStruct+len(v.data)+len(v.area)),
+	)
 
 	// write class
 	buf.WriteByte(uint8(v.class))
