@@ -442,3 +442,43 @@ func BenchmarkVectorExtend(t *testing.B) {
 		vec1.Extend(vec2)
 	}
 }
+
+func TestForeachWindowFixed(t *testing.T) {
+	vec1 := MockVector(types.T_uint32.ToType(), 2, false, nil)
+	defer vec1.Close()
+	vec1.Append(types.Null{})
+
+	cnt := 0
+	op := func(v uint32, isNull bool, row int) (err error) {
+		t.Logf("v=%v,null=%v,row=%d", v, isNull, row)
+		cnt++
+		if cnt == vec1.Length() {
+			assert.True(t, isNull)
+		} else {
+			assert.Equal(t, vec1.Get(row).(uint32), v)
+		}
+		return
+	}
+	ForeachWindowFixed(vec1, 0, vec1.Length(), op)
+	assert.Equal(t, vec1.Length(), cnt)
+}
+
+func TestForeachWindowBytes(t *testing.T) {
+	vec1 := MockVector(types.T_varchar.ToType(), 2, false, nil)
+	defer vec1.Close()
+	vec1.Append(types.Null{})
+
+	cnt := 0
+	op := func(v []byte, isNull bool, row int) (err error) {
+		t.Logf("v=%v,null=%v,row=%d", v, isNull, row)
+		cnt++
+		if cnt == vec1.Length() {
+			assert.True(t, isNull)
+		} else {
+			assert.Equal(t, 0, bytes.Compare(v, vec1.Get(row).([]byte)))
+		}
+		return
+	}
+	ForeachWindowBytes(vec1, 0, vec1.Length(), op)
+	assert.Equal(t, vec1.Length(), cnt)
+}

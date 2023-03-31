@@ -271,3 +271,34 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	}
 	return bat
 }
+
+func ForeachWindowFixed[T any](
+	vec Vector,
+	start, length int,
+	op ItOpT[T],
+) (err error) {
+	src := vec.(*vector[T])
+	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
+	for i, v := range slice {
+		if err = op(v, src.IsNull(i+start), i+start); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func ForeachWindowBytes(
+	vec Vector,
+	start, length int,
+	op ItOpT[[]byte],
+) (err error) {
+	src := vec.(*vector[[]byte])
+	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
+	slice = slice[start : start+length]
+	for i, v := range slice {
+		if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+			break
+		}
+	}
+	return
+}

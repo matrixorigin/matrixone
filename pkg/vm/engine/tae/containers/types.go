@@ -15,12 +15,13 @@
 package containers
 
 import (
+	"io"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"io"
 )
 
 type Options struct {
@@ -29,6 +30,7 @@ type Options struct {
 }
 
 type ItOp = func(v any, isNull bool, row int) error
+type ItOpT[T any] func(v T, isNull bool, row int) error
 
 type Vector interface {
 	GetType() types.Type
