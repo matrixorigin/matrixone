@@ -15777,7 +15777,7 @@ yydefault:
 //line mysql_sql.y:6650
 		{
 			t := yyVAL.columnTypeUnion()
-			if t.InternalType.FamilyString == "binary" || t.InternalType.FamilyString == "BINARY" {
+			if strings.ToLower(t.InternalType.FamilyString) == "binary" {
 				t.InternalType.Scale = -1
 			}
 		}

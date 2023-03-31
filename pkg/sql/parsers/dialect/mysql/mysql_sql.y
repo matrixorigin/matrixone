@@ -6649,7 +6649,7 @@ mo_cast_type:
     column_type
 {
    t := $$ 
-   if t.InternalType.FamilyString == "binary" || t.InternalType.FamilyString == "BINARY" {
+   if strings.ToLower(t.InternalType.FamilyString) == "binary" {
         t.InternalType.Scale = -1
    }
 }
