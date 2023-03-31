@@ -1231,7 +1231,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 
 	//record the id :routine pair in RoutineManager
-	ses.rm.accountRoutine.recordRountine(tenantID, ses.getRoutin())
+	ses.getRoutineManager().GetAccountRoutine().recordRountine(tenantID, ses.getRoutin())
 	logInfo(sessionInfo, tenant.String())
 
 	return []byte(pwd), nil

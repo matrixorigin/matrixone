@@ -104,6 +104,10 @@ func (ar *AccountRoutineManager) cleanKillQueue() {
 	ar.killIdQueue = make([]int64, 0)
 }
 
+func (rm *RoutineManager) GetAccountRoutine() *AccountRoutineManager {
+	return rm.accountRoutine
+}
+
 func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
 	return rm.aicm
 }
