@@ -68,6 +68,18 @@ col1    col2    col3    col4
 4    1981-04-02    Dora    24
 5    1981-09-28    bcvdf    25
 6    1981-05-01    green    26
+alter table t1 alter index idx1 invisible;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t1    0    idx1    1    col2    A    0    NULL    NULL                    NO    NULL
+t1    0    idx1    2    col3    A    0    NULL    NULL                    NO    NULL
+alter table t1 alter index idx1 visible;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t1    0    idx1    1    col2    A    0    NULL    NULL                    YES    NULL
+t1    0    idx1    2    col3    A    0    NULL    NULL                    YES    NULL
 ALTER TABLE t1 DROP INDEX idx1;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
@@ -78,6 +90,12 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
 t1    0    idx2    1    col2    A    0    NULL    NULL                    YES    NULL
 t1    0    idx2    2    col3    A    0    NULL    NULL                    YES    NULL
+alter table t1 alter index idx2 invisible;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t1    0    idx2    1    col2    A    0    NULL    NULL                    NO    NULL
+t1    0    idx2    2    col3    A    0    NULL    NULL                    NO    NULL
 ALTER TABLE t1 DROP INDEX idx2;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
@@ -102,6 +120,11 @@ show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
 t2    1    index1    1    col2    A    0    NULL    NULL                    YES    NULL
+alter table t2 alter index index1 invisible;
+show index from t2;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t2    1    index1    1    col2    A    0    NULL    NULL                    NO    NULL
 select * from t2;
 col1    col2    col3    col4
 1    1980-12-17    Abby    21
@@ -120,6 +143,12 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
 t2    1    index2    1    col2    A    0    NULL    NULL                    YES    NULL
 t2    1    index2    2    col3    A    0    NULL    NULL                    YES    NULL
+alter table t2 alter index index2 invisible;
+show index from t2;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t2    1    index2    1    col2    A    0    NULL    NULL                    NO    NULL
+t2    1    index2    2    col3    A    0    NULL    NULL                    NO    NULL
 ALTER TABLE t2 DROP INDEX index2;
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
@@ -145,6 +174,12 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
 t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
 t3    1    index1    1    col2    A    0    NULL    NULL                    YES    NULL
+alter table t3 alter index index1 invisible;
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+t3    1    index1    1    col2    A    0    NULL    NULL                    NO    NULL
 select * from t3;
 col1    col2    col3    col4
 1    1980-12-17    Abby    21
@@ -165,6 +200,13 @@ t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES
 t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
 t3    0    index2    1    col2    A    0    NULL    NULL                    YES    NULL
 t3    0    index2    2    col3    A    0    NULL    NULL                    YES    NULL
+alter table t3 alter index index2 invisible;
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+t3    0    index2    1    col2    A    0    NULL    NULL                    NO    NULL
+t3    0    index2    2    col3    A    0    NULL    NULL                    NO    NULL
 ALTER TABLE t3 DROP INDEX index2;
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression

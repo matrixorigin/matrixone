@@ -1732,6 +1732,22 @@ func boolToStr(
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
 	l := uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			var v1 []byte
+			if v {
+				v1 = []byte("1")
+			} else {
+				v1 = []byte("0")
+			}
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1951,6 +1967,18 @@ func signedToStr[T constraints.Integer](
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
 	l := uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(strconv.FormatInt(int64(v), 10))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1959,6 +1987,11 @@ func signedToStr[T constraints.Integer](
 			}
 		} else {
 			result := []byte(strconv.FormatInt(int64(v), 10))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Signed", " truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -1978,6 +2011,17 @@ func unsignedToStr[T constraints.Unsigned](
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
 	l := uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(strconv.FormatUint(uint64(v), 10))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1986,6 +2030,11 @@ func unsignedToStr[T constraints.Unsigned](
 			}
 		} else {
 			result := []byte(strconv.FormatUint(uint64(v), 10))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Unsigned", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2006,6 +2055,17 @@ func floatToStr[T constraints.Float](
 	var i uint64
 	l := uint64(length)
 	bitSize := int(unsafe.Sizeof(T(0)) * 8)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := floatToBytes(float64(v), bitSize)
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2014,11 +2074,11 @@ func floatToStr[T constraints.Float](
 			}
 		} else {
 			// float to string, [-14,15] convert to exponent.
-			var result []byte
-			if float64(v) >= float64(1e15) || float64(v) < float64(1e-13) {
-				result = []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
-			} else {
-				result = []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
+			result := floatToBytes(float64(v), bitSize)
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Float", "truncated for binary/varbinary")
+				}
 			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
@@ -2454,6 +2514,17 @@ func dateToStr(
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
 	l := uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.String())
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2462,6 +2533,11 @@ func dateToStr(
 			}
 		} else {
 			result := []byte(v.String())
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Date", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2482,6 +2558,17 @@ func datetimeToStr(
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.String2(fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2490,6 +2577,11 @@ func datetimeToStr(
 			}
 		} else {
 			result := []byte(v.String2(fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Datetime", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2511,6 +2603,17 @@ func timestampToStr(
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.String2(zone, fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2519,6 +2622,11 @@ func timestampToStr(
 			}
 		} else {
 			result := []byte(v.String2(zone, fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("TimeStamp", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2539,6 +2647,17 @@ func timeToStr(
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.String2(fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2547,6 +2666,11 @@ func timeToStr(
 			}
 		} else {
 			result := []byte(v.String2(fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Time", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -3074,6 +3198,17 @@ func decimal64ToStr(
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.Format(fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -3082,6 +3217,17 @@ func decimal64ToStr(
 			}
 		} else {
 			result := []byte(v.Format(fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Decimal64", "truncated for binary/varbinary")
+				}
+			}
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -3096,6 +3242,17 @@ func decimal128ToStr(
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.Format(fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -3104,6 +3261,17 @@ func decimal128ToStr(
 			}
 		} else {
 			result := []byte(v.Format(fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Decimal128", "truncated for binary/varbinary")
+				}
+			}
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -3543,6 +3711,16 @@ func strToStr(
 	destLen := int(totype.Width)
 	var i uint64
 	var l = uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetStrValue(i)
+			if err := explicitCastToBinary(toType, v, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -3577,12 +3755,6 @@ func strToStr(
 				}
 				continue
 			}
-			if toType.Oid == types.T_binary && len(v) < int(toType.Width) {
-				add0 := int(toType.Width) - len(v)
-				for ; add0 != 0; add0-- {
-					v = append(v, 0)
-				}
-			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
@@ -3596,6 +3768,17 @@ func uuidToStr(
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
 	var l = uint64(length)
+	// Here cast using cast(data_type as binary[(n)]).
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.ToString())
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -3604,6 +3787,11 @@ func uuidToStr(
 			}
 		} else {
 			result := []byte(v.ToString())
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for binary/varbinary")
+				}
+			}
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -4106,4 +4294,44 @@ func IsDecimal(t types.T) bool {
 // IsBinary: return true if the types.T is binary or varbinary.
 func IsBinary(t types.T) bool {
 	return t == types.T_binary || t == types.T_varbinary
+}
+
+func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		if err := to.AppendBytes(nil, true); err != nil {
+			return err
+		}
+		return nil
+	}
+	// cast(data_type as binary)
+	if toType.Width == -1 {
+		if err := to.AppendBytes(v, false); err != nil {
+			return err
+		}
+		return nil
+	}
+	// cast(data_type as binary(n))
+	// truncating
+	if int32(len(v)) > toType.Width {
+		v = v[:toType.Width]
+	}
+	// right-padding.
+	if len(v) < int(toType.Width) {
+		add0 := int(toType.Width) - len(v)
+		for ; add0 != 0; add0-- {
+			v = append(v, 0)
+		}
+	}
+	if err := to.AppendBytes(v, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func floatToBytes(v float64, bitSize int) []byte {
+	if v >= float64(1e15) || v < float64(1e-13) {
+		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
+	} else {
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
+	}
 }

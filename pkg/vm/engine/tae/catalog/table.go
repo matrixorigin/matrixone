@@ -31,9 +31,9 @@ import (
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
-func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts types.TS) (visible, dropped bool) {
+func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool) {
 	table := n.GetPayload()
-	visible, dropped = table.GetVisibility(ts)
+	visible, dropped = table.GetVisibility(txn)
 	return
 }
 

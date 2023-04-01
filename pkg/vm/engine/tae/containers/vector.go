@@ -28,16 +28,11 @@ import (
 )
 
 // DN vector is different from CN vector by
-// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable. (Will be removed in future PR)
 // 2. Window - DN uses shared-memory Window
 // 3. Mpool  - DN stores mpool reference within the vector
 // 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
 type vector[T any] struct {
 	downstreamVector *cnVector.Vector
-
-	// isNullable mainly used in Equals() Note:
-	//1. We can't use cnVector.Nsp.Np to replace this flag, as this information will be lost in Marshalling/UnMarshalling.
-	isNullable bool
 
 	// Used in Append()
 	mpool *mpool.MPool
@@ -46,10 +41,9 @@ type vector[T any] struct {
 	isOwner bool
 }
 
-func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
+func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 	vec := &vector[T]{
 		downstreamVector: cnVector.NewVec(typ),
-		isNullable:       nullable,
 	}
 
 	// setting mpool variables
@@ -109,10 +103,6 @@ func (vec *vector[T]) Append(v any) {
 	}
 }
 
-func (vec *vector[T]) Nullable() bool {
-	return vec.isNullable
-}
-
 func (vec *vector[T]) GetAllocator() *mpool.MPool {
 	return vec.mpool
 }
@@ -143,15 +133,12 @@ func (vec *vector[T]) Slice() any {
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
-	// 1. Nullable Flag [1 byte]
-	buf := types.EncodeFixed(vec.Nullable())
 
-	// 2. Vector bytes
-	var vecBytes []byte
-	if vecBytes, err = vec.downstreamVector.MarshalBinary(); err != nil {
+	// 1. Vector bytes
+	var buf []byte
+	if buf, err = vec.downstreamVector.MarshalBinary(); err != nil {
 		return 0, err
 	}
-	buf = append(buf, vecBytes...)
 
 	//0. Length of vector bytes [8 bytes]
 	i64 := int64(len(buf))
@@ -174,20 +161,13 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	length := types.DecodeInt64(lengthBytes[:8])
 	n += 8
 
-	// Whole DN Vector
+	// 1. Whole DN Vector
 	buf := make([]byte, length)
 	if _, err = r.Read(buf); err != nil {
 		return 0, err
 	}
 
 	n += int64(len(buf))
-
-	// 1. Nullable flag [1 byte]
-	isNullable := types.DecodeFixed[bool](buf[:1])
-	vec.isNullable = isNullable
-
-	//2. Vector
-	buf = buf[1:]
 
 	vec.releaseDownstream()
 	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
@@ -268,7 +248,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		opts.Allocator = allocator[0]
 	}
 
-	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+	cloned := NewVector[T](vec.GetType(), opts)
 	var err error
 	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
 	if err != nil {
@@ -485,9 +465,6 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		return false
 	}
 	if !vec.GetType().TypeEqual(o.GetType()) {
-		return false
-	}
-	if vec.Nullable() != o.Nullable() {
 		return false
 	}
 	if vec.HasNull() != o.HasNull() {
