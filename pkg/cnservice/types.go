@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -259,6 +260,7 @@ type service struct {
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
@@ -278,6 +280,7 @@ type service struct {
 	lockService            lockservice.LockService
 
 	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex

@@ -48,8 +48,8 @@ func TestInternalAutoIncrement(t *testing.T) {
 	proc := testutil.NewProc()
 
 	var mu sync.Mutex
-	proc.SessionInfo.AutoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
-	proc.SessionInfo.AutoIncrCaches.Mu = &mu
+	// 3000 is the default number.
+	proc.Aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &mu, MaxSize: 3000}
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

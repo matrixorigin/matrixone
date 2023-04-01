@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"math"
 	"math/bits"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -810,6 +811,7 @@ var (
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
 				name     varchar(100),
+				creator  int unsigned,
 				args     text,
 				retType  varchar(20),
 				body     text,
@@ -889,6 +891,7 @@ var (
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
+			creator,
 			args,
 			retType,
 			body,
@@ -902,7 +905,7 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
@@ -6175,7 +6178,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) error {
+func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -6200,7 +6203,7 @@ func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) e
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	bh := NewBackgroundHandler(ctx, ctx, mp, pu, autoincrcaches)
+	bh := NewBackgroundHandler(ctx, ctx, mp, pu, aicm)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -7158,6 +7161,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
 		string(cf.Name.Name.ObjectName),
+		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		retTypeStr, cf.Body, cf.Language, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")

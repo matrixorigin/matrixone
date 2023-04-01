@@ -120,6 +120,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(rowidDescCompare, rowidCopy, nullsLast)
 		}
 		return newCompare(rowidAscCompare, rowidCopy, nullsLast)
+	case types.T_Blockid:
+		if desc {
+			return newCompare(blockidDescCompare, blockidCopy, nullsLast)
+		}
+		return newCompare(blockidAscCompare, blockidCopy, nullsLast)
 	case types.T_uuid:
 		if desc {
 			return newCompare(uuidDescCompare, uuidCopy, nullsLast)
@@ -162,7 +167,11 @@ func txntsAscCompare(x, y types.TS) int {
 	return bytes.Compare(x[:], y[:])
 }
 func rowidAscCompare(x, y types.Rowid) int {
-	return bytes.Compare(x[:], x[:])
+	return bytes.Compare(x[:], y[:])
+}
+
+func blockidAscCompare(x, y types.Blockid) int {
+	return bytes.Compare(x[:], y[:])
 }
 
 func genericAscCompare[T types.OrderedT](x, y T) int {
@@ -203,6 +212,10 @@ func rowidDescCompare(x, y types.Rowid) int {
 	return bytes.Compare(y[:], x[:])
 }
 
+func blockidDescCompare(x, y types.Blockid) int {
+	return bytes.Compare(y[:], x[:])
+}
+
 func genericDescCompare[T types.OrderedT](x, y T) int {
 	if x == y {
 		return 0
@@ -233,6 +246,10 @@ func txntsCopy(vecDst, vecSrc []types.TS, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 func rowidCopy(vecDst, vecSrc []types.Rowid, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func blockidCopy(vecDst, vecSrc []types.Blockid, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

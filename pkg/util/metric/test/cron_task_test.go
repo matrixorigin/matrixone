@@ -92,10 +92,10 @@ func TestCalculateStorageUsage(t *testing.T) {
 	pu.SV.SetDefaultValues()
 
 	// Mock autoIncrCache
-	aic := defines.AutoIncrCaches{}
+	aicm := &defines.AutoIncrCacheManager{}
 
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, aic)
+		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
 	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {

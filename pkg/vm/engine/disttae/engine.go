@@ -329,6 +329,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op,
 		e.fs,
 		nil,
+		nil,
 	)
 	txn := &Transaction{
 		op:          op,
