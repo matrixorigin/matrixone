@@ -48,3 +48,6 @@ port = 16001
 [cn.rpc]
 send-queue-size = 2
 busy-queue-size = 1
+
+[cn.txn]
+non-freshness = false

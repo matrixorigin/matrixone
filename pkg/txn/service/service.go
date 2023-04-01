@@ -38,7 +38,6 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	rt        runtime.Runtime
 	logger    *log.MOLogger
 	shard     metadata.DNShard
 	storage   storage.TxnStorage
@@ -74,23 +73,19 @@ func NewTxnService(
 	sender rpc.TxnSender,
 	zombieTimeout time.Duration,
 	allocator lockservice.LockTableAllocator) TxnService {
-	logger := rt.Logger().With(util.TxnDNShardField(shard))
 	s := &service{
-		rt:      rt,
-		logger:  rt.Logger().With(util.TxnDNShardField(shard)),
+		logger:  util.GetLogger(),
 		shard:   shard,
 		sender:  sender,
 		storage: storage,
 		pool: sync.Pool{
 			New: func() any {
-				return &txnContext{
-					logger: logger,
-				}
+				return &txnContext{}
 			}},
 		stopper: stopper.NewStopper(fmt.Sprintf("txn-service-%d-%d",
 			shard.ShardID,
 			shard.ReplicaID),
-			stopper.WithLogger(logger.RawLogger())),
+			stopper.WithLogger(util.GetLogger().RawLogger())),
 		zombieTimeout: zombieTimeout,
 		recoveryC:     make(chan struct{}),
 		txnC:          make(chan txn.TxnMeta, 16),
@@ -196,7 +191,7 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	// 1. first transaction write request at current DNShard
 	// 2. transaction already committed or aborted, the transcation context will removed by gcZombieTxn.
 	txnCtx.init(meta, acquireNotifier())
-	util.LogTxnCreateOn(s.logger, meta, s.shard)
+	util.LogTxnCreateOn(meta, s.shard)
 	return txnCtx, true
 }
 
@@ -243,13 +238,13 @@ func (s *service) parallelSendWithRetry(
 		case <-ctx.Done():
 			return nil
 		default:
-			util.LogTxnSendRequests(s.logger, requests)
+			util.LogTxnSendRequests(requests)
 			result, err := s.sender.Send(ctx, requests)
 			if err != nil {
-				util.LogTxnSendRequestsFailed(s.logger, requests, err)
+				util.LogTxnSendRequestsFailed(requests, err)
 				continue
 			}
-			util.LogTxnReceivedResponses(s.logger, result.Responses)
+			util.LogTxnReceivedResponses(result.Responses)
 			hasError := false
 			for _, resp := range result.Responses {
 				if resp.TxnError != nil {
@@ -268,7 +263,6 @@ func (s *service) parallelSendWithRetry(
 }
 
 type txnContext struct {
-	logger   *log.MOLogger
 	nt       *notifier
 	createAt time.Time
 
@@ -287,7 +281,7 @@ func (c *txnContext) addWaiter(txnID []byte, w *waiter, waitStatus txn.TxnStatus
 		return false
 	}
 
-	util.LogTxnWaiterAdded(c.logger, c.mu.txn, waitStatus)
+	util.LogTxnWaiterAdded(c.mu.txn, waitStatus)
 	c.nt.addWaiter(w, waitStatus)
 	return true
 }
@@ -320,7 +314,7 @@ func (c *txnContext) getTxnLocked() txn.TxnMeta {
 
 func (c *txnContext) updateTxnLocked(txn txn.TxnMeta) {
 	c.mu.txn = txn
-	util.LogTxnUpdated(c.logger, c.mu.txn)
+	util.LogTxnUpdated(c.mu.txn)
 }
 
 func (c *txnContext) resetLocked() {
@@ -333,7 +327,7 @@ func (c *txnContext) resetLocked() {
 func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 	if c.mu.txn.Status != status {
 		c.mu.txn.Status = status
-		util.LogTxnUpdated(c.logger, c.mu.txn)
+		util.LogTxnUpdated(c.mu.txn)
 		c.nt.notify(status)
 	}
 }

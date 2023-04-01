@@ -456,7 +456,6 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
-			rt,
 			sender,
 			opts...)
 		s._txnClient = c

@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -174,6 +175,13 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
+
+	// the internal executor is used for system initialization and
+	// we need to use the latest current time as the latest commit ts
+	// to ensure that transactions occurring on the current session
+	// can see the latest data.
+	ts, _ := runtime.ProcessLevelRuntime().Clock().Now()
+	sess.updateLastCommitTS(ts)
 
 	// Set AutoIncrCache for this session.
 	sess.SetAutoIncrCaches(ie.autoIncrCaches)

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -51,6 +52,8 @@ func (e *miniExec) SetSession(sess *Session) {
 }
 
 func TestIe(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 

@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
 )
 
 // WithTxnIDGenerator setup txn id generator
@@ -48,7 +50,7 @@ func WithTimestampWaiter(timestampWaiter TimestampWaiter) TxnClientCreateOption 
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	rt              runtime.Runtime
+	clock           clock.Clock
 	sender          rpc.TxnSender
 	generator       TxnIDGenerator
 	lockService     lockservice.LockService
@@ -57,10 +59,12 @@ type txnClient struct {
 
 // NewTxnClient create a txn client with TxnSender and Options
 func NewTxnClient(
-	rt runtime.Runtime,
 	sender rpc.TxnSender,
 	options ...TxnClientCreateOption) TxnClient {
-	c := &txnClient{rt: rt, sender: sender}
+	c := &txnClient{
+		clock:  runtime.ProcessLevelRuntime().Clock(),
+		sender: sender,
+	}
 	for _, opt := range options {
 		opt(c)
 	}
@@ -72,24 +76,31 @@ func (client *txnClient) adjust() {
 	if client.generator == nil {
 		client.generator = newUUIDTxnIDGenerator()
 	}
-	if client.rt.Clock() == nil {
+	if runtime.ProcessLevelRuntime().Clock() == nil {
 		panic("txn clock not set")
 	}
 }
 
 func (client *txnClient) New(
 	ctx context.Context,
-	commitTS timestamp.Timestamp,
+	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
-	now, _ := client.rt.Clock().Now()
+	now, _ := client.clock.Now()
 	// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
 	if client.timestampWaiter != nil {
-		client.timestampWaiter.GetTimestamp(ctx, commitTS)
+		ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
+		if err != nil {
+			return nil, err
+		}
+		util.LogTxnSnapshotTimestamp(
+			minTS,
+			ts)
+		txnMeta.SnapshotTS = ts
 	}
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
@@ -97,14 +108,13 @@ func (client *txnClient) New(
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))
 	return newTxnOperator(
-		client.rt,
 		client.sender,
 		txnMeta,
 		options...), nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	return newTxnOperatorWithSnapshot(client.rt, client.sender, snapshot)
+	return newTxnOperatorWithSnapshot(client.sender, snapshot)
 }
 
 func (client *txnClient) Close() error {
@@ -112,14 +122,14 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
-	if v, ok := client.rt.GetGlobalVariables(runtime.TxnIsolation); ok {
+	if v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnIsolation); ok {
 		return v.(txn.TxnIsolation)
 	}
 	return txn.TxnIsolation_RC
 }
 
 func (client *txnClient) getTxnMode() txn.TxnMode {
-	if v, ok := client.rt.GetGlobalVariables(runtime.TxnMode); ok {
+	if v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnMode); ok {
 		return v.(txn.TxnMode)
 	}
 	return txn.TxnMode_Pessimistic

@@ -22,11 +22,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
 )
 
 const (
 	maxNotifiedCount = 64
-	maxWaitersCount  = 10000
 )
 
 type timestampWaiter struct {
@@ -44,7 +44,7 @@ type timestampWaiter struct {
 func NewTimestampWaiter() TimestampWaiter {
 	tw := &timestampWaiter{
 		stopper: *stopper.NewStopper("timestamp-waiter",
-			stopper.WithLogger(getLogger().RawLogger())),
+			stopper.WithLogger(util.GetLogger().RawLogger())),
 		notifiedC: make(chan timestamp.Timestamp, maxNotifiedCount),
 	}
 	if err := tw.stopper.RunTask(tw.handleNotify); err != nil {
@@ -73,6 +73,7 @@ func (tw *timestampWaiter) GetTimestamp(
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
+	util.LogTxnPushedTimestampUpdated(ts)
 	tw.notifiedC <- ts
 }
 

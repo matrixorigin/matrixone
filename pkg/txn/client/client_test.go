@@ -32,11 +32,11 @@ import (
 )
 
 func TestAdjustClient(t *testing.T) {
-	c := &txnClient{rt: runtime.DefaultRuntime()}
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.rt)
 }
 
 func TestNewTxn(t *testing.T) {
@@ -45,7 +45,8 @@ func TestNewTxn(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	c := NewTxnClient(rt, newTestTxnSender())
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0))
@@ -62,7 +63,8 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	c := NewTxnClient(rt, newTestTxnSender())
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))

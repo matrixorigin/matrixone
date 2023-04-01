@@ -113,6 +113,7 @@ func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
 		"dn-uuid",
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		runtime.WithClock(clock))
+	runtime.SetupProcessLevelRuntime(rt)
 	return NewTxnService(rt,
 		NewTestDNShard(shard),
 		NewTestTxnStorage(log, clock),

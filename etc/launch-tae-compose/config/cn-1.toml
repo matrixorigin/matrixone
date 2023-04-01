@@ -57,3 +57,6 @@ type = "distributed-tae"
 
 [cn.frontend]
 port = 6001
+
+[cn.txn]
+non-freshness = false

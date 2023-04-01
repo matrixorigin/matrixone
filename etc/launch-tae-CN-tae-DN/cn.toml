@@ -2,7 +2,7 @@ service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "debug"
 format = "console"
 max-size = 512
 
@@ -35,7 +35,7 @@ disableMetric = true
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
-turn-on-push-model = false
+turn-on-push-model = true
 
 [cn.Engine]
 type = "distributed-tae"
@@ -43,3 +43,6 @@ type = "distributed-tae"
 [cn.rpc]
 send-queue-size = 2
 busy-queue-size = 1
+
+[cn.txn]
+non-freshness = false

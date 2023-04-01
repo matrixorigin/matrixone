@@ -113,7 +113,7 @@ func runLockOpTest(
 			s, err := rpc.NewSender(rpc.Config{}, runtime.ProcessLevelRuntime())
 			require.NoError(t, err)
 
-			c := client.NewTxnClient(runtime.ProcessLevelRuntime(), s)
+			c := client.NewTxnClient(s)
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()
