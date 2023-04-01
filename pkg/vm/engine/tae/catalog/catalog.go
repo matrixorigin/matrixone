@@ -974,7 +974,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 func (catalog *Catalog) txnGetNodeByName(
 	tenantID uint32,
 	name string,
-	ts types.TS) (*common.GenericDLNode[*DBEntry], error) {
+	txn txnif.TxnReader) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	fullName := genDBFullName(tenantID, name)
@@ -982,14 +982,14 @@ func (catalog *Catalog) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.NewBadDBNoCtx(name)
 	}
-	return node.TxnGetNodeLocked(ts)
+	return node.TxnGetNodeLocked(txn)
 }
 
 func (catalog *Catalog) GetDBEntryByName(
 	tenantID uint32,
 	name string,
-	ts types.TS) (db *DBEntry, err error) {
-	n, err := catalog.txnGetNodeByName(tenantID, name, ts)
+	txn txnif.TxnReader) (db *DBEntry, err error) {
+	n, err := catalog.txnGetNodeByName(tenantID, name, txn)
 	if err != nil {
 		return
 	}
@@ -998,7 +998,7 @@ func (catalog *Catalog) GetDBEntryByName(
 }
 
 func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
-	n, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
+	n, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,7 +1010,7 @@ func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEnt
 	if err != nil {
 		return nil, err
 	}
-	visiable, dropped := dbEntry.GetVisibility(txn.GetStartTS())
+	visiable, dropped := dbEntry.GetVisibility(txn)
 	if !visiable || dropped {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -1024,7 +1024,7 @@ func (catalog *Catalog) DropDBEntry(
 		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
+	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}

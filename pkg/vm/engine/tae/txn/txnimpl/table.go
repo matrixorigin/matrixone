@@ -344,7 +344,7 @@ func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	}
 	var ok bool
 	meta.RLock()
-	ok, err = meta.IsVisible(tbl.store.txn.GetStartTS(), meta.RWMutex)
+	ok, err = meta.IsVisible(tbl.store.txn, meta.RWMutex)
 	meta.RUnlock()
 	if err != nil {
 		return
