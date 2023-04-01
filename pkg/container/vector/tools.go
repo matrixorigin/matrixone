@@ -245,11 +245,6 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 		cantFreeData: true,
 		cantFreeArea: true,
 	}
-	// Check for enum type, assign the enumvalues.
-	rvec.typ.EnumValues = vec.Type.EnumValues
-	if rvec.typ.EnumValues != nil && len(rvec.typ.EnumValues) <= 255 {
-		rvec.typ.Size = 1
-	}
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {

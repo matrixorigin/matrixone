@@ -1327,11 +1327,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				AutoIncrement: col.Typ.GetAutoIncr(),
 			},
 		}
-		// Check for enum type.
 		exeCols[i].(*engine.AttributeDef).Attr.Type.EnumValues = colTyp.EnumValues
-		if colTyp.EnumValues != nil && len(colTyp.EnumValues) <= 255 {
-			exeCols[i].(*engine.AttributeDef).Attr.Type.Size = 1
-		}
 	}
 	return exeCols
 }

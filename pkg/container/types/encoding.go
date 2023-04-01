@@ -29,9 +29,7 @@ import (
 )
 
 const (
-	// Tsize representing size Type without []string.
-	TSize          int = int(unsafe.Sizeof(Type{})) - SSize
-	SSize          int = int(unsafe.Sizeof([]string{}))
+	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -100,42 +98,26 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 }
 
 func EncodeType(v *Type) ([]byte, int32) {
-	var n int32 = int32(TSize)
-	// Encoding fields without EnumValues
+	n := int32(TSize)
+	// Encoding Type with enumvalues == nil.
+	ev := v.EnumValues
+	v.EnumValues = nil
 	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+	v.EnumValues = ev
 	// For enum type encode the string list.
-	slen := int32(0)
-	var sdat []byte
-	if v.EnumValues != nil {
-		sdat = EncodeStringSlice(v.EnumValues)
-		slen = int32(len(sdat))
-	}
-	lendat := EncodeInt32(&slen)
-	dat = append(dat, lendat...)
-	n += 4
-	if slen != 0 {
+	if ev != nil {
+		sdat := EncodeStringSlice(ev)
+		n += int32(len(sdat))
 		dat = append(dat, sdat...)
-		n += slen
 	}
 	return dat, n
 }
 
 func DecodeType(v []byte) Type {
 	baseData := v[:TSize]
-	var mock []string
-	mock = nil
-	modata := unsafe.Slice((*byte)(unsafe.Pointer(&mock)), SSize)
-	typdata := make([]byte, 0)
-	typdata = append(typdata, baseData...)
-	typdata = append(typdata, modata...)
-	basetyp := *(*Type)(unsafe.Pointer(&typdata[0]))
+	basetyp := *(*Type)(unsafe.Pointer(&baseData[0]))
 	v = v[TSize:]
-
-	lenData := v[:4]
-	len := DecodeInt32(lenData)
-	v = v[4:]
-
-	if len != 0 {
+	if len(v) != 0 {
 		basetyp.EnumValues = DecodeStringSlice(v)
 	}
 	return basetyp

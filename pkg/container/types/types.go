@@ -265,6 +265,9 @@ func TypeSize(oid T) int {
 func (t Type) TypeEqual(o Type) (equal bool) {
 	equal = t.Size == o.Size && t.Width == o.Width && t.Scale == o.Scale &&
 		t.Oid == o.Oid && t.Charset == o.Charset && t.dummy1 == o.dummy1 && t.dummy2 == o.dummy2
+	if !equal {
+		return
+	}
 	if t.EnumValues == nil && o.EnumValues == nil {
 		return
 	}
