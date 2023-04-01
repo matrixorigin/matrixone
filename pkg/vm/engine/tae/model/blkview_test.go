@@ -26,8 +26,7 @@ import (
 
 func TestEval(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	var zeroV types.TS
-	view := NewBlockView(zeroV.Next().Next())
+	view := NewBlockView()
 	colTypes := types.MockColTypes(14)
 	rows := 64
 	bat := containers.MockBatch(colTypes, rows, 3, nil)

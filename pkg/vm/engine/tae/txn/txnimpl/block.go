@@ -59,7 +59,7 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -97,7 +97,7 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -166,21 +166,21 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaloc string) {
-	return blk.entry.GetVisibleMetaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleMetaLoc(blk.Txn)
 }
 func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
-	return blk.entry.GetVisibleDeltaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleDeltaLoc(blk.Txn)
 }
 func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
 	return
 }
@@ -226,7 +226,7 @@ func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), entry, readed)
+	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().ID, entry, readed)
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {

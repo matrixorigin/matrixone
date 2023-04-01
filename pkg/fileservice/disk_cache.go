@@ -19,15 +19,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
-
-//TODO cache evict
 
 type DiskCache struct {
 	capacity        int64
@@ -39,6 +39,14 @@ type DiskCache struct {
 		sync.Mutex
 		m map[string]chan struct{}
 	}
+
+	stats struct {
+		sync.Mutex
+		sizes     map[string]int64
+		totalSize int64
+	}
+
+	jobs chan func()
 }
 
 func NewDiskCache(
@@ -54,8 +62,16 @@ func NewDiskCache(
 		capacity:        capacity,
 		path:            path,
 		perfCounterSets: perfCounterSets,
+		jobs:            make(chan func(), 128),
 	}
 	ret.settingContent.m = make(map[string]chan struct{})
+	ret.stats.sizes = make(map[string]int64)
+	go func() {
+		for job := range ret.jobs {
+			job()
+		}
+	}()
+	go ret.collect()
 	return ret, nil
 }
 
@@ -170,11 +186,12 @@ func (d *DiskCache) Update(
 		return nil
 	}
 
-	var numOpen, numStat int64
+	var numOpen, numStat, numError int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 			set.FileService.Cache.Disk.OpenFile.Add(numOpen)
 			set.FileService.Cache.Disk.StatFile.Add(numStat)
+			set.FileService.Cache.Disk.Error.Add(numError)
 		})
 	}()
 
@@ -224,23 +241,47 @@ func (d *DiskCache) Update(
 			dataPath := d.entryDataPath(vector, entry)
 			err = os.MkdirAll(filepath.Dir(dataPath), 0755)
 			if err != nil {
-				return err
+				numError++
+				continue // ignore error
 			}
 			file, err := os.OpenFile(dataPath, os.O_RDWR|os.O_CREATE, 0644)
 			if err != nil {
-				return err
+				numError++
+				continue // ignore error
 			}
 			numOpen++
 			n, err := file.WriteAt(entry.Data, entry.Offset)
 			if err != nil {
-				return err
+				numError++
+				continue // ignore error
 			}
+			info, err := file.Stat()
+			if err != nil {
+				numError++
+				continue // ignore error
+			}
+			size := info.Size()
 			if err := file.Close(); err != nil {
-				return err
+				numError++
+				continue // ignore error
 			}
 			if int64(n) != entry.Size {
-				return io.ErrShortWrite
+				numError++
+				continue // ignore error
 			}
+
+			d.jobs <- func() {
+				d.stats.Lock()
+				prev, ok := d.stats.sizes[dataPath]
+				if ok {
+					d.stats.totalSize -= prev
+				}
+				d.stats.sizes[dataPath] = size
+				d.stats.totalSize += size
+				d.evict()
+				d.stats.Unlock()
+			}
+
 			linkTarget = dataPath
 		}
 
@@ -261,6 +302,52 @@ func (d *DiskCache) Update(
 
 func (d *DiskCache) Flush() {
 	//TODO
+}
+
+func (d *DiskCache) collect() {
+	d.stats.Lock()
+	defer d.stats.Unlock()
+
+	// collect
+	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil //ignore
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".mofscache") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil // ignore
+		}
+		size := info.Size()
+		prev, ok := d.stats.sizes[path]
+		if ok {
+			d.stats.totalSize -= prev
+		}
+		d.stats.sizes[path] = size
+		d.stats.totalSize += size
+		return nil
+	})
+
+	d.evict()
+}
+
+func (d *DiskCache) evict() {
+	// must be called with d.stats locked
+	for path, size := range d.stats.sizes {
+		if d.stats.totalSize == 0 || d.stats.totalSize < d.capacity {
+			break
+		}
+		if err := os.Remove(path); err != nil {
+			continue // ignore
+		}
+		delete(d.stats.sizes, path)
+		d.stats.totalSize -= size
+	}
 }
 
 var _ FileContentCache = new(DiskCache)
@@ -360,12 +447,31 @@ func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done fun
 	var doneOnce sync.Once
 	return f, func() (err error) {
 		doneOnce.Do(func() {
+			var info fs.FileInfo
+			info, err = f.Stat()
+			if err != nil {
+				return
+			}
+			size := info.Size()
 			if err = f.Close(); err != nil {
 				return
 			}
 			if err = os.Rename(tmpPath, contentPath); err != nil {
 				return
 			}
+
+			d.jobs <- func() {
+				d.stats.Lock()
+				prev, ok := d.stats.sizes[contentPath]
+				if ok {
+					d.stats.totalSize -= prev
+				}
+				d.stats.sizes[contentPath] = size
+				d.stats.totalSize += size
+				d.evict()
+				d.stats.Unlock()
+			}
+
 		})
 		return
 	}, f.Close, nil
@@ -386,7 +492,7 @@ func (d *DiskCache) entryDataPath(vector *IOVector, entry IOEntry) string {
 	return filepath.Join(
 		d.path,
 		toOSPath(vector.FilePath),
-		"data",
+		"data.mofscache",
 	)
 }
 
@@ -394,6 +500,6 @@ func (d *DiskCache) contentPath(filePath string) string {
 	return filepath.Join(
 		d.path,
 		toOSPath(filePath),
-		"full-data",
+		"full-data.mofscache",
 	)
 }

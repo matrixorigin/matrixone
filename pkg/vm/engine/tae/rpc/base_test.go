@@ -707,6 +707,11 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
+		if err := vector.AppendFixed(bat.Vecs[idx], int8(0), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_PARTITION_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition_info
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
@@ -760,10 +765,9 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 
 func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
 	bat *batch.Batch) *containers.Batch {
-	allNullables := schema.AllNullables()
 	taeBatch := containers.NewEmptyBatch()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
+		v := containers.NewVectorWithSharedMemory(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return taeBatch

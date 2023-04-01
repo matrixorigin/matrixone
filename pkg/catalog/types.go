@@ -97,7 +97,8 @@ const (
 	SystemRelAttr_Creator     = "creator"
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_AccID       = "account_id"
-	SystemRelAttr_Partition   = "partitioned"
+	SystemRelAttr_Partitioned = "partitioned"
+	SystemRelAttr_Partition   = "partition_info"
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
 
@@ -147,6 +148,11 @@ const (
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
+	/*
+		the partition table contains the data of the partition.
+		the table partitioned has multiple partition tables
+	*/
+	SystemPartitionRel = "partition"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
@@ -192,8 +198,9 @@ const (
 	MO_TABLES_OWNER_IDX          = 10
 	MO_TABLES_ACCOUNT_ID_IDX     = 11
 	MO_TABLES_PARTITIONED_IDX    = 12
-	MO_TABLES_VIEWDEF_IDX        = 13
-	MO_TABLES_CONSTRAINT_IDX     = 14
+	MO_TABLES_PARTITION_INFO_IDX = 13
+	MO_TABLES_VIEWDEF_IDX        = 14
+	MO_TABLES_CONSTRAINT_IDX     = 15
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -266,6 +273,7 @@ type CreateTable struct {
 	DatabaseId   uint64
 	DatabaseName string
 	Comment      string
+	Partitioned  int8
 	Partition    string
 	RelKind      string
 	Viewdef      string
@@ -315,6 +323,7 @@ var (
 		SystemRelAttr_Creator,
 		SystemRelAttr_Owner,
 		SystemRelAttr_AccID,
+		SystemRelAttr_Partitioned,
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
@@ -376,7 +385,8 @@ var (
 		types.New(types.T_uint32, 0, 0),     // creator
 		types.New(types.T_uint32, 0, 0),     // owner
 		types.New(types.T_uint32, 0, 0),     // account_id
-		types.New(types.T_blob, 0, 0),       // partition
+		types.New(types.T_int8, 0, 0),       // partitioned
+		types.New(types.T_blob, 0, 0),       // partition_info
 		types.New(types.T_blob, 0, 0),       // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
 	}

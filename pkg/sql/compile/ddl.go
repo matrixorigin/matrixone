@@ -36,6 +36,12 @@ import (
 	"math"
 )
 
+var (
+	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	createIndexTableForamt                = "create table %s.`%s` (%s);"
+)
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	var span trace.Span
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
@@ -67,6 +73,21 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -78,10 +99,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	// execute additional sql pipeline, currently, only delete operations are performed
-	if s.AttachedScope != nil {
-		_, err = s.AttachedScope.Delete(c)
-		if err != nil {
+
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -132,6 +152,29 @@ func (s *Scope) AlterView(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		case Update:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Update(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -155,21 +198,136 @@ func (s *Scope) AlterTable(c *Compile) error {
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
+	var addIndex *plan.IndexDef
+	var dropIndex *plan.IndexDef
+	var alterIndex *plan.IndexDef
+
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
 		case *plan.AlterTable_Action_Drop:
-			name := act.Drop.Name
-			for i, fk := range tableDef.Fkeys {
-				if fk.Name == name {
-					removeRefChildTbls[name] = fk.ForeignTbl
-					tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-					break
+			alterTableDrop := act.Drop
+			constraintName := alterTableDrop.Name
+			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				for i, fk := range tableDef.Fkeys {
+					if fk.Name == constraintName {
+						removeRefChildTbls[constraintName] = fk.ForeignTbl
+						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
+						break
+					}
+				}
+			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
+				for i, indexdef := range tableDef.Indexes {
+					if indexdef.IndexName == constraintName {
+						dropIndex = indexdef
+						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
+						// drop index table
+						if indexdef.TableExist {
+							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+								return err
+							}
+						}
+						break
+					}
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
+		case *plan.AlterTable_Action_AddIndex:
+			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
+			addIndex = indexDef
+			// build and update constraint def
+			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
+			if err != nil {
+				return err
+			}
+			if act.AddIndex.IndexTableExist {
+				var sql string
+				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+				planCols := def.GetCols()
+				for i, planCol := range planCols {
+					if i == 1 {
+						sql += ","
+					}
+					sql += planCol.Name + " "
+					typeId := types.T(planCol.Typ.Id)
+					switch typeId {
+					case types.T_char:
+						sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+					case types.T_varchar:
+						sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+					case types.T_binary:
+						sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+					case types.T_varbinary:
+						sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+					case types.T_decimal64:
+						sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					case types.T_decimal128:
+						sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+					default:
+						sql += typeId.String()
+					}
+					if i == 0 {
+						sql += " primary key"
+					}
+				}
+
+				createSQL := fmt.Sprintf(createIndexTableForamt, dbName, indexDef.IndexTableName, sql)
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(createSQL)
+				if err != nil {
+					return err
+				}
+				var insetSQL string
+				var temp string
+				for i, part := range indexDef.Parts {
+					if i == 0 {
+						temp += part
+					} else {
+						temp += "," + part
+					}
+				}
+
+				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+				} else {
+					pkeyName := tableDef.Pkey.PkeyColName
+					var pKeyMsg string
+					if pkeyName == catalog.CPrimaryKeyColName {
+						pKeyMsg = "serial("
+						for i, part := range tableDef.Pkey.Names {
+							if i == 0 {
+								pKeyMsg += part
+							} else {
+								pKeyMsg += "," + part
+							}
+						}
+						pKeyMsg += ")"
+					} else {
+						pKeyMsg = pkeyName
+					}
+
+					insetSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, dbName, indexDef.IndexTableName, temp, pKeyMsg, dbName, tblName, temp)
+				}
+				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(insetSQL)
+				if err != nil {
+					return err
+				}
+			}
+		case *plan.AlterTable_Action_AlterIndex:
+			tableAlterIndex := act.AlterIndex
+			constraintName := tableAlterIndex.IndexName
+			for i, indexdef := range tableDef.Indexes {
+				if indexdef.IndexName == constraintName {
+					alterIndex = indexdef
+					alterIndex.Visible = tableAlterIndex.Visible
+					tableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					break
+				}
+			}
 		}
 	}
 
@@ -191,6 +349,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 	}
 	originHasFkDef := false
+	originHasIndexDef := false
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
@@ -205,6 +364,27 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *engine.RefChildTableDef:
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
+			originHasIndexDef = true
+			if dropIndex != nil {
+				for i, idx := range t.Indexes {
+					if dropIndex.IndexName == idx.IndexName {
+						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
+					}
+				}
+			}
+			if addIndex != nil {
+				t.Indexes = append(t.Indexes, addIndex)
+			}
+
+			if alterIndex != nil {
+				for i, idx := range t.Indexes {
+					if alterIndex.IndexName == idx.IndexName {
+						t.Indexes[i].TableExist = alterIndex.Visible
+					}
+				}
+			}
+			newCt.Cts = append(newCt.Cts, t)
+		case *engine.PrimaryKeyDef:
 			newCt.Cts = append(newCt.Cts, t)
 		}
 	}
@@ -213,6 +393,12 @@ func (s *Scope) AlterTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 	}
+	if !originHasIndexDef && addIndex != nil {
+		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
+			Indexes: []*plan.IndexDef{addIndex},
+		})
+	}
+
 	err = rel.UpdateConstraint(c.ctx, newCt)
 	if err != nil {
 		return err
@@ -238,6 +424,11 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 	}
 
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -286,6 +477,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
+	}
+
+	partitionTables := qry.GetPartitionTables()
+	for _, table := range partitionTables {
+		storageCols := planColsToExeCols(table.GetCols())
+		storageDefs, err := planDefsToExeDefs(table)
+		if err != nil {
+			return err
+		}
+		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+		if err != nil {
+			return err
+		}
 	}
 
 	fkDbs := qry.GetFkDbs()
@@ -563,6 +767,21 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
+
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
@@ -603,10 +822,8 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
-	// execute additional sql pipeline, currently, only delete operations are performed
-	if s.AttachedScope != nil {
-		_, err = s.AttachedScope.Delete(c)
-		if err != nil {
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -892,15 +1109,30 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	qry := s.Plan.GetDdl().GetDropTable()
+	errChan := make(chan error, len(s.PreScopes))
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Delete(c)
+			}(s.PreScopes[i])
+		}
+	}
 
+	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
+	tblName := qry.GetTable()
+
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
 	var isTemp bool
 
-	tblName := qry.GetTable()
 	tblId := qry.GetTableId()
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -947,16 +1179,21 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// execute additional sql pipeline, currently, only delete operations are performed
-			if s.AttachedScope != nil {
-				_, err = s.AttachedScope.Delete(c)
-				if err != nil {
-					return err
-				}
+
+		//delete partition table
+		for _, name := range qry.GetPartitionTableNames() {
+			if err = dbSource.Delete(c.ctx, name); err != nil {
+				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+			if err != nil {
+				return err
+			}
+		}
+
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
 			return err
@@ -967,19 +1204,28 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// execute additional sql pipeline, currently, only delete operations are performed
-			if s.AttachedScope != nil {
-				_, err = s.AttachedScope.Delete(c)
-				if err != nil {
-					return err
-				}
+		//delete partition table
+		for _, name := range qry.GetPartitionTableNames() {
+			if err = dbSource.Delete(c.ctx, name); err != nil {
+				return err
 			}
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 		}
-		return nil
+
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+			if err != nil {
+				return err
+			}
+		}
 	}
+
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
@@ -1014,7 +1260,8 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			return nil, err
 		}
 		exeDefs = append(exeDefs, &engine.PartitionDef{
-			Partition: string(bytes),
+			Partitioned: 1,
+			Partition:   string(bytes),
 		})
 	}
 
@@ -1089,8 +1336,12 @@ func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []strin
 		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
 			for _, ct := range constraintDef.Cts {
 				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
-					for _, name := range pk.Pkey.Names {
-						colNameMap[name] = 1
+					if pk.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+						colNameMap[catalog.CPrimaryKeyColName] = 1
+					} else {
+						for _, name := range pk.Pkey.Names {
+							colNameMap[name] = 1
+						}
 					}
 					break
 				}

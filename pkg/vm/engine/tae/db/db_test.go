@@ -1467,7 +1467,7 @@ func TestLogIndex1(t *testing.T) {
 		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
 		assert.Equal(t, len(txns), len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-1, len(indexes))
 		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
@@ -3360,7 +3360,9 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err := rel.CreateSegment(false)
 	assert.NoError(t, err)
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateMetaLoc(txn, "test_1")
+	blk, err := seg.CreateBlock(false)
+	assert.NoError(t, err)
+	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, "test_1")
 	assert.NoError(t, txn.Commit())
 
 	txn, err = tae.StartTxn(nil)
@@ -3371,7 +3373,9 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err = rel.GetSegment(seg.GetID())
 	assert.NoError(t, err)
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateDeltaLoc(txn, "test_2")
+	blk, err = seg.CreateBlock(false)
+	assert.NoError(t, err)
+	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, "test_2")
 	rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, txn.Commit())
 
@@ -4727,7 +4731,7 @@ func TestAppendBat(t *testing.T) {
 
 	run := func() {
 		defer wg.Done()
-		b := containers.BuildBatch(schema.Attrs(), schema.Types(), schema.Nullables(), containers.Options{
+		b := containers.BuildBatch(schema.Attrs(), schema.Types(), containers.Options{
 			Allocator: common.DefaultAllocator})
 		defer b.Close()
 		for i := 0; i < bat.Length(); i++ {
