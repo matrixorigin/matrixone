@@ -16,7 +16,6 @@ package vector
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -297,12 +296,9 @@ func (v *Vector) Free(mp *mpool.MPool) {
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
 	// write type
-	data, err := types.Encode(v.typ)
-	if err != nil {
-		return nil, err
-	}
-	lth := uint64(len(data))
-	if err := binary.Write(&buf, binary.LittleEndian, lth); err != nil {
+	data, typelen := types.EncodeType(&v.typ)
+	lendata := types.EncodeInt32(&typelen)
+	if _, err := buf.Write(lendata); err != nil {
 		return nil, err
 	}
 	if _, err := buf.Write(data); err != nil {
@@ -351,11 +347,9 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
 	// read typ
-	length := types.DecodeUint64(data[:8])
-	data = data[8:]
-	if err := types.Decode(data[:length], &v.typ); err != nil {
-		return err
-	}
+	length := types.DecodeInt32(data[:4])
+	data = data[4:]
+	v.typ = types.DecodeType(data[:length])
 	data = data[length:]
 	// read class
 	v.class = int(data[0])
@@ -402,11 +396,9 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	var err error
 	// read typ
-	length := types.DecodeUint64(data[:8])
-	data = data[8:]
-	if err := types.Decode(data[:length], &v.typ); err != nil {
-		return err
-	}
+	length := types.DecodeInt32(data[:4])
+	data = data[4:]
+	v.typ = types.DecodeType(data[:length])
 	data = data[length:]
 	// read class
 	v.class = int(data[0])
@@ -841,15 +833,14 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			ws := MustFixedCol[types.Varlena](w)
 			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
-	case types.T_enum:
-		if typ.GetSize() == 1 {
-			return func(v, w *Vector, sel int64) error {
-				ws := MustFixedCol[uint8](w)
-				return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
-			}
-		}
+	case types.T_enum1:
 		return func(v, w *Vector, sel int64) error {
-			ws := MustFixedCol[uint16](w)
+			ws := MustFixedCol[types.Enum1](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_enum2:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Enum2](w)
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	default:

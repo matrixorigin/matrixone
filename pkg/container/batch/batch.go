@@ -17,7 +17,6 @@ package batch
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 
@@ -83,24 +82,15 @@ func (info *aggInfo) MarshalBinary() ([]byte, error) {
 	i32 := int32(info.Op)
 	buf.Write(types.EncodeInt32(&i32))
 	buf.Write(types.EncodeBool(&info.Dist))
-	var data []byte
-	var err error
-	if data, err = types.Encode(info.inputTypes); err != nil {
+	// Encode type
+	dat, len := types.EncodeType(&info.inputTypes)
+	buf.Write(types.EncodeInt32(&len))
+	buf.Write(dat)
+	data, err := types.Encode(info.Agg)
+	if err != nil {
 		return nil, err
 	}
-	length := uint64(len(data))
-	if err = binary.Write(&buf, binary.LittleEndian, length); err != nil {
-		return nil, err
-	}
-	if _, err = buf.Write(data); err != nil {
-		return nil, err
-	}
-	if data, err = types.Encode(info.Agg); err != nil {
-		return nil, err
-	}
-	if _, err = buf.Write(data); err != nil {
-		return nil, err
-	}
+	buf.Write(data)
 	return buf.Bytes(), nil
 }
 
@@ -109,12 +99,11 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
-	length := types.DecodeUint64(data[:8])
-	data = data[8:]
-	if err := types.Decode(data[:length], &info.inputTypes); err != nil {
-		return err
-	}
-	data = data[length:]
+	// Decode type
+	len := types.DecodeInt32(data[:4])
+	data = data[4:]
+	info.inputTypes = types.DecodeType(data[:len])
+	data = data[len:]
 	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
 	if err != nil {
 		return err

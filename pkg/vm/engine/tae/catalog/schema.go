@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -249,19 +248,20 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		var length uint64
-		if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-			return
-		}
-		n += 8
-		data := make([]byte, length)
-		if sn2, err = r.Read(data); err != nil {
+		// Read typ
+		var length int32
+		ldata := make([]byte, 4)
+		if sn2, err = r.Read(ldata); err != nil {
 			return
 		}
 		n += int64(sn2)
-		if err = types.Decode(data, &def.Type); err != nil {
+		length = types.DecodeInt32(ldata)
+		tdata := make([]byte, length)
+		if sn2, err = r.Read(tdata); err != nil {
 			return
 		}
+		n += int64(sn2)
+		def.Type = types.DecodeType(tdata)
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -344,15 +344,12 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = common.WriteBytes(def.OnUpdate, &w); err != nil {
 			return
 		}
-		var data []byte
-		if data, err = types.Encode(def.Type); err != nil {
+		dat, tlen := types.EncodeType(&def.Type)
+		lendat := types.EncodeInt32(&tlen)
+		if _, err = w.Write(lendat); err != nil {
 			return
 		}
-		length := uint64(len(data))
-		if err = binary.Write(&w, binary.BigEndian, length); err != nil {
-			return
-		}
-		if _, err = w.Write(data); err != nil {
+		if _, err = w.Write(dat); err != nil {
 			return
 		}
 	}

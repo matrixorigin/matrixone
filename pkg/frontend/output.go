@@ -230,13 +230,15 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
-	case types.T_enum:
-		var index uint16
-		if vec.GetType().GetSize() == 1 {
-			index = uint16(vector.GetFixedAt[uint8](vec, rowIndex))
+	case types.T_enum1:
+		index := vector.GetFixedAt[types.Enum1](vec, rowIndex)
+		if index == 0 {
+			row[i] = ""
 		} else {
-			index = vector.GetFixedAt[uint16](vec, rowIndex)
+			row[i] = vec.GetType().EnumValues[index-1]
 		}
+	case types.T_enum2:
+		index := vector.GetFixedAt[types.Enum2](vec, rowIndex)
 		if index == 0 {
 			row[i] = ""
 		} else {

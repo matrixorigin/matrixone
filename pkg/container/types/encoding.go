@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	// TSize is unused.
-	TSize          int = int(unsafe.Sizeof(Type{}))
+	// Tsize representing size Type without []string.
+	TSize          int = int(unsafe.Sizeof(Type{}) - unsafe.Sizeof([]string{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -98,12 +98,42 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 	return bj
 }
 
-func EncodeType(v *Type) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+func EncodeType(v *Type) ([]byte, int32) {
+	var n int32 = int32(TSize)
+	// Encoding fields without EnumValues
+	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+	// For enum type encode the string list.
+	slen := int32(0)
+	var sdat []byte
+	if v.EnumValues != nil {
+		sdat = EncodeStringSlice(v.EnumValues)
+		slen = int32(len(sdat))
+	}
+	lendat := EncodeInt32(&slen)
+	dat = append(dat, lendat...)
+	n += 4
+	if slen != 0 {
+		dat = append(dat, sdat...)
+		n += slen
+	}
+	return dat, n
 }
 
 func DecodeType(v []byte) Type {
-	return *(*Type)(unsafe.Pointer(&v[0]))
+	baseData := v[:TSize]
+	basetyp := *(*Type)(unsafe.Pointer(&baseData[0]))
+	v = v[TSize:]
+
+	lenData := v[:4]
+	len := DecodeInt32(lenData)
+	v = v[4:]
+
+	if len == 0 {
+		basetyp.EnumValues = nil
+	} else {
+		basetyp.EnumValues = DecodeStringSlice(v)
+	}
+	return basetyp
 }
 
 func EncodeFixed[T FixedSizeT](v T) []byte {
@@ -346,11 +376,10 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[Rowid](val)
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val
-	case T_enum:
-		if typ.GetSize() == 1 {
-			return DecodeFixed[uint8](val)
-		}
-		return DecodeFixed[uint16](val)
+	case T_enum1:
+		return DecodeFixed[Enum1](val)
+	case T_enum2:
+		return DecodeFixed[Enum2](val)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
 	}
@@ -400,11 +429,10 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val.([]byte)
-	case T_enum:
-		if typ.GetSize() == 1 {
-			return EncodeFixed(val.(uint8))
-		}
-		return EncodeFixed(val.(uint16))
+	case T_enum1:
+		return EncodeFixed(val.(Enum1))
+	case T_enum2:
+		return EncodeFixed(val.(Enum2))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
 	}

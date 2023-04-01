@@ -315,19 +315,19 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	// encode the input types.
-	idata, err := types.Encode(a.ityps)
-	if err != nil {
-		return nil, err
+	var itypsdata []byte
+	for i := range a.ityps {
+		dat, tlen := types.EncodeType(&a.ityps[i])
+		lendat := types.EncodeInt32(&tlen)
+		itypsdata = append(itypsdata, lendat...)
+		itypsdata = append(itypsdata, dat...)
 	}
-	odata, err := types.Encode(a.otyp)
-	if err != nil {
-		return nil, err
-	}
+	odata, _ := types.EncodeType(&a.otyp)
 	source := &EncodeAgg{
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		InputTypes: idata,
+		InputTypes: itypsdata,
 		OutputType: odata,
 		IsCount:    a.isCount,
 	}
@@ -360,12 +360,17 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	if err := types.Decode(decoded.InputTypes, &a.ityps); err != nil {
-		return err
+	// Decode ityps.
+	typss := make([]types.Type, 0)
+	for len(decoded.InputTypes) != 0 {
+		tlen := types.DecodeInt32(decoded.InputTypes[:4])
+		decoded.InputTypes = decoded.InputTypes[4:]
+		typ := types.DecodeType(decoded.InputTypes[:tlen])
+		decoded.InputTypes = decoded.InputTypes[tlen:]
+		typss = append(typss, typ)
 	}
-	if err := types.Decode(decoded.OutputType, &a.otyp); err != nil {
-		return err
-	}
+	a.ityps = typss
+	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
 	data = make([]byte, len(decoded.Da))

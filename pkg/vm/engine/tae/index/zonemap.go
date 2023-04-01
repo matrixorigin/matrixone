@@ -271,24 +271,6 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 				}
 			}
 		}
-	case types.T_enum:
-		// Always store the zonemap values of enum type as uint16.
-		var minva, maxva uint16
-		switch min := zm.min.(type) {
-		case uint8:
-			minva = uint16(min)
-			maxva = uint16(zm.max.(uint8))
-		case uint16:
-			minva = min
-			maxva = zm.max.(uint16)
-		}
-		minv := types.EncodeFixed(minva)
-		maxv := types.EncodeFixed(maxva)
-		if len(maxv) > 32 || len(minv) > 32 {
-			panic("zonemap: large fixed length type, check again")
-		}
-		copy(buf[0:], minv)
-		copy(buf[32:], maxv)
 	default:
 		minv := types.EncodeValue(zm.min, zm.typ)
 		maxv := types.EncodeValue(zm.max, zm.typ)
@@ -426,10 +408,15 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 
 		zm.isInf = is32BytesMax(maxBuf)
 		return nil
-	case types.T_enum:
-		zm.min = types.DecodeFixed[uint16](buf[:2])
+	case types.T_enum1:
+		zm.min = types.DecodeFixed[types.Enum1](buf[:2])
 		buf = buf[32:]
-		zm.max = types.DecodeFixed[uint16](buf[:2])
+		zm.max = types.DecodeFixed[types.Enum1](buf[:2])
+		return nil
+	case types.T_enum2:
+		zm.min = types.DecodeFixed[types.Enum2](buf[:2])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Enum2](buf[:2])
 		return nil
 	default:
 		panic("unsupported type")

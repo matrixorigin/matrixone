@@ -121,11 +121,10 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return col.GetBytesAt(int(row))
-	case types.T_enum:
-		if len(col.GetType().EnumValues) <= 255 {
-			return movec.GetFixedAt[uint8](col, int(row))
-		}
-		return movec.GetFixedAt[uint16](col, int(row))
+	case types.T_enum1:
+		return movec.GetFixedAt[types.Enum1](col, int(row))
+	case types.T_enum2:
+		return movec.GetFixedAt[types.Enum2](col, int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))

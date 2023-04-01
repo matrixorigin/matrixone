@@ -104,15 +104,10 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return CompareBytes(a, b)
 	case types.T_any:
 		return 0
-	case types.T_enum:
-		// Using uint16 to compare. To cater for easy zoneMap's enum type store.
-		var at, bt uint16
-		switch a := a.(type) {
-		case uint8:
-			at = uint16(a)
-			bt = uint16(b.(uint8))
-		}
-		return CompareOrdered[uint16](at, bt)
+	case types.T_enum1:
+		return CompareOrdered[types.Enum1](a, b)
+	case types.T_enum2:
+		return CompareOrdered[types.Enum2](a, b)
 	default:
 		panic(fmt.Sprintf("unsupported type: %s", t.String()))
 	}

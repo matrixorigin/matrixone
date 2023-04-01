@@ -157,13 +157,17 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_ENUM:
-			if len(n.InternalType.EnumValues) > types.MaxEnumSize {
+			lens := len(n.InternalType.EnumValues)
+			if lens > types.MaxEnumSize {
 				return nil, moerr.NewInvalidInput(ctx, "Too many values for enum type")
 			}
-			if len(n.InternalType.EnumValues) == 0 {
+			if lens == 0 {
 				return nil, moerr.NewInvalidInput(ctx, "Should assign string values to enum type")
 			}
-			return &plan.Type{Id: int32(types.T_enum), EnumValues: n.InternalType.EnumValues}, nil
+			if lens <= 255 {
+				return &plan.Type{Id: int32(types.T_enum1), EnumValues: n.InternalType.EnumValues}, nil
+			}
+			return &plan.Type{Id: int32(types.T_enum2), EnumValues: n.InternalType.EnumValues}, nil
 		default:
 			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}

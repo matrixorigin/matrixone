@@ -3426,7 +3426,9 @@ convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {
 	switch engineType {
-	case types.T_enum:
+	case types.T_enum1:
+		col.SetColumnType(defines.MYSQL_TYPE_ENUM)
+	case types.T_enum2:
 		col.SetColumnType(defines.MYSQL_TYPE_ENUM)
 	case types.T_any:
 		col.SetColumnType(defines.MYSQL_TYPE_NULL)

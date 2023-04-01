@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -2008,12 +2009,11 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal128](tmp)[0], false, proc.Mp())
 		case types.T_uuid:
 			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
-		case types.T_enum:
-			if len(typ.EnumValues) <= 255 {
-				vector.AppendFixed(vec, vector.MustFixedCol[uint8](tmp)[0], false, proc.Mp())
-			} else {
-				vector.AppendFixed(vec, vector.MustFixedCol[uint16](tmp)[0], false, proc.Mp())
-			}
+		case types.T_enum1:
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Enum1](tmp)[0], false, proc.Mp())
+			vec.GetType().EnumValues = tmp.GetType().EnumValues
+		case types.T_enum2:
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Enum2](tmp)[0], false, proc.Mp())
 			vec.GetType().EnumValues = tmp.GetType().EnumValues
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))

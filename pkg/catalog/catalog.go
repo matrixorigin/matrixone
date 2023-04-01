@@ -400,17 +400,15 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_enum:
-			if vec.GetType().Size == 1 {
-				col := vector.MustFixedCol[uint8](vec)
-				for j := 0; j < vec.Length(); j++ {
-					rows[j][i] = col[j]
-				}
-			} else {
-				col := vector.MustFixedCol[uint16](vec)
-				for j := 0; j < vec.Length(); j++ {
-					rows[j][i] = col[j]
-				}
+		case types.T_enum1:
+			col := vector.MustFixedCol[types.Enum1](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_enum2:
+			col := vector.MustFixedCol[types.Enum2](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
 			}
 		default:
 			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))

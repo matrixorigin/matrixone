@@ -80,7 +80,7 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 		}
 		if showLen {
 			ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
-			if tp.Oid == types.T_enum {
+			if types.IsEnum(tp.Oid) {
 				sv := ""
 				for _, v := range tp.EnumValues {
 					sv += v

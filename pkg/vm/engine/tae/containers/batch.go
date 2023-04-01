@@ -199,10 +199,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 		buffer.Append([]byte(bat.Attrs[i]))
 		vt := vec.GetType()
 		var data []byte
-		data, err = types.Encode(vt)
-		if err != nil {
-			return
-		}
+		data, _ = types.EncodeType(&vt)
 		buffer.Append(data)
 	}
 	if tmpn, err = buffer.WriteTo(w); err != nil {
@@ -259,9 +256,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 		bat.Attrs[i] = string(buf)
 		bat.nameidx[bat.Attrs[i]] = i
 		buf = buffer.Get(pos).([]byte)
-		if err = types.Decode(buf, &vecTypes[i]); err != nil {
-			return
-		}
+		vecTypes[i] = types.DecodeType(buf)
 		pos++
 	}
 	for _, vecType := range vecTypes {

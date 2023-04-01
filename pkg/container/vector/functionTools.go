@@ -370,11 +370,10 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 		return newResultFunc[types.Blockid](v, mp)
 	case types.T_uuid:
 		return newResultFunc[types.Uuid](v, mp)
-	case types.T_enum:
-		if len(typ.EnumValues) <= 255 {
-			return newResultFunc[uint8](v, mp)
-		}
-		return newResultFunc[uint16](v, mp)
+	case types.T_enum1:
+		return newResultFunc[types.Enum1](v, mp)
+	case types.T_enum2:
+		return newResultFunc[types.Enum2](v, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }
