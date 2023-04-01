@@ -95,8 +95,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.NoError(t, err)
 
 	rows = 500
-	typ1 := typ
-	typ1.Oid = types.T_int64
+	typ1 := types.T_int64.ToType()
 	ctx.Keys = containers.MockVector2(typ1, rows, 2000)
 	ctx.Count = rows
 	defer ctx.Keys.Close()
@@ -109,14 +108,13 @@ func TestZoneMapNumeric(t *testing.T) {
 	yes = zm1.Contains(int32(1199))
 	require.True(t, yes)
 
-	typ1.Oid = types.T_int32
-	vec := containers.MockVector2(typ1, rows, 3000)
+	vec := containers.MockVector2(typ, rows, 3000)
 	defer vec.Close()
 	visibility, yes = zm1.ContainsAny(vec)
 	require.False(t, yes)
 	require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	vec = containers.MockVector2(typ1, rows, 0)
+	vec = containers.MockVector2(typ, rows, 0)
 	defer vec.Close()
 	visibility, yes = zm1.ContainsAny(vec)
 	require.True(t, yes)

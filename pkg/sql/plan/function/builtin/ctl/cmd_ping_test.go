@@ -32,7 +32,7 @@ import (
 func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
-	proc := process.New(ctx, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -49,7 +49,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 
 	shardID := uint64(1)
 	ctx := context.Background()
-	proc := process.New(ctx, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -70,7 +70,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -94,7 +94,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"1",

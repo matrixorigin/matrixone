@@ -88,7 +88,8 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 
 	case types.T_Rowid:
 		return vectorAtFixed[types.Rowid](vec, i)
-
+	case types.T_Blockid:
+		return vectorAtFixed[types.Blockid](vec, i)
 	case types.T_uuid:
 		return vectorAtFixed[types.Uuid](vec, i)
 

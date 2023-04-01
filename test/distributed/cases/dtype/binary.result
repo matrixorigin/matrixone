@@ -27,3 +27,11 @@ select * from t1 where a = '6';
 a
 select * from t1 where a = '6 ';
 a
+select cast('a' as varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(TIMESTAMP "2022-01-22 21:45:33" AS BINARY(6));
+cast(timestamp(2022-01-22 21:45:33) as binary(6))
+2022-0
+select cast('12345' as binary);
+case(12345 as binary)
+12345
