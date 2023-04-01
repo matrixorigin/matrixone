@@ -88,7 +88,7 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 				}
 				// Remove trailing ','
 				sv = string(([]byte)(sv)[:len(sv)-1])
-				ret[i] = fmt.Sprintf("%s(%s)", tp.String(), sv)
+				ret[i] = fmt.Sprintf("ENUM(%s)", sv)
 			}
 		} else {
 			ret[i] = tp.String()

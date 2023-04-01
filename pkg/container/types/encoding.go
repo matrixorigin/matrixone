@@ -30,7 +30,7 @@ import (
 
 const (
 	// Tsize representing size Type without []string.
-	TSize          int = int(unsafe.Sizeof(Type{}) - unsafe.Sizeof([]string{}))
+	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -128,9 +128,7 @@ func DecodeType(v []byte) Type {
 	len := DecodeInt32(lenData)
 	v = v[4:]
 
-	if len == 0 {
-		basetyp.EnumValues = nil
-	} else {
+	if len != 0 {
 		basetyp.EnumValues = DecodeStringSlice(v)
 	}
 	return basetyp
