@@ -258,7 +258,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
-			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12], false)
+			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12])
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -373,7 +373,7 @@ func TestCopy1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	t1 := types.T_varchar.ToType()
-	v1 := containers.MockVector(t1, 10, false, true, nil)
+	v1 := containers.MockVector(t1, 10, false, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
 	mv1 := containers.CopyToMoVec(v1)
@@ -382,7 +382,7 @@ func TestCopy1(t *testing.T) {
 	}
 
 	t2 := types.T_date.ToType()
-	v2 := containers.MockVector(t2, 20, false, true, nil)
+	v2 := containers.MockVector(t2, 20, false, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})
 	mv2 := containers.CopyToMoVec(v2)
@@ -390,7 +390,7 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
 	}
 
-	v3 := containers.NewVectorWithSharedMemory(mv2, true)
+	v3 := containers.NewVectorWithSharedMemory(mv2)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))

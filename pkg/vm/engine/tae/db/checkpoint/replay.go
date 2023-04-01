@@ -73,7 +73,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
-	nullables := CheckpointSchema.Nullables()
 	t0 := time.Now()
 	for i := range colNames {
 		if len(bats) == 0 {
@@ -81,9 +80,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
+			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i], nullables[i])
+			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}

@@ -467,12 +467,12 @@ func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	}
 }
 
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				ReCalcNodeStats(child, builder, recursive)
+				ReCalcNodeStats(child, builder, recursive, leafNode)
 			}
 		}
 	}
@@ -636,7 +636,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		}
 
 	case plan.Node_TABLE_SCAN:
-		if node.ObjRef != nil {
+		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
+		if node.ObjRef != nil && leafNode {
 			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
 			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
 

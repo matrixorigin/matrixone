@@ -220,7 +220,7 @@ func TestTxn4(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
+		pk := containers.MakeVector(schema.GetSingleSortKey().Type)
 		defer pk.Close()
 		pk.AppendMany(int32(1), int32(2), int32(1))
 		provider := containers.NewMockDataProvider()
@@ -433,9 +433,9 @@ func TestMergeBlocks1(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
+	pk := containers.MakeVector(schema.GetSingleSortKey().Type)
 	defer pk.Close()
-	col3 := containers.MakeVector(schema.ColDefs[3].Type, schema.ColDefs[3].Nullable())
+	col3 := containers.MakeVector(schema.ColDefs[3].Type)
 	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
@@ -537,8 +537,8 @@ func TestMergeBlocks2(t *testing.T) {
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 
-	pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
-	col3 := containers.MakeVector(schema.ColDefs[3].Type, schema.ColDefs[3].Nullable())
+	pk := containers.MakeVector(schema.GetSingleSortKey().Type)
+	col3 := containers.MakeVector(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		pk.Append(v)
