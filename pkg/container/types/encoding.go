@@ -30,7 +30,7 @@ import (
 
 const (
 	// Tsize representing size Type without []string.
-	TSize          int = int(unsafe.Sizeof(Type{}))
+	TSize          int = int(unsafe.Sizeof(Type{}) - unsafe.Sizeof([]string{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -121,7 +121,12 @@ func EncodeType(v *Type) ([]byte, int32) {
 
 func DecodeType(v []byte) Type {
 	baseData := v[:TSize]
-	basetyp := *(*Type)(unsafe.Pointer(&baseData[0]))
+	mock := make([]string, 0)
+	modata := unsafe.Slice((*byte)(unsafe.Pointer(&mock)), unsafe.Sizeof([]string{}))
+	typdata := make([]byte, 0)
+	typdata = append(typdata, baseData...)
+	typdata = append(typdata, modata...)
+	basetyp := *(*Type)(unsafe.Pointer(&typdata[0]))
 	v = v[TSize:]
 
 	lenData := v[:4]
