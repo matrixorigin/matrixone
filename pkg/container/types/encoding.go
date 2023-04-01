@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	TSize          int = int(unsafe.Sizeof(Type{})) - SSize
+	TSize          int = int(unsafe.Sizeof(Type{}))
 	SSize          int = int(unsafe.Sizeof([]string{}))
 	DateSize       int = 4
 	TimeSize       int = 8
@@ -99,8 +99,8 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 }
 
 func EncodeType(v *Type) ([]byte, int32) {
-	n := int32(TSize)
-	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+	n := int32(TSize - SSize)
+	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize-SSize)
 	// For enum type encode the string list.
 	if v.EnumValues != nil {
 		sdat := EncodeStringSlice(v.EnumValues)
@@ -111,13 +111,13 @@ func EncodeType(v *Type) ([]byte, int32) {
 }
 
 func DecodeType(v []byte) Type {
-	basedata := v[:TSize]
-	typdata := make([]byte, 0, TSize+SSize)
+	basedata := v[:TSize-SSize]
+	typdata := make([]byte, 0, TSize)
 	typdata = append(typdata, basedata...)
 	mock := []string(nil)
 	typdata = append(typdata, unsafe.Slice((*byte)(unsafe.Pointer(&mock)), SSize)...)
 	basetyp := *(*Type)(unsafe.Pointer(&typdata[0]))
-	v = v[TSize:]
+	v = v[TSize-SSize:]
 	if len(v) != 0 {
 		basetyp.EnumValues = DecodeStringSlice(v)
 	}
