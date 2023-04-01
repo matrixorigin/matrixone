@@ -77,11 +77,7 @@ func MakeVector(typ types.Type, opts ...Options) (vec Vector) {
 	return
 }
 
-func BuildBatch(
-	attrs []string,
-	colTypes []types.Type,
-	nullables []bool,
-	opts Options) *Batch {
+func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
 	bat := &Batch{
 		Attrs:   make([]string, 0, len(attrs)),
 		nameidx: make(map[string]int, len(attrs)),
