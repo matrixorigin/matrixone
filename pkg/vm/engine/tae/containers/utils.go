@@ -483,9 +483,72 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		return overload(args)
 	}
 	switch t {
+	case types.T_bool:
+		overload := overloads[t].(func(...any) func(bool, bool, int) error)
+		return overload(args)
+	case types.T_int8:
+		overload := overloads[t].(func(...any) func(int8, bool, int) error)
+		return overload(args)
+	case types.T_int16:
+		overload := overloads[t].(func(...any) func(int16, bool, int) error)
+		return overload(args)
 	case types.T_int32:
 		overload := overloads[t].(func(...any) func(int32, bool, int) error)
 		return overload(args)
+	case types.T_int64:
+		overload := overloads[t].(func(...any) func(int64, bool, int) error)
+		return overload(args)
+	case types.T_uint8:
+		overload := overloads[t].(func(...any) func(uint8, bool, int) error)
+		return overload(args)
+	case types.T_uint16:
+		overload := overloads[t].(func(...any) func(uint16, bool, int) error)
+		return overload(args)
+	case types.T_uint32:
+		overload := overloads[t].(func(...any) func(uint32, bool, int) error)
+		return overload(args)
+	case types.T_uint64:
+		overload := overloads[t].(func(...any) func(uint64, bool, int) error)
+		return overload(args)
+	case types.T_float32:
+		overload := overloads[t].(func(...any) func(float32, bool, int) error)
+		return overload(args)
+	case types.T_float64:
+		overload := overloads[t].(func(...any) func(float64, bool, int) error)
+		return overload(args)
+	case types.T_decimal64:
+		overload := overloads[t].(func(...any) func(types.Decimal64, bool, int) error)
+		return overload(args)
+	case types.T_decimal128:
+		overload := overloads[t].(func(...any) func(types.Decimal128, bool, int) error)
+		return overload(args)
+	case types.T_decimal256:
+		overload := overloads[t].(func(...any) func(types.Decimal256, bool, int) error)
+		return overload(args)
+	case types.T_timestamp:
+		overload := overloads[t].(func(...any) func(types.Timestamp, bool, int) error)
+		return overload(args)
+	case types.T_time:
+		overload := overloads[t].(func(...any) func(types.Time, bool, int) error)
+		return overload(args)
+	case types.T_date:
+		overload := overloads[t].(func(...any) func(types.Date, bool, int) error)
+		return overload(args)
+	case types.T_datetime:
+		overload := overloads[t].(func(...any) func(types.Datetime, bool, int) error)
+		return overload(args)
+	case types.T_TS:
+		overload := overloads[t].(func(...any) func(types.TS, bool, int) error)
+		return overload(args)
+	case types.T_Rowid:
+		overload := overloads[t].(func(...any) func(types.Rowid, bool, int) error)
+		return overload(args)
+	case types.T_Blockid:
+		overload := overloads[t].(func(...any) func(types.Blockid, bool, int) error)
+		return overload(args)
+	case types.T_uuid:
+		overload := overloads[t].(func(...any) func(types.Uuid, bool, int) error)
+		return overload(args)
 	}
-	return nil
+	panic(fmt.Sprintf("unsupported type: %s", t.String()))
 }
