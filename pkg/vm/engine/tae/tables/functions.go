@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var dedupNABlkFunctions = map[types.T]any{
@@ -133,5 +134,46 @@ func dedupNABlkClosure(
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return nil
+	}
+}
+
+func dedupABlkClosureFactory(
+	scan func() (containers.Vector, error),
+) func(
+	containers.Vector,
+	types.TS,
+	*roaring.Bitmap,
+	*catalog.ColDef,
+) func(any, bool, int) error {
+	return func(vec containers.Vector, ts types.TS, mask *roaring.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
+		return func(v1 any, _ bool, _ int) (err error) {
+			var tsVec containers.Vector
+			defer func() {
+				if tsVec != nil {
+					tsVec.Close()
+					tsVec = nil
+				}
+			}()
+			return vec.ForeachShallow(func(v2 any, _ bool, row int) (err error) {
+				if mask != nil && mask.ContainsInt(row) {
+					return
+				}
+				if compute.CompareGeneric(v1, v2, vec.GetType()) != 0 {
+					return
+				}
+				if tsVec == nil {
+					tsVec, err = scan()
+					if err != nil {
+						return
+					}
+				}
+				commitTS := tsVec.Get(row).(types.TS)
+				if commitTS.Greater(ts) {
+					return txnif.ErrTxnWWConflict
+				}
+				entry := common.TypeStringValue(vec.GetType(), v1)
+				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
+			}, nil)
+		}
 	}
 }

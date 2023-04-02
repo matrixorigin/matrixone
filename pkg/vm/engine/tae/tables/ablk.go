@@ -549,34 +549,6 @@ func (blk *ablock) inMemoryBatchDedup(
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 
-func (blk *ablock) dedupClosure(
-	vec containers.Vector,
-	ts types.TS,
-	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, bool, int) error {
-	return func(v1 any, _ bool, _ int) (err error) {
-		return vec.ForeachShallow(func(v2 any, _ bool, row int) error {
-			if mask != nil && mask.ContainsInt(row) {
-				return nil
-			}
-			if compute.CompareGeneric(v1, v2, vec.GetType()) == 0 {
-				commitTSVec, err := blk.LoadPersistedCommitTS()
-				if err != nil {
-					return err
-				}
-				defer commitTSVec.Close()
-				commiTs := commitTSVec.Get(row).(types.TS)
-				if commiTs.Greater(ts) {
-					return txnif.ErrTxnWWConflict
-				}
-				entry := common.TypeStringValue(vec.GetType(), v1)
-				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-			}
-			return nil
-		}, nil)
-	}
-}
-
 func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -601,7 +573,7 @@ func (blk *ablock) BatchDedup(
 			dedupTS,
 			keys,
 			rowmask,
-			blk.dedupClosure)
+			dedupABlkClosureFactory(blk.LoadPersistedCommitTS))
 	}
 }
 
