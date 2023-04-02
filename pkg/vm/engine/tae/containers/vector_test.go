@@ -482,3 +482,44 @@ func TestForeachWindowBytes(t *testing.T) {
 	ForeachWindowBytes(vec1, 0, vec1.Length(), op)
 	assert.Equal(t, vec1.Length(), cnt)
 }
+
+func BenchmarkForeachVector(b *testing.B) {
+	rows := 1000
+	int64s := MockVector2(types.T_int64.ToType(), rows, 0)
+	defer int64s.Close()
+	b.Run("int64-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			int64s.Foreach(func(any, bool, int) error {
+				return nil
+			}, nil)
+		}
+	})
+	b.Run("int64-new", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(int64s, 0, rows, func(int64, bool, int) (err error) {
+				return
+			})
+		}
+	})
+
+	chars := MockVector2(types.T_varchar.ToType(), rows, 0)
+	defer chars.Close()
+	b.Run("chars-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			chars.Foreach(func(any, bool, int) error {
+				return nil
+			}, nil)
+		}
+	})
+	b.Run("chars-new", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
+				return
+			})
+		}
+	})
+}

@@ -272,6 +272,54 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
+func ForeachVectorWindow(
+	vec Vector,
+	start, length int,
+	op any,
+) (err error) {
+	typ := vec.GetType()
+	if typ.IsVarlen() {
+		return ForeachWindowBytes(
+			vec,
+			start,
+			length,
+			op.(func([]byte, bool, int) error))
+	}
+	switch typ.Oid {
+	case types.T_bool:
+		return ForeachWindowFixed[bool](
+			vec,
+			start,
+			length,
+			op.(func(bool, bool, int) error))
+	case types.T_int8:
+		return ForeachWindowFixed[int8](
+			vec,
+			start,
+			length,
+			op.(func(int8, bool, int) error))
+	case types.T_int16:
+		return ForeachWindowFixed[int16](
+			vec,
+			start,
+			length,
+			op.(func(int16, bool, int) error))
+	case types.T_int32:
+		return ForeachWindowFixed[int32](
+			vec,
+			start,
+			length,
+			op.(func(int32, bool, int) error))
+	case types.T_int64:
+		return ForeachWindowFixed[int64](
+			vec,
+			start,
+			length,
+			op.(func(int64, bool, int) error))
+	}
+	return
+}
+
 func ForeachWindowFixed[T any](
 	vec Vector,
 	start, length int,
@@ -279,6 +327,7 @@ func ForeachWindowFixed[T any](
 ) (err error) {
 	src := vec.(*vector[T])
 	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
+	// op2 := op.(func(T, bool, int) error)
 	for i, v := range slice {
 		if err = op(v, src.IsNull(i+start), i+start); err != nil {
 			break
