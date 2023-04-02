@@ -113,8 +113,10 @@ func GetOffsetWithFunc[T any](
 }
 
 func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
-	column := vs.([]T)
-	val := v.(T)
+	return GetOffsetOfOrdered2[T](vs.([]T), v.(T), skipmask)
+}
+
+func GetOffsetOfOrdered2[T types.OrderedT](column []T, val T, skipmask *roaring.Bitmap) (offset int, exist bool) {
 	start, end := 0, len(column)-1
 	var mid int
 	for start <= end {

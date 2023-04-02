@@ -561,11 +561,13 @@ func BenchmarkFunctions(b *testing.B) {
 	vec := MockVector2(types.T_char.ToType(), 1000, 0)
 	defer vec.Close()
 	b.Run("func-new", func(b *testing.B) {
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs))
 		}
 	})
 	b.Run("func-old", func(b *testing.B) {
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			vec.ForeachShallow(func(any, bool, int) (err error) {
 				return

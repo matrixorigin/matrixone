@@ -149,32 +149,7 @@ func (blk *block) BatchDedup(
 		ts,
 		keys,
 		rowmask,
-		blk.dedupClosure)
-}
-
-// func DedupOrderedOp[T types.OrderedT](args ...any) func(T, bool, int) error {
-// 	vec := args[0].(containers.Vector).GetDownstreamVector()
-// 	vs := vector.MustFixedCol[T]()
-// 	mask := args[1].(*roaring.Bitmap)
-// 	def := args[2].(*catalog.ColDef)
-// 	return func(v T, _ bool, _ int) (err error) {
-// 		// if _, existed := compute.GetOffsetWithFunc()
-// 		return
-// 	}
-// }
-
-func (blk *block) dedupClosure(
-	vec containers.Vector,
-	ts types.TS,
-	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, bool, int) error {
-	return func(v any, _ bool, _ int) (err error) {
-		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(vec.GetType(), v)
-			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-		}
-		return nil
-	}
+		dedupClosure)
 }
 
 func (blk *block) GetValue(
