@@ -268,11 +268,13 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = keys.ForeachShallow(func(key any, _ bool, _ int) (err error) {
-		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
-		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
-		return
-	}, nil)
+	err = containers.ForeachVectorWindow(
+		keys, 0, keys.Length(),
+		func(rid types.Rowid, _ bool, _ int) (err error) {
+			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
+			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
+			return
+		})
 	return
 }
 

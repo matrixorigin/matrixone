@@ -316,6 +316,12 @@ func ForeachVectorWindow(
 			start,
 			length,
 			op.(func(int64, bool, int) error))
+	case types.T_Rowid:
+		return ForeachWindowFixed[types.Rowid](
+			vec,
+			start,
+			length,
+			op.(func(types.Rowid, bool, int) error))
 	}
 	return
 }
