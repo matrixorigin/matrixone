@@ -25,41 +25,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type Comparable[T any] interface {
-	Compare(T, T) int
-}
+var dedupPersistedFunctions = map[types.T]any{
+	types.T_bool:       dedupPersistedFuncFactory[bool](compute.CompareBool),
+	types.T_int8:       dedupPersistedOrderedFunc[int8],
+	types.T_int16:      dedupPersistedOrderedFunc[int16],
+	types.T_int32:      dedupPersistedOrderedFunc[int32],
+	types.T_int64:      dedupPersistedOrderedFunc[int64],
+	types.T_uint8:      dedupPersistedOrderedFunc[uint8],
+	types.T_uint16:     dedupPersistedOrderedFunc[uint16],
+	types.T_uint32:     dedupPersistedOrderedFunc[uint32],
+	types.T_uint64:     dedupPersistedOrderedFunc[uint64],
+	types.T_float32:    dedupPersistedOrderedFunc[float32],
+	types.T_float64:    dedupPersistedOrderedFunc[float64],
+	types.T_timestamp:  dedupPersistedOrderedFunc[types.Timestamp],
+	types.T_date:       dedupPersistedOrderedFunc[types.Date],
+	types.T_time:       dedupPersistedOrderedFunc[types.Time],
+	types.T_datetime:   dedupPersistedOrderedFunc[types.Datetime],
+	types.T_decimal64:  dedupPersistedFuncFactory[types.Decimal64](types.CompareDecimal64),
+	types.T_decimal128: dedupPersistedFuncFactory[types.Decimal128](types.CompareDecimal128),
+	types.T_decimal256: dedupPersistedFuncFactory[types.Decimal256](types.CompareDecimal256),
+	types.T_TS:         dedupPersistedFuncFactory[types.TS](types.CompareTSTSAligned),
+	types.T_Rowid:      dedupPersistedFuncFactory[types.Rowid](types.CompareRowidRowidAligned),
+	types.T_Blockid:    dedupPersistedFuncFactory[types.Blockid](types.CompareBlockidBlockidAligned),
+	types.T_uuid:       dedupPersistedFuncFactory[types.Uuid](types.CompareUuid),
 
-var dedupFunctions = map[types.T]any{
-	types.T_bool:       dedupWithCompareFuncFactory[bool](compute.CompareBool),
-	types.T_int8:       dedupOrderedFunc[int8],
-	types.T_int16:      dedupOrderedFunc[int16],
-	types.T_int32:      dedupOrderedFunc[int32],
-	types.T_int64:      dedupOrderedFunc[int64],
-	types.T_uint8:      dedupOrderedFunc[uint8],
-	types.T_uint16:     dedupOrderedFunc[uint16],
-	types.T_uint32:     dedupOrderedFunc[uint32],
-	types.T_uint64:     dedupOrderedFunc[uint64],
-	types.T_float32:    dedupOrderedFunc[float32],
-	types.T_float64:    dedupOrderedFunc[float64],
-	types.T_timestamp:  dedupOrderedFunc[types.Timestamp],
-	types.T_date:       dedupOrderedFunc[types.Date],
-	types.T_time:       dedupOrderedFunc[types.Time],
-	types.T_datetime:   dedupOrderedFunc[types.Datetime],
-	types.T_decimal64:  dedupWithCompareFuncFactory[types.Decimal64](types.CompareDecimal64),
-	types.T_decimal128: dedupWithCompareFuncFactory[types.Decimal128](types.CompareDecimal128),
-	types.T_decimal256: dedupWithCompareFuncFactory[types.Decimal256](types.CompareDecimal256),
-	types.T_TS:         dedupWithCompareFuncFactory[types.TS](types.CompareTSTSAligned),
-	types.T_Rowid:      dedupWithCompareFuncFactory[types.Rowid](types.CompareRowidRowidAligned),
-	types.T_Blockid:    dedupWithCompareFuncFactory[types.Blockid](types.CompareBlockidBlockidAligned),
-	types.T_uuid:       dedupWithCompareFuncFactory[types.Uuid](types.CompareUuid),
-
-	types.T_char:      dedupBytesFunc,
-	types.T_varchar:   dedupBytesFunc,
-	types.T_blob:      dedupBytesFunc,
-	types.T_binary:    dedupBytesFunc,
-	types.T_varbinary: dedupBytesFunc,
-	types.T_json:      dedupBytesFunc,
-	types.T_text:      dedupBytesFunc,
+	types.T_char:      dedupPersistedBytesFunc,
+	types.T_varchar:   dedupPersistedBytesFunc,
+	types.T_blob:      dedupPersistedBytesFunc,
+	types.T_binary:    dedupPersistedBytesFunc,
+	types.T_varbinary: dedupPersistedBytesFunc,
+	types.T_json:      dedupPersistedBytesFunc,
+	types.T_text:      dedupPersistedBytesFunc,
 }
 
 func parseDedupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def *catalog.ColDef) {
@@ -73,7 +69,7 @@ func parseDedupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def 
 	return
 }
 
-func dedupWithCompareFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupPersistedFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def := parseDedupArgs(args...)
 		vs := vector.MustFixedCol[T](vec)
@@ -93,7 +89,7 @@ func dedupWithCompareFuncFactory[T any](comp func(T, T) int64) func(args ...any)
 	}
 }
 
-func dedupBytesFunc(args ...any) func([]byte, bool, int) error {
+func dedupPersistedBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, mask, def := parseDedupArgs(args...)
 	return func(v []byte, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
@@ -109,7 +105,7 @@ func dedupBytesFunc(args ...any) func([]byte, bool, int) error {
 	}
 }
 
-func dedupOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
+func dedupPersistedOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
 	vec, mask, def := parseDedupArgs(args...)
 	vs := vector.MustFixedCol[T](vec)
 	return func(v T, _ bool, row int) (err error) {
