@@ -71,7 +71,7 @@ func BenchmarkFunctions(b *testing.B) {
 	defer vec6.Close()
 	vec7 := vec6.CloneWindow(0, 10000)
 	defer vec7.Close()
-	vec8 := vec6.CloneWindow(10500, 100)
+	vec8 := vec6.CloneWindow(10500, 10)
 	defer vec8.Close()
 
 	b.Run("old-dedup-chars", func(b *testing.B) {
@@ -82,6 +82,23 @@ func BenchmarkFunctions(b *testing.B) {
 	})
 	b.Run("new-dedup-chars", func(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupNABlkFunctions, vec7, nil, nil)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
+		}
+	})
+
+	b.Run("old-dedup-achars", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec8.ForeachShallow(dedupABlkClosureFactory(nil)(vec7, types.TS{}, nil, nil), nil)
+		}
+	})
+
+	// op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
+	// containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
+	b.Run("new-dedup-achars", func(b *testing.B) {
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)

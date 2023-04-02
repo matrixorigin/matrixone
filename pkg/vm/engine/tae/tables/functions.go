@@ -59,7 +59,40 @@ var dedupNABlkFunctions = map[types.T]any{
 	types.T_text:      dedupNABlkBytesFunc,
 }
 
-func parseDedupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def *catalog.ColDef) {
+var dedupAlkFunctions = map[types.T]any{
+	types.T_bool:       dedupABlkFuncFactory[bool](compute.CompareBool),
+	types.T_int8:       dedupABlkFuncFactory[int8](compute.CompareOrdered2[int8]),
+	types.T_int16:      dedupABlkFuncFactory[int16](compute.CompareOrdered2[int16]),
+	types.T_int32:      dedupABlkFuncFactory[int32](compute.CompareOrdered2[int32]),
+	types.T_int64:      dedupABlkFuncFactory[int64](compute.CompareOrdered2[int64]),
+	types.T_uint8:      dedupABlkFuncFactory[uint8](compute.CompareOrdered2[uint8]),
+	types.T_uint16:     dedupABlkFuncFactory[uint16](compute.CompareOrdered2[uint16]),
+	types.T_uint32:     dedupABlkFuncFactory[uint32](compute.CompareOrdered2[uint32]),
+	types.T_uint64:     dedupABlkFuncFactory[uint64](compute.CompareOrdered2[uint64]),
+	types.T_float32:    dedupABlkFuncFactory[float32](compute.CompareOrdered2[float32]),
+	types.T_float64:    dedupABlkFuncFactory[float64](compute.CompareOrdered2[float64]),
+	types.T_timestamp:  dedupABlkFuncFactory[types.Timestamp](compute.CompareOrdered2[types.Timestamp]),
+	types.T_date:       dedupABlkFuncFactory[types.Date](compute.CompareOrdered2[types.Date]),
+	types.T_time:       dedupABlkFuncFactory[types.Time](compute.CompareOrdered2[types.Time]),
+	types.T_datetime:   dedupABlkFuncFactory[types.Datetime](compute.CompareOrdered2[types.Datetime]),
+	types.T_decimal64:  dedupABlkFuncFactory[types.Decimal64](types.CompareDecimal64),
+	types.T_decimal128: dedupABlkFuncFactory[types.Decimal128](types.CompareDecimal128),
+	types.T_decimal256: dedupABlkFuncFactory[types.Decimal256](types.CompareDecimal256),
+	types.T_TS:         dedupABlkFuncFactory[types.TS](types.CompareTSTSAligned),
+	types.T_Rowid:      dedupABlkFuncFactory[types.Rowid](types.CompareRowidRowidAligned),
+	types.T_Blockid:    dedupABlkFuncFactory[types.Blockid](types.CompareBlockidBlockidAligned),
+	types.T_uuid:       dedupABlkFuncFactory[types.Uuid](types.CompareUuid),
+
+	types.T_char:      dedupABlkBytesFunc,
+	types.T_varchar:   dedupABlkBytesFunc,
+	types.T_blob:      dedupABlkBytesFunc,
+	types.T_binary:    dedupABlkBytesFunc,
+	types.T_varbinary: dedupABlkBytesFunc,
+	types.T_json:      dedupABlkBytesFunc,
+	types.T_text:      dedupABlkBytesFunc,
+}
+
+func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def *catalog.ColDef) {
 	vec = args[0].(containers.Vector).GetDownstreamVector()
 	if args[1] != nil {
 		mask = args[1].(*roaring.Bitmap)
@@ -70,9 +103,27 @@ func parseDedupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def 
 	return
 }
 
+func parseADedeupArgs(args ...any) (
+	vec containers.Vector, mask *roaring.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), ts types.TS) {
+	vec = args[0].(containers.Vector)
+	if args[1] != nil {
+		mask = args[1].(*roaring.Bitmap)
+	}
+	if args[2] != nil {
+		def = args[2].(*catalog.ColDef)
+	}
+	if args[3] != nil {
+		scan = args[3].(func() (containers.Vector, error))
+	}
+	if args[4] != nil {
+		ts = args[4].(types.TS)
+	}
+	return
+}
+
 func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
-		vec, mask, def := parseDedupArgs(args...)
+		vec, mask, def := parseNADedeupArgs(args...)
 		vs := vector.MustFixedCol[T](vec)
 		return func(v T, _ bool, row int) (err error) {
 			// logutil.Infof("row=%d,v=%v", row, v)
@@ -91,7 +142,7 @@ func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(
 }
 
 func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
-	vec, mask, def := parseDedupArgs(args...)
+	vec, mask, def := parseNADedeupArgs(args...)
 	return func(v []byte, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
 		if _, existed := compute.GetOffsetOfBytes(
@@ -107,7 +158,7 @@ func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 }
 
 func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
-	vec, mask, def := parseDedupArgs(args...)
+	vec, mask, def := parseNADedeupArgs(args...)
 	vs := vector.MustFixedCol[T](vec)
 	return func(v T, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
@@ -120,6 +171,81 @@ func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) err
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return
+	}
+}
+
+func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
+	vec, mask, def, scan, ts := parseADedeupArgs(args...)
+	return func(v1 []byte, _ bool, _ int) error {
+		var tsVec containers.Vector
+		defer func() {
+			if tsVec != nil {
+				tsVec.Close()
+				tsVec = nil
+			}
+		}()
+		return containers.ForeachWindowVarlen(
+			vec,
+			0,
+			vec.Length(),
+			func(v2 []byte, _ bool, row int) (err error) {
+				// logutil.Infof("row=%d,v1=%v,v2=%v", row, v1, v2)
+				if mask != nil && mask.ContainsInt(row) {
+					return
+				}
+				if compute.CompareBytes(v1, v2) != 0 {
+					return
+				}
+				if tsVec == nil {
+					if tsVec, err = scan(); err != nil {
+						return
+					}
+				}
+				commitTS := tsVec.Get(row).(types.TS)
+				if commitTS.Greater(ts) {
+					return txnif.ErrTxnWWConflict
+				}
+				entry := common.TypeStringValue(vec.GetType(), any(v1))
+				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
+			})
+	}
+}
+
+func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+	return func(args ...any) func(T, bool, int) error {
+		vec, mask, def, scan, ts := parseADedeupArgs(args...)
+		return func(v1 T, _ bool, _ int) error {
+			var tsVec containers.Vector
+			defer func() {
+				if tsVec != nil {
+					tsVec.Close()
+					tsVec = nil
+				}
+			}()
+			return containers.ForeachWindowFixed(
+				vec,
+				0,
+				vec.Length(),
+				func(v2 T, _ bool, row int) (err error) {
+					if mask != nil && mask.ContainsInt(row) {
+						return
+					}
+					if comp(v1, v2) != 0 {
+						return
+					}
+					if tsVec == nil {
+						if tsVec, err = scan(); err != nil {
+							return
+						}
+					}
+					commitTS := tsVec.Get(row).(types.TS)
+					if commitTS.Greater(ts) {
+						return txnif.ErrTxnWWConflict
+					}
+					entry := common.TypeStringValue(vec.GetType(), any(v1))
+					return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
+				})
+		}
 	}
 }
 
@@ -155,6 +281,7 @@ func dedupABlkClosureFactory(
 				}
 			}()
 			return vec.ForeachShallow(func(v2 any, _ bool, row int) (err error) {
+				// logutil.Infof("%v, %v, %d", v1, v2, row)
 				if mask != nil && mask.ContainsInt(row) {
 					return
 				}
