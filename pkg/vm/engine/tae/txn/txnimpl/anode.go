@@ -53,7 +53,7 @@ func (n *anode) GetAppends() []*appendInfo {
 func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.storage.mnode.appends)
 	info := &appendInfo{
-		dest:    dest,
+		dest:    *dest,
 		destOff: destOff,
 		destLen: destLen,
 		dbid:    dbid,
