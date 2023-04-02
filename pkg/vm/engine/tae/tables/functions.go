@@ -126,7 +126,7 @@ func dedupOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
 	}
 }
 
-func dedupClosure(
+func dedupPersistedClosure(
 	vec containers.Vector,
 	ts types.TS,
 	mask *roaring.Bitmap,

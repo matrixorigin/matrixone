@@ -149,7 +149,7 @@ func (blk *block) BatchDedup(
 		ts,
 		keys,
 		rowmask,
-		dedupClosure)
+		dedupPersistedClosure)
 }
 
 func (blk *block) GetValue(
