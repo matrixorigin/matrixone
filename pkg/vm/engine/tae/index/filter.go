@@ -58,9 +58,6 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op); err != nil {
 		return nil, err
 	}
-	// if err = data.ForeachShallow(op, nil); err != nil {
-	// 	return nil, err
-	// }
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 		if err.Error() == FuseFilterError {
 			// 230+ duplicate keys in hashes

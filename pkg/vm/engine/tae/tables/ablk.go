@@ -359,6 +359,8 @@ func (blk *ablock) GetByFilter(
 	}
 }
 
+// only used by tae only
+// not to optimize it
 func (blk *ablock) getPersistedRowByFilter(
 	pnode *persistedNode,
 	ts types.TS,
