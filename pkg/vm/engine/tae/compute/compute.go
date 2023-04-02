@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -83,6 +84,33 @@ func GetOffsetMapBeforeApplyDeletes(deletes *roaring.Bitmap) []uint32 {
 	}
 	mapping = append(mapping, uint32(prev)+1)
 	return mapping
+}
+
+func GetOffsetOfBytes(
+	data *vector.Vector,
+	val []byte,
+	skipmask *roaring.Bitmap,
+) (offset int, exist bool) {
+	start, end := 0, data.Length()-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		res := bytes.Compare(data.GetBytesAt(mid), val)
+		if res > 0 {
+			end = mid - 1
+		} else if res < 0 {
+			start = mid + 1
+		} else {
+			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+				return
+			}
+			offset = mid
+			exist = true
+			return
+		}
+	}
+	return
+
 }
 
 func GetOffsetWithFunc[T any](

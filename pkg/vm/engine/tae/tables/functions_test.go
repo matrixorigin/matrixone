@@ -33,17 +33,58 @@ func BenchmarkFunctions(b *testing.B) {
 	// op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupFunctions, vec, nil, nil)
 	// containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op)
 
-	b.Run("old-dedup", func(b *testing.B) {
+	b.Run("old-dedup-int64", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			vec2.ForeachShallow(dedupClosure(vec, types.TS{}, nil, nil), nil)
 		}
 	})
-	b.Run("new-dedup", func(b *testing.B) {
+	b.Run("new-dedup-int64", func(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupFunctions, vec, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op)
+		}
+	})
+
+	vec3 := containers.MockVector(types.T_decimal128.ToType(), 20000, true, nil)
+	defer vec3.Close()
+	vec4 := vec3.CloneWindow(0, 10000)
+	defer vec4.Close()
+	vec5 := vec3.CloneWindow(11000, 100)
+	defer vec5.Close()
+	b.Run("old-dedup-d128", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec5.ForeachShallow(dedupClosure(vec4, types.TS{}, nil, nil), nil)
+		}
+	})
+	b.Run("new-dedup-d128", func(b *testing.B) {
+		op := containers.MakeForeachVectorOp(vec4.GetType().Oid, dedupFunctions, vec4, nil, nil)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			containers.ForeachVectorWindow(vec5, 0, vec5.Length(), op)
+		}
+	})
+
+	vec6 := containers.MockVector2(types.T_varchar.ToType(), 12000, 0)
+	defer vec6.Close()
+	vec7 := vec6.CloneWindow(0, 10000)
+	defer vec7.Close()
+	vec8 := vec6.CloneWindow(10500, 100)
+	defer vec8.Close()
+
+	b.Run("old-dedup-chars", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec8.ForeachShallow(dedupClosure(vec7, types.TS{}, nil, nil), nil)
+		}
+	})
+	b.Run("new-dedup-chars", func(b *testing.B) {
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupFunctions, vec7, nil, nil)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
 		}
 	})
 }
