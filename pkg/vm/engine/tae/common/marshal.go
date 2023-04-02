@@ -15,13 +15,15 @@
 package common
 
 import (
-	"encoding/binary"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func WriteString(str string, w io.Writer) (n int64, err error) {
 	buf := []byte(str)
-	if err = binary.Write(w, binary.BigEndian, uint16(len(buf))); err != nil {
+	length := uint16(len(buf))
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	wn, err := w.Write(buf)
@@ -29,7 +31,8 @@ func WriteString(str string, w io.Writer) (n int64, err error) {
 }
 
 func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, uint16(len(b))); err != nil {
+	length := uint16(len(b))
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	wn, err := w.Write(b)
@@ -38,7 +41,7 @@ func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 
 func ReadString(r io.Reader) (str string, n int64, err error) {
 	strLen := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &strLen); err != nil {
+	if _, err = r.Read(types.EncodeUint16(&strLen)); err != nil {
 		return
 	}
 	buf := make([]byte, strLen)
@@ -52,7 +55,7 @@ func ReadString(r io.Reader) (str string, n int64, err error) {
 
 func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
 	strLen := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &strLen); err != nil {
+	if _, err = r.Read(types.EncodeUint16(&strLen)); err != nil {
 		return
 	}
 	buf = make([]byte, strLen)

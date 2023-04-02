@@ -15,9 +15,9 @@
 package txnif
 
 import (
-	"encoding/binary"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -62,11 +62,7 @@ func (memo *TxnMemo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += tmpn
-	isCatalogChanged := int8(0)
-	if memo.isCatalogChanged {
-		isCatalogChanged = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, isCatalogChanged); err != nil {
+	if _, err = w.Write(types.EncodeBool(&memo.isCatalogChanged)); err != nil {
 		return
 	}
 	n += 1
@@ -79,13 +75,9 @@ func (memo *TxnMemo) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += tmpn
-	isCatalogChanged := int8(0)
-	if err = binary.Read(r, binary.BigEndian, &isCatalogChanged); err != nil {
+	if _, err = r.Read(types.EncodeBool(&memo.isCatalogChanged)); err != nil {
 		return
 	}
 	n += 1
-	if isCatalogChanged == 1 {
-		memo.isCatalogChanged = true
-	}
 	return
 }

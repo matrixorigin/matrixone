@@ -16,11 +16,11 @@ package updates
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -160,22 +160,23 @@ func (c *UpdateCmd) GetType() int16 { return c.cmdType }
 
 func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	typ := c.GetType()
+	if _, err = w.Write(types.EncodeInt16(&typ)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dbid); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&c.dbid)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.TableID); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&c.dest.TableID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.SegmentID); err != nil {
+	if _, err = w.Write(c.dest.SegmentID[:]); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.BlockID); err != nil {
+	if _, err = w.Write(c.dest.BlockID[:]); err != nil {
 		return
 	}
 	switch c.GetType() {
@@ -189,20 +190,20 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &c.dbid); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&c.dbid)); err != nil {
 		return
 	}
 	c.dest = &common.ID{}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.TableID); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&c.dest.TableID)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.SegmentID); err != nil {
+	if _, err = r.Read(c.dest.SegmentID[:]); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.BlockID); err != nil {
+	if _, err = r.Read(c.dest.BlockID[:]); err != nil {
 		return
 	}
 	switch c.GetType() {
