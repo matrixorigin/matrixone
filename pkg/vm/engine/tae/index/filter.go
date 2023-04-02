@@ -30,7 +30,7 @@ const FuseFilterError = "too many iterations, you probably have duplicate keys"
 
 type StaticFilter interface {
 	MayContainsKey(key any) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
+	MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	GetMemoryUsage() uint32
@@ -88,7 +88,7 @@ func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
 	return false, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error) {
 	positive := roaring.NewBitmap()
 	row := uint32(0)
 	exist := false

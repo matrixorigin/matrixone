@@ -55,21 +55,14 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
-	visibility := roaring.NewBitmap()
-	visibility.AddRange(uint64(0), uint64(1000))
-	exist, positive, err = sf.MayContainsAnyKeys(query, visibility)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1000), positive.GetCardinality())
-	require.True(t, exist)
-
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query, nil)
+	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -87,7 +80,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
 	require.True(t, exist)
@@ -134,14 +127,14 @@ func TestStaticFilterString(t *testing.T) {
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query, nil)
+	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -159,7 +152,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
 	require.True(t, exist)
