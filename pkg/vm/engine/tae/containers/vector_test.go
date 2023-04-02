@@ -545,3 +545,31 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 		}
 	})
 }
+
+func testFunc[T any](args ...any) func(T, bool, int) error {
+	return func(v T, isNull bool, row int) (err error) {
+		return
+	}
+}
+
+func BenchmarkFunctions(b *testing.B) {
+	var funcs = map[types.T]any{
+		types.T_bool:  testFunc[bool],
+		types.T_int32: testFunc[int32],
+		types.T_char:  testFunc[[]byte],
+	}
+	vec := MockVector2(types.T_char.ToType(), 1000, 0)
+	defer vec.Close()
+	b.Run("func-new", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs))
+		}
+	})
+	b.Run("func-old", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			vec.ForeachShallow(func(any, bool, int) (err error) {
+				return
+			}, nil)
+		}
+	})
+}

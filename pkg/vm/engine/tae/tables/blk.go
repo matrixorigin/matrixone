@@ -152,6 +152,17 @@ func (blk *block) BatchDedup(
 		blk.dedupClosure)
 }
 
+// func DedupOrderedOp[T types.OrderedT](args ...any) func(T, bool, int) error {
+// 	vec := args[0].(containers.Vector).GetDownstreamVector()
+// 	vs := vector.MustFixedCol[T]()
+// 	mask := args[1].(*roaring.Bitmap)
+// 	def := args[2].(*catalog.ColDef)
+// 	return func(v T, _ bool, _ int) (err error) {
+// 		// if _, existed := compute.GetOffsetWithFunc()
+// 		return
+// 	}
+// }
+
 func (blk *block) dedupClosure(
 	vec containers.Vector,
 	ts types.TS,

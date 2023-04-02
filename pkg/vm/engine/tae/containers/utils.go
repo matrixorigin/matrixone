@@ -28,7 +28,7 @@ import (
 // ### Shallow copy Functions
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	return vec.getDownstreamVector()
+	return vec.GetDownstreamVector()
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -49,8 +49,8 @@ func NewVectorWithSharedMemory(v *movec.Vector) Vector {
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
-	vecLen := vec.getDownstreamVector().Length()
-	res, err := vec.getDownstreamVector().CloneWindow(0, vecLen, nil)
+	vecLen := vec.GetDownstreamVector().Length()
+	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -435,7 +435,7 @@ func ForeachWindowBytes(
 	if typ.IsVarlen() {
 		return ForeachWindowVarlen(vec, start, length, op)
 	}
-	cnVec := vec.getDownstreamVector()
+	cnVec := vec.GetDownstreamVector()
 	tsize := typ.TypeSize()
 	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
 	for i := 0; i < length; i++ {
@@ -475,4 +475,17 @@ func ForeachWindowVarlen(
 		}
 	}
 	return
+}
+
+func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any {
+	if t.FixedLength() < 0 {
+		overload := overloads[t].(func(...any) func([]byte, bool, int) error)
+		return overload(args)
+	}
+	switch t {
+	case types.T_int32:
+		overload := overloads[t].(func(...any) func(int32, bool, int) error)
+		return overload(args)
+	}
+	return nil
 }

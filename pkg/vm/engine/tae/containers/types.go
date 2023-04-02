@@ -49,7 +49,7 @@ type Vector interface {
 	ShallowGet(i int) any
 	Window(offset, length int) Vector
 
-	getDownstreamVector() *cnVector.Vector
+	GetDownstreamVector() *cnVector.Vector
 	setDownstreamVector(vec *cnVector.Vector)
 
 	Update(i int, v any)
