@@ -198,7 +198,7 @@ func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewBlockView(n.table.store.txn.GetStartTS())
+		view = model.NewBlockView()
 		err = n.FillBlockView(view, colIdxes)
 		return
 	}
@@ -207,7 +207,7 @@ func (n *anode) GetColumnDataByIds(
 
 func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
+		view = model.NewColumnView(colIdx)
 		err = n.FillColumnView(view)
 		return
 	}
