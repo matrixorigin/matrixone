@@ -479,7 +479,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowBytes(vec1, 0, vec1.Length(), op)
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), op)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -520,6 +520,28 @@ func BenchmarkForeachVector(b *testing.B) {
 			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
 				return
 			})
+		}
+	})
+}
+
+func BenchmarkForeachVectorBytes(b *testing.B) {
+	rows := 1000
+	vec := MockVector2(types.T_int64.ToType(), rows, 0)
+	defer vec.Close()
+	b.Run("int64-bytes", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+				return
+			})
+		}
+	})
+	b.Run("int64-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec.ForeachShallow(func(any, bool, int) error {
+				return nil
+			}, nil)
 		}
 	})
 }

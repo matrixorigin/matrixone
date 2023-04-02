@@ -15,6 +15,8 @@
 package containers
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -279,7 +281,7 @@ func ForeachVectorWindow(
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
-		return ForeachWindowBytes(
+		return ForeachWindowVarlen(
 			vec,
 			start,
 			length,
@@ -316,12 +318,130 @@ func ForeachVectorWindow(
 			start,
 			length,
 			op.(func(int64, bool, int) error))
+	case types.T_uint8:
+		return ForeachWindowFixed[uint8](
+			vec,
+			start,
+			length,
+			op.(func(uint8, bool, int) error))
+	case types.T_uint16:
+		return ForeachWindowFixed[uint16](
+			vec,
+			start,
+			length,
+			op.(func(uint16, bool, int) error))
+	case types.T_uint32:
+		return ForeachWindowFixed[uint32](
+			vec,
+			start,
+			length,
+			op.(func(uint32, bool, int) error))
+	case types.T_uint64:
+		return ForeachWindowFixed[uint64](
+			vec,
+			start,
+			length,
+			op.(func(uint64, bool, int) error))
+	case types.T_decimal64:
+		return ForeachWindowFixed[types.Decimal64](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal64, bool, int) error))
+	case types.T_decimal128:
+		return ForeachWindowFixed[types.Decimal128](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal128, bool, int) error))
+	case types.T_decimal256:
+		return ForeachWindowFixed[types.Decimal256](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal256, bool, int) error))
+	case types.T_float32:
+		return ForeachWindowFixed[float32](
+			vec,
+			start,
+			length,
+			op.(func(float32, bool, int) error))
+	case types.T_float64:
+		return ForeachWindowFixed[float64](
+			vec,
+			start,
+			length,
+			op.(func(float64, bool, int) error))
+	case types.T_timestamp:
+		return ForeachWindowFixed[types.Timestamp](
+			vec,
+			start,
+			length,
+			op.(func(types.Timestamp, bool, int) error))
+	case types.T_date:
+		return ForeachWindowFixed[types.Date](
+			vec,
+			start,
+			length,
+			op.(func(types.Date, bool, int) error))
+	case types.T_time:
+		return ForeachWindowFixed[types.Time](
+			vec,
+			start,
+			length,
+			op.(func(types.Time, bool, int) error))
+	case types.T_datetime:
+		return ForeachWindowFixed[types.Datetime](
+			vec,
+			start,
+			length,
+			op.(func(types.Datetime, bool, int) error))
+	case types.T_TS:
+		return ForeachWindowFixed[types.TS](
+			vec,
+			start,
+			length,
+			op.(func(types.TS, bool, int) error))
+	case types.T_Blockid:
+		return ForeachWindowFixed[types.Blockid](
+			vec,
+			start,
+			length,
+			op.(func(types.Blockid, bool, int) error))
+	case types.T_uuid:
+		return ForeachWindowFixed[types.Uuid](
+			vec,
+			start,
+			length,
+			op.(func(types.Uuid, bool, int) error))
 	case types.T_Rowid:
 		return ForeachWindowFixed[types.Rowid](
 			vec,
 			start,
 			length,
 			op.(func(types.Rowid, bool, int) error))
+	default:
+		panic(fmt.Sprintf("unsupported type: %s", typ.String()))
+	}
+	return
+}
+
+func ForeachWindowBytes(
+	vec Vector,
+	start, length int,
+	op ItOpT[[]byte],
+) (err error) {
+	typ := vec.GetType()
+	if typ.IsVarlen() {
+		return ForeachWindowVarlen(vec, start, length, op)
+	}
+	cnVec := vec.getDownstreamVector()
+	tsize := typ.TypeSize()
+	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
+	for i := 0; i < length; i++ {
+		if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+			break
+		}
 	}
 	return
 }
@@ -333,7 +453,6 @@ func ForeachWindowFixed[T any](
 ) (err error) {
 	src := vec.(*vector[T])
 	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
-	// op2 := op.(func(T, bool, int) error)
 	for i, v := range slice {
 		if err = op(v, src.IsNull(i+start), i+start); err != nil {
 			break
@@ -342,7 +461,7 @@ func ForeachWindowFixed[T any](
 	return
 }
 
-func ForeachWindowBytes(
+func ForeachWindowVarlen(
 	vec Vector,
 	start, length int,
 	op ItOpT[[]byte],

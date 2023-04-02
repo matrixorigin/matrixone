@@ -32,6 +32,8 @@ type Options struct {
 type ItOp = func(v any, isNull bool, row int) error
 type ItOpT[T any] func(v T, isNull bool, row int) error
 
+// type ItBytesOp func(v []byte, isNull bool, row int) error
+
 type Vector interface {
 	GetType() types.Type
 

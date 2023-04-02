@@ -102,6 +102,16 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func BenchmarkCreateFilter(b *testing.B) {
+	rows := 1000
+	data := containers.MockVector2(types.T_int64.ToType(), rows, 0)
+	defer data.Close()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		NewBinaryFuseFilter(data)
+	}
+}
+
 func TestStaticFilterString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
