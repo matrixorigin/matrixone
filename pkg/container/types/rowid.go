@@ -93,7 +93,7 @@ func (r Rowid) GetObject() ObjectBytes {
 
 func (r Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
-	s := binary.BigEndian.Uint16(r[UuidSize:ObjectBytesSize])
+	s := DecodeUint16(r[UuidSize:ObjectBytesSize])
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
 }
 
