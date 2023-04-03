@@ -60,7 +60,7 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.NewVectorWithSharedMemory(bat[0].Vecs[0], def.NullAbility), nil
+	return containers.NewVectorWithSharedMemory(bat[0].Vecs[0]), nil
 }
 
 func ReadPersistedBlockRow(location string) int {
@@ -90,7 +90,7 @@ func LoadPersistedDeletes(
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	for i := 0; i < 3; i++ {
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat[0].Vecs[i], false))
+		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat[0].Vecs[i]))
 	}
 	return
 }

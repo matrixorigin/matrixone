@@ -415,7 +415,7 @@ func Test_initFunction(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := &Session{}
+		ses := &Session{tenant: tenant}
 		err := InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})

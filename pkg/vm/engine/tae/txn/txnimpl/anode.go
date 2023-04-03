@@ -93,11 +93,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)
 		}
-		n.storage.mnode.data = containers.BuildBatch(
-			schema.AllNames(),
-			schema.AllTypes(),
-			schema.AllNullables(),
-			opts)
+		n.storage.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
 	from := uint32(n.storage.mnode.data.Length())
@@ -202,7 +198,7 @@ func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewBlockView(n.table.store.txn.GetStartTS())
+		view = model.NewBlockView()
 		err = n.FillBlockView(view, colIdxes)
 		return
 	}
@@ -211,7 +207,7 @@ func (n *anode) GetColumnDataByIds(
 
 func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
+		view = model.NewColumnView(colIdx)
 		err = n.FillColumnView(view)
 		return
 	}

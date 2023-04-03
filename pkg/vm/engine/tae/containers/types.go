@@ -63,7 +63,6 @@ type Vector interface {
 	Allocated() int
 	GetAllocator() *mpool.MPool
 
-	Nullable() bool
 	IsNull(i int) bool
 	HasNull() bool
 	NullMask() *cnNulls.Nulls

@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 1",
-		output: "select 1",
+		input:  "alter table t1 alter index c visible",
+		output: "alter table t1 alter index c visible",
 	}
 )
 
@@ -1995,6 +1995,14 @@ var (
 			output: "alter table tbl1 checksum = 0, comment = asdf",
 		},
 		{
+			input:  "alter table t1 alter index c visible",
+			output: "alter table t1 alter index c visible",
+		},
+		{
+			input:  "alter table t1 alter index c invisible",
+			output: "alter table t1 alter index c invisible",
+		},
+		{
 			input: "create publication pub1 database db1",
 		},
 		{
@@ -2093,6 +2101,14 @@ var (
 		{
 			input:  "call test1(@session, @increment)",
 			output: "call test1(@session, @increment)",
+		},
+		{
+			input:  "select cast(123 as binary)",
+			output: "select cast(123 as binary)",
+		},
+		{
+			input:  "select BINARY 124",
+			output: "select binary(124)",
 		},
 	}
 )

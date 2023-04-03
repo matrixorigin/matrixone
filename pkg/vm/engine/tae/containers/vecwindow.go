@@ -53,9 +53,7 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 	if win.GetType() != o.GetType() {
 		return false
 	}
-	if win.Nullable() != o.Nullable() {
-		return false
-	}
+
 	if win.HasNull() != o.HasNull() {
 		return false
 	}
@@ -118,8 +116,7 @@ func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
 	return win.ref.ShallowGet(i + win.offset)
 }
 
-func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
-func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
+func (win *vectorWindow[T]) HasNull() bool { return win.ref.HasNull() }
 func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
 	mask := win.ref.NullMask()
 	if win.offset == 0 || mask == nil {
