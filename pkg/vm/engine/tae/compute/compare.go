@@ -21,6 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func CompareOrdered2[T types.OrderedT](a, b T) int64 {
+	if a > b {
+		return 1
+	} else if a < b {
+		return -1
+	}
+	return 0
+}
+
 func CompareOrdered[T types.OrderedT](v1, v2 any) int64 {
 	a, b := v1.(T), v2.(T)
 	if a > b {
@@ -42,8 +51,8 @@ func CompareBool(a, b bool) int64 {
 	return 0
 }
 
-func CompareBytes(a, b any) int64 {
-	res := bytes.Compare(a.([]byte), b.([]byte))
+func CompareBytes(a, b []byte) int64 {
+	res := bytes.Compare(a, b)
 	if res > 0 {
 		return 1
 	} else if res < 0 {
@@ -94,14 +103,14 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 	case types.T_TS:
 		return int64(a.(types.TS).Compare(b.(types.TS)))
 	case types.T_Rowid:
-		return CompareBytes(a, b)
+		return CompareBytes(a.([]byte), b.([]byte))
 	case types.T_Blockid:
-		return CompareBytes(a, b)
+		return CompareBytes(a.([]byte), b.([]byte))
 	case types.T_uuid:
 		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
-		return CompareBytes(a, b)
+		return CompareBytes(a.([]byte), b.([]byte))
 	case types.T_any:
 		return 0
 	default:
