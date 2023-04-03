@@ -19,12 +19,41 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"go.uber.org/zap"
 )
+
+func (s *Service) initSqlWriterFactory() {
+	addressFunc := func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx,
+			time.Second*5)
+		defer cancel()
+		if s.haClient == nil {
+			return "", nil
+		}
+		details, err := s.haClient.GetClusterDetails(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(details.CNStores) == 0 {
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
+		}
+
+		n := rand.Intn(len(details.CNStores))
+		return details.CNStores[n].SQLAddress, nil
+	}
+
+	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
+}
+func (s *Service) createSQLLogger(command *logservicepb.CreateTaskService) {
+	sqlWriter.SetSQLWriterDBUser(sqlWriter.DBLoggerUser, command.User.Password)
+}
 
 func (s *Service) initTaskHolder() {
 	s.task.Lock()

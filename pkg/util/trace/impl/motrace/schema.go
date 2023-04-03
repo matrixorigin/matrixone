@@ -156,7 +156,7 @@ var (
 			spanKindCol,
 		},
 		PrimaryKeyColumn: nil,
-		Engine:           table.ExternalTableEngine,
+		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,

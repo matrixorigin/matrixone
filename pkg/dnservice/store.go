@@ -16,7 +16,6 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"time"
 
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
@@ -170,6 +170,7 @@ func NewService(
 		return nil, err
 	}
 	s.initTaskHolder()
+	s.initSqlWriterFactory()
 	return s, nil
 }
 

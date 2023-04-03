@@ -290,6 +290,8 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	switch strings.ToUpper(tbl.Engine) {
 	case ExternalTableEngine:
 		sb.WriteString(TableOptions.GetCreateOptions())
+	case NormalTableEngine:
+		sb.WriteString(TableOptions.GetCreateOptions())
 	default:
 		panic(moerr.NewInternalError(ctx, "NOT support engine: %s", tbl.Engine))
 	}
