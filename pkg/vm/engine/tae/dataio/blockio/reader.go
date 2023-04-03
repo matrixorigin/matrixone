@@ -353,21 +353,20 @@ func PrefetchWithMerged(pref prefetch) error {
 	return pipeline.Prefetch(pref)
 }
 
-func Prefetch(idxes []uint16, reader dataio.Reader,
-	ids []uint32, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
-	}
+func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key string) error {
 
-	pref := BuildPrefetch(reader, m)
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
+	}
 	pref.AddBlock(idxes, ids)
 	return pipeline.Prefetch(pref)
 }
 
-func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
+func PrefetchBlocksMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
 	}
-	pref := BuildPrefetch(reader, m)
 	return pipeline.Prefetch(pref)
 }

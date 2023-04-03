@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -483,14 +484,21 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
-	reader dataio.Reader,
-	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
+	service fileservice.FileService,
+	key string) (err error) {
+	reader, err := blockio.NewCheckPointReader(service, key)
+	if err != nil {
+		return
+	}
+	metas, err := reader.LoadBlocksMeta(ctx, common.DefaultAllocator)
 	if err != nil {
 		return
 	}
 
-	pref := blockio.BuildPrefetch(reader, m)
+	pref, err := blockio.BuildPrefetch(service, key)
+	if err != nil {
+		return
+	}
 	for idx, item := range checkpointDataRefer {
 		idxes := make([]uint16, len(item.attrs))
 		for i := range item.attrs {

@@ -376,7 +376,7 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 	}
 	bats := t.makeBatchWithGCTable()
 	defer t.closeBatch(bats)
-	pref := blockio.BuildPrefetch(reader, common.DefaultAllocator)
+	pref := blockio.BuildReaderPrefetch(reader)
 	for i := range bats {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
