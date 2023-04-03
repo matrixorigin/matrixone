@@ -204,6 +204,7 @@ import (
     indexHintScope tree.IndexHintScope
     indexHint *tree.IndexHint
     indexHintList []*tree.IndexHint
+    indexVisibility tree.VisibleType
 
     killOption tree.KillOption
     statementOption tree.StatementOption
@@ -486,8 +487,9 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
-%type <alterTableOptions> alter_options
-%type <alterTableOption> alter_table_drop
+%type <alterTableOptions> alter_option_list
+%type <alterTableOption> alter_option alter_table_drop alter_table_alter
+%type <indexVisibility> visibility
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -2248,7 +2250,7 @@ alter_view_stmt:
     }
 
 alter_table_stmt:
-    ALTER TABLE table_name alter_options
+    ALTER TABLE table_name alter_option_list
     {
         $$ = &tree.AlterTable{
             Table: $3,
@@ -2256,25 +2258,35 @@ alter_table_stmt:
         }
     }
 
-alter_options:
+alter_option_list:
+alter_option
+    {
+        $$ = []tree.AlterTableOption{$1}
+    }
+|   alter_option_list ',' alter_option
+    {
+        $$ = append($1, $3)
+    }
+
+alter_option:
 ADD table_elem
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
         }
-        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+        $$ = tree.AlterTableOption(opt)
     }
-|   DROP alter_table_drop
+| DROP alter_table_drop
     {
-        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+        $$ = tree.AlterTableOption($2)
     }
-| table_option_list
+|   ALTER alter_table_alter
     {
-        opts := make([]tree.AlterTableOption, len($1))
-        for i, opt := range $1 {
-            opts[i] = tree.AlterTableOption(opt)
-        }
-        $$ =  opts
+    	$$ = tree.AlterTableOption($2)
+    }
+| table_option
+    {
+        $$ =  tree.AlterTableOption($1)
     }
 
 alter_table_drop:
@@ -2312,7 +2324,26 @@ alter_table_drop:
             Typ:  tree.AlterTableDropPrimaryKey,
         }
     }
-    
+
+alter_table_alter:
+   INDEX ident visibility
+   {
+	$$ = &tree.AlterOptionAlterIndex{
+            Visibility:  $3,
+            Name: tree.Identifier($2.Compare()),
+        }
+   }
+
+visibility:
+    VISIBLE
+    {
+        $$ = tree.VISIBLE_TYPE_VISIBLE
+    }
+|   INVISIBLE
+    {
+   	$$ = tree.VISIBLE_TYPE_INVISIBLE
+    }
+
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -6642,6 +6673,12 @@ when_clause:
 
 mo_cast_type:
     column_type
+{
+   t := $$ 
+   if strings.ToLower(t.InternalType.FamilyString) == "binary" {
+        t.InternalType.Scale = -1
+   }
+}
 |   SIGNED integer_opt
     {
         name := $1
@@ -7341,12 +7378,32 @@ function_call_keyword:
             Exprs: es,
         }
     }
-|   BINARY '(' expression_list ')' 
+|   BINARY '(' expression_list ')'
     {
         name := tree.SetUnresolvedName("binary")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
+        }
+    }
+|   BINARY literal
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+           Func: tree.FuncName2ResolvableFunctionReference(name), 
+           Exprs: exprs, 
+        }
+    }
+|   BINARY column_name
+    {
+        name := tree.SetUnresolvedName("binary")
+        exprs := make([]tree.Expr, 1)
+        exprs[0] = $2
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name), 
+            Exprs: exprs,
         }
     }
 |   CHAR '(' expression_list ')'

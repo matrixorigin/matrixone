@@ -1266,7 +1266,8 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		if dropTable.Database != catalog.MO_CATALOG && dropTable.Table != catalog.MO_INDEXES {
 			if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
 				var err error
-				attachedPlan, err = buildDeleteIndexMetaPlan("", tableDef.TblId, 0, DROP_TABLE, ctx)
+				sql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tableDef.TblId)
+				attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
 				if err != nil {
 					return nil, err
 				}
@@ -1286,40 +1287,26 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-type DeleteIndexMode int
-
-const (
-	DROP_INDEX DeleteIndexMode = iota
-	DROP_TABLE
-	DROP_DATABASE
-	TRUNCATE_TABLE
-)
-
 var (
 	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 )
 
-// Build a plan to delete index metadata
-func buildDeleteIndexMetaPlan(indexName string, tblId uint64, databaseId uint64, mode DeleteIndexMode, ctx CompilerContext) (*Plan, error) {
-	var sql string
-	switch mode {
-	case DROP_INDEX:
-		sql = fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tblId, indexName)
-	case DROP_TABLE:
-		sql = fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tblId)
-	case DROP_DATABASE:
-		sql = fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
-	}
+// Build a plan to modify index metadata
+func buildIndexMetadataPlan(sql string, ctx CompilerContext) (*Plan, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		return nil, err
 	}
-	if deleteStmt, ok := stmt.(*tree.Delete); ok {
-		return buildDelete(deleteStmt, ctx)
-	} else {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not delete syntax tree")
+	switch rstmt := stmt.(type) {
+	case *tree.Delete:
+		return buildDelete(rstmt, ctx)
+	case *tree.Update:
+		return buildTableUpdate(rstmt, ctx)
+	default:
+		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not the expected syntax tree")
 	}
 }
 
@@ -1413,7 +1400,8 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		if err != nil {
 			return nil, err
 		}
-		attachedPlan, err = buildDeleteIndexMetaPlan("", 0, databaseId, DROP_DATABASE, ctx)
+		sql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
+		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1553,8 +1541,8 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
 	} else {
 		var err error
-		attachedPlan, err = buildDeleteIndexMetaPlan(dropIndex.IndexName, tableDef.TblId, 0, DROP_INDEX, ctx)
-		//attachedPlan, err = buildDeleteIndexMetadataPlan(tableDef, dropIndex.IndexName, ctx)
+		sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, dropIndex.IndexName)
+		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1700,7 +1688,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					if constraintName == indexdef.IndexName {
 						name_not_found = false
 						var err error
-						attachedPlan, err = buildDeleteIndexMetaPlan(indexdef.IndexName, tableDef.TblId, 0, DROP_INDEX, ctx)
+						sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
+						attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
 						if err != nil {
 							return nil, err
 						}
@@ -1802,6 +1791,45 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 
+			}
+
+		case *tree.AlterOptionAlterIndex:
+			alterTableIndex := new(plan.AlterTableAlterIndex)
+			constraintName := string(opt.Name)
+			alterTableIndex.IndexName = constraintName
+
+			if opt.Visibility == tree.VISIBLE_TYPE_VISIBLE {
+				alterTableIndex.Visible = true
+			} else {
+				alterTableIndex.Visible = false
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					var err error
+					var sql string
+					if alterTableIndex.Visible {
+						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, tableDef.TblId, indexdef.IndexName)
+					} else {
+						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
+					}
+					attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
+					if err != nil {
+						return nil, err
+					}
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterIndex{
+					AlterIndex: alterTableIndex,
+				},
 			}
 		}
 	}

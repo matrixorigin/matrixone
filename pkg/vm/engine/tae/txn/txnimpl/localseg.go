@@ -175,7 +175,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			seg.tableHandle = tableData.GetHandle()
 		}
 		appended := uint32(0)
-		vec := containers.MakeVector(catalog.PhyAddrColumnType, false)
+		vec := containers.MakeVector(catalog.PhyAddrColumnType)
 		for appended < node.RowsWithoutDeletes() {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {

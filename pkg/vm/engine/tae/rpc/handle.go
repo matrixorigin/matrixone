@@ -827,7 +827,7 @@ func (h *Handle) HandleWrite(
 			if err != nil {
 				return
 			}
-			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
 
 			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
 			if err != nil {
