@@ -84,6 +84,8 @@ func newDiskFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (Fil
 		cfg.Name,
 		cfg.DataDir,
 		int64(cfg.Cache.MemoryCapacity),
+		int64(cfg.Cache.DiskCapacity),
+		cfg.Cache.DiskPath,
 		perfCounters,
 	)
 	if err != nil {

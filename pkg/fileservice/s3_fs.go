@@ -162,7 +162,10 @@ func (s *S3FS) initCaches(
 			WithLRU(memCacheCapacity),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
-		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("capacity", memCacheCapacity),
+		)
 	}
 
 	// disk cache
@@ -179,7 +182,11 @@ func (s *S3FS) initCaches(
 		if err != nil {
 			return err
 		}
-		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", diskCacheCapacity))
+		logutil.Info("fileservice: disk cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("capacity", diskCacheCapacity),
+			zap.Any("path", diskCachePath),
+		)
 	}
 
 	return nil
@@ -377,7 +384,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = done()
+			err = done(ctx)
 		}()
 		r = io.TeeReader(
 			newIOEntriesReader(ctx, vector.Entries),
