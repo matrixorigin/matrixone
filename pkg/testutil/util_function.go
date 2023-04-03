@@ -531,6 +531,24 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_Blockid:
+		r := vector.GenerateFunctionFixedTypeParameter[types.Blockid](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Blockid](vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_json:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
@@ -641,6 +659,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_Rowid:
 		values := val.([]types.Rowid)
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_Blockid:
+		values := val.([]types.Blockid)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_json:
 		values := val.([]string)

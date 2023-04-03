@@ -2140,7 +2140,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewFileNotFound(ctx, param.Filepath)
+			err = moerr.NewInvalidInput(ctx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
 		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		return
@@ -2241,24 +2241,23 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:              ses.GetUserName(),
-		Host:              pu.SV.Host,
-		ConnectionID:      uint64(proto.ConnectionID()),
-		Database:          ses.GetDatabaseName(),
-		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:          ses.GetTimeZone(),
-		StorageEngine:     pu.StorageEngine,
-		LastInsertID:      ses.GetLastInsertID(),
-		AutoIncrCaches:    ses.GetAutoIncrCaches(),
-		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
-		SqlHelper:         ses.GetSqlHelper(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+		LastInsertID:  ses.GetLastInsertID(),
+		SqlHelper:     ses.GetSqlHelper(),
 	}
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -3175,21 +3174,20 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:              ses.GetUserName(),
-		Host:              pu.SV.Host,
-		ConnectionID:      uint64(proto.ConnectionID()),
-		Database:          ses.GetDatabaseName(),
-		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:          ses.GetTimeZone(),
-		StorageEngine:     pu.StorageEngine,
-		AutoIncrCaches:    ses.GetAutoIncrCaches(),
-		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
 	}
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.

@@ -39,11 +39,9 @@ const (
 	maxBlockTimeToNewTransaction = 1 * time.Minute
 	periodToCheckTxnTimestamp    = 1 * time.Millisecond
 
-	// if we didn't receive response within time maxTimeToWaitServerResponse.
-	// we assume that client has lost connect to server.
-	// and will reconnect in a period of periodToReconnectDnLogServer.
-	maxTimeToWaitServerResponse  = 60 * time.Second
-	periodToReconnectDnLogServer = 10 * time.Second
+	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
+	// we assume that client has lost connect to server and will start a reconnect.
+	maxTimeToWaitServerResponse = 60 * time.Second
 
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
@@ -222,6 +220,8 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 }
 
 func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
+	reconnectErr := make(chan error)
+
 	go func() {
 		for {
 			// new parallelNums routine to consume log tails.
@@ -248,7 +248,17 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				case err := <-errChan:
 					// receive an error from sub-routine to consume log.
 					logutil.ErrorField(err)
+					cancel()
 					goto cleanAndReconnect
+
+				case err := <-reconnectErr:
+					cancel()
+					if err != nil {
+						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
+						goto cleanAndReconnect
+					}
+					logutil.Infof("reconnect to dn log tail service succeed")
+					continue
 				}
 
 				resp := <-ch
@@ -294,24 +304,20 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 			for _, r := range receiver {
 				r.close()
 			}
-			for {
-				logutil.Infof("start to reconnect to dn log tail service")
-				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-				if err := client.init(dnLogTailServerBackend); err != nil {
-					logutil.Error("rebuild the cn log tail client failed.")
-					continue
-				}
-
-				// once we reconnect succeed, should clean partition here.
-				e.cleanMemoryTable()
-
-				if err := client.firstTimeConnectToLogTailServer(ctx); err == nil {
-					logutil.Info("reconnect to dn log tail server succeed.")
-					break
-				}
-				logutil.Error("reconnect to dn log tail server failed.")
-				time.Sleep(periodToReconnectDnLogServer)
+			logutil.Infof("start to reconnect to dn log tail service")
+			dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+			if err := client.init(dnLogTailServerBackend); err != nil {
+				logutil.Error("rebuild the cn log tail client failed.")
+				reconnectErr <- err
 			}
+
+			// once we reconnect succeed, should clean partition here.
+			e.cleanMemoryTable()
+
+			go func() {
+				err := client.firstTimeConnectToLogTailServer(context.TODO())
+				reconnectErr <- err
+			}()
 		}
 	}()
 }
