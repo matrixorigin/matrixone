@@ -115,14 +115,15 @@ var (
 		output: "select count(*) as low_stock from (select s_w_id, s_i_id, s_quantity from bmsql_stock where s_w_id = 1 and s_quantity < 1000 and s_i_id in (select ol_i_id from bmsql_district inner join bmsql_order_line on ol_w_id = d_w_id and ol_d_id = d_id and ol_o_id >= d_next_o_id - 20 and ol_o_id < d_next_o_id where d_w_id = 1 and d_id = 1))",
 	}, {
 		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
-		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+		output: "create account abc@124 admin_name 'abc@124' identified by '******'",
 	}, {
 		input:  "create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';",
-		output: "create account account admin_name 'root' identified by '123456'",
+		output: "create account account admin_name 'root' identified by '******'",
 	}, {
 		input: "drop table if exists history",
 	}, {
-		input: "create user daisy@192.168.1.10 identified by '123456'",
+		input:  "create user daisy@192.168.1.10 identified by '123456'",
+		output: "create user daisy@192.168.1.10 identified by '******'",
 	}, {
 		input: "create table t0 (a float(255, 3))",
 	}, {
@@ -1503,37 +1504,51 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 		}, {
-			input: "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "create account if not exists nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "create account if not exists nihao admin_name 'admin' identified with '123'",
+			input:  "create account if not exists nihao admin_name 'admin' identified with '123'",
+			output: "create account if not exists nihao admin_name 'admin' identified with '******'",
 		}, {
-			input: "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "create account nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "create account nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "create account nihao admin_name 'admin' identified with '123'",
+			input:  "create account nihao admin_name 'admin' identified with '123'",
+			output: "create account nihao admin_name 'admin' identified with '******'",
 		}, {
 			input: "drop account if exists abc",
 		}, {
-			input: "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "alter account if exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "alter account if exists nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "alter account if exists nihao admin_name 'admin' identified with '123'",
+			input:  "alter account if exists nihao admin_name 'admin' identified with '123'",
+			output: "alter account if exists nihao admin_name 'admin' identified with '******'",
 		}, {
-			input: "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "alter account nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "alter account nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "alter account nihao admin_name 'admin' identified with '123'",
+			input:  "alter account nihao admin_name 'admin' identified with '123'",
+			output: "alter account nihao admin_name 'admin' identified with '******'",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role def_role " +
 				"password expire " +
 				"comment 'new comment'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' default role def_role " +
+				"password expire " +
+				"comment 'new comment'",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role de_role " +
+				"lock " +
+				"attribute 'new attribute'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' default role de_role " +
 				"lock " +
 				"attribute 'new attribute'",
 		}, {
@@ -1542,27 +1557,46 @@ var (
 				"abc5 identified with '345' " +
 				"default role de_role " +
 				"attribute 'new attribute'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******', " +
+				"abc4 identified by random password, " +
+				"abc5 identified with '******' " +
+				"default role de_role " +
+				"attribute 'new attribute'",
 		}, {
 			input: "create user if not exists abc1 identified by '111' " +
+				"default role de_role " +
+				"comment 'new comment'",
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role " +
 				"comment 'new comment'",
 		}, {
 			input: "create user if not exists abc1 identified by '111' " +
 				"default role de_role",
-		}, {
-			input: "create user if not exists abc1 identified by '123' " +
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role",
 		}, {
 			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+			output: "create user if not exists abc1 identified by '******' " +
+				"default role de_role",
+		}, {
+			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role",
 		}, {
 			input: "create user abc1 identified by '123' " +
 				"default role de_role",
+			output: "create user abc1 identified by '******' " +
+				"default role de_role",
 		}, {
 			input: "create user abc1 identified by '111' " +
 				"default role de_role",
+			output: "create user abc1 identified by '******' " +
+				"default role de_role",
 		}, {
-			input: "create user abc1 identified by 'a111'",
+			input:  "create user abc1 identified by 'a111'",
+			output: "create user abc1 identified by '******'",
 		}, {
 			input: "drop user if exists abc1, abc2, abc3",
 		}, {
@@ -1574,8 +1608,16 @@ var (
 				"default role de_role " +
 				"lock " +
 				"comment 'new comment'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"default role de_role " +
+				"lock " +
+				"comment 'new comment'",
 		}, {
 			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
+				"default role de_role " +
+				"unlock " +
+				"comment 'new comment'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
 				"default role de_role " +
 				"unlock " +
 				"comment 'new comment'",
@@ -1584,19 +1626,30 @@ var (
 				"default role de_role " +
 				"password expire " +
 				"attribute 'new attribute'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"default role de_role " +
+				"password expire " +
+				"attribute 'new attribute'",
 		}, {
 			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
 				"attribute 'new attribute'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"attribute 'new attribute'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+			input:  "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified with '******', abc3 identified with '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123'",
+			output: "alter user if exists abc1 identified by '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123'",
+			output: "alter user if exists abc1 identified by '******'",
 		}, {
-			input: "alter user abc1 identified by '123'",
+			input:  "alter user abc1 identified by '123'",
+			output: "alter user abc1 identified by '******'",
 		}, {
 			input: "create role if not exists role1, role2, role2",
 		}, {
@@ -1784,7 +1837,8 @@ var (
 			input: "alter account if exists abc",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+			output: "alter account if exists abc admin_name 'root' identified by '******' open comment 'str'",
 		},
 		{
 			input: "alter account if exists abc open comment 'str'",
@@ -1796,10 +1850,12 @@ var (
 			input: "alter account if exists abc open",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' open",
+			output: "alter account if exists abc admin_name 'root' identified by '******' open",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+			output: "alter account if exists abc admin_name 'root' identified by '******' comment 'str'",
 		},
 		{
 			input: `create cluster table a (a int)`,
