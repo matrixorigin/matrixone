@@ -423,7 +423,6 @@ func ForeachVectorWindow(
 	default:
 		panic(fmt.Sprintf("unsupported type: %s", typ.String()))
 	}
-	return
 }
 
 func ForeachWindowBytes(
