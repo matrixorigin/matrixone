@@ -569,6 +569,10 @@ func (node Exprs) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node Exprs) String() string {
+	return ""
+}
+
 // ast fir the list of expression
 type ExprList struct {
 	exprImpl

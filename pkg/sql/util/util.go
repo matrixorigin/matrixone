@@ -159,16 +159,23 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// att_relname in ('mo_database','mo_tables','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
 
-	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
-	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
-	mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
-	mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
-	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
-	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
-	mo_mysql_compatbility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatbility_mode"), "mo_mysql_compatbility_mode", false, tree.P_char)
-	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
+	//mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
+	// mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
+	// mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
+	// mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
+	// mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
+	// mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
+	// mo_mysql_compatbility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatbility_mode"), "mo_mysql_compatbility_mode", false, tree.P_char)
+	// mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
 
-	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst, mo_user_defined_functionConst, mo_mysql_compatbility_modeConst, mo_indexes})
+	systemTables := []string{"mo_user", "mo_account", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs", "mo_user_defined_function", "mo_mysql_compatbility_mode", "mo_indexes", "mo_pubs", "mo_stored_procedure"}
+	systemTableExprs := tree.Exprs{}
+	for _, sysTable := range systemTables {
+		expr := tree.NewNumValWithType(constant.MakeString(sysTable), sysTable, false, tree.P_char)
+		systemTableExprs = append(systemTableExprs, tree.Exprs{expr})
+	}
+
+	notInValues := tree.NewTuple(systemTableExprs)
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
 	dbNameEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
