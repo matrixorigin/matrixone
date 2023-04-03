@@ -28,6 +28,10 @@ type exprImpl struct {
 	Expr
 }
 
+func (node *exprImpl) String() string {
+	return ""
+}
+
 // Binary Operator
 type BinaryOp int
 
@@ -563,10 +567,6 @@ func (node Exprs) Format(ctx *FmtCtx) {
 		n.Format(ctx)
 		prefix = ", "
 	}
-}
-
-func (node Exprs) String() string {
-	return ""
 }
 
 // ast fir the list of expression
