@@ -43,8 +43,7 @@ func (txn *Transaction) getTableMeta(
 	name := genMetaTableName(tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
 	if needUpdated {
-		key := [2]uint64{databaseId, tableId}
-		states := txn.engine.partitions[key].Snapshot()
+		states := txn.engine.getPartitions(databaseId, tableId).Snapshot()
 		for i := range txn.dnStores {
 			if i >= len(states) {
 				continue

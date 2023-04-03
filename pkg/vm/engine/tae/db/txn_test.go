@@ -675,7 +675,9 @@ func TestTxn9(t *testing.T) {
 			it.Next()
 		}
 		val.Store(2)
-		assert.Equal(t, 2, cnt)
+		// Use max commit ts as start ts
+		// 2nd relation is not visible
+		assert.Equal(t, 1, cnt)
 		assert.NoError(t, txn.Commit())
 	}
 
@@ -717,7 +719,9 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
-	assert.Equal(t, uint32(2), val.Load())
+	// Use max commit ts as start ts
+	// When reading snapshot, it's not necessary to wait commit.
+	assert.Equal(t, uint32(1), val.Load())
 
 	apply := func(_ txnif.AsyncTxn) error {
 		wg.Add(1)

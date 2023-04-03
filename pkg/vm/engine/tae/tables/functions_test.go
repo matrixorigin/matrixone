@@ -36,7 +36,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-int64", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec2.ForeachShallow(dedupNABlkClosure(vec, types.TS{}, nil, nil), nil)
+			vec2.ForeachShallow(dedupNABlkClosure(vec, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-int64", func(b *testing.B) {
@@ -56,7 +56,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-d128", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec5.ForeachShallow(dedupNABlkClosure(vec4, types.TS{}, nil, nil), nil)
+			vec5.ForeachShallow(dedupNABlkClosure(vec4, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-d128", func(b *testing.B) {
@@ -77,7 +77,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-chars", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec8.ForeachShallow(dedupNABlkClosure(vec7, types.TS{}, nil, nil), nil)
+			vec8.ForeachShallow(dedupNABlkClosure(vec7, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-chars", func(b *testing.B) {
@@ -91,7 +91,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-achars", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec8.ForeachShallow(dedupABlkClosureFactory(nil)(vec7, types.TS{}, nil, nil), nil)
+			vec8.ForeachShallow(dedupABlkClosureFactory(nil)(vec7, nil, nil, nil), nil)
 		}
 	})
 

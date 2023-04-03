@@ -104,7 +104,7 @@ func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, d
 }
 
 func parseADedeupArgs(args ...any) (
-	vec containers.Vector, mask *roaring.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), ts types.TS) {
+	vec containers.Vector, mask *roaring.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), txn txnif.TxnReader) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
 		mask = args[1].(*roaring.Bitmap)
@@ -116,7 +116,7 @@ func parseADedeupArgs(args ...any) (
 		scan = args[3].(func() (containers.Vector, error))
 	}
 	if args[4] != nil {
-		ts = args[4].(types.TS)
+		txn = args[4].(txnif.TxnReader)
 	}
 	return
 }
@@ -175,7 +175,7 @@ func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) err
 }
 
 func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
-	vec, mask, def, scan, ts := parseADedeupArgs(args...)
+	vec, mask, def, scan, txn := parseADedeupArgs(args...)
 	return func(v1 []byte, _ bool, _ int) error {
 		var tsVec containers.Vector
 		defer func() {
@@ -202,7 +202,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(ts) {
+				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(vec.GetType(), any(v1))
@@ -213,7 +213,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 
 func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
-		vec, mask, def, scan, ts := parseADedeupArgs(args...)
+		vec, mask, def, scan, txn := parseADedeupArgs(args...)
 		return func(v1 T, _ bool, _ int) error {
 			var tsVec containers.Vector
 			defer func() {
@@ -239,7 +239,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 						}
 					}
 					commitTS := tsVec.Get(row).(types.TS)
-					if commitTS.Greater(ts) {
+					if commitTS.Greater(txn.GetStartTS()) {
 						return txnif.ErrTxnWWConflict
 					}
 					entry := common.TypeStringValue(vec.GetType(), any(v1))
@@ -251,7 +251,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 
 func dedupNABlkClosure(
 	vec containers.Vector,
-	ts types.TS,
+	txn txnif.TxnReader,
 	mask *roaring.Bitmap,
 	def *catalog.ColDef) func(any, bool, int) error {
 	return func(v any, _ bool, _ int) (err error) {
@@ -267,11 +267,11 @@ func dedupABlkClosureFactory(
 	scan func() (containers.Vector, error),
 ) func(
 	containers.Vector,
-	types.TS,
+	txnif.TxnReader,
 	*roaring.Bitmap,
 	*catalog.ColDef,
 ) func(any, bool, int) error {
-	return func(vec containers.Vector, ts types.TS, mask *roaring.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
+	return func(vec containers.Vector, txn txnif.TxnReader, mask *roaring.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
 		return func(v1 any, _ bool, _ int) (err error) {
 			var tsVec containers.Vector
 			defer func() {
@@ -295,7 +295,7 @@ func dedupABlkClosureFactory(
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(ts) {
+				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(vec.GetType(), v1)
