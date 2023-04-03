@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
 )
 
@@ -31,18 +32,46 @@ import (
 type MemoryFS struct {
 	name string
 	sync.RWMutex
-	tree *btree.BTreeG[*_MemFSEntry]
+	tree            *btree.BTreeG[*_MemFSEntry]
+	diskCache       *DiskCache
+	perfCounterSets []*perfcounter.CounterSet
+	asyncUpdate     bool
 }
 
 var _ FileService = new(MemoryFS)
 
-func NewMemoryFS(name string) (*MemoryFS, error) {
-	return &MemoryFS{
+func NewMemoryFS(
+	name string,
+	cacheConfig CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*MemoryFS, error) {
+
+	fs := &MemoryFS{
 		name: name,
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
-	}, nil
+		perfCounterSets: perfCounterSets,
+	}
+
+	//if diskCacheCapacity > DisableCacheCapacity && diskCachePath != "" {
+	//	var err error
+	//	fs.diskCache, err = NewDiskCache(
+	//		diskCachePath,
+	//		diskCacheCapacity,
+	//		fs.perfCounterSets,
+	//	)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	logutil.Info("fileservice: disk cache initialized",
+	//		zap.Any("fs-name", fs.name),
+	//		zap.Any("capacity", diskCacheCapacity),
+	//		zap.Any("path", diskCachePath),
+	//	)
+	//}
+
+	return fs, nil
 }
 
 func (m *MemoryFS) Name() string {
@@ -160,11 +189,23 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
+func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+	}
+
+	if m.diskCache != nil {
+		if err := m.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = m.diskCache.Update(ctx, vector, m.asyncUpdate)
+		}()
 	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
