@@ -38,7 +38,7 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
 	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB, nil)
+	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB, -1, "", nil)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
