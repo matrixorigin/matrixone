@@ -145,22 +145,7 @@ func (blk *block) BatchDedup(
 		precommit,
 		keys,
 		rowmask,
-		blk.dedupClosure)
-}
-
-func (blk *block) dedupClosure(
-	vec containers.Vector,
-	txn txnif.TxnReader,
-	isCommitting bool,
-	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, bool, int) error {
-	return func(v any, _ bool, _ int) (err error) {
-		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(vec.GetType(), v)
-			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-		}
-		return nil
-	}
+		dedupNABlkClosure)
 }
 
 func (blk *block) GetValue(

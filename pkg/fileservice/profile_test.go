@@ -26,7 +26,7 @@ func TestProfile(t *testing.T) {
 	defer stop()
 	testFileService(t, func(name string) FileService {
 		dir := t.TempDir()
-		fs, err := NewLocalFS(name, dir, -1, nil)
+		fs, err := NewLocalFS(name, dir, -1, -1, "", nil)
 		assert.Nil(t, err)
 		return fs
 	})

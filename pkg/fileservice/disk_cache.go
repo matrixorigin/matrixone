@@ -19,14 +19,16 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"go.uber.org/zap"
 )
 
 type DiskCache struct {
@@ -40,13 +42,10 @@ type DiskCache struct {
 		m map[string]chan struct{}
 	}
 
-	stats struct {
+	evictState struct {
 		sync.Mutex
-		sizes     map[string]int64
-		totalSize int64
+		pending bool
 	}
-
-	jobs chan func()
 }
 
 func NewDiskCache(
@@ -62,16 +61,9 @@ func NewDiskCache(
 		capacity:        capacity,
 		path:            path,
 		perfCounterSets: perfCounterSets,
-		jobs:            make(chan func(), 128),
 	}
 	ret.settingContent.m = make(map[string]chan struct{})
-	ret.stats.sizes = make(map[string]int64)
-	go func() {
-		for job := range ret.jobs {
-			job()
-		}
-	}()
-	go ret.collect()
+	ret.triggerEvict(context.TODO())
 	return ret, nil
 }
 
@@ -98,8 +90,13 @@ func (d *DiskCache) Read(
 		}, d.perfCounterSets...)
 	}()
 
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	contentOK := false
-	contentPath := d.contentPath(vector.FilePath)
+	contentPath := d.fullDataFilePath(path.File)
 	contentFile, err := os.Open(contentPath)
 	if err == nil {
 		numOpen++
@@ -125,7 +122,7 @@ func (d *DiskCache) Read(
 			file = contentFile
 		} else {
 			// open link file
-			linkPath := d.entryLinkPath(vector, entry)
+			linkPath := d.entryLinkPath(path.File, entry)
 			linkFile, err := os.Open(linkPath)
 			if err == nil {
 				file = linkFile
@@ -195,8 +192,13 @@ func (d *DiskCache) Update(
 		})
 	}()
 
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	contentOK := false
-	contentPath := d.contentPath(vector.FilePath)
+	contentPath := d.fullDataFilePath(path.File)
 	if _, ok := d.fileExists.Load(contentPath); ok {
 		contentOK = true
 	} else {
@@ -218,7 +220,7 @@ func (d *DiskCache) Update(
 			continue
 		}
 
-		linkPath := d.entryLinkPath(vector, entry)
+		linkPath := d.entryLinkPath(path.File, entry)
 		if _, ok := d.fileExists.Load(linkPath); ok {
 			// already exists
 			continue
@@ -238,7 +240,7 @@ func (d *DiskCache) Update(
 
 		} else {
 			// write data
-			dataPath := d.entryDataPath(vector, entry)
+			dataPath := d.dataFilePath(path.File)
 			err = os.MkdirAll(filepath.Dir(dataPath), 0755)
 			if err != nil {
 				numError++
@@ -255,12 +257,6 @@ func (d *DiskCache) Update(
 				numError++
 				continue // ignore error
 			}
-			info, err := file.Stat()
-			if err != nil {
-				numError++
-				continue // ignore error
-			}
-			size := info.Size()
 			if err := file.Close(); err != nil {
 				numError++
 				continue // ignore error
@@ -269,24 +265,12 @@ func (d *DiskCache) Update(
 				numError++
 				continue // ignore error
 			}
-
-			d.jobs <- func() {
-				d.stats.Lock()
-				prev, ok := d.stats.sizes[dataPath]
-				if ok {
-					d.stats.totalSize -= prev
-				}
-				d.stats.sizes[dataPath] = size
-				d.stats.totalSize += size
-				d.evict()
-				d.stats.Unlock()
-			}
-
+			d.triggerEvict(ctx)
 			linkTarget = dataPath
 		}
 
 		// link
-		if err := os.Link(linkTarget, linkPath); err != nil {
+		if err := os.Symlink(filepath.Base(linkTarget), linkPath); err != nil {
 			if os.IsExist(err) {
 				// ok
 			} else {
@@ -304,11 +288,27 @@ func (d *DiskCache) Flush() {
 	//TODO
 }
 
-func (d *DiskCache) collect() {
-	d.stats.Lock()
-	defer d.stats.Unlock()
+func (d *DiskCache) triggerEvict(ctx context.Context) {
+	d.evictState.Lock()
+	defer d.evictState.Unlock()
+	if d.evictState.pending {
+		return
+	}
+	d.evictState.pending = true
+	time.AfterFunc(time.Minute*7, func() {
+		defer func() {
+			d.evictState.Lock()
+			d.evictState.pending = false
+			d.evictState.Unlock()
+		}()
+		d.evict(ctx)
+	})
+}
 
-	// collect
+func (d *DiskCache) evict(ctx context.Context) {
+	paths := make(map[string]int64)
+	var sumSize int64
+
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return nil //ignore
@@ -324,36 +324,43 @@ func (d *DiskCache) collect() {
 			return nil // ignore
 		}
 		size := info.Size()
-		prev, ok := d.stats.sizes[path]
-		if ok {
-			d.stats.totalSize -= prev
+		if _, ok := paths[path]; !ok {
+			paths[path] = size
+			sumSize += size
 		}
-		d.stats.sizes[path] = size
-		d.stats.totalSize += size
 		return nil
 	})
 
-	d.evict()
-}
-
-func (d *DiskCache) evict() {
-	// must be called with d.stats locked
-	for path, size := range d.stats.sizes {
-		if d.stats.totalSize == 0 || d.stats.totalSize < d.capacity {
+	var numDeleted int64
+	var bytesDeleted int64
+	defer func() {
+		if numDeleted > 0 {
+			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+				set.FileService.Cache.Disk.Evict.Add(numDeleted)
+			}, d.perfCounterSets...)
+			logutil.Info("disk info eviction",
+				zap.Any("files", numDeleted),
+				zap.Any("bytes", bytesDeleted),
+			)
+		}
+	}()
+	for path, size := range paths {
+		if sumSize <= d.capacity {
 			break
 		}
 		if err := os.Remove(path); err != nil {
 			continue // ignore
 		}
-		delete(d.stats.sizes, path)
-		d.stats.totalSize -= size
+		sumSize -= size
+		numDeleted++
+		bytesDeleted += size
 	}
 }
 
 var _ FileContentCache = new(DiskCache)
 
 func (d *DiskCache) GetFileContent(ctx context.Context, filePath string, offset int64) (r io.ReadCloser, err error) {
-	contentPath := d.contentPath(filePath)
+	contentPath := d.fullDataFilePath(filePath)
 	f, err := os.Open(contentPath)
 	if err != nil {
 		return nil, err
@@ -378,7 +385,7 @@ func (d *DiskCache) SetFileContent(
 	readFunc func(context.Context, *IOVector) error,
 ) (err error) {
 
-	contentPath := d.contentPath(filePath)
+	contentPath := d.fullDataFilePath(filePath)
 
 	_, err = os.Stat(contentPath)
 	if err == nil {
@@ -422,7 +429,7 @@ func (d *DiskCache) SetFileContent(
 	if err := readFunc(ctx, &vec); err != nil {
 		return err
 	}
-	if err := done(); err != nil {
+	if err := done(ctx); err != nil {
 		return err
 	}
 
@@ -433,8 +440,8 @@ func (d *DiskCache) SetFileContent(
 	return nil
 }
 
-func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done func() error, closeFunc func() error, err error) {
-	contentPath := d.contentPath(filePath)
+func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done func(context.Context) error, closeFunc func() error, err error) {
+	contentPath := d.fullDataFilePath(filePath)
 	tmpPath := contentPath + fmt.Sprintf(".%d.tmp", rand.Int63())
 	err = os.MkdirAll(filepath.Dir(tmpPath), 0755)
 	if err != nil {
@@ -445,61 +452,43 @@ func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done fun
 		return nil, nil, nil, err
 	}
 	var doneOnce sync.Once
-	return f, func() (err error) {
+	return f, func(ctx context.Context) (err error) {
 		doneOnce.Do(func() {
-			var info fs.FileInfo
-			info, err = f.Stat()
-			if err != nil {
-				return
-			}
-			size := info.Size()
 			if err = f.Close(); err != nil {
 				return
 			}
 			if err = os.Rename(tmpPath, contentPath); err != nil {
 				return
 			}
-
-			d.jobs <- func() {
-				d.stats.Lock()
-				prev, ok := d.stats.sizes[contentPath]
-				if ok {
-					d.stats.totalSize -= prev
-				}
-				d.stats.sizes[contentPath] = size
-				d.stats.totalSize += size
-				d.evict()
-				d.stats.Unlock()
-			}
-
+			d.triggerEvict(ctx)
 		})
 		return
 	}, f.Close, nil
 }
 
-func (d *DiskCache) entryLinkPath(vector *IOVector, entry IOEntry) string {
+func (d *DiskCache) entryLinkPath(path string, entry IOEntry) string {
 	if entry.Size < 0 {
 		panic("should not cache size -1 entry")
 	}
 	return filepath.Join(
 		d.path,
-		toOSPath(vector.FilePath),
+		toOSPath(path),
 		fmt.Sprintf("%d-%d", entry.Offset, entry.Size),
 	)
 }
 
-func (d *DiskCache) entryDataPath(vector *IOVector, entry IOEntry) string {
+func (d *DiskCache) dataFilePath(path string) string {
 	return filepath.Join(
 		d.path,
-		toOSPath(vector.FilePath),
+		toOSPath(path),
 		"data.mofscache",
 	)
 }
 
-func (d *DiskCache) contentPath(filePath string) string {
+func (d *DiskCache) fullDataFilePath(path string) string {
 	return filepath.Join(
 		d.path,
-		toOSPath(filePath),
+		toOSPath(path),
 		"full-data.mofscache",
 	)
 }

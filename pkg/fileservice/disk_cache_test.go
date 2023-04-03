@@ -243,7 +243,7 @@ func TestDiskCacheEviction(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 1, nil)
+	cache, err := NewDiskCache(dir, 3, nil)
 	assert.Nil(t, err)
 
 	n := 128
@@ -267,7 +267,6 @@ func TestDiskCacheEviction(t *testing.T) {
 
 	assert.Equal(t, int64(128), counterSet.FileService.Cache.Disk.SetFileContent.Load())
 
-	cache.stats.Lock()
-	cache.evict()
-	cache.stats.Unlock()
+	cache.evict(ctx)
+	assert.True(t, counterSet.FileService.Cache.Disk.Evict.Load() > 0)
 }
