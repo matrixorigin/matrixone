@@ -82,6 +82,7 @@ type TxnManager struct {
 	IDMap           map[string]txnif.AsyncTxn
 	IdAlloc         *common.TxnIDAllocator
 	TsAlloc         *types.TsAlloctor
+	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
@@ -105,12 +106,18 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		CommitListener:  newBatchCommitListener(),
 		wg:              sync.WaitGroup{},
 	}
+	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
+}
+
+func (mgr *TxnManager) initMaxCommittedTS() {
+	now := mgr.Now()
+	mgr.MaxCommittedTS.Store(&now)
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -146,6 +153,25 @@ func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
 
 // StartTxn starts a local transaction initiated by DN
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txnId := mgr.IdAlloc.Alloc()
+	startTs := *mgr.MaxCommittedTS.Load()
+
+	store := mgr.TxnStoreFactory()
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
+	store.BindTxn(txn)
+	mgr.IDMap[string(txnId)] = txn
+	return
+}
+
+// StartTxn starts a local transaction initiated by DN
+func (mgr *TxnManager) StartTxnWithNow(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
@@ -374,11 +400,15 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
+	mgr.OnCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
 }
-
+func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
+	commitTS := txn.GetCommitTS()
+	mgr.MaxCommittedTS.Store(&commitTS)
+}
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
 	var isAbort bool

@@ -70,10 +70,11 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,8 +120,12 @@ func HandleSyncLogTailReq(
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
+		if elapsed := time.Since(now); elapsed > 5*time.Second {
+			logutil.Infof("[Logtail] long pull cost %v, %v: %+v, %v ", elapsed, canRetry, req, err)
+		}
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
@@ -248,9 +253,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -293,9 +298,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			}
 		}
 	}
@@ -359,17 +364,20 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 // this is used to collect ONE ROW of db or table change
-func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
+func catalogEntry2Batch[
+	T *catalog.DBEntry | *catalog.TableEntry,
+	N *catalog.MVCCNode[*catalog.EmptyMVCCNode] | *catalog.MVCCNode[*catalog.TableMVCCNode]](
 	dstBatch *containers.Batch,
 	e T,
+	node N,
 	schema *catalog.Schema,
-	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
+	fillDataRow func(e T, node N, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
 	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
+		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
@@ -647,7 +655,7 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, readerMetas[i][idx], readers[i])
+			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
 			if err != nil {
 				return
 			}

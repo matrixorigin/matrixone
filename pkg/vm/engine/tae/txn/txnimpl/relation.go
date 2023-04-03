@@ -85,7 +85,7 @@ func (it *txnRelationIt) Next() {
 			entry.RUnlock()
 			continue
 		}
-		valid, err = entry.IsVisible(it.txnDB.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -242,7 +242,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 				return err
 			}
 		}
-		vec := containers.MakeVector(def.Type, def.Nullable())
+		vec := containers.MakeVector(def.Type)
 		vec.Append(colVal)
 		bat.AddVector(def.Name, vec)
 	}

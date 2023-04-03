@@ -124,12 +124,11 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
-	nullables := schema.AllNullables()
 	for i, attr := range attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
+		bat.AddVector(attr, containers.MakeVector(typs[i]))
 	}
 	return bat
 }
