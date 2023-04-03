@@ -3,11 +3,11 @@ create table t1(a binary(2));
 insert into t1 values(null);
 select * from t1;
 a
-NULL
+null
 insert into t1 values("时");
 select * from t1;
 a
-NULL
+null
 æ¶
 insert into t1 values(rpad("1", 500, "1"));
 internal error: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BINARY type. Src length 500 is larger than Dest length 2
@@ -21,8 +21,8 @@ a
 insert into t1 values("65");
 select * from t1 where a > '6 ';
 a
-65
 66
+65
 select * from t1 where a = '6';
 a
 select * from t1 where a = '6 ';
@@ -33,5 +33,1303 @@ SELECT CAST(TIMESTAMP "2022-01-22 21:45:33" AS BINARY(6));
 cast(timestamp(2022-01-22 21:45:33) as binary(6))
 2022-0
 select cast('12345' as binary);
-case(12345 as binary)
+cast(12345 as binary)
 12345
+DROP DATABASE IF EXISTS test;
+create database test;
+USE test;
+DROP TABLE IF EXISTS binary01;
+CREATE TABLE binary01(a binary);
+INSERT INTO binary01 VALUES(63872143291);
+Data truncation: data truncated: data type Signed,  truncated for binary/varbinary
+INSERT INTO binary01 VALUES(2784329432432);
+Data truncation: data truncated: data type Signed,  truncated for binary/varbinary
+DROP TABLE binary01;
+DROP TABLE IF EXISTS length01;
+CREATE TABLE length01(col1 binary(20));
+INSERT into length01 VALUES('12');
+INSERT into length01 VALUES('372814');
+INSERT into length01 VALUES('&***');
+SELECT * FROM length01;
+col1
+12
+372814
+&***
+DROP TABLE length01;
+DROP TABLE IF EXISTS length02;
+CREATE TABLE length02(col1 binary(255));
+INSERT into length02 VALUES('ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt');
+internal error: Can't cast 'tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt...' from VARCHAR type to BINARY type. Src length 323 is larger than Dest length 255
+INSERT into length02 VALUES('dehwjqbewbvhrbewrhebwjverguyw432843iuhfkuejwnfjewbhvbewh4gh3jbvrew vnbew rjjrewkfrhjewhrefrewfrwrewf432432r32r432r43rewvrewrfewfrewf432f43fewf4324r3r3rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr');
+SELECT * from length02;
+col1
+dehwjqbewbvhrbewrhebwjverguyw432843iuhfkuejwnfjewbhvbewh4gh3jbvrew vnbew rjjrewkfrhjewhrefrewfrwrewf432432r32r432r43rewvrewrfewfrewf432f43fewf4324r3r3rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+DROP TABLE length02;
+DROP TABLE IF EXISTS length03;
+CREATE TABLE length03 (col1 binary(4));
+INSERT INTO length03 VALUES ('a');
+INSERT INTO length03 VALUES ('a ');
+INSERT INTO length03 VALUES ('b');
+INSERT INTO length03 VALUES ('b ');
+INSERT INTO length03 VALUES (' abc');
+INSERT INTO length03 VALUES (NULL);
+INSERT INTO length03 VALUES (123);
+INSERT INTO length03 VALUES (-90);
+INSERT INTO length03 VALUES (0);
+INSERT INTO length03 VALUES ('8**');
+INSERT INTO length03 VALUES (' ');
+SELECT * FROM length03;
+col1
+a
+a
+b
+b
+ abc
+null
+123
+-90
+0
+8**
+
+INSERT INTO length03 VALUES ('abcde');
+internal error: Can't cast 'abcde' from VARCHAR type to BINARY type. Src length 5 is larger than Dest length 4
+INSERT INTO length03 VALUES ('-902183');
+internal error: Can't cast '-902183' from VARCHAR type to BINARY type. Src length 7 is larger than Dest length 4
+INSERT INTO length03 VALUES ('123abc**');
+internal error: Can't cast '123abc**' from VARCHAR type to BINARY type. Src length 8 is larger than Dest length 4
+SELECT * FROM length03 ORDER BY col1;
+col1
+null
+
+ abc
+-90
+0
+123
+8**
+a
+a
+b
+b
+SELECT * FROM length03 ORDER BY col1 DESC;
+col1
+b
+b
+a
+a
+8**
+123
+0
+-90
+ abc
+
+null
+SELECT MAX(col1) FROM length03;
+max(col1)
+b
+SELECT MIN(col1) FROM length03;
+min(col1)
+
+SELECT COUNT(col1) FROM length03;
+count(col1)
+10
+SELECT BIT_AND(col1) FROM length03;
+bit_and(col1)
+
+SELECT bit_or(col1) FROM length03;
+bit_or(col1)
+{{c
+SELECT bit_xor(col1) FROM length03;
+bit_xor(col1)
+@Kc
+DROP TABLE length03;
+DROP TABLE IF EXISTS index01;
+CREATE TABLE index01(col1 binary ,col2 binary(100),UNIQUE INDEX(col2));
+INSERT INTO index01 VALUES('1','213dew2321');
+INSERT INTO index01 VALUES('a','&^*32f3r2');
+INSERT INTO index01 VALUES('%','--0-32=');
+show INDEX FROM index01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index01    0    col2    1    col2    A    0    NULL    NULL    YES                YES    NULL
+DROP TABLE index01;
+DROP TABLE IF EXISTS view00;
+DROP TABLE IF EXISTS view01;
+CREATE TABLE view00(a binary(10));
+INSERT INTO view00 VALUES(214213);
+INSERT INTO view00 VALUES(-329184021);
+CREATE TABLE view01(a binary(30));
+INSERT INTO view01 VALUES (352183902148392104);
+CREATE VIEW v0 AS SELECT view01.a, view01.a AS b FROM view00 LEFT JOIN view01 USING(a);
+show CREATE v0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 14 near " v0;";
+show CREATE v0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 14 near " v0;";
+DROP view v0;
+show CREATE v0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 14 near " v0;";
+DROP TABLE view00;
+DROP TABLE view01;
+DROP TABLE IF EXISTS cte01;
+CREATE TABLE cte01(col1 int, col2 binary(10),col3 varbinary(20));
+INSERT INTO cte01 VALUES(1,03921094321,'32432121421');
+INSERT INTO cte01 VALUES(2,000000,'&&&*(*');
+INSERT INTO cte01 VALUES(1,'$%^&',38921432);
+SELECT * FROM cte01;
+col1    col2    col3
+1    3921094321    32432121421
+2    0             &&&*(*
+1    $%^&          38921432
+WITH cte_1 AS(SELECT col1,col2 FROM cte01 WHERE col1 = 1) SELECT col2 FROM cte_1 WHERE col2 = 0x33393231303934333231;
+col2
+3921094321
+WITH cte_2 AS(SELECT col1,col3 FROM cte01 WHERE col1 = 2) SELECT col3 FROM cte_2 WHERE col3 = 0x2626262A282A;
+col3
+&&&*(*
+DROP TABLE cte01;
+DROP TABLE IF EXISTS bit01;
+CREATE TABLE bit01(id char(1), b binary(10));
+INSERT INTO bit01 VALUES('a', '111');
+INSERT INTO bit01 VALUES('a', '110');
+INSERT INTO bit01 VALUES('a', '143');
+INSERT INTO bit01 VALUES('a', '000');
+INSERT INTO bit01 VALUES('b', '001');
+INSERT INTO bit01 VALUES('b', '011');
+INSERT INTO bit01 VALUES('c', '010');
+INSERT INTO bit01 VALUES('d', NULL);
+SELECT * FROM bit01;
+id    b
+a    111
+a    110
+a    143
+a    000
+b    001
+b    011
+c    010
+d    null
+SELECT id, BIT_AND(b) FROM bit01 GROUP by id;
+id    bit_and(b)
+a    000
+b    001
+c    010
+d    null
+SELECT id, bit_or(b) FROM Bit01 GROUP by id;
+id    bit_or(b)
+a    153
+b    011
+c    010
+d    null
+SELECT id, bit_xor(b) FROM bit01 GROUP by id;
+id    bit_xor(b)
+a    
+b     
+c    010
+d    null
+SELECT * FROM bit01 ORDER BY b DESC;
+id    b
+a    143
+a    111
+a    110
+b    011
+c    010
+b    001
+a    000
+d    null
+SELECT * FROM bit01 ORDER BY b;
+id    b
+d    null
+a    000
+b    001
+c    010
+b    011
+a    110
+a    111
+a    143
+SELECT id, any_value(b) FROM bit01 group by id;
+id    any_value(b)
+a    111
+b    001
+c    010
+d    null
+SELECT id, group_concat(id,b) FROM bit01 group by id;
+id    group_concat(id, b, ,)
+a    a111       ,a110       ,a143       ,a000
+b    b001       ,b011
+c    c010
+d
+SELECT hex(b) FROM bit01;
+hex(b)
+31313100000000000000
+31313000000000000000
+31343300000000000000
+30303000000000000000
+30303100000000000000
+30313100000000000000
+30313000000000000000
+
+SELECT hex(b) FROM bit01 WHERE hex(b) = 31313100000000000000;
+internal error: panic runtime error: index out of range [0] with length 0:
+runtime.goPanicIndex
+	/usr/local/go/go/src/runtime/panic.go:113
+github.com/matrixorigin/matrixone/pkg/container/types.Parse128
+	/data/weilu/matrixone/pkg/container/types/decimal.go:1494
+github.com/matrixorigin/matrixone/pkg/container/types.ParseDecimal128
+	/data/weilu/matrixone/pkg/container/types/decimal.go:1615
+github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator.strToDecimal128
+	/data/weilu/matrixone/pkg/sql/plan/function/operator/cast2.go:3375
+github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator.strTypeToOthers
+	/data/weilu/matrixone/pkg/sql/plan/function/operator/cast2.go:1376
+github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator.NewCast
+	/data/weilu/matrixone/pkg/sql/plan/function/operator/cast2.go:393
+github.com/matrixorigin/matrixone/pkg/sql/colexec.evalFunction
+	/data/weilu/matrixone/pkg/sql/colexec/expr_eval.go:522
+github.com/matrixorigin/matrixone/pkg/sql/colexec.EvalExpr
+	/data/weilu/matrixone/pkg/sql/colexec/expr_eval.go:265
+github.com/matrixorigin/matrixone/pkg/sql/colexec.EvalExpr
+	/data/weilu/matrixone/pkg/sql/colexec/expr_eval.go:255
+github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict.Call
+	/data/weilu/matrixone/pkg/sql/colexec/restrict/restrict.go:50
+github.com/matrixorigin/matrixone/pkg/vm.Run
+	/data/weilu/matrixone/pkg/vm/vm.go:61
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/data/weilu/matrixone/pkg/vm/pipeline/pipeline.go:92
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/data/weilu/matrixone/pkg/sql/compile/scope.go:72
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun.func1
+	/data/weilu/matrixone/pkg/sql/compile/scope.go:92
+runtime.goexit
+	/usr/local/go/go/src/runtime/asm_amd64.s:1594
+SELECT * FROM bit01 WHERE CAST(id AS binary) = 0x61;
+id    b
+a    111
+a    110
+a    143
+a    000
+SELECT * FROM bit01 WHERE CAST(id AS binary) != 0x61;
+id    b
+b    001
+b    011
+c    010
+d    null
+SELECT * FROM bit01 WHERE b BETWEEN 0x30303000000000000000 AND 0x30313100000000000000;
+id    b
+a    000
+b    001
+b    011
+c    010
+SELECT * FROM bit01 WHERE b NOT BETWEEN 0x30303000000000000000 AND 0x30313100000000000000;
+id    b
+a    111
+a    110
+a    143
+SELECT hex(b) FROM bit01 WHERE b IN(0x30303000000000000000);
+hex(b)
+30303000000000000000
+SELECT * FROM bit01 WHERE b NOT IN(0x30303000000000000000);
+id    b
+a    111
+a    110
+a    143
+b    001
+b    011
+c    010
+SELECT * FROM bit01 WHERE b > 0x31313000000000000000;
+id    b
+a    111
+a    143
+SELECT hex(b) FROM bit01 WHERE b >= 0x31313000000000000000;
+hex(b)
+31313100000000000000
+31313000000000000000
+31343300000000000000
+SELECT * FROM bit01 WHERE b < 0x31303000000000000000;
+id    b
+a    000
+b    001
+b    011
+c    010
+SELECT hex(b) FROM bit01 WHERE b <= 0x31303000000000000000;
+hex(b)
+30303000000000000000
+30303100000000000000
+30313100000000000000
+30313000000000000000
+SELECT * FROM bit01 WHERE b is NULL;
+id    b
+d    null
+SELECT * FROM bit01 WHERE b is not NULL;
+id    b
+a    111
+a    110
+a    143
+a    000
+b    001
+b    011
+c    010
+SELECT COALESCE(NULL,NULL,b) FROM bit01;
+coalesce(null, null, b)
+111
+110
+143
+000
+001
+011
+010
+null
+SELECT hex(b) FROM bit01 WHERE id = (SELECT id FROM bit01 WHERE b = 0x31313100000000000000);
+hex(b)
+31313100000000000000
+31313000000000000000
+31343300000000000000
+30303000000000000000
+DROP TABLE bit01;
+DROP TABLE IF EXISTS t3;
+CREATE TABLE t3(id char(1), b binary(10));
+INSERT INTO t3 SELECT * FROM bit01;
+SQL parser error: table "bit01" does not exist
+SELECT * FROM t3;
+id    b
+UPDATE bit01 SET b = 101 WHERE id = 'c';
+no such table test.bit01
+DELETE FROM bit01 WHERE id = 'c';
+no such table test.bit01
+DROP TABLE t3;
+SELECT CAST("A" AS binary) = "a";
+cast(A as binary) = a
+false
+SELECT CAST("z" AS binary);
+cast(z as binary)
+z
+SELECT CAST(12 AS binary);
+cast(12 as binary)
+12
+SELECT CAST(NULL AS binary);
+cast(null as binary)
+null
+SELECT CAST("*" AS binary(30));
+cast(* as binary(30))
+*
+SELECT CAST(0101010 AS binary);
+cast(101010 as binary)
+101010
+SELECT CAST(-10 AS binary(20));
+cast(-10 as binary(20))
+-10
+SELECT CAST(0 AS binary);
+cast(0 as binary)
+0
+SELECT CAST('9' AS binary);
+cast(9 as binary)
+9
+SELECT CAST(9 AS binary);
+cast(9 as binary)
+9
+SELECT CAST(-9090.999 AS binary);
+cast(-9090.999 as binary)
+-9090.999
+SELECT CAST('1232142' AS binary(10));
+cast(1232142 as binary(10))
+1232142
+SELECT CAST(27832.2213213211321432 AS binary);
+cast(27832.2213213211321432 as binary)
+27832.2213213211321432
+SELECT CAST(-38921.3423 AS binary);
+cast(-38921.3423 as binary)
+-38921.3423
+SELECT CAST(' ' AS binary(10));
+cast(  as binary(10))
+
+SELECT CAST('' AS binary(10));
+cast( as binary(10))
+
+SELECT CAST(FALSE AS binary);
+cast(false as binary)
+0
+SELECT CAST(TRUE AS binary(10));
+cast(true as binary(10))
+1
+SELECT CAST(NULL AS binary(4));
+cast(null as binary(4))
+null
+SELECT CAST('@#$$%%' AS binary);
+cast(@#$$%% as binary)
+@#$$%%
+SELECT CAST('26713hajncjdncekfwr' AS binary);
+cast(26713hajncjdncekfwr as binary)
+26713hajncjdncekfwr
+SELECT CAST('-3902=3-21-3' AS binary);
+cast(-3902=3-21-3 as binary)
+-3902=3-21-3
+SELECT CAST(2913812 AS binary(1));
+cast(2913812 as binary(1))
+2
+SELECT CAST(100 AS binary(1));
+cast(100 as binary(1))
+1
+SELECT CAST('3672817438921' AS binary(2));
+cast(3672817438921 as binary(2))
+36
+SELECT CAST(37218738243.32142 AS binary(100));
+cast(37218738243.32142 as binary(100))
+37218738243.32142
+SELECT CAST('数据库' AS binary(10));
+cast(数据库 as binary(10))
+æ°æ®åº
+SELECT CAST('数据库mo&*' AS binary);
+cast(数据库mo&* as binary)
+æ°æ®åºmo&*
+DROP TABLE IF EXISTS cast01;
+CREATE TABLE cast01(a binary(10), b CHAR, c bigint);
+INSERT INTO cast01 VALUES('3214243','0', -9);
+INSERT INTO cast01 VALUES('-1212','1', 8989);
+INSERT INTO cast01 VALUES(NULL, 'e', 45318424324324);
+SELECT * FROM cast01;
+a    b    c
+3214243       0    -9
+-1212         1    8989
+null    e    45318424324324
+SELECT hex(a),hex(b) FROM cast01;
+hex(a)    hex(b)
+33323134323433000000    30
+2d313231320000000000    31
+    65
+SELECT CAST(b AS binary) FROM cast01;
+cast(b as binary)
+0
+1
+e
+SELECT CAST(c AS binary) FROM cast01;
+cast(c as binary)
+-9
+8989
+45318424324324
+SELECT * FROM cast01 WHERE a != '1212';
+a    b    c
+3214243       0    -9
+-1212         1    8989
+SELECT * FROM cast01 WHERE a = '-1212';
+a    b    c
+SELECT * FROM cast01 WHERE a is NULL;
+a    b    c
+null    e    45318424324324
+SELECT * FROM cast01 WHERE a is NOT NULL;
+a    b    c
+3214243       0    -9
+-1212         1    8989
+DROP TABLE IF EXISTS cast02;
+CREATE TABLE cast02(col1 binary(10), col2 binary(20), col3 binary(30));
+INSERT into cast02 SELECT * from cast01;
+SELECT * from cast02;
+col1    col2    col3
+3214243       0                       -9
+-1212         1                       8989
+null    e                       45318424324324
+DROP TABLE cast01;
+DROP TABLE cast02;
+DROP TABLE IF EXISTS cast03;
+CREATE TABLE cast03(a int NOT NULL PRIMARY KEY, b float, c double, d VARCHAR(30),e decimal(20,10));
+INSERT INTO cast03 VALUES(1, 3214321.213, -8392.3,'woshishei',123456789.12356);
+INSERT INTO cast03 VALUES(2, 0, 38293.3332121,'12345@',-12.365);
+INSERT INTO cast03 VALUES(3, -392.1, 8390232,'3***',0.456984166622488655);
+DROP table IF EXISTS cast04;
+CREATE TABLE cast04 (col1 binary(10), col2 varbinary(20), col3 varbinary(20),col4 binary(30),col5 varbinary(30));
+INSERT into cast04 SELECT * from cast03;
+drop table cast04;
+SELECT CAST(a AS binary) FROM cast03;
+cast(a as binary)
+1
+2
+3
+SELECT CAST(b AS binary) FROM cast03;
+[unknown result because it is related to issue#8719]
+SELECT CAST(c as binary) FROM cast03;
+cast(c as binary)
+-8.3923E+03
+38293.3332121
+8390232
+SELECT CAST(e as binary) FROM cast03;
+cast(e as binary)
+123456789.1235600000
+-12.3650000000
+0.4569841666
+SELECT CAST(d AS binary) FROM cast03;
+cast(d as binary)
+woshishei
+12345@
+3***
+DROP TABLE cast03;
+SELECT CAST(DATE "2023-01-13" AS binary(10));
+cast(date(2023-01-13) as binary(10))
+2023-01-13
+SELECT CAST('08:00:00' AS binary(10));
+cast(08:00:00 as binary(10))
+08:00:00
+SELECT CAST('2019-03-05 01:53:55.63' AS binary(200));
+cast(2019-03-05 01:53:55.63 as binary(200))
+2019-03-05 01:53:55.63
+SELECT CAST(TIMESTAMP "2004-01-22 21:45:33" AS BINARY(4));
+cast(timestamp(2004-01-22 21:45:33) as binary(4))
+2004
+DROP TABLE IF EXISTS time01;
+DROP TABLE IF EXISTS time02;
+CREATE TABLE time01(col1 date,col2 datetime,col3 TIMESTAMP,col4 TIME);
+INSERT INTO time01 VALUES("2020-01-01","2019-01-01 00:00:00","1999-01-01 00:00:01","08:00:00");
+INSERT INTO time01 VALUES("2022-01-01","1996-01-01 23:23:23","2023-09-12 20:45:06","00:00:00");
+INSERT INTO time01 VALUES("1997-01-13",NULL,"2024-01-01 00:00:01",NULL);
+CREATE TABLE time02(col1 binary,col2 binary(10),col3 binary(2),col4 binary(10));
+INSERT INTO time02 SELECT * FROM time01;
+Data truncation: data truncated: data type Date, truncated for binary/varbinary
+DROP TABLE time01;
+DROP TABLE IF EXISTS groupby01;
+CREATE TABLE groupby01(col1 tinyint unsigned, col2 binary(10) NOT NULL);
+INSERT INTO groupby01 VALUES(0, '2312432112');
+INSERT INTO groupby01 VALUES(20, '321313');
+INSERT INTO groupby01 VALUES(23, '2312432112');
+INSERT INTO groupby01 VALUES(255, '321313');
+SELECT col2,bit_and(col1) FROM groupby01 GROUP BY col2;
+col2    bit_and(col1)
+2312432112    0
+321313        20
+SELECT col2,bit_xor(col1) FROM groupby01 GROUP BY col2;
+col2    bit_xor(col1)
+2312432112    23
+321313        235
+SELECT col2,bit_or(col1) FROM groupby01 GROUP BY col2;
+col2    bit_or(col1)
+2312432112    23
+321313        255
+DROP TABLE groupby01;
+DROP table IF EXISTS external01;
+CREATE external table external01(clo1 binary,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+SELECT * FROM external01;
+clo1    clo2
+drop table external01;
+DROP TABLE IF EXISTS temporary01;
+CREATE TEMPORARY table temporary01(col1 binary, col2 float, col3 double);
+INSERT into temporary01 values(NULL,38232424.3242,90090);
+INSERT into temporary01 values('123',NULL,'3829043294.3242432');
+internal error: Can't cast '123' from VARCHAR type to BINARY type. Src length 3 is larger than Dest length 1
+INSERT into temporary01 values('0',0.123233333333,7894646541.4547845412);
+SELECT CAST(col1 AS binary) FROM temporary01;
+[unknown result because it is related to issue#8719]
+SELECT CAST(col2 AS binary) FROM temporary01;
+[unknown result because it is related to issue#8719]
+SELECT CAST(col3 AS binary) FROM temporary01;
+[unknown result because it is related to issue#8719]
+drop table temporary01;
+DROP TABLE IF EXISTS join01;
+DROP TABLE IF EXISTS join02;
+CREATE TABLE join01(col1 binary,col2 varbinary(65535),col3 bigint unsigned);
+INSERT INTO join01 VALUES('a','7894531e234r323r2844352r432r4',78965612184651);
+INSERT INTO join01 VALUES('b',NULL,5463137456315300);
+INSERT INTO join01 VALUES('c',0121313131,0);
+SELECT * FROM join01;
+col1    col2    col3
+a    7894531e234r323r2844352r432r4    78965612184651
+b    null    5463137456315300
+c    121313131    0
+CREATE TABLE join02(col1 binary,col2 varbinary(65535));
+INSERT INTO join02 VALUES('a','7894531e234r323r2844352r432r4');
+INSERT INTO join02 VALUES('b',NULL);
+INSERT INTO join02 VALUES('d',012131);
+SELECT * FROM join02;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+d    12131
+SELECT join01.col1,join02.col2 FROM join01,join02 WHERE join01.col1 = join02.col1;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+SELECT join01.col1,join02.col2 FROM join01 left join join02 on join01.col1 = join02.col1;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+c    null
+SELECT join01.col1,join02.col2 FROM join01 right join join02 on join01.col1 != join02.col1;
+col1    col2
+b    7894531e234r323r2844352r432r4
+c    7894531e234r323r2844352r432r4
+a    null
+c    null
+a    12131
+b    12131
+c    12131
+SELECT join01.col1,join02.col2 FROM join01 inner join join02 on join01.col1 = join02.col1;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+DROP TABLE join01;
+DROP TABLE join02;
+DROP table IF EXISTS built01;
+CREATE TABLE built01 (col1 binary,col2 varbinary(10),col3 VARCHAR(20));
+INSERT into built01 VALUES('a',85555555,'372r4973892ufd3jf432');
+INSERT into built01 VALUES('b',NULL,'3e8729fj32i4f3f435');
+INSERT into built01 VALUES('c',0,null);
+INSERT into built01 VALUES('d',   73281482,'326784921-3kfi');
+INSERT into built01 VALUES('e', 3782949432 ,' ');
+SELECT bit_length(col2) FROM built01;
+bit_length(col2)
+64
+null
+8
+64
+80
+SELECT bit_length(col1) FROM built01;
+bit_length(col1)
+8
+8
+8
+8
+8
+SELECT length(col1) FROM built01;
+length(col1)
+1
+1
+1
+1
+1
+SELECT length(col2) FROM built01;
+length(col2)
+8
+null
+1
+8
+10
+SELECT LTRIM(col2) FROM built01;
+ltrim(col2)
+85555555
+null
+0
+73281482
+3782949432
+SELECT RTRIM(col2) FROM built01;
+rtrim(col2)
+85555555
+null
+0
+73281482
+3782949432
+SELECT substring(col1,1,4) FROM built01;
+substring(col1, 1, 4)
+a
+b
+c
+d
+e
+SELECT CONCAT_WS(col1,'string',col2) FROM built01;
+concat_ws(col1, string, col2)
+stringa85555555
+string
+stringc0
+stringd73281482
+stringe3782949432
+SELECT CHAR_length(col1) FROM built01;
+char_length(col1)
+1
+1
+1
+1
+1
+SELECT char_length(col2) FROM built01;
+char_length(col2)
+8
+null
+1
+8
+10
+SELECT REVERSE(col2) FROM built01;
+reverse(col2)
+55555558
+null
+0
+28418237
+2349492873
+SELECT startswith(col2,85) FROM built01;
+startswith(col2, 85)
+1
+null
+0
+0
+0
+SELECT endswith(col2,32 )FROM built01;
+endswith(col2, 32)
+0
+null
+0
+0
+1
+SELECT CONCAT(col1,col2) FROM built01;
+[unknown result because it is related to issue#8760]
+SELECT RPAD(col1,100,"fewqf43f3g54") FROM built01;
+[unknown result because it is related to issue#8761]
+SELECT LPAD(col2,10,"xxxxxxxxxxx") FROM built01;
+[unknown result because it is related to issue#8761]
+DROP TABLE built01;
+DROP TABLE IF EXISTS binary01;
+CREATE TABLE varbinary01(a varbinary);
+SQL syntax error: Should specify width to varbinary type
+INSERT INTO varbinary01 VALUES(63872143291);
+no such table test.varbinary01
+INSERT INTO varbinary01 VALUES(2784329432432);
+no such table test.varbinary01
+DROP TABLE varbinary01;
+no such table test.varbinary01
+DROP TABLE IF EXISTS varbinary01;
+CREATE TABLE varbinary01 (
+a varbinary(20) NOT NULL DEFAULT '\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',
+index idx(a)
+);
+INSERT INTO varbinary01 SET a=hex('A');
+INSERT INTO varbinary01 SET a=hex('1F9');
+INSERT INTO varbinary01 SET a=hex('80707');
+INSERT INTO varbinary01 VALUES('  12  ');
+INSERT INTO varbinary01 VALUES('abc** ');
+INSERT INTO varbinary01 VALUES('-12321');
+INSERT INTO varbinary01 VALUES(2121432432143212121);
+INSERT INTO varbinary01 VALUES(NULL);
+constraint violation: Column 'a' cannot be null
+INSERT INTO varbinary01 VALUES(2121432432143212132312121);
+internal error: Can't cast '2121432432143212132312121' from VARCHAR type to VARBINARY type. Src length 25 is larger than Dest length 20
+INSERT INTO varbinary01 VALUES('chabvkjewnjrklf rewmfrewfew');
+internal error: Can't cast 'chabvkjewnjrklf rewmfrewfew' from VARCHAR type to VARBINARY type. Src length 27 is larger than Dest length 20
+SELECT * FROM varbinary01;
+a
+41
+314639
+3830373037
+  12
+abc**
+-12321
+2121432432143212121
+SELECT * FROM varbinary01 ORDER BY a;
+a
+  12
+-12321
+2121432432143212121
+314639
+3830373037
+41
+abc**
+SELECT * FROM varbinary01 ORDER BY a DESC;
+a
+abc**
+41
+3830373037
+314639
+2121432432143212121
+-12321
+  12
+SELECT max(a) FROM varbinary01;
+max(a)
+abc**
+SELECT min(a) FROM varbinary01;
+min(a)
+  12
+DROP TABLE varbinary01;
+DROP TABLE IF EXISTS varbinary02;
+CREATE TABLE varbinary02 (
+col1 int, col2 varbinary(20) NOT NULL,
+index idx(col2)
+);
+INSERT INTO varbinary02 VALUES(1, '11111111101010101');
+INSERT INTO varbinary02 VALUES(2, '10111111101010101');
+INSERT INTO varbinary02 VALUES(1, '36217468721382183');
+INSERT INTO varbinary02 VALUES(2, '22258445222388855');
+INSERT INTO varbinary02 VALUES(2, '00000000000000000');
+SELECT * FROM varbinary02;
+col1    col2
+1    11111111101010101
+2    10111111101010101
+1    36217468721382183
+2    22258445222388855
+2    00000000000000000
+SELECT * FROM varbinary02 order by col2 ASC;
+col1    col2
+2    00000000000000000
+2    10111111101010101
+1    11111111101010101
+2    22258445222388855
+1    36217468721382183
+SELECT BIT_AND(col2) FROM varbinary02;
+bit_and(col2)
+00000000000000000
+SELECT BIT_OR(col2) FROM varbinary02;
+bit_or(col2)
+3735?57=72339:9=7
+SELECT BIT_XOR(col2) FROM varbinary02;
+bit_xor(col2)
+1504?02=50300:9=6
+SELECT col1, BIT_AND(col2) FROM varbinary02 group by col1;
+col1    bit_and(col2)
+1    10011000101000101
+2    00000000000000000
+SELECT col1, BIT_OR(col2) FROM varbinary02 group by col1;
+col1    bit_or(col2)
+1    37317579721392183
+2    32359555323398955
+SELECT col1, any_value(col2) FROM varbinary02 group by col1;
+col1    any_value(col2)
+1    11111111101010101
+2    10111111101010101
+SELECT col1, group_concat(col1,col2) FROM varbinary02 group by col1;
+col1    group_concat(col1, col2, ,)
+1    111111111101010101,136217468721382183
+2    210111111101010101,222258445222388855,200000000000000000
+SELECT col1, hex(col2) FROM varbinary02;
+col1    hex(col2)
+1    3131313131313131313031303130313031
+2    3130313131313131313031303130313031
+1    3336323137343638373231333832313833
+2    3232323538343435323232333838383535
+2    3030303030303030303030303030303030
+SELECT * FROM varbinary02 WHERE col2 = 11111111101010101;
+col1    col2
+1    11111111101010101
+SELECT * FROM varbinary02 WHERE col2 != 11111111101010101;
+col1    col2
+2    10111111101010101
+1    36217468721382183
+2    22258445222388855
+2    00000000000000000
+SELECT * FROM varbinary02 WHERE col2 BETWEEN 0x3131313131313131313031303130313031 AND 0x3336323137343638373231333832313833;
+col1    col2
+1    11111111101010101
+1    36217468721382183
+2    22258445222388855
+SELECT * FROM varbinary02 WHERE col2 NOT BETWEEN 0x3131313131313131313031303130313031 AND 0x3336323137343638373231333832313833;
+col1    col2
+2    10111111101010101
+2    00000000000000000
+SELECT * FROM varbinary02 WHERE col2 IN(0x3131313131313131313031303130313031,0x3336323137343638373231333832313833);
+col1    col2
+1    11111111101010101
+1    36217468721382183
+SELECT * FROM varbinary02 WHERE col2 NOT IN(0x3131313131313131313031303130313031,0x3336323137343638373231333832313833);
+col1    col2
+2    10111111101010101
+2    22258445222388855
+2    00000000000000000
+SELECT * FROM varbinary02 WHERE col2 != (SELECT col2 FROM varbinary02 WHERE col2 = 11111111101010101);
+col1    col2
+2    10111111101010101
+1    36217468721382183
+2    22258445222388855
+2    00000000000000000
+SELECT * FROM varbinary02 WHERE col2 LIKE '0x313131313131313131303130313031303%';
+col1    col2
+SELECT * FROM varbinary02 WHERE col2 LIKE 0x3131313131313131313031303130313031;
+col1    col2
+1    11111111101010101
+SELECT * FROM varbinary02 WHERE col2 > 0x3131313131313131313031303130313031;
+col1    col2
+1    36217468721382183
+2    22258445222388855
+SELECT * FROM varbinary02 WHERE col2 >=0x3131313131313131313031303130313031;
+col1    col2
+1    11111111101010101
+1    36217468721382183
+2    22258445222388855
+SELECT * FROM varbinary02 WHERE col2 < 0x3131313131313131313031303130313031;
+col1    col2
+2    10111111101010101
+2    00000000000000000
+SELECT * FROM varbinary02 WHERE col2 <= 0x3131313131313131313031303130313031;
+col1    col2
+1    11111111101010101
+2    10111111101010101
+2    00000000000000000
+SELECT COALESCE(NULL,NULL,col2) FROM varbinary02;
+coalesce(null, null, col2)
+11111111101010101
+10111111101010101
+36217468721382183
+22258445222388855
+00000000000000000
+DROP TABLE varbinary02;
+DROP TABLE IF EXISTS varbinary03;
+CREATE TABLE varbinary03(col1 int unsigned, col2 varbinary(10));
+INSERT INTO varbinary03 VALUES(1, '121212');
+INSERT INTO varbinary03 VALUES(2, '-12431');
+INSERT INTO varbinary03 VALUES(3, NULL);
+DROP TABLE IF EXISTS varbinary04;
+CREATE TABLE varbinary04(col1 int unsigned, col2 varbinary(10));
+INSERT INTO varbinary04 SELECT * FROM varbinary03;
+SELECT * FROM varbinary04;
+col1    col2
+1    121212
+2    -12431
+3    null
+SELECT COALESCE(null,col2) FROM varbinary03;
+coalesce(null, col2)
+121212
+-12431
+null
+DROP TABLE varbinary03;
+DROP TABLE varbinary04;
+SELECT CAST("A" AS varbinary(100)) = "a";
+cast(A as varbinary(100)) = a
+false
+SELECT CAST(37218738243.32142 AS varbinary(100));
+cast(37218738243.32142 as varbinary(100))
+37218738243.32142
+SELECT CAST("z" AS varbinary(10));
+cast(z as varbinary(10))
+z
+SELECT CAST(12 AS varbinary(20));
+cast(12 as varbinary(20))
+12
+SELECT CAST("*" AS varbinary(1));
+cast(* as varbinary(1))
+*
+SELECT CAST(-10 AS varbinary(20));
+cast(-10 as varbinary(20))
+-10
+SELECT CAST(0 AS varbinary(100));
+cast(0 as varbinary(100))
+0
+SELECT CAST(9 AS varbinary(10));
+cast(9 as varbinary(10))
+9
+SELECT CAST(-9090.999 AS varbinary(100));
+cast(-9090.999 as varbinary(100))
+-9090.999
+SELECT CAST(27832.2213213211321432 AS varbinary(65535));
+cast(27832.2213213211321432 as varbinary(65535))
+27832.2213213211321432
+SELECT CAST(-38921.3423 AS varbinary(10));
+Data truncation: data truncated: data type Decimal64, truncated for binary/varbinary
+SELECT CAST(' ' AS varbinary(20));
+cast(  as varbinary(20))
+
+SELECT CAST('' AS varbinary(10));
+cast( as varbinary(10))
+
+SELECT CAST('@#$$%%' AS varbinary(1));
+internal error: Can't cast '@#$$%' from VARCHAR type to VARBINARY type. Src length 6 is larger than Dest length 1
+SELECT CAST('26713hajncjdncekfwr' AS varbinary(1));
+internal error: Can't cast '26713hajncjdncekfwr' from VARCHAR type to VARBINARY type. Src length 19 is larger than Dest length 1
+SELECT CAST('-3902=3-21-3' AS varbinary(1));
+internal error: Can't cast '-3902=3-21-3' from VARCHAR type to VARBINARY type. Src length 12 is larger than Dest length 1
+SELECT CAST(2913812 AS varbinary(1));
+Data truncation: data truncated: data type Signed,  truncated for binary/varbinary
+SELECT CAST(100 AS varbinary(1));
+Data truncation: data truncated: data type Signed,  truncated for binary/varbinary
+SELECT CAST('3672817438921' AS varbinary(2));
+internal error: Can't cast '3672817438921' from VARCHAR type to VARBINARY type. Src length 13 is larger than Dest length 2
+SELECT CAST(37218738243.32142 AS varbinary(100));
+cast(37218738243.32142 as varbinary(100))
+37218738243.32142
+SELECT CAST(0101010 AS varbinary(1));
+Data truncation: data truncated: data type Signed,  truncated for binary/varbinary
+SELECT CAST('数据库' AS varbinary(10));
+cast(数据库 as varbinary(10))
+æ°æ®åº
+SELECT CAST('数据库mo&*' AS binary(10));
+cast(数据库mo&* as binary(10))
+æ°æ®åºm
+SELECT CAST("z" AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(12 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(NULL AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST("*" AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(0101010 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(-10 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(0 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST('9' AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(9 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(-9090.999 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(27832.2213213211321432 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST(-38921.3423 AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST('anfdjasv' AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+SELECT CAST('efhkjw21231' AS varbinary);
+SQL syntax error: Should specify width to varbinary type
+DROP TABLE IF EXISTS varbinary05;
+CREATE TABLE varbinary05(a varbinary(30), b CHAR, c bigint);
+INSERT INTO varbinary05 VALUES('3214243','0', -9);
+INSERT INTO varbinary05 VALUES('-1212','1', 8989);
+INSERT INTO varbinary05 VALUES(NULL, 'e', 45318424324324);
+SELECT * FROM varbinary05;
+a    b    c
+3214243    0    -9
+-1212    1    8989
+null    e    45318424324324
+SELECT hex(a),hex(b) FROM varbinary05;
+hex(a)    hex(b)
+33323134323433    30
+2d31323132    31
+    65
+SELECT CAST(b AS binary) FROM varbinary05;
+cast(b as binary)
+0
+1
+e
+SELECT CAST(c AS binary) FROM varbinary05;
+cast(c as binary)
+-9
+8989
+45318424324324
+DROP TABLE varbinary05;
+DROP TABLE IF EXISTS varbinary06;
+CREATE TABLE varbinary06(a int NOT NULL PRIMARY KEY, b float, c double, d VARCHAR(30),e decimal(20,10));
+INSERT INTO varbinary06 VALUES(1, 3214321.213, -8392.3,'woshishei',123456789.12356);
+INSERT INTO varbinary06 VALUES(2, 0, 38293.3332121,'12345@',-12.365);
+INSERT INTO varbinary06 VALUES(3, -392.1, 8390232,'3***',0.456984166622488655);
+SELECT CAST(a AS varbinary(10)) FROM varbinary06;
+cast(a as varbinary(10))
+1
+2
+3
+SELECT CAST(b AS varbinary(100)) FROM varbinary06;
+[unknown result because it is related to issue#8719]
+SELECT CAST(c AS varbinary(20)) FROM varbinary06;
+cast(c as varbinary(20))
+-8.3923E+03
+38293.3332121
+8390232
+SELECT CAST(d AS varbinary(30)) FROM varbinary06;
+cast(d as varbinary(30))
+woshishei
+12345@
+3***
+SELECT CAST(e AS varbinary(100)) FROM varbinary06;
+cast(e as varbinary(100))
+123456789.1235600000
+-12.3650000000
+0.4569841666
+DROP TABLE varbinary06;
+DROP TABLE IF EXISTS varbinary07;
+CREATE TABLE varbinary07(col1 varbinary(65535));
+DROP TABLE varbinary07;
+DROP TABLE IF EXISTS varbinary08;
+CREATE TABLE varbinary08(col1 varbinary(65536));
+Data truncation: data out of range: data type varbinary,  typeLen is over the MaxVarcharLen: 65535
+DROP TABLE varbinary08;
+no such table test.varbinary08
+SELECT CAST(DATE "2023-01-13" AS varbinary(10));
+cast(date(2023-01-13) as varbinary(10))
+2023-01-13
+SELECT CAST('08:00:00' AS varbinary(100));
+cast(08:00:00 as varbinary(100))
+08:00:00
+SELECT CAST('2019-03-05 01:53:55.63' AS varbinary(200));
+cast(2019-03-05 01:53:55.63 as varbinary(200))
+2019-03-05 01:53:55.63
+SELECT CAST(TIMESTAMP "2004-01-22 21:45:33" AS BINARY(4));
+cast(timestamp(2004-01-22 21:45:33) as binary(4))
+2004
+SELECT CAST(DATE "2023-01-13" AS varbinary(2));
+Data truncation: data truncated: data type Date, truncated for binary/varbinary
+DROP table IF EXISTS varbinary09;
+CREATE external table varbinary09(clo1 varbinary(60),clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+SELECT * FROM varbinary09;
+clo1    clo2
+drop table varbinary09;
+DROP TABLE IF EXISTS varbinary10;
+CREATE TEMPORARY table varbinary09(col1 varbinary(60), col2 float, col3 double);
+INSERT into varbinary09 values(NULL,38232424.3242,90090);
+INSERT into varbinary09 values('123',NULL,'3829043294.3242432');
+INSERT into varbinary09 values('0',0.123233333333,7894646541.4547845412);
+SELECT CAST(col1 AS varbinary(100)) FROM varbinary09;
+[unknown result because it is related to issue#8719]
+SELECT CAST(col2 AS varbinary(100)) FROM varbinary09;
+[unknown result because it is related to issue#8719]
+SELECT CAST(col3 AS varbinary(10)) FROM varbinary09;
+[unknown result because it is related to issue#8719]
+drop table varbinary09;
+DROP TABLE IF EXISTS varbinary10;
+DROP TABLE IF EXISTS varbinary11;
+create table varbinary10(a binary primary key,b varchar(5));
+create table varbinary11(a int,b varchar(5),c binary, foreign key(c) references varbinary10(a));
+INSERT into varbinary10 VALUES('1','哈哈哈');
+INSERT into varbinary10 VALUES('1','abcde');
+Duplicate entry '1' for key 'a'
+show CREATE TABLE varbinary11;
+Table    Create Table
+varbinary11    CREATE TABLE `varbinary11` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` BINARY(1) DEFAULT NULL,\nCONSTRAINT `` FOREIGN KEY (`c`) REFERENCES `varbinary10` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+DROP TABLE varbinary11;
+DROP TABLE varbinary10;
+DROP TABLE IF EXISTS varbinary12;
+DROP TABLE IF EXISTS varbinary13;
+CREATE TABLE varbinary12(col1 binary,col2 varbinary(65535),col3 bigint unsigned);
+INSERT INTO varbinary12 VALUES('a','7894531e234r323r2844352r432r4',78965612184651);
+INSERT INTO varbinary12 VALUES('b',NULL,5463137456315300);
+INSERT INTO varbinary12 VALUES('c',0121313131,0);
+SELECT * FROM varbinary12;
+col1    col2    col3
+a    7894531e234r323r2844352r432r4    78965612184651
+b    null    5463137456315300
+c    121313131    0
+CREATE TABLE varbinary13(col1 binary,col2 varbinary(65535));
+INSERT INTO varbinary13 VALUES('a','7894531e234r323r2844352r432r4');
+INSERT INTO varbinary13 VALUES('b',NULL);
+INSERT INTO varbinary13 VALUES('d',012131);
+SELECT * FROM varbinary13;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+d    12131
+SELECT varbinary12.col1,varbinary13.col2 FROM varbinary12,varbinary13 WHERE varbinary12.col2 = varbinary13.col2;
+col1    col2
+a    7894531e234r323r2844352r432r4
+SELECT varbinary12.col1,varbinary13.col2 FROM varbinary12 left join varbinary13 on varbinary12.col2 = varbinary13.col2;
+col1    col2
+a    7894531e234r323r2844352r432r4
+b    null
+c    null
+SELECT varbinary12.col1,varbinary13.col2 FROM varbinary12 right join varbinary13 on varbinary12.col2 != varbinary13.col2;
+col1    col2
+b    7894531e234r323r2844352r432r4
+c    7894531e234r323r2844352r432r4
+null    null
+a    12131
+b    12131
+c    12131
+SELECT varbinary12.col1,varbinary13.col2 FROM varbinary12 inner join varbinary13 on varbinary12.col2 = varbinary13.col2;
+col1    col2
+a    7894531e234r323r2844352r432r4
+SELECT varbinary12.col1,varbinary13.col2 FROM varbinary12 natural join varbinary13;
+col1    col2
+a    7894531e234r323r2844352r432r4
+DROP TABLE varbinary12;
+DROP TABLE varbinary13;
+drop TABLE IF EXISTS text_01;
+create table text_01(t1 text,t2 text,t3 text);
+insert into text_01 values ('中文123abcd','',NULL);
+insert into text_01 values ('yef&&190',' wwww ',983);
+insert into text_01 select '',null,'中文';
+insert into text_01 select '123','7834','commmmmmment';
+insert into text_01 values ('789',' 23:50:00','20');
+select * from text_01;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+SELECT CAST(t1 AS binary(20)) FROM text_01;
+cast(t1 as binary(20))
+ä¸­æ123abcd
+yef&&190
+
+123
+789
+SELECT CAST(t2 AS binary(100)) FROM text_01;
+cast(t2 as binary(100))
+
+ wwww
+null
+7834
+ 23:50:00
+SELECT CAST(t1 AS varbinary(20)) FROM text_01;
+cast(t1 as varbinary(20))
+ä¸­æ123abcd
+yef&&190
+
+123
+789
+SELECT CAST(t2 AS varbinary(100)) FROM text_01;
+cast(t2 as varbinary(100))
+
+ wwww
+null
+7834
+ 23:50:00
+SELECT CAST(t3 AS varbinary(1)) FROM text_01;
+internal error: Can't cast column from TEXT type to VARBINARY type because of one or more values in that column. Src length 3 is larger than Dest length 1
+SELECT CAST(t3 AS binary) FROM text_01;
+cast(t3 as binary)
+null
+983
+ä¸­æ
+commmmmmment
+20
+DROP TABLE text_01;
+drop TABLE IF EXISTS blob_01;
+create table blob_01(b1 blob,b2 blob,b3 blob);
+insert into blob_01 values ('no','中文','89233432234234 ');
+insert into blob_01 values ('',' hhhh@126.com','0001-01-01');
+insert into blob_01 values ('#$%^&*()',NULL,null);
+select * from blob_01;
+b1    b2    b3
+no    ä¸­æ    89233432234234
+     hhhh@126.com    0001-01-01
+#$%^&*()    null    null
+SELECT CAST(b1 AS varbinary(20)) FROM blob_01;
+cast(b1 as varbinary(20))
+no
+
+#$%^&*()
+SELECT CAST(b2 AS varbinary(100)) FROM blob_01;
+cast(b2 as varbinary(100))
+ä¸­æ
+ hhhh@126.com
+null
+SELECT CAST(b1 AS binary(20)) FROM blob_01;
+cast(b1 as binary(20))
+no
+
+#$%^&*()
+SELECT CAST(b2 AS binary(100)) FROM blob_01;
+cast(b2 as binary(100))
+ä¸­æ
+ hhhh@126.com
+null
+SELECT CAST(b3 AS varbinary(1)) FROM blob_01;
+internal error: Can't cast column from BLOB type to VARBINARY type because of one or more values in that column. Src length 15 is larger than Dest length 1
+SELECT CAST(b3 AS binary) FROM blob_01;
+cast(b3 as binary)
+89233432234234
+0001-01-01
+null
+DROP TABLE blob_01;
+drop table if EXISTS prepare01;
+create table prepare01 (a binary(20), b varbinary(100));
+insert into prepare01 values (12.2222, '3278492142324');
+prepare stmt1 from 'update prepare01 set a=?';
+set @bin_a=0.1111;
+execute stmt1 using @bin_a;
+select a, b from prepare01;
+[unknown result because it is related to issue#8790]
+prepare stmt2 from 'insert into prepare01 values(NULL,0)';
+execute stmt2;
+SELECT * from prepare01;
+a    b
+0.1111                  3278492142324
+null    0
+drop TABLE prepare01;
+select binary(372817432918321);
+binary(372817432918321)
+372817432918321
+select binary(0823109213);
+binary(823109213)
+823109213
+select binary('1');
+binary(1)
+1
+select binary(NULL);
+binary(null)
+null
+select binary(' ');
+binary( )
+
+select binary('&**');
+binary(&**)
+&**
+select binary('数据库');
+binary(数据库)
+æ°æ®åº
+select binary('hello你好呀');
+binary(hello你好呀)
+helloä½ å¥½å
+DROP DATABASE test;
