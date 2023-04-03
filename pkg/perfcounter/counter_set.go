@@ -52,6 +52,7 @@ type FileServiceCounterSet struct {
 			OpenFile       stats.Counter
 			StatFile       stats.Counter
 			Error          stats.Counter
+			Evict          stats.Counter
 		}
 	}
 
