@@ -1450,7 +1450,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	go func() {
 		//start 1pc txn ,read "dbtest"'s ID
 		ctx := context.TODO()
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		//reader should wait until the writer committed.
 		dbNames, _ = txnEngine.DatabaseNames(ctx, txn)
@@ -1537,7 +1537,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1pc txn ,read table ID
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1594,7 +1594,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1PC txn , read table
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1675,7 +1675,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//read, there should be 80 rows left.
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
