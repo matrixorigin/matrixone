@@ -28,10 +28,6 @@ type exprImpl struct {
 	Expr
 }
 
-func (node *exprImpl) String() string {
-	return ""
-}
-
 // Binary Operator
 type BinaryOp int
 
