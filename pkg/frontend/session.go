@@ -1391,11 +1391,14 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 // Session will merge all batches in one batch.
 // It will not send the result to the client.
 func batchFetcher(handle interface{}, dataSet *batch.Batch) error {
-	if handle == nil || dataSet == nil {
+	if handle == nil {
 		return nil
 	}
 	ses := handle.(*Session)
 	ses.SaveResultSet()
+	if dataSet == nil {
+		return nil
+	}
 	return ses.AppendResultBatch(dataSet)
 }
 
