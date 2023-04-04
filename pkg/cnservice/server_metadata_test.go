@@ -27,7 +27,7 @@ import (
 )
 
 func TestInitMetadata(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
 
 	s := &service{logger: logutil.GetPanicLogger(), metadataFS: fs}
@@ -41,7 +41,7 @@ func TestInitMetadata(t *testing.T) {
 }
 
 func TestInitMetadataWithExistData(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
 	value := metadata.CNStore{
 		UUID: "cn1",
@@ -63,7 +63,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
 	value := metadata.CNStore{
 		UUID: "cn1",
