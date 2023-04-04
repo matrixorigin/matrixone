@@ -169,9 +169,13 @@ func NewEmptyTxnCmd() *TxnCmd {
 	}
 }
 func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
+	// if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	// 	return
+	// }
 	n += 2
 	var sn int64
 	if sn, err = common.WriteString(c.ID, w); err != nil {
@@ -250,9 +254,13 @@ func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Memo = txn.GetMemo()
 }
 func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
+	// if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	// 	return
+	// }
 	n += 2
 	var sn int64
 	sn, err = c.ComposedCmd.WriteTo(w)
@@ -383,7 +391,8 @@ func (e *PointerCmd) VerboseString() string {
 	return s
 }
 func (e *PointerCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
+	t := e.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, e.Group); err != nil {
@@ -438,9 +447,13 @@ func (e *DeleteBitmapCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if e == nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
+	t := e.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
+	// if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
+	// 	return
+	// }
 	n, err = e.Bitmap.WriteTo(w)
 	n += 2
 	return
@@ -510,9 +523,13 @@ func (e *BatchCmd) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
+	t := e.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
+	// if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
+	// 	return
+	// }
 	if n, err = e.Bat.WriteTo(w); err != nil {
 		return
 	}
@@ -576,9 +593,13 @@ func (cc *ComposedCmd) Unmarshal(buf []byte) (err error) {
 }
 
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, cc.GetType()); err != nil {
+	t := cc.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
+	// if err = binary.Write(w, binary.BigEndian, cc.GetType()); err != nil {
+	// 	return
+	// }
 	n += 2
 	if err = binary.Write(w, binary.BigEndian, cc.CmdSize); err != nil {
 		return
@@ -664,7 +685,7 @@ func (cc *ComposedCmd) Desc() string {
 }
 func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, n int64, err error) {
 	var cmdType int16
-	if err = binary.Read(r, binary.BigEndian, &cmdType); err != nil {
+	if _, err = r.Read(types.EncodeInt16(&cmdType)); err != nil {
 		return
 	}
 

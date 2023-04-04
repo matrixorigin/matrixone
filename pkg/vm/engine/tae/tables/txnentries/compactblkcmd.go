@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -43,7 +44,8 @@ func newCompactBlockCmd(from, to *common.ID, txn txnif.AsyncTxn, id uint32) *com
 }
 func (cmd *compactBlockCmd) GetType() int16 { return CmdCompactBlock }
 func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, CmdCompactBlock); err != nil {
+	t := CmdCompactBlock
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {

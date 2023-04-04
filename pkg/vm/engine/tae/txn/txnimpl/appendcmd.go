@@ -89,7 +89,8 @@ func (c *AppendCmd) VerboseString() string {
 func (c *AppendCmd) Close()         { c.ComposedCmd.Close() }
 func (c *AppendCmd) GetType() int16 { return CmdAppend }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {

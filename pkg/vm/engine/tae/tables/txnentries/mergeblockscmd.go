@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -142,7 +143,8 @@ func ReadUint32Array(r io.Reader) (array []uint32, n int64, err error) {
 
 func (cmd *mergeBlocksCmd) GetType() int16 { return CmdMergeBlocks }
 func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, CmdMergeBlocks); err != nil {
+	t := CmdMergeBlocks
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
 
