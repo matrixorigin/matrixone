@@ -111,7 +111,7 @@ func newTestCase() mergeTestCase {
 	return mergeTestCase{
 		proc: proc,
 		types: []types.Type{
-			{Oid: types.T_int8},
+			types.T_int8.ToType(),
 		},
 		arg:    new(Argument),
 		cancel: cancel,

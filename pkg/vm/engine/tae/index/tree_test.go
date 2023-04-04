@@ -27,7 +27,7 @@ import (
 func TestARTIndexNumeric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.T_int32.ToType()
 	idx := NewSimpleARTMap(typ)
 
 	var err error
@@ -87,7 +87,7 @@ func TestARTIndexNumeric(t *testing.T) {
 func TestArtIndexString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	typ := types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
+	typ := types.T_varchar.ToType()
 	idx := NewSimpleARTMap(typ)
 
 	var err error
@@ -132,4 +132,22 @@ func TestArtIndexString(t *testing.T) {
 
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func BenchmarkArt(b *testing.B) {
+	tr := NewSimpleARTMap(types.T_char.ToType())
+	b.Run("tree-insert", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			j := uint32(i)
+			tr.Insert(types.EncodeUint32(&j), uint32(i))
+		}
+	})
+	buf := []byte("hello")
+	b.Run("tree-search", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tr.Search(buf)
+		}
+	})
 }

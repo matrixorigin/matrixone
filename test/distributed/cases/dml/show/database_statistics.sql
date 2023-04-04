@@ -19,13 +19,7 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
-
-
--- @bvt:issue#7520
-show column_number from PROCESSLIST;
--- @bvt:issue
-
-
+show column_number from processlist;
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;
@@ -53,6 +47,7 @@ show column_number from mo_user_defined_function;
 show column_number from mo_tables;
 show column_number from mo_database;
 show column_number from mo_columns;
+show column_number from mo_indexes;
 
 use system_metrics;
 show column_number from metric;
@@ -210,12 +205,7 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
-
-
--- @bvt:issue#7520
-show column_number from PROCESSLIST;
--- @bvt:issue
-
+show column_number from processlist;
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;

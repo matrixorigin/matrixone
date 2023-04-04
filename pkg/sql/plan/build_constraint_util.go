@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -234,14 +235,17 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+
 	if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
+	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.GetContext().Value(defines.BgKey{}) == nil {
+		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
@@ -251,6 +255,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
+	}
+	if obj.PubAccountId != -1 {
+		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
 	if !tblInfo.haveConstraint {
@@ -558,7 +565,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// if insert with on duplicate key . need append a join node
 	// create table t1 (a int primary key, b int unique key, c int);
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.a, t1.b，c, t1.row_id from
+	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
 
@@ -858,7 +865,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 		return expr, nil
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
+	if t1.Eq(t2) {
 		return expr, nil
 	}
 
@@ -1029,8 +1036,16 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 
-					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
-					rightIdxPos := int32(0)
+					var rightRowIdPos int32 = -1
+					var rightIdxPos int32 = -1 //it's also a primary key.
+					// it's better to get pos from tableDef
+					for colIdx, col := range rightTableDef.Cols {
+						if col.Name == catalog.Row_ID {
+							rightRowIdPos = int32(colIdx)
+						} else if col.Name == catalog.IndexTableIndexColName {
+							rightIdxPos = int32(colIdx)
+						}
+					}
 
 					// append projection
 					info.projectList = append(info.projectList, &plan.Expr{
@@ -1042,6 +1057,20 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					})
+					// we only keep column index of row_id.
+					// primary key column index = column index of row_id + 1
+					info.onIdx = append(info.onIdx, info.idx)
+					info.idx = info.idx + 1
+					info.projectList = append(info.projectList, &plan.Expr{
+						Typ: rightTableDef.Cols[rightIdxPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: rightIdxPos,
+							},
+						},
+					})
+					info.idx = info.idx + 1
 
 					rightExpr := &plan.Expr{
 						Typ: rightTableDef.Cols[rightIdxPos].Typ,
@@ -1109,8 +1138,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					bindCtx.binder = NewTableBinder(builder, bindCtx)
 					info.rootId = newRootId
 					info.onIdxTbl = append(info.onIdxTbl, idxRef)
-					info.onIdx = append(info.onIdx, info.idx)
-					info.idx = info.idx + 1
 				}
 			}
 		}

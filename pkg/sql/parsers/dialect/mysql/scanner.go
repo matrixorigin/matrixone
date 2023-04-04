@@ -97,7 +97,24 @@ func (s *Scanner) Scan() (int, string) {
 				return s.scanBitLiteral()
 			}
 		}
-		return s.scanIdentifier(false)
+		if ch == '$' {
+			typ, str := s.scanIdentifier(false)
+			if s.cur() != '$' {
+				return typ, str
+			} else {
+				// this is a dollar sign string
+				strTyp, strStr := s.scanString('$', STRING)
+				_, tagStr := s.scanIdentifier(false)
+				if tagStr != str {
+					return LEX_ERROR, string(byte(s.cur()))
+				}
+				s.inc()
+				return strTyp, strStr
+			}
+
+		} else {
+			return s.scanIdentifier(false)
+		}
 	case isDigit(ch):
 		return s.scanNumber()
 	case ch == ':':
@@ -106,7 +123,18 @@ func (s *Scanner) Scan() (int, string) {
 			return ASSIGNMENT, ""
 		}
 		// Like mysql -h ::1 ?
-		return s.scanBindVar()
+		id, str := s.scanBindVar()
+		if id == LEX_ERROR {
+			// test for 'label:'
+			s.skipBlank()
+			// LOOP WHILE REPEAT
+			if s.cur() != 'L' && s.cur() != 'l' && s.cur() != 'W' && s.cur() != 'w' && s.cur() != 'R' && s.cur() != 'r' {
+				return id, str
+			}
+			return ':', ""
+		} else {
+			return id, str
+		}
 	case ch == ';':
 		s.inc()
 		return ';', ""
@@ -237,11 +265,18 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 }
 
 func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
+	if delim == '$' {
+		s.inc() // advance the first '$'
+	}
 	ch := s.cur()
 	buf := new(strings.Builder)
 	for s.Pos < len(s.buf) {
 		if ch == delim {
-			s.inc()
+			if delim != '$' {
+				s.inc()
+			} else {
+				return typ, buf.String()
+			}
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
@@ -512,11 +547,18 @@ exit:
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	dollarFlag := false
+	if s.cur() == '$' {
+		dollarFlag = true
+	}
 	start := s.Pos
 	s.inc()
 
 	for {
 		ch := s.cur()
+		if ch == '$' && dollarFlag {
+			break
+		}
 		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
@@ -528,7 +570,24 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, keywordName
+		// make transaction statements coexist with plsql
+		if lower == "begin" {
+			cur := s.Pos
+			s.skipBlank()
+			if s.cur() == ';' || s.cur() == eofChar { // "begin ;" situation
+				s.Pos = cur
+				return keywordID, keywordName
+			}
+			typ, _ := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			if typ == WORK || typ == TRANSACTION {
+				s.Pos = cur
+				return keywordID, keywordName
+			}
+			s.Pos = cur
+			return SPBEGIN, keywordName
+		} else {
+			return keywordID, keywordName
+		}
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {

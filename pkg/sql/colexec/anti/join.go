@@ -150,7 +150,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
-	eligible := make([]int64, 0, hashmap.UnitLimit)
+	eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -163,7 +163,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if vals[k] == 0 {
-				eligible = append(eligible, int64(i+k))
+				eligible = append(eligible, int32(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
@@ -186,7 +186,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				if matched {
 					continue
 				}
-				eligible = append(eligible, int64(i+k))
+				eligible = append(eligible, int32(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 			}
 		}

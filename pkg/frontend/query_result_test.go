@@ -71,7 +71,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	//new session
-	ses := NewSession(proto, testPool, pu, GSysVariables, true)
+	ses := NewSession(proto, testPool, pu, GSysVariables, true, nil)
 	return ses
 }
 
@@ -111,6 +111,9 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		TenantID: sysAccountID,
 	}
 	ses.SetTenantInfo(tenant)
+	proc := testutil.NewProcess()
+	proc.FileService = ses.pu.FileService
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	//three columns
@@ -126,7 +129,6 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			Name: fmt.Sprintf("a_%d", i),
 			Typ: &plan.Type{
 				Id:    int32(ty.Oid),
-				Size:  ty.Size,
 				Scale: ty.Scale,
 				Width: ty.Width,
 			},
@@ -157,7 +159,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	//result string
 	wantResult := "0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n"
 	//save blocks
-	proc := testutil.NewProcess()
+
 	for i := 0; i < blockCnt; i++ {
 		data := newBatch(typs, blockCnt, proc)
 		err = saveQueryResult(ses, data)

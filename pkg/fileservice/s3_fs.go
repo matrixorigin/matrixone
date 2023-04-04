@@ -23,6 +23,7 @@ import (
 	"math"
 	stdhttp "net/http"
 	"net/url"
+	"os"
 	pathpkg "path"
 	"sort"
 	"strings"
@@ -51,9 +52,10 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	asyncUpdate bool
+	memCache              *MemCache
+	diskCache             *DiskCache
+	asyncUpdate           bool
+	writeDiskCacheOnWrite bool
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
@@ -160,7 +162,10 @@ func (s *S3FS) initCaches(
 			WithLRU(memCacheCapacity),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
-		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("capacity", memCacheCapacity),
+		)
 	}
 
 	// disk cache
@@ -177,7 +182,11 @@ func (s *S3FS) initCaches(
 		if err != nil {
 			return err
 		}
-		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", diskCacheCapacity))
+		logutil.Info("fileservice: disk cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("capacity", diskCacheCapacity),
+			zap.Any("path", diskCachePath),
+		)
 	}
 
 	return nil
@@ -341,7 +350,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	return s.write(ctx, vector)
 }
 
-func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -362,8 +371,32 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 		size = int64(last.Offset + last.Size)
 	}
 
+	// reader
+	var r io.Reader
+	if s.writeDiskCacheOnWrite && s.diskCache != nil {
+		// also write to disk cache
+		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
+		if err != nil {
+			return err
+		}
+		defer closeW()
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = done(ctx)
+		}()
+		r = io.TeeReader(
+			newIOEntriesReader(ctx, vector.Entries),
+			w,
+		)
+
+	} else {
+		r = newIOEntriesReader(ctx, vector.Entries)
+	}
+
 	// put
-	content, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
+	content, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -467,6 +500,30 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	getReader := func(ctx context.Context, readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
+
+		// try to load from disk cache
+		if s.diskCache != nil {
+			r, err := s.diskCache.GetFileContent(ctx, vector.FilePath, min)
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+				os.IsNotExist(err) {
+				err = nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			if r != nil {
+				// cache hit
+				if readToEnd {
+					return r, nil
+				} else {
+					return &readCloser{
+						r:         io.LimitReader(r, max-min),
+						closeFunc: r.Close,
+					}, nil
+				}
+			}
+		}
+
 		if readToEnd {
 			rang := fmt.Sprintf("bytes=%d-", min)
 			output, err := s.s3GetObject(
@@ -650,6 +707,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		vector.Entries[i] = entry
 	}
 
+	return nil
+}
+
+func (s *S3FS) Preload(ctx context.Context, filePath string) error {
+	if s.diskCache != nil {
+		err := s.diskCache.SetFileContent(ctx, filePath, s.read)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -991,7 +1058,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.List.Add(1)
+		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.ListObjects(ctx, params, optFns...)
 }
@@ -999,7 +1066,7 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Head.Add(1)
+		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
@@ -1007,7 +1074,7 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Put.Add(1)
+		counter.FileService.S3.Put.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
@@ -1015,7 +1082,7 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Get.Add(1)
+		counter.FileService.S3.Get.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
@@ -1023,7 +1090,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.DeleteMulti.Add(1)
+		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
@@ -1031,7 +1098,7 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.S3.Delete.Add(1)
+		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }

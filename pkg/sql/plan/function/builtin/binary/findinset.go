@@ -24,7 +24,7 @@ import (
 
 func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	rtyp := types.Type{Oid: types.T_uint64, Size: 8}
+	rtyp := types.T_uint64.ToType()
 	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():

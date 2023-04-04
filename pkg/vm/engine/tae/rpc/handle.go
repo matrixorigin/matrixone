@@ -17,19 +17,19 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"go.uber.org/zap"
 )
@@ -58,7 +57,6 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
-	jobScheduler tasks.JobScheduler
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -86,8 +84,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	}
 
 	h := &Handle{
-		eng:          moengine.NewEngine(tae),
-		jobScheduler: tasks.NewParallelJobScheduler(100),
+		eng: moengine.NewEngine(tae),
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -95,7 +92,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (err error) {
+	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
@@ -172,6 +169,7 @@ func (h *Handle) HandleCommit(
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
 	err = txn.Commit()
+	cts = txn.GetCommitTS().ToTimestamp()
 
 	//delete the txn's context.
 	h.mu.Lock()
@@ -309,13 +307,11 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	h.jobScheduler.Stop()
 	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	h.jobScheduler.Stop()
 	return h.eng.Destroy()
 }
 
@@ -396,100 +392,29 @@ func (h *Handle) HandleInspectDN(
 	return nil
 }
 
-func (h *Handle) startLoadJobs(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req *db.WriteReq,
-) (err error) {
-	var locations []string
-	var isNull []bool
-	var jobIds []string
-	var columnIdx int
-	if req.Type == db.EntryInsert {
-		//for loading ZM index of primary key
-		locations = append(locations, req.MetaLocs...)
-		columnIdx = req.Schema.GetSingleSortKeyIdx()
-		isNull = append(isNull, false)
-		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
-		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-		for i := range req.MetaLocs {
-			jobIds = append(jobIds,
-				fmt.Sprintf("load-zm-%s", req.MetaLocs[i]))
-		}
-	} else {
-		//for loading deleted rowid.
-		locations = append(locations, req.DeltaLocs...)
-		columnIdx = 0
-		isNull = append(isNull, false)
-		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
-		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
-		for i := range req.DeltaLocs {
-			jobIds = append(jobIds,
-				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
-		}
+func (h *Handle) prefetch(ctx context.Context,
+	req *db.WriteReq) error {
+	if len(req.DeltaLocs) == 0 {
+		return nil
 	}
+	//for loading deleted rowid.
+	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	nctx := context.Background()
-	if deadline, ok := ctx.Deadline(); ok {
-		nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+	reader, err := blockio.NewObjectReader(
+		h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	if err != nil {
+		return nil
 	}
-	for i, v := range locations {
-		nctx = context.WithValue(nctx, db.LocationKey{}, v)
-		req.Jobs[i] = tasks.NewJob(
-			jobIds[i],
-			nctx,
-			func(ctx context.Context) (jobR *tasks.JobResult) {
-				jobR = &tasks.JobResult{}
-				loc, ok := ctx.Value(db.LocationKey{}).(string)
-				if !ok {
-					panic(moerr.NewInternalErrorNoCtx("Miss Location"))
-				}
-				//reader, err := blockio.NewReader(ctx,
-				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				reader, err := blockio.NewObjectReader(
-					h.eng.GetTAE(ctx).Fs.Service, loc)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				if req.Type == db.EntryDelete {
-					bat, err := reader.LoadColumns(
-						ctx,
-						[]uint16{uint16(columnIdx)},
-						[]uint32{id},
-						nil,
-					)
-					if err != nil {
-						jobR.Err = err
-						return
-					}
-					jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
-					return
-				}
-				zmIndex, err := reader.LoadZoneMaps(
-					ctx,
-					[]uint16{uint16(columnIdx)},
-					[]uint32{id},
-					nil,
-				)
-				if err != nil {
-					jobR.Err = err
-					return
-				}
-				jobR.Res = zmIndex[0][columnIdx]
-				return
-			},
-		)
-		if err = h.jobScheduler.Schedule(req.Jobs[i]); err != nil {
-			return err
+
+	pref := blockio.BuildPrefetch(reader, nil)
+	for _, key := range req.DeltaLocs {
+		_, id, _, _, err := blockio.DecodeLocation(key)
+		if err != nil {
+			return nil
 		}
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
 	}
-	return
+	return blockio.PrefetchWithMerged(pref)
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
@@ -505,7 +430,7 @@ func (h *Handle) EvaluateTxnRequest(
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
 					//start to load deleted row ids
-					err = h.startLoadJobs(ctx, meta, r)
+					err = h.prefetch(ctx, r)
 					if err != nil {
 						return
 					}
@@ -570,6 +495,7 @@ func (h *Handle) HandlePreCommitWrite(
 						RoleID:    cmd.Owner,
 						AccountID: cmd.AccountId,
 					},
+					DatTyp: cmd.DatTyp,
 				}
 				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateDatabaseResp)); err != nil {
@@ -650,6 +576,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -702,7 +629,8 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatabaseId, txn)
+	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatTyp, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
@@ -817,14 +745,15 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-
+	if req.PkCheck == db.PKCheckDisable {
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	}
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
 		req.Type, req.TableID,
 		req.TableName, req.DatabaseId, req.DatabaseName,
 		txn.String(),
 	)
-	logutil.Debugf("[precommit] write batch: %s\n", debugMoBatch(req.Batch))
+	logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
 	defer func() {
 		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
 	}()
@@ -848,6 +777,25 @@ func (h *Handle) HandleWrite(
 				req.MetaLocs)
 			return
 		}
+		//check the input batch passed by cn is valid.
+		len := 0
+		for i, vec := range req.Batch.Vecs {
+			if vec == nil {
+				logutil.Errorf("the vec:%d in req.Batch is nil", i)
+				panic("invalid vector : vector is nil")
+			}
+			if vec.Length() == 0 {
+				logutil.Errorf("the vec:%d in req.Batch is empty", i)
+				panic("invalid vector: vector is empty")
+			}
+			if i == 0 {
+				len = vec.Length()
+			}
+			if vec.Length() != len {
+				logutil.Errorf("the length of vec:%d in req.Batch is not equal to the first vec", i)
+				panic("invalid batch : the length of vectors in batch is not the same")
+			}
+		}
 		//Appends a batch of data into table.
 		err = tb.Write(ctx, req.Batch)
 		return
@@ -855,18 +803,38 @@ func (h *Handle) HandleWrite(
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
-		for i, job := range req.Jobs {
-			req.JobRes[i] = job.WaitDone()
-			if req.JobRes[i].Err != nil {
-				return req.JobRes[i].Err
-			}
-			rowidVec := req.JobRes[i].Res.(containers.Vector)
-			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(rowidVec))
+		nctx := context.Background()
+		if deadline, ok := ctx.Deadline(); ok {
+			nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+		}
+		columnIdx := 0
+		var reader dataio.Reader
+		reader, err = blockio.NewObjectReader(
+			h.eng.GetTAE(nctx).Fs.Service, req.DeltaLocs[0])
+		if err != nil {
+			return
+		}
+		for _, key := range req.DeltaLocs {
+			var id uint32
+			_, id, _, _, err = blockio.DecodeLocation(key)
+			var bats []*batch.Batch
+			bats, err = reader.LoadColumns(
+				ctx,
+				[]uint16{uint16(columnIdx)},
+				[]uint32{id},
+				nil,
+			)
 			if err != nil {
-				rowidVec.Close()
 				return
 			}
-			rowidVec.Close()
+			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+
+			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
+			if err != nil {
+				vec.Close()
+				return
+			}
+			vec.Close()
 		}
 		return
 	}
@@ -902,88 +870,6 @@ func (h *Handle) HandleUpdateConstraint(
 	tbl.UpdateConstraintWithBin(ctx, cstr)
 
 	return nil
-}
-
-func vec2Str[T any](vec []T, v *vector.Vector) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", v.Length()))
-	first := true
-	for i := 0; i < len(vec); i++ {
-		if !first {
-			_ = w.WriteByte(',')
-		}
-		if v.GetNulls().Contains(uint64(i)) {
-			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), types.Null{}))
-		} else {
-			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), vec[i]))
-		}
-		first = false
-	}
-	return w.String()
-}
-
-func moVec2String(v *vector.Vector, printN int) string {
-	switch v.GetType().Oid {
-	case types.T_bool:
-		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
-	case types.T_int8:
-		return vec2Str(vector.MustFixedCol[int8](v)[:printN], v)
-	case types.T_int16:
-		return vec2Str(vector.MustFixedCol[int16](v)[:printN], v)
-	case types.T_int32:
-		return vec2Str(vector.MustFixedCol[int32](v)[:printN], v)
-	case types.T_int64:
-		return vec2Str(vector.MustFixedCol[int64](v)[:printN], v)
-	case types.T_uint8:
-		return vec2Str(vector.MustFixedCol[uint8](v)[:printN], v)
-	case types.T_uint16:
-		return vec2Str(vector.MustFixedCol[uint16](v)[:printN], v)
-	case types.T_uint32:
-		return vec2Str(vector.MustFixedCol[uint32](v)[:printN], v)
-	case types.T_uint64:
-		return vec2Str(vector.MustFixedCol[uint64](v)[:printN], v)
-	case types.T_float32:
-		return vec2Str(vector.MustFixedCol[float32](v)[:printN], v)
-	case types.T_float64:
-		return vec2Str(vector.MustFixedCol[float64](v)[:printN], v)
-	case types.T_date:
-		return vec2Str(vector.MustFixedCol[types.Date](v)[:printN], v)
-	case types.T_datetime:
-		return vec2Str(vector.MustFixedCol[types.Datetime](v)[:printN], v)
-	case types.T_time:
-		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
-	case types.T_timestamp:
-		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
-	case types.T_decimal64:
-		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
-	case types.T_decimal128:
-		return vec2Str(vector.MustFixedCol[types.Decimal128](v)[:printN], v)
-	case types.T_uuid:
-		return vec2Str(vector.MustFixedCol[types.Uuid](v)[:printN], v)
-	case types.T_TS:
-		return vec2Str(vector.MustFixedCol[types.TS](v)[:printN], v)
-	case types.T_Rowid:
-		return vec2Str(vector.MustFixedCol[types.Rowid](v)[:printN], v)
-	}
-	if v.GetType().IsVarlen() {
-		return vec2Str(vector.MustBytesCol(v)[:printN], v)
-	}
-	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
-}
-
-func debugMoBatch(moBat *batch.Batch) string {
-	if !logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		return "not debug level"
-	}
-	printN := moBat.Length()
-	if printN > logtail.PrintN {
-		printN = logtail.PrintN
-	}
-	buf := new(bytes.Buffer)
-	for i, vec := range moBat.Vecs {
-		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, printN))
-	}
-	return buf.String()
 }
 
 func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {

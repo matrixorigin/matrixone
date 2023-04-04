@@ -33,7 +33,7 @@ func TestSingleSQL(t *testing.T) {
 	//sql := "select * from nation"
 	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
 	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
-	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)"
+	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)"
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -377,7 +377,6 @@ func TestSingleSQL(t *testing.T) {
 // test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
 	// should pass
 	sqls := []string{
 		"SELECT '1900-01-01 00:00:00' + INTERVAL 2147483648 SECOND",
@@ -738,7 +737,7 @@ func TestTcl(t *testing.T) {
 }
 
 func TestDdl(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(true)
 	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
@@ -765,7 +764,7 @@ func TestDdl(t *testing.T) {
 		"create unique index idx_name on nation(n_regionkey)",
 		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
 		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
-		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
+		"create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)",
 		"lock tables nation read",
 		"lock tables nation write, supplier read",
 		"unlock tables",
@@ -871,6 +870,54 @@ func TestResultColumns(t *testing.T) {
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		// "UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		// "DELETE FROM NATION",
+		//"create database db_name",
+		//"drop database tpch",
+		//"create table tbl_name (b int unsigned, c char(20))",
+		//"drop table nation",
+	}
+	for _, sql := range returnNilSQL {
+		columns := getColumns(sql)
+		if columns != nil {
+			t.Fatalf("sql:%+v, return columns should be nil", sql)
+		}
+	}
+
+	returnColumnsSQL := map[string]string{
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
+		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
+		"show variables":            "Variable_name,Value",
+		"show create database tpch": "Database,Create Database",
+		"show create table nation":  "Table,Create Table",
+		"show databases":            "Database",
+		"show tables":               "Tables_in_tpch",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Extra,Comment",
+	}
+	for sql, colsStr := range returnColumnsSQL {
+		cols := strings.Split(colsStr, ",")
+		columns := getColumns(sql)
+		if len(columns) != len(cols) {
+			t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+		}
+		for idx, col := range cols {
+			// now ast always change col_name to lower string. will be fixed soon
+			if !strings.EqualFold(columns[idx].Name, col) {
+				t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+			}
+		}
+	}
+}
+
+func TestResultColumns2(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	getColumns := func(sql string) []*ColDef {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("sql %s build plan error:%+v", sql, err)
+		}
+		return GetResultColumnsFromPlan(logicPlan)
+	}
+
+	returnNilSQL := []string{
 		"create database db_name",
 		"drop database tpch",
 		"create table tbl_name (b int unsigned, c char(20))",
@@ -1045,11 +1092,11 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 }
 
 func Test_mergeContexts(t *testing.T) {
-	b1 := NewBinding(0, 1, "a", nil, nil, false)
+	b1 := NewBinding(0, 1, "a", 0, nil, nil, false)
 	bc1 := NewBindContext(nil, nil)
 	bc1.bindings = append(bc1.bindings, b1)
 
-	b2 := NewBinding(1, 2, "a", nil, nil, false)
+	b2 := NewBinding(1, 2, "a", 0, nil, nil, false)
 	bc2 := NewBindContext(nil, nil)
 	bc2.bindings = append(bc2.bindings, b2)
 
@@ -1061,7 +1108,7 @@ func Test_mergeContexts(t *testing.T) {
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 
 	//a merge b
-	b3 := NewBinding(2, 3, "b", nil, nil, false)
+	b3 := NewBinding(2, 3, "b", 0, nil, nil, false)
 	bc3 := NewBindContext(nil, nil)
 	bc3.bindings = append(bc3.bindings, b3)
 

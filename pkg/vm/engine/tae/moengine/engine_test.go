@@ -23,6 +23,7 @@ import (
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -258,7 +259,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
-			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12], false)
+			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12])
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -274,7 +275,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	_, err = rel.Stats(ctx, nil)
+	_, err = rel.Stats(ctx, nil, nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -373,24 +374,32 @@ func TestCopy1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	t1 := types.T_varchar.ToType()
-	v1 := containers.MockVector(t1, 10, false, true, nil)
+	v1 := containers.MockVector(t1, 10, false, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
 	mv1 := containers.CopyToMoVec(v1)
 	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), containers.GetValue(mv1, uint32(i)))
+		if v1.IsNull(i) {
+			assert.True(t, mv1.GetNulls().Contains(uint64(i)))
+		} else {
+			assert.Equal(t, v1.Get(i).([]byte), mv1.GetBytesAt(i))
+		}
 	}
 
 	t2 := types.T_date.ToType()
-	v2 := containers.MockVector(t2, 20, false, true, nil)
+	v2 := containers.MockVector(t2, 20, false, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})
 	mv2 := containers.CopyToMoVec(v2)
 	for i := 0; i < v2.Length(); i++ {
-		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
+		if v2.IsNull(i) {
+			assert.True(t, mv2.GetNulls().Contains(uint64(i)))
+		} else {
+			assert.Equal(t, v2.Get(i).(types.Date), vector.GetFixedAt[types.Date](mv2, i))
+		}
 	}
 
-	v3 := containers.NewVectorWithSharedMemory(mv2, true)
+	v3 := containers.NewVectorWithSharedMemory(mv2)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))

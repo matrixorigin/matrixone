@@ -14,9 +14,15 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"golang.org/x/exp/constraints"
+)
 
 func DeepCopyExprList(list []*Expr) []*Expr {
+	if list == nil {
+		return nil
+	}
 	newList := make([]*Expr, len(list))
 	for idx, expr := range list {
 		newList[idx] = DeepCopyExpr(expr)
@@ -290,10 +296,14 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		NotCacheable:    node.NotCacheable,
+		SourceStep:      node.SourceStep,
+		TargetSteps:     make([]int32, len(node.TargetSteps)),
 	}
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
+	copy(newNode.TargetSteps, node.TargetSteps)
 
 	for idx, expr := range node.ProjectList {
 		newNode.ProjectList[idx] = DeepCopyExpr(expr)
@@ -393,7 +403,6 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Id:          typ.Id,
 		NotNullable: typ.NotNullable,
 		Width:       typ.Width,
-		Size:        typ.Size,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
 	}
@@ -426,6 +435,10 @@ func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
 		Names:       make([]string, len(pkeyDef.Names)),
 	}
 	copy(def.Names, pkeyDef.Names)
+	// Check whether the composite primary key column is included
+	if pkeyDef.CompPkeyCol != nil {
+		def.CompPkeyCol = DeepCopyColDef(pkeyDef.CompPkeyCol)
+	}
 	return def
 }
 
@@ -458,6 +471,17 @@ func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
 	}
 }
 
+func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
+	if src == nil {
+		return nil
+	}
+	ret := make([]*plan.TableDef, len(src))
+	for i, def := range src {
+		ret[i] = DeepCopyTableDef(def)
+	}
+	return ret
+}
+
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	if table == nil {
 		return nil
@@ -469,7 +493,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
-		CompositePkey: nil,
 		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
 		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
@@ -496,15 +519,9 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	}
 
 	if table.Pkey != nil {
-		newTable.Pkey = &plan.PrimaryKeyDef{
-			Names: make([]string, len(table.Pkey.Names)),
-		}
-		copy(newTable.Pkey.Names, table.Pkey.Names)
+		newTable.Pkey = DeepCopyPrimaryKeyDef(table.Pkey)
 	}
 
-	if table.CompositePkey != nil {
-		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
-	}
 	if table.ClusterBy != nil {
 		newTable.ClusterBy = &plan.ClusterByDef{
 			Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),
@@ -524,12 +541,13 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	if table.Partition != nil {
 		partitionDef := &plan.PartitionByDef{
 			Type:                table.Partition.GetType(),
-			PartitionExpression: table.Partition.GetPartitionExpression(),
+			PartitionExpression: DeepCopyExpr(table.Partition.GetPartitionExpression()),
 			PartitionNum:        table.Partition.GetPartitionNum(),
 			Partitions:          make([]*plan.PartitionItem, len(table.Partition.Partitions)),
 			Algorithm:           table.Partition.GetAlgorithm(),
 			IsSubPartition:      table.Partition.GetIsSubPartition(),
 			PartitionMsg:        table.Partition.GetPartitionMsg(),
+			PartitionTableNames: DeepCopyStringList(table.GetPartition().GetPartitionTableNames()),
 		}
 		if table.Partition.PartitionExpr != nil {
 			partitionDef.PartitionExpr = &plan.PartitionExpr{
@@ -540,29 +558,20 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 		if table.Partition.PartitionColumns != nil {
 			partitionDef.PartitionColumns = &plan.PartitionColumns{
-				Columns:          make([]*plan.Expr, len(table.Partition.PartitionColumns.Columns)),
-				PartitionColumns: make([]string, len(table.Partition.PartitionColumns.PartitionColumns)),
+				Columns:          DeepCopyExprList(table.Partition.PartitionColumns.Columns),
+				PartitionColumns: DeepCopyStringList(table.Partition.PartitionColumns.PartitionColumns),
 			}
-			for i, e := range table.Partition.PartitionColumns.Columns {
-				partitionDef.PartitionColumns.Columns[i] = DeepCopyExpr(e)
-			}
-			copy(partitionDef.PartitionColumns.PartitionColumns, table.Partition.PartitionColumns.PartitionColumns)
 		}
 
 		for i, e := range table.Partition.Partitions {
 			partitionDef.Partitions[i] = &plan.PartitionItem{
-				PartitionName:   e.PartitionName,
-				OrdinalPosition: e.OrdinalPosition,
-				Description:     e.Description,
-				Comment:         e.Comment,
-				LessThan:        make([]*plan.Expr, len(e.LessThan)),
-				InValues:        make([]*plan.Expr, len(e.InValues)),
-			}
-			for j, ee := range e.LessThan {
-				partitionDef.Partitions[i].LessThan[j] = DeepCopyExpr(ee)
-			}
-			for j, ee := range e.InValues {
-				partitionDef.Partitions[i].InValues[j] = DeepCopyExpr(ee)
+				PartitionName:      e.PartitionName,
+				OrdinalPosition:    e.OrdinalPosition,
+				Description:        e.Description,
+				Comment:            e.Comment,
+				LessThan:           DeepCopyExprList(e.LessThan),
+				InValues:           DeepCopyExprList(e.InValues),
+				PartitionTableName: e.PartitionTableName,
 			}
 		}
 		newTable.Partition = partitionDef
@@ -682,13 +691,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_CreateTable:
 		CreateTable := &plan.CreateTable{
-			IfNotExists: df.CreateTable.IfNotExists,
-			Temporary:   df.CreateTable.Temporary,
-			Database:    df.CreateTable.Database,
-			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef),
-			FkDbs:       make([]string, len(df.CreateTable.FkDbs)),
-			FkTables:    make([]string, len(df.CreateTable.FkTables)),
-			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
+			IfNotExists:     df.CreateTable.IfNotExists,
+			Temporary:       df.CreateTable.Temporary,
+			Database:        df.CreateTable.Database,
+			TableDef:        DeepCopyTableDef(df.CreateTable.TableDef),
+			IndexTables:     DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
+			FkDbs:           make([]string, len(df.CreateTable.FkDbs)),
+			FkTables:        make([]string, len(df.CreateTable.FkTables)),
+			FkCols:          make([]*plan.FkColName, len(df.CreateTable.FkCols)),
+			PartitionTables: DeepCopyTableDefList(df.CreateTable.GetPartitionTables()),
 		}
 		copy(CreateTable.FkDbs, df.CreateTable.FkDbs)
 		copy(CreateTable.FkTables, df.CreateTable.FkTables)
@@ -742,10 +753,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
 			DropTable: &plan.DropTable{
-				IfExists:     df.DropTable.IfExists,
-				Database:     df.DropTable.Database,
-				Table:        df.DropTable.Table,
-				ClusterTable: DeepCopyClusterTable(df.DropTable.GetClusterTable()),
+				IfExists:            df.DropTable.IfExists,
+				Database:            df.DropTable.Database,
+				Table:               df.DropTable.Table,
+				IndexTableNames:     DeepCopyStringList(df.DropTable.GetIndexTableNames()),
+				ClusterTable:        DeepCopyClusterTable(df.DropTable.GetClusterTable()),
+				TableId:             df.DropTable.GetTableId(),
+				ForeignTbl:          DeepCopyNumberList(df.DropTable.GetForeignTbl()),
+				PartitionTableNames: DeepCopyStringList(df.DropTable.GetPartitionTableNames()),
 			},
 		}
 
@@ -1017,4 +1032,22 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		ScanTime:         analyzeinfo.GetScanTime(),
 		InsertTime:       analyzeinfo.GetInsertTime(),
 	}
+}
+
+func DeepCopyStringList(src []string) []string {
+	if src == nil {
+		return nil
+	}
+	ret := make([]string, len(src))
+	copy(ret, src)
+	return ret
+}
+
+func DeepCopyNumberList[T constraints.Integer](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	ret := make([]T, len(src))
+	copy(ret, src)
+	return ret
 }

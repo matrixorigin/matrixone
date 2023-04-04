@@ -62,6 +62,11 @@ const (
 )
 
 const (
+	// Non-hard-coded data dictionary table
+	MO_INDEXES = "mo_indexes"
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
@@ -77,6 +82,7 @@ const (
 	SystemDBAttr_Creator     = "creator"
 	SystemDBAttr_CreateAt    = "created_time"
 	SystemDBAttr_AccID       = "account_id"
+	SystemDBAttr_Type        = "dat_type"
 
 	// 'mo_tables' table
 	SystemRelAttr_ID          = "rel_id"
@@ -91,7 +97,8 @@ const (
 	SystemRelAttr_Creator     = "creator"
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_AccID       = "account_id"
-	SystemRelAttr_Partition   = "partitioned"
+	SystemRelAttr_Partitioned = "partitioned"
+	SystemRelAttr_Partition   = "partition_info"
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
 
@@ -141,9 +148,16 @@ const (
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
+	/*
+		the partition table contains the data of the partition.
+		the table partitioned has multiple partition tables
+	*/
+	SystemPartitionRel = "partition"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
+
+	SystemDBTypeSubscription = "subscription"
 )
 
 const (
@@ -169,6 +183,7 @@ const (
 	MO_DATABASE_CREATOR_IDX          = 5
 	MO_DATABASE_CREATED_TIME_IDX     = 6
 	MO_DATABASE_ACCOUNT_ID_IDX       = 7
+	MO_DATABASE_DAT_TYPE_IDX         = 8
 
 	MO_TABLES_REL_ID_IDX         = 0
 	MO_TABLES_REL_NAME_IDX       = 1
@@ -183,8 +198,9 @@ const (
 	MO_TABLES_OWNER_IDX          = 10
 	MO_TABLES_ACCOUNT_ID_IDX     = 11
 	MO_TABLES_PARTITIONED_IDX    = 12
-	MO_TABLES_VIEWDEF_IDX        = 13
-	MO_TABLES_CONSTRAINT_IDX     = 14
+	MO_TABLES_PARTITION_INFO_IDX = 13
+	MO_TABLES_VIEWDEF_IDX        = 14
+	MO_TABLES_CONSTRAINT_IDX     = 15
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -219,13 +235,13 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID    uint64
+	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
 	MetaLoc    string
 	DeltaLoc   string
 	CommitTs   types.TS
-	SegmentID  uint64
+	SegmentID  types.Uuid
 }
 
 // used for memengine and tae
@@ -235,6 +251,7 @@ type CreateDatabase struct {
 	DatabaseId  uint64
 	Name        string
 	CreateSql   string
+	DatTyp      string
 	Owner       uint32
 	Creator     uint32
 	AccountId   uint32
@@ -256,6 +273,7 @@ type CreateTable struct {
 	DatabaseId   uint64
 	DatabaseName string
 	Comment      string
+	Partitioned  int8
 	Partition    string
 	RelKind      string
 	Viewdef      string
@@ -290,6 +308,7 @@ var (
 		SystemDBAttr_Creator,
 		SystemDBAttr_CreateAt,
 		SystemDBAttr_AccID,
+		SystemDBAttr_Type,
 	}
 	MoTablesSchema = []string{
 		SystemRelAttr_ID,
@@ -304,6 +323,7 @@ var (
 		SystemRelAttr_Creator,
 		SystemRelAttr_Owner,
 		SystemRelAttr_AccID,
+		SystemRelAttr_Partitioned,
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
@@ -350,6 +370,7 @@ var (
 		types.New(types.T_uint32, 0, 0),     // creator
 		types.New(types.T_timestamp, 0, 0),  // created_time
 		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_varchar, 32, 0),   // dat_type
 	}
 	MoTablesTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),     // rel_id
@@ -364,7 +385,8 @@ var (
 		types.New(types.T_uint32, 0, 0),     // creator
 		types.New(types.T_uint32, 0, 0),     // owner
 		types.New(types.T_uint32, 0, 0),     // account_id
-		types.New(types.T_blob, 0, 0),       // partition
+		types.New(types.T_int8, 0, 0),       // partitioned
+		types.New(types.T_blob, 0, 0),       // partition_info
 		types.New(types.T_blob, 0, 0),       // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
 	}
@@ -393,13 +415,13 @@ var (
 		types.New(types.T_int8, 0, 0),       // att_is_clusterby
 	}
 	MoTableMetaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),                    // block_id
+		types.New(types.T_Blockid, 0, 0),                   // block_id
 		types.New(types.T_bool, 0, 0),                      // entry_state, true for appendable
 		types.New(types.T_bool, 0, 0),                      // sorted, true for sorted by primary key
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
 		types.New(types.T_TS, 0, 0),                        // committs
-		types.New(types.T_uint64, 0, 0),                    // segment_id
+		types.New(types.T_uuid, 0, 0),                      // segment_id
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

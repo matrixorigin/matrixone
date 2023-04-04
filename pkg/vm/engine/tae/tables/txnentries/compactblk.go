@@ -15,12 +15,14 @@
 package txnentries
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -50,7 +52,7 @@ func NewCompactBlockEntry(
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
-		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+		prefix := toId.BlockID[:]
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
 		if deletes != nil && !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
@@ -81,6 +83,26 @@ func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
+	var fs fileservice.FileService
+	var toName string
+
+	fromBlockEntry := entry.from.GetMeta().(*catalog.BlockEntry)
+	fs = fromBlockEntry.GetBlockData().GetFs().Service
+
+	if entry.to != nil {
+		toBlockEntry := entry.to.GetMeta().(*catalog.BlockEntry)
+		toName = toBlockEntry.ID.ObjectString()
+	}
+
+	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
+		// do not delete `from` block file because it can be written again if it has deletes
+		// while it is totally safe to delete the brand new `to` block file
+		if toName != "" {
+			_ = fs.Delete(context.TODO(), toName)
+		}
+		// logutil.Infof("rollback unfinished compact file %q and %q", fromName, toName)
+		return nil
+	})
 	return
 }
 func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
@@ -105,7 +127,7 @@ func (entry *compactBlockEntry) Set1PC()     {}
 func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS(), types.MaxTs()) {
+	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs()) {
 		err = moerr.NewTxnWWConflictNoCtx()
 	}
 	return

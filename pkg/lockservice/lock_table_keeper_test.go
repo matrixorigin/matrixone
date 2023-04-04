@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -93,11 +94,15 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 			m.Store(1,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
-					nil))
+					nil,
+					nil,
+					runtime.DefaultRuntime().Clock()))
 			m.Store(2,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
-					nil))
+					nil,
+					nil,
+					runtime.DefaultRuntime().Clock()))
 			m.Store(3,
 				newRemoteLockTable(
 					"s1",

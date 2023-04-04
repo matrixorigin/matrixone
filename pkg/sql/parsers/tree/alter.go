@@ -203,6 +203,23 @@ type alterOptionImpl struct {
 	AlterTableOption
 }
 
+type AlterOptionAlterIndex struct {
+	alterOptionImpl
+	Name       Identifier
+	Visibility VisibleType
+}
+
+func (node *AlterOptionAlterIndex) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter index ")
+	node.Name.Format(ctx)
+	switch node.Visibility {
+	case VISIBLE_TYPE_VISIBLE:
+		ctx.WriteString(" visible")
+	case VISIBLE_TYPE_INVISIBLE:
+		ctx.WriteString(" invisible")
+	}
+}
+
 type AlterOptionAdd struct {
 	alterOptionImpl
 	Def TableDef
@@ -293,3 +310,6 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
 	}
 }
+
+func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
+func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }

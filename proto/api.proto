@@ -73,10 +73,7 @@ message SyncLogTailResp {
 
 //How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
-    uint32 user_id = 1;
-    uint32 role_id = 2;
-    uint32 account_id = 3;
-    repeated Entry entry_list = 4;
+    repeated Entry entry_list = 1;
 };
 
 // CN--->DN, DDL
@@ -194,7 +191,9 @@ message Entry {
     string    table_name = 4;
     string    database_name = 5;
     string    file_name = 6;
-    Batch     bat = 8;
+    Batch     bat = 7;
+    //whether DN do the PK uniqueness check against txn's workspace or not.
+    int32     pk_check_by_dn = 8;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,

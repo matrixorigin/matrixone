@@ -76,7 +76,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-	table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), int64(1000000), nil).AnyTimes()
+	table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), int64(1000000), nil).AnyTimes()
 	table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -92,10 +92,10 @@ func TestCalculateStorageUsage(t *testing.T) {
 	pu.SV.SetDefaultValues()
 
 	// Mock autoIncrCache
-	aic := defines.AutoIncrCaches{}
+	aicm := &defines.AutoIncrCacheManager{}
 
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, aic)
+		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
 	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {

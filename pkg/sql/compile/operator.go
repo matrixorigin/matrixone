@@ -100,12 +100,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
 		res.Arg = &group.Argument{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    t.Types,
-			Aggs:     t.Aggs,
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     t.Types,
+			Aggs:      t.Aggs,
+			MultiAggs: t.MultiAggs,
 		}
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
@@ -870,7 +871,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	// multiaggs: is not like the normal agg funcs which have only one arg exclude 'distinct'
 	// for now, we have group_concat
 	multiaggs := make([]group_concat.Argument, len(n.AggList))
-	for _, expr := range n.AggList {
+	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			if len(f.F.Args) > 1 {
@@ -881,6 +882,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					Dist:      distinct,
 					GroupExpr: f.F.Args[:len(f.F.Args)-1],
 					Separator: sepa,
+					OrderId:   int32(i),
 				}
 				lenMultiAggs++
 				continue
@@ -902,11 +904,9 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	multiaggs = multiaggs[:lenMultiAggs]
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
-		typs[i].Oid = types.T(e.Typ.Id)
-		typs[i].Width = e.Typ.Width
-		typs[i].Size = e.Typ.Size
-		typs[i].Scale = e.Typ.Scale
+		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
+	// we need to store the
 	return &group.Argument{
 		Aggs:      aggs,
 		MultiAggs: multiaggs,
@@ -970,7 +970,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 		}
 
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			isSameCN(currentCNAddr, s.NodeInfo.Addr) {
+			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])

@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,11 +46,14 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 
 // WithMessageHandle setup message handle
 func WithMessageHandle(f func(ctx context.Context,
+	cnAddr string,
 	message morpc.Message,
 	cs morpc.ClientSession,
 	engine engine.Engine,
 	fs fileservice.FileService,
+	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {
 	return func(s *service) {
 		s.requestHandler = f

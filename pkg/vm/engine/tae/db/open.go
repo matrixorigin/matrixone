@@ -100,7 +100,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
-
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -117,6 +116,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start()
+	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		db.Fs,
 		db.Catalog,

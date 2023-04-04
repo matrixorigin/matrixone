@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/inside"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/seq"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
@@ -454,6 +455,18 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_date},
 				ReturnTyp: types.T_uint32,
 				Fn:        binary.ExtractFromDate,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_varchar, types.T_time},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ExtractFromTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ExtractFromVarchar,
 			},
 		},
 	},
@@ -3019,6 +3032,85 @@ var builtins = map[int]Functions{
 					return parameters[0]
 				},
 				NewFn: unary.Values,
+			},
+		},
+	},
+	NEXTVAL: {
+		Id:     NEXTVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_varchar,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Nextval,
+			},
+		},
+	},
+	SETVAL: {
+		Id:     SETVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_bool,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Setval,
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Setval,
+			},
+		},
+	},
+	CURRVAL: {
+		Id:     CURRVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_varchar,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Currval,
+			},
+		},
+	},
+	LASTVAL: {
+		Id:     LASTVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Lastval,
 			},
 		},
 	},

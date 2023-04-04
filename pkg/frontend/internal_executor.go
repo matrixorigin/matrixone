@@ -52,25 +52,25 @@ type internalMiniExec interface {
 
 type internalExecutor struct {
 	sync.Mutex
-	proto          *internalProtocol
-	executor       internalMiniExec // MySqlCmdExecutor struct impls miniExec
-	pu             *config.ParameterUnit
-	baseSessOpts   ie.SessionOverrideOptions
-	autoIncrCaches defines.AutoIncrCaches
+	proto        *internalProtocol
+	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
+	pu           *config.ParameterUnit
+	baseSessOpts ie.SessionOverrideOptions
+	aicm         *defines.AutoIncrCacheManager
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor(), autoIncrCaches)
+func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), aicm)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
-		proto:          proto,
-		executor:       inner,
-		pu:             pu,
-		baseSessOpts:   ie.NewOptsBuilder().Finish(),
-		autoIncrCaches: autoIncrCaches,
+		proto:        proto,
+		executor:     inner,
+		pu:           pu,
+		baseSessOpts: ie.NewOptsBuilder().Finish(),
+		aicm:         aicm,
 	}
 	return ret
 }
@@ -171,11 +171,9 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm)
 	sess.SetRequestContext(ctx)
-
-	// Set AutoIncrCache for this session.
-	sess.SetAutoIncrCaches(ie.autoIncrCaches)
+	sess.SetConnectContext(ctx)
 
 	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	sess.SetTenantInfo(t)
@@ -223,7 +221,7 @@ func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
 	return nil
 }
 
-func (ip *internalProtocol) GetConciseProfile() string {
+func (ip *internalProtocol) GetDebugString() string {
 	return "internal protocol"
 }
 
@@ -232,14 +230,6 @@ func (ip *internalProtocol) GetSequenceId() uint8 {
 }
 
 func (ip *internalProtocol) SetSequenceID(value uint8) {
-}
-
-func (ip *internalProtocol) makeProfile(profileTyp profileType) {
-
-}
-
-func (ip *internalProtocol) getProfile(profileTyp profileType) string {
-	return ""
 }
 
 func (ip *internalProtocol) IsEstablished() bool {
@@ -266,8 +256,8 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 }
 
 // Peer gets the address [Host:Port] of the client
-func (ip *internalProtocol) Peer() (string, string, string, string) {
-	panic("not impl")
+func (ip *internalProtocol) Peer() string {
+	return "0.0.0.0"
 }
 
 func (ip *internalProtocol) GetDatabaseName() string {
@@ -392,5 +382,11 @@ func (ip *internalProtocol) ResetStatistics() {
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (ip *internalProtocol) incDebugCount(int) {}
+
+func (ip *internalProtocol) resetDebugCount() []uint64 {
 	return nil
 }

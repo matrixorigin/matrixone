@@ -39,6 +39,7 @@ type Txn interface {
 	GetID() string
 	Is2PC() bool
 	SetCommitTS(cts types.TS) error
+	GetCommitTS() types.TS
 	SetParticipants(ids []uint64) error
 	SetPKDedupSkip(skip txnif.PKDedupSkipScope)
 	Prepare() (types.TS, error)
@@ -99,8 +100,8 @@ type Engine interface {
 	DropDatabase(ctx context.Context, databaseName string, txn Txn) error
 	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
-	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
-	CreateDatabaseWithID(ctx context.Context, databaseName, createSql string, id uint64, txn Txn) error
+	CreateDatabase(ctx context.Context, databaseName, datTyp string, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName, createSql, datTyp string, id uint64, txn Txn) error
 
 	// DatabaseNames returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
@@ -120,6 +121,7 @@ type TxnEngine interface {
 	engine.Engine
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
+	StartTxnWithNow(info []byte) (txn Txn, err error)
 	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
 	GetTxnByID(id []byte) (txn Txn, err error)
 	Close() error

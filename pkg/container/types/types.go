@@ -74,16 +74,18 @@ const (
 	T_text T = 71
 
 	// Transaction TS
-	T_TS    T = 100
-	T_Rowid T = 101
+	T_TS      T = 100
+	T_Rowid   T = 101
+	T_Blockid T = 102
 
 	// system family
 	T_tuple T = 201
 )
 
 const (
-	TxnTsSize = 12
-	RowidSize = 16
+	TxnTsSize   = 12
+	RowidSize   = 24
+	BlockidSize = 20
 )
 
 type Type struct {
@@ -96,10 +98,11 @@ type Type struct {
 	dummy1  uint8
 	dummy2  uint8
 
+	Size int32
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
-	Size  int32
 	Width int32
+	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
 }
 
@@ -133,6 +136,9 @@ type TS [TxnTsSize]byte
 // Rowid
 type Rowid [RowidSize]byte
 
+// Blockid
+type Blockid [BlockidSize]byte
+
 // Fixed bytes.   Deciaml64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
 type FixedBytes interface {
@@ -165,7 +171,7 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid
+	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid | Blockid
 }
 
 type Number interface {
@@ -213,14 +219,15 @@ var Types map[string]T = map[string]T{
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
+	"blockid":               T_Blockid,
 }
 
 func New(oid T, width, scale int32) Type {
 	return Type{
 		Oid:     oid,
+		Size:    int32(oid.TypeLen()),
 		Width:   width,
 		Scale:   scale,
-		Size:    int32(oid.TypeLen()),
 		Charset: CharsetType(oid),
 	}
 }
@@ -240,8 +247,12 @@ func TypeSize(oid T) int {
 	return oid.TypeLen()
 }
 
+func (t Type) GetSize() int32 {
+	return t.Size
+}
+
 func (t Type) TypeSize() int {
-	return t.Oid.TypeLen()
+	return int(t.Size)
 }
 
 func (t Type) IsBoolean() bool {
@@ -371,6 +382,8 @@ func (t T) ToType() Type {
 		typ.Size = TxnTsSize
 	case T_Rowid:
 		typ.Size = RowidSize
+	case T_Blockid:
+		typ.Size = BlockidSize
 	case T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
 	case T_char:
@@ -456,6 +469,10 @@ func (t T) String() string {
 		return "ROWID"
 	case T_uuid:
 		return "UUID"
+	case T_Blockid:
+		return "BLOCKID"
+	case T_interval:
+		return "INTERVAL"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -519,6 +536,10 @@ func (t T) OidString() string {
 		return "T_TS"
 	case T_Rowid:
 		return "T_Rowid"
+	case T_Blockid:
+		return "T_Blockid"
+	case T_interval:
+		return "T_interval"
 	}
 	return "unknown_type"
 }
@@ -562,10 +583,12 @@ func (t T) TypeLen() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
-	case T_tuple:
+	case T_Blockid:
+		return BlockidSize
+	case T_tuple, T_interval:
 		return 0
 	}
-	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
+	panic(fmt.Sprintf("unknown type %d", t))
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
@@ -593,10 +616,12 @@ func (t T) FixedLength() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
+	case T_Blockid:
+		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
 	}
-	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type

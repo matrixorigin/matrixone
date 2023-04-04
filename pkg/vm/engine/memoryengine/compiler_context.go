@@ -16,14 +16,15 @@ package memoryengine
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 )
 
 type CompilerContext struct {
@@ -31,6 +32,26 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (e *Engine) NewCompilerContext(
@@ -57,7 +78,15 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
-	return &plan.Stats{}
+	return plan.DefaultStats()
+}
+
+func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+	return nil
+}
+
+func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return nil, nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
@@ -77,6 +106,18 @@ func (c *CompilerContext) DatabaseExists(name string) bool {
 		c.txnOp,
 	)
 	return err == nil
+}
+
+func (c *CompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+	database, err := c.engine.Database(c.ctx, dbName, c.txnOp)
+	if err != nil {
+		return 0, err
+	}
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(c.ctx), 10, 64)
+	if err != nil {
+		return 0, moerr.NewInternalError(c.ctx, "The databaseid of '%s' is not a valid number", dbName)
+	}
+	return databaseId, nil
 }
 
 func (c *CompilerContext) DefaultDatabase() string {
@@ -223,7 +264,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
-			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},
 		Default:   attr.Default,

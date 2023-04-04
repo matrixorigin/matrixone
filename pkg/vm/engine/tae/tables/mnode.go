@@ -48,11 +48,7 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	schema := block.meta.GetSchema()
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
-	impl.data = containers.BuildBatch(
-		schema.AllNames(),
-		schema.AllTypes(),
-		schema.AllNullables(),
-		opts)
+	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	impl.initIndexes(schema)
 	impl.OnZeroCB = impl.close
 	return impl
@@ -74,7 +70,7 @@ func (node *memoryNode) initIndexes(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
-	logutil.Infof("Releasing Memorynode BLK-%d", node.block.meta.ID)
+	logutil.Infof("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
 	for i, index := range node.indexes {
@@ -173,16 +169,8 @@ func (node *memoryNode) ApplyAppend(
 	from = int(node.data.Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		if def.IsPhyAddr() {
-			continue
-		}
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
-	}
-	if err = node.FillPhyAddrColumn(
-		uint32(from),
-		uint32(bat.Length())); err != nil {
-		return
 	}
 	return
 }

@@ -26,21 +26,19 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 	t1 := rewriteDecimalTypeIfNecessary(&plan.Type{
 		Id: int32(types.T_decimal64),
 	})
-	require.Equal(t, []int32{t1.Scale, t1.Width, t1.Size}, []int32{2, 6, 8})
+	require.Equal(t, []int32{t1.Scale, t1.Width}, []int32{2, 6})
 	t2 := rewriteDecimalTypeIfNecessary(&plan.Type{
 		Id: int32(types.T_decimal128),
 	})
-	require.Equal(t, []int32{t2.Scale, t2.Width, t2.Size}, []int32{10, 38, 16})
+	require.Equal(t, []int32{t2.Scale, t2.Width}, []int32{10, 38})
 	t3 := rewriteDecimalTypeIfNecessary(&plan.Type{
 		Id:    int32(types.T_decimal64),
 		Scale: 10,
-		Size:  8,
 	})
-	require.Equal(t, []int32{t3.Scale, t3.Width, t3.Size}, []int32{10, 0, 8})
+	require.Equal(t, []int32{t3.Scale, t3.Width}, []int32{10, 0})
 	t4 := rewriteDecimalTypeIfNecessary(&plan.Type{
 		Id:    int32(types.T_decimal128),
 		Width: 18,
-		Size:  16,
 	})
-	require.Equal(t, []int32{t4.Scale, t4.Width, t4.Size}, []int32{0, 18, 16})
+	require.Equal(t, []int32{t4.Scale, t4.Width}, []int32{0, 18})
 }

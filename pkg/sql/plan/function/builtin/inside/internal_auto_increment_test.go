@@ -48,8 +48,8 @@ func TestInternalAutoIncrement(t *testing.T) {
 	proc := testutil.NewProc()
 
 	var mu sync.Mutex
-	proc.SessionInfo.AutoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
-	proc.SessionInfo.AutoIncrCaches.Mu = &mu
+	// 3000 is the default number.
+	proc.Aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &mu, MaxSize: 3000}
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -90,7 +90,7 @@ func TestInternalAutoIncrement(t *testing.T) {
 	table.EXPECT().TableDefs(gomock.Any()).Return(buildTableDefs(columnNames, columnTypes), nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-	table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	table.EXPECT().Rows(gomock.Any()).Return(int64(10), nil).AnyTimes()
@@ -258,7 +258,6 @@ func makePlan2Type(typ types.Type) plan.Type {
 	return plan.Type{
 		Id:    int32(typ.Oid),
 		Width: typ.Width,
-		Size:  typ.Size,
 		Scale: typ.Scale,
 	}
 }
@@ -269,14 +268,9 @@ func buildTableDefs(columnNames []string, columnTypes []plan.Type) []engine.Tabl
 	for i, colTyp := range columnTypes {
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name: columnNames[i],
-				Alg:  compress.None,
-				Type: types.Type{
-					Oid:   types.T(colTyp.GetId()),
-					Width: colTyp.GetWidth(),
-					Scale: colTyp.GetScale(),
-					Size:  colTyp.GetSize(),
-				},
+				Name:          columnNames[i],
+				Alg:           compress.None,
+				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       nil,
 				OnUpdate:      nil,
 				Primary:       i == 0,

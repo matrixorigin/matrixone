@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"time"
 
@@ -130,6 +131,9 @@ func NewService(
 		return nil, err
 	}
 
+	// start I/O pipeline
+	blockio.Start()
+
 	s := &store{
 		cfg:                 cfg,
 		rt:                  rt,
@@ -209,6 +213,8 @@ func (s *store) Close() error {
 	if ts != nil {
 		err = ts.Close()
 	}
+	// stop I/O pipeline
+	blockio.Stop()
 	return err
 }
 
@@ -349,7 +355,7 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
-		s.cfg.LockService.LockListenAddress,
+		s.cfg.LockService.ListenAddress,
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
 	return nil

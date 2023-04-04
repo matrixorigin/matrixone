@@ -44,7 +44,7 @@ func TestReplayCatalog1(t *testing.T) {
 	}
 
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db", "")
+	_, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	createTable := func(schema *catalog.Schema, wg *sync.WaitGroup, forceCkp bool) func() {
@@ -118,12 +118,12 @@ func TestReplayCatalog2(t *testing.T) {
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db2", "")
+	_, err := txn.CreateDatabase("db2", "", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -196,12 +196,12 @@ func TestReplayCatalog3(t *testing.T) {
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db2", "")
+	_, err := txn.CreateDatabase("db2", "", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -286,7 +286,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -392,7 +392,7 @@ func TestReplay2(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -530,7 +530,7 @@ func TestReplay3(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	tbl, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -603,7 +603,7 @@ func TestReplayTableRows(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	tbl, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -626,6 +626,8 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(bats[1])
 	assert.Nil(t, err)
 	rows += 1600
+	blkIterator = tbl.MakeBlockIt()
+	blkID = blkIterator.GetBlock().Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
@@ -1299,7 +1301,7 @@ func TestReplaySnapshots(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -1330,4 +1332,37 @@ func TestReplaySnapshots(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.Close()
+}
+
+func TestReplayDatabaseEntry(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	datypStr := "datyp"
+	createSqlStr := "createSql"
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", createSqlStr, datypStr)
+	assert.NoError(t, err)
+	dbID := db.GetID()
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+	t.Log(tae.Catalog.SimplePPString(3))
+	dbEntry, err := tae.Catalog.GetDatabaseByID(dbID)
+	assert.NoError(t, err)
+	assert.Equal(t, datypStr, dbEntry.GetDatType())
+	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.NoError(t, err)
+
+	tae.restart()
+	dbEntry, err = tae.Catalog.GetDatabaseByID(dbID)
+	assert.NoError(t, err)
+	assert.Equal(t, datypStr, dbEntry.GetDatType())
+	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
 }

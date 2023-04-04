@@ -20,13 +20,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -84,23 +84,26 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account           string
-	User              string
-	Host              string
-	Role              string
-	ConnectionID      uint64
-	AccountId         uint32
-	RoleId            uint32
-	UserId            uint32
-	LastInsertID      uint64
-	Database          string
-	Version           string
-	TimeZone          *time.Location
-	StorageEngine     engine.Engine
-	QueryId           []string
-	ResultColTypes    []types.Type
-	AutoIncrCaches    defines.AutoIncrCaches
-	AutoIncrCacheSize uint64
+	Account        string
+	User           string
+	Host           string
+	Role           string
+	ConnectionID   uint64
+	AccountId      uint32
+	RoleId         uint32
+	UserId         uint32
+	LastInsertID   uint64
+	Database       string
+	Version        string
+	TimeZone       *time.Location
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
+	SeqCurValues   map[uint64]string
+	SeqDeleteKeys  []uint64
+	SeqAddValues   map[uint64]string
+	SeqLastValue   []string
+	SqlHelper      sqlHelper
 }
 
 // AnalyzeInfo  analyze information for query
@@ -164,6 +167,7 @@ type Process struct {
 	Cancel context.CancelFunc
 
 	FileService fileservice.FileService
+	LockService lockservice.LockService
 
 	LoadTag bool
 
@@ -172,6 +176,12 @@ type Process struct {
 	LoadLocalReader *io.PipeReader
 
 	DispatchNotifyCh chan WrapCs
+
+	Aicm *defines.AutoIncrCacheManager
+}
+
+type sqlHelper interface {
+	ExecSql(string) ([]interface{}, error)
 }
 
 type WrapCs struct {
@@ -179,6 +189,14 @@ type WrapCs struct {
 	Uid    uuid.UUID
 	Cs     morpc.ClientSession
 	DoneCh chan struct{}
+}
+
+func (proc *Process) InitSeq() {
+	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.SessionInfo.SeqLastValue[0] = ""
+	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
+	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

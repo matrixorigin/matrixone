@@ -147,7 +147,7 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 	}
 
 	newTxn.CommitTS = request.Txn.CommitTS
-	if err := s.storage.Commit(ctx, newTxn); err != nil {
+	if _, err := s.storage.Commit(ctx, newTxn); err != nil {
 		response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
 		return nil
 	}

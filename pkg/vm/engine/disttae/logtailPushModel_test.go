@@ -15,8 +15,10 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -45,15 +47,6 @@ func TestLogList_Sort(t *testing.T) {
 	}
 }
 
-/*
-// should ensure syncLogTailTimestamp can get time or set time without any trace.
-// and will not cause any deadlock.
-func TestSyncLogTailTimestamp(t *testing.T) {
-	// Not now.
-	t.Skip()
-}
-*/
-
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
@@ -81,6 +74,48 @@ func TestSubscribedTable(t *testing.T) {
 	require.Equal(t, 0, len(subscribeRecord.m))
 }
 
+func TestReconnectRace(t *testing.T) {
+	pClient := pushClient{
+		receivedLogTailTime: syncLogTailTimestamp{},
+		subscribed:          subscribedTable{},
+		subscriber: &logTailSubscriber{
+			lockSubscriber: make(chan func(context.Context, api.TableID) error, 1),
+		},
+	}
+	pClient.receivedLogTailTime.initLogTailTimestamp()
+	pClient.subscribed.initTableSubscribeRecord()
+	pClient.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
+		return nil
+	}
+
+	// mock reconnect
+	mockReconnect := func(pc *pushClient) {
+		<-pc.subscriber.lockSubscriber
+		time.Sleep(time.Millisecond * 2)
+		pc.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
+			return nil
+		}
+	}
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			mockReconnect(&pClient)
+		}
+	}()
+	go func() {
+		for i := 0; i < 1000; i++ {
+			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
+			require.NoError(t, err)
+		}
+	}()
+	go func() {
+		for i := 0; i < 1000; i++ {
+			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
+			require.NoError(t, err)
+		}
+	}()
+}
+
 var _ = debugToPrintLogList
 
 func debugToPrintLogList(ls []logtail.TableLogtail) string {
@@ -95,14 +130,8 @@ func debugToPrintLogList(ls []logtail.TableLogtail) string {
 			str += "\tcommands are :\n"
 		}
 		for j, command := range l.Commands {
-			typ := "insert"
-			if command.EntryType == 1 {
-				typ = "delete"
-			} else if command.EntryType == 2 {
-				typ = "update"
-			}
 			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
-				j, command.DatabaseName, command.TableName, typ)
+				j, command.DatabaseName, command.TableName, command.EntryType.String())
 		}
 	}
 	return str

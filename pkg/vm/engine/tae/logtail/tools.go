@@ -49,8 +49,6 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 	return w.String()
 }
 
-const PrintN = 3
-
 func DebugBatchToString(name string, bat *containers.Batch, isSpecialRowID bool, lvl zapcore.Level) string {
 	if logutil.GetSkip1Logger().Core().Enabled(lvl) {
 		return BatchToString(name, bat, isSpecialRowID)
@@ -65,12 +63,12 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 		_, _ = w.WriteString(fmt.Sprintf("(attr=%s)", bat.Attrs[i]))
 		if bat.Attrs[i] == catalog.AttrRowID {
 			if isSpecialRowID {
-				_, _ = w.WriteString(ToStringTemplate(vec, PrintN, common.WithSpecialRowid{}))
+				_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN, common.WithSpecialRowid{}))
 			} else {
-				_, _ = w.WriteString(ToStringTemplate(vec, PrintN))
+				_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN))
 			}
 		} else {
-			_, _ = w.WriteString(ToStringTemplate(vec, PrintN, common.WithDoNotPrintBin{}))
+			_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN, common.WithDoNotPrintBin{}))
 		}
 		_ = w.WriteByte('\n')
 	}
@@ -81,6 +79,18 @@ func u64ToRowID(v uint64) types.Rowid {
 	var rowid types.Rowid
 	bs := types.EncodeUint64(&v)
 	copy(rowid[0:], bs)
+	return rowid
+}
+
+func blockid2rowid(bid *types.Blockid) types.Rowid {
+	var rowid types.Rowid
+	copy(rowid[:], bid[:])
+	return rowid
+}
+
+func segid2rowid(sid *types.Uuid) types.Rowid {
+	var rowid types.Rowid
+	copy(rowid[:], sid[:])
 	return rowid
 }
 
@@ -100,17 +110,16 @@ func bytesToRowID(bs []byte) types.Rowid {
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
+	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType()))
+	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType()))
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
-	nullables := schema.AllNullables()
 	for i, attr := range attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
+		bat.AddVector(attr, containers.MakeVector(typs[i]))
 	}
 	return bat
 }

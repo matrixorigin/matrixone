@@ -1160,7 +1160,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("system_time_zone"),
-		Default:           "",
+		Default:           getSystemTimeZone(),
 	},
 	"transaction_isolation": {
 		Name:              "transaction_isolation",
@@ -1250,6 +1250,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
+	//whether DN does primary key uniqueness check against transaction's workspace or not.
+	"mo_pk_check_by_dn": {
+		Name:              "mo_pk_check_by_dn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
+		Default:           int8(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
@@ -1262,74 +1271,57 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 	if tzStr == "SYSTEM" {
 		vars[name] = "SYSTEM"
 		sess.SetTimeZone(time.Local)
-	} else if tzStr[0] == '-' {
-		if len(tzStr) != 6 {
+	} else if tzStr[0] == '-' || tzStr[0] == '+' {
+		if len(tzStr) != 5 && len(tzStr) != 6 {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
 
+		minIdx := 3
 		if tzStr[1] < '0' || tzStr[1] > '9' {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
-		hour := int(tzStr[1]-'0') * 10
-		if tzStr[2] < '0' || tzStr[2] > '9' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-		hour += int(tzStr[2] - '0')
-
-		if tzStr[3] != ':' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-
-		if tzStr[4] < '0' || tzStr[4] > '9' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-		minute := int(tzStr[4]-'0') * 10
-		if tzStr[5] < '0' || tzStr[5] > '9' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-		minute += int(tzStr[5] - '0')
-
-		minute += hour * 60
-		if minute >= 14*60 {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+		hour := int(tzStr[1] - '0')
+		if tzStr[2] != ':' {
+			if tzStr[2] < '0' || tzStr[2] > '9' {
+				return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+			}
+			hour = hour*10 + int(tzStr[2]-'0')
+			minIdx = 4
+			if tzStr[3] != ':' {
+				return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+			}
 		}
 
-		vars[name] = tzStr
-		sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
-	} else if tzStr[0] == '+' {
-		if len(tzStr) != 6 {
+		if minIdx != len(tzStr)-2 {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
-
-		if tzStr[1] < '0' || tzStr[1] > '9' {
+		if tzStr[minIdx] < '0' || tzStr[minIdx] > '9' {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
-		hour := int(tzStr[1]-'0') * 10
-		if tzStr[2] < '0' || tzStr[2] > '9' {
+		minute := int(tzStr[minIdx]-'0') * 10
+		if tzStr[minIdx+1] < '0' || tzStr[minIdx+1] > '9' {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
-		hour += int(tzStr[2] - '0')
-
-		if tzStr[3] != ':' {
+		minute += int(tzStr[minIdx+1] - '0')
+		if minute >= 60 {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
-
-		if tzStr[4] < '0' || tzStr[4] > '9' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-		minute := int(tzStr[4]-'0') * 10
-		if tzStr[5] < '0' || tzStr[5] > '9' {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
-		}
-		minute += int(tzStr[5] - '0')
 
 		minute += hour * 60
-		if minute > 14*60 {
-			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+
+		if tzStr[0] == '-' {
+			if minute >= 14*60 {
+				return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+			}
+			sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
+		} else {
+			if minute > 14*60 {
+				return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+			}
+			sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
 		}
 
 		vars[name] = tzStr
-		sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
 	} else {
 		loc, err := time.LoadLocation(tzStr)
 		if err != nil {
@@ -1341,4 +1333,9 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 	}
 
 	return nil
+}
+
+func getSystemTimeZone() string {
+	tz, _ := time.Now().Zone()
+	return tz
 }

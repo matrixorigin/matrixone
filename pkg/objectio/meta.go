@@ -16,12 +16,60 @@ package objectio
 
 import (
 	"bytes"
-	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"io"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const HeaderSize = 64
-const ColumnMetaSize = 128
+const ColumnMetaSize = 136
+const ExtentSize = 16
+
+const ObjectColumnMetaSize = 72
+const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
+
+type ObjectMeta struct {
+	Rows     uint32             // total rows
+	ColMetas []ObjectColumnMeta // meta for every column of all blocks
+	BlkMetas []BlockObject      // meta for every block
+}
+
+// 4 + 4 + 64 = 72 bytes
+type ObjectColumnMeta struct {
+	Ndv     uint32
+	NullCnt uint32
+	Zonemap ZoneMap
+}
+
+func (meta *ObjectColumnMeta) Write(w io.Writer) (err error) {
+	if _, err = w.Write(types.EncodeUint32(&meta.Ndv)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint32(&meta.NullCnt)); err != nil {
+		return
+	}
+
+	var zmbuf []byte
+	if meta.Zonemap.data == nil {
+		var buf [ZoneMapMinSize + ZoneMapMaxSize]byte
+		zmbuf = buf[:]
+	} else {
+		zmbuf = meta.Zonemap.data.([]byte)
+	}
+	if _, err = w.Write(zmbuf); err != nil {
+		return
+	}
+	return
+}
+
+func (meta *ObjectColumnMeta) Read(bs []byte) (err error) {
+	meta.Ndv = types.DecodeUint32(bs)
+	meta.NullCnt = types.DecodeUint32(bs[4:])
+	bs = bs[8:]
+	meta.Zonemap.data = bs[:64]
+	return
+}
 
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
@@ -78,6 +126,20 @@ func (bh *BlockHeader) GetColumnCount() uint16 {
 	return bh.columnCount
 }
 
+func (bh *BlockHeader) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(bh)), HeaderSize)
+}
+
+func (bh *BlockHeader) Unmarshal(data []byte) {
+	h := *(*BlockHeader)(unsafe.Pointer(&data[0]))
+	bh.tableId = h.tableId
+	bh.segmentId = h.segmentId
+	bh.blockId = h.blockId
+	bh.columnCount = h.columnCount
+	bh.dummy = h.dummy
+	bh.checksum = h.checksum
+}
+
 // +---------------------------------------------------------------------------------------------------------------+
 // |                                                    ColumnMeta                                                 |
 // +--------+-------+----------+--------+---------+--------+--------+------------+---------+----------+------------+
@@ -106,8 +168,8 @@ type ColumnMeta struct {
 	location    Extent
 	zoneMap     ZoneMap
 	bloomFilter Extent
-	dummy       [32]byte
-	checksum    uint32
+	//dummy       [32]byte
+	checksum uint32
 }
 
 func (cm *ColumnMeta) GetType() uint8 {
@@ -134,58 +196,72 @@ func (cm *ColumnMeta) GetBloomFilter() Extent {
 	return cm.bloomFilter
 }
 
+func (cm *ColumnMeta) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeFixed(cm.typ))
+	buffer.Write(types.EncodeFixed(cm.alg))
+	buffer.Write(types.EncodeFixed(cm.idx))
+	buffer.Write(cm.location.Marshal())
+	var buf []byte
+	if cm.zoneMap.data == nil {
+		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
+		cm.zoneMap.data = buf
+	}
+	buffer.Write(cm.zoneMap.data.([]byte))
+	buffer.Write(cm.bloomFilter.Marshal())
+	dummy := make([]byte, 32)
+	buffer.Write(dummy)
+	buffer.Write(types.EncodeFixed(cm.checksum))
+	return buffer.Bytes()
+}
+
+func (cm *ColumnMeta) Unmarshal(data []byte) error {
+	cm.typ = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cm.alg = types.DecodeUint8(data[:1])
+	data = data[1:]
+	cm.idx = types.DecodeUint16(data[:2])
+	data = data[2:]
+	cm.location.Unmarshal(data)
+	data = data[ExtentSize:]
+	cm.zoneMap.idx = cm.idx
+	t := types.T(cm.typ).ToType()
+	if err := cm.zoneMap.Unmarshal(data[:64], t); err != nil {
+		return err
+	}
+	data = data[64:]
+	cm.bloomFilter.Unmarshal(data)
+	// 32 skip dummy
+	data = data[ExtentSize+32:]
+	cm.checksum = types.DecodeUint32(data[:4])
+	return nil
+}
+
 type Header struct {
 	magic   uint64
 	version uint16
-	dummy   [22]byte
+	//dummy   [22]byte
 }
 
 type Footer struct {
-	magic      uint64
-	blockCount uint32
-	extents    []Extent
+	magic     uint64
+	metaStart uint32
+	metaLen   uint32
 }
 
-func (f *Footer) UnMarshalFooter(data []byte) error {
-	var err error
-	footer := data[len(data)-FooterSize:]
-	FooterCache := bytes.NewBuffer(footer)
-	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
-		return err
-	}
-	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
-		return err
-	}
-	if f.magic != uint64(Magic) {
-		return moerr.NewInternalErrorNoCtx("object io: invalid footer")
-	}
-	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
-		return nil
-	} else {
-		f.extents = make([]Extent, f.blockCount)
-	}
-	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
-	ExtentsCache := bytes.NewBuffer(extents)
-	size := uint32(0)
-	for i := 0; i < int(f.blockCount); i++ {
-		f.extents[i].id = uint32(i)
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
-			return err
-		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
-			return err
-		}
-		size += f.extents[i].originSize
-	}
+func (f *Footer) Marshal() []byte {
+	var buffer bytes.Buffer
+	buffer.Write(types.EncodeUint32(&f.metaStart))
+	buffer.Write(types.EncodeUint32(&f.metaLen))
+	buffer.Write(types.EncodeUint64(&f.magic))
+	return buffer.Bytes()
+}
 
-	for i := 0; i < int(f.blockCount); i++ {
-		f.extents[i].offset = f.extents[0].offset
-		f.extents[i].length = size
-		f.extents[i].originSize = size
-	}
-
-	return err
+func (f *Footer) Unmarshal(data []byte) error {
+	f.metaStart = types.DecodeUint32(data)
+	data = data[4:]
+	f.metaLen = types.DecodeUint32(data)
+	data = data[4:]
+	f.magic = types.DecodeUint64(data)
+	return nil
 }

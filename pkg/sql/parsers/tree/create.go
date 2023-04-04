@@ -2428,11 +2428,11 @@ type AccountIdentified struct {
 func (node *AccountIdentified) Format(ctx *FmtCtx) {
 	switch node.Typ {
 	case AccountIdentifiedByPassword:
-		ctx.WriteString(fmt.Sprintf(" identified by '%s'", node.Str))
+		ctx.WriteString(" identified by '******'")
 	case AccountIdentifiedByRandomPassword:
 		ctx.WriteString(" identified by random password")
 	case AccountIdentifiedWithSSL:
-		ctx.WriteString(fmt.Sprintf(" identified with '%s'", node.Str))
+		ctx.WriteString(" identified with '******'")
 	}
 }
 

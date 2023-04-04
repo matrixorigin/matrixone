@@ -42,6 +42,7 @@ type LocalFS struct {
 	dirFiles map[string]*os.File
 
 	memCache    *MemCache
+	diskCache   *DiskCache
 	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
@@ -57,6 +58,8 @@ func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*LocalFS, error) {
 
@@ -111,15 +114,53 @@ func NewLocalFS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 	}
-	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(
-			WithLRU(memCacheCapacity),
-			WithPerfCounterSets(perfCounterSets),
-		)
-		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
+
+	if err := fs.initCaches(
+		memCacheCapacity,
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
+}
+
+func (l *LocalFS) initCaches(
+	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
+) error {
+
+	if memCacheCapacity > 0 {
+		l.memCache = NewMemCache(
+			WithLRU(memCacheCapacity),
+			WithPerfCounterSets(l.perfCounterSets),
+		)
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", l.name),
+			zap.Any("capacity", memCacheCapacity),
+		)
+	}
+
+	//if diskCacheCapacity > 0 && diskCachePath != "" {
+	//	var err error
+	//	l.diskCache, err = NewDiskCache(
+	//		diskCachePath,
+	//		diskCacheCapacity,
+	//		l.perfCounterSets,
+	//	)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	logutil.Info("fileservice: disk cache initialized",
+	//		zap.Any("fs-name", l.name),
+	//		zap.Any("capacity", diskCacheCapacity),
+	//		zap.Any("path", diskCachePath),
+	//	)
+	//}
+
+	return nil
 }
 
 func (l *LocalFS) Name() string {
@@ -184,7 +225,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	fileWithChecksum := NewFileWithChecksum(f, _BlockContentSize)
+	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	defer put()
 	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
@@ -250,10 +292,27 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
+	if l.diskCache != nil {
+		if err := l.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = l.diskCache.Update(ctx, vector, l.asyncUpdate)
+		}()
+	}
+
 	if err := l.read(ctx, vector); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (l *LocalFS) Preload(ctx context.Context, filePath string) error {
+	//TODO load to memory
 	return nil
 }
 
@@ -289,7 +348,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if entry.WriterForRead != nil {
-			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
+			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			defer put()
 
 			if entry.Offset > 0 {
 				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -335,7 +395,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			if err != nil {
 				return err
 			}
-			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
+			fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
 
 			if entry.Offset > 0 {
 				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -372,7 +432,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 			}
 
 		} else {
-			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
+			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			defer put()
 
 			if entry.Offset > 0 {
 				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -631,7 +692,7 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 
 var _ MutableFileService = new(LocalFS)
 
-func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
+func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -643,7 +704,7 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 	}
 	return &LocalFSMutator{
 		osFile:           f,
-		fileWithChecksum: NewFileWithChecksum(f, _BlockContentSize),
+		fileWithChecksum: NewFileWithChecksum(ctx, f, _BlockContentSize, l.perfCounterSets),
 	}, nil
 }
 
@@ -730,6 +791,9 @@ var _ CachingFileService = new(LocalFS)
 func (l *LocalFS) FlushCache() {
 	if l.memCache != nil {
 		l.memCache.Flush()
+	}
+	if l.diskCache != nil {
+		l.diskCache.Flush()
 	}
 }
 

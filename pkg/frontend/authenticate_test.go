@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -215,9 +217,9 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		// A mock autoIncrCaches.
-		aic := defines.AutoIncrCaches{}
+		aicm := &defines.AutoIncrCacheManager{}
 
-		err = InitSysTenant(ctx, aic)
+		err = InitSysTenant(ctx, aicm)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -300,6 +302,10 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
 				AdminName: "root",
+				IdentifiedType: tree.AccountIdentified{
+					Typ: tree.AccountIdentifiedByPassword,
+					Str: "123456",
+				},
 			},
 		})
 		convey.So(err, convey.ShouldBeNil)
@@ -350,49 +356,6 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func Test_checkUserExistsOrNot(t *testing.T) {
-	convey.Convey("checkUserExistsOrNot", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-		mrs1 := mock_frontend.NewMockExecResult(ctrl)
-		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		exists, err := checkUserExistsOrNot(ctx, pu, "test")
-		convey.So(exists, convey.ShouldBeTrue)
-		convey.So(err, convey.ShouldBeNil)
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-
-		ses := &Session{}
-
-		err = InitUser(ctx, ses, tenant, &tree.CreateUser{IfNotExists: true, Users: []*tree.User{{Username: "test"}}})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -452,7 +415,7 @@ func Test_initFunction(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := &Session{}
+		ses := &Session{tenant: tenant}
 		err := InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -6611,7 +6574,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false)
+	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7234,4 +7197,515 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 		convey.So(has("system"), convey.ShouldBeTrue)
 		convey.So(has("mo_catalog"), convey.ShouldBeFalse)
 	})
+}
+
+func TestGetSqlForGetDbIdAndType(t *testing.T) {
+	ctx := context.TODO()
+	kases := []struct {
+		pubName string
+		want    string
+		err     bool
+	}{
+		{
+			pubName: "abc",
+			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc';",
+			err:     false,
+		},
+		{
+			pubName: "abc\t",
+			want:    "",
+			err:     true,
+		},
+	}
+	for _, k := range kases {
+		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true)
+		require.Equal(t, k.err, err != nil)
+		require.Equal(t, k.want, sql)
+	}
+}
+
+func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
+	ctx := context.TODO()
+	kases := []struct {
+		pubName      string
+		databaseName string
+		err          bool
+	}{
+		{
+			pubName:      "abc",
+			databaseName: "abc",
+			err:          false,
+		},
+		{
+			pubName:      "abc\t",
+			databaseName: "abc",
+			err:          true,
+		},
+		{
+			pubName:      "abc",
+			databaseName: "abc\t",
+			err:          true,
+		},
+	}
+	for _, k := range kases {
+		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, true, "", "", 1, 1, "", true)
+		require.Equal(t, k.err, err != nil)
+	}
+}
+
+func TestDoCreatePublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Dispose()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	sa := &tree.CreatePublication{
+		Name:     "pub1",
+		Database: "db1",
+		Comment:  "124",
+		Accounts: []tree.Identifier{"a1", "a2"},
+	}
+	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true)
+	require.NoError(t, err)
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, false, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
+	require.NoError(t, err)
+	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+	defer bhStub.Reset()
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result[sql1] = &MysqlResultSet{
+		Columns: []Column{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "dat_id",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "dat_type",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+		Data: [][]interface{}{{0, ""}},
+	}
+	bh.sql2result[sql2] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	err = doCreatePublication(ctx, ses, sa)
+	require.NoError(t, err)
+}
+
+func TestDoDropPublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Dispose()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	sa := &tree.DropPublication{
+		Name: "pub1",
+	}
+	sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
+	require.NoError(t, err)
+	sql2, err := getSqlForDropPubInfo(ctx, string(sa.Name), true)
+	require.NoError(t, err)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+	defer bhStub.Reset()
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result[sql1] = &MysqlResultSet{
+		Data: [][]any{{"db1", 0, "a1, a2", "124"}},
+	}
+	bh.sql2result[sql2] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	err = doDropPublication(ctx, ses, sa)
+	require.NoError(t, err)
+
+}
+
+func TestDoAlterPublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Dispose()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	columns := []Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "all_account",
+				columnType: defines.MYSQL_TYPE_BOOL,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "account_list",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "comment",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+	}
+	kases := []struct {
+		pubName     string
+		comment     string
+		accountsSet *tree.AccountsSetOption
+		accountList string
+		allAccount  bool
+		data        [][]any
+		err         bool
+	}{
+		{
+			pubName: "pub1",
+			comment: "124",
+			accountsSet: &tree.AccountsSetOption{
+				All: true,
+			},
+			accountList: "121",
+			allAccount:  true,
+			data:        [][]any{{"true", "", "121"}},
+			err:         false,
+		},
+		{
+			pubName: "pub1",
+			comment: "124",
+			accountsSet: &tree.AccountsSetOption{
+				AddAccounts: tree.IdentifierList{
+					tree.Identifier("a1"),
+				},
+			},
+			accountList: "a0",
+			allAccount:  false,
+			data:        [][]any{{"false", "a0", "121"}},
+			err:         false,
+		},
+		{
+			pubName: "pub1",
+			comment: "124",
+			accountsSet: &tree.AccountsSetOption{
+				SetAccounts: tree.IdentifierList{
+					tree.Identifier("a1"),
+				},
+			},
+			accountList: "a0",
+			allAccount:  false,
+			data:        [][]any{{"false", "a0", "121"}},
+			err:         false,
+		},
+		{
+			pubName: "pub1",
+			comment: "124",
+			accountsSet: &tree.AccountsSetOption{
+				DropAccounts: tree.IdentifierList{
+					tree.Identifier("a1"),
+				},
+			},
+			allAccount:  true,
+			accountList: "",
+			data:        [][]any{{"true", "", "121"}},
+			err:         true,
+		},
+	}
+
+	for _, kase := range kases {
+		sa := &tree.AlterPublication{
+			Name:        tree.Identifier(kase.pubName),
+			Comment:     kase.comment,
+			AccountsSet: kase.accountsSet,
+		}
+		sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
+		require.NoError(t, err)
+		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.allAccount, kase.accountList, sa.Comment, true)
+		require.NoError(t, err)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result[sql1] = &MysqlResultSet{
+			Data:    kase.data,
+			Columns: columns,
+		}
+		bh.sql2result[sql2] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		err = doAlterPublication(ctx, ses, sa)
+		if kase.err {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+
+}
+
+func TestCheckSubscriptionValid(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Dispose()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ses.SetTenantInfo(tenant)
+
+	columns := [][]Column{
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_id",
+					columnType: defines.MYSQL_TYPE_LONGLONG,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "status",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "database_name",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "all_account",
+					columnType: defines.MYSQL_TYPE_BOOL,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_list",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+	}
+
+	kases := []struct {
+		createSql string
+
+		accName   string
+		pubName   string
+		pubExists bool
+		accExists bool
+
+		subName string
+
+		accId     uint32
+		accStatus string
+
+		databaseName string
+		allAccount   bool
+		accountList  string
+
+		sqls  []string
+		datas [][][]interface{}
+
+		err bool
+	}{
+		{
+			createSql: "create database sub1 from acc0 publication",
+			accName:   "acc0",
+			pubName:   "",
+			subName:   "sub1",
+			accId:     1,
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from sys publication pub1",
+			accName:   "sys",
+			pubName:   "pub1",
+			subName:   "sub1",
+			accId:     0,
+			accStatus: "",
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   true,
+			accountList:  "",
+
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: false,
+			accId:     1,
+			accStatus: "",
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: false,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
+
+			databaseName: "t1",
+			allAccount:   false,
+			accountList:  "sys",
+
+			sqls: []string{},
+			err:  true,
+		},
+	}
+
+	initData := func(idx int) {
+		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
+		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
+		kases[idx].sqls = []string{
+			sql1, sql2,
+		}
+		kases[idx].datas = [][][]interface{}{
+			{{kases[idx].accId, kases[idx].accStatus}},
+			{{kases[idx].databaseName, kases[idx].allAccount, kases[idx].accountList}},
+		}
+
+		if !kases[idx].accExists {
+			kases[idx].datas[0] = nil
+		}
+		if !kases[idx].pubExists {
+			kases[idx].datas[1] = nil
+		}
+	}
+
+	for idx := range kases {
+		initData(idx)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+		for i := range kases[idx].sqls {
+			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
+				Data:    kases[idx].datas[i],
+				Columns: columns[i],
+			}
+		}
+
+		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
+		require.Equal(t, kases[idx].err, err != nil)
+	}
+
 }

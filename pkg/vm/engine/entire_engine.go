@@ -96,3 +96,7 @@ func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, t
 func (e *EntireEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error) {
 	return e.Engine.GetRelationById(ctx, op, tableId)
 }
+
+func (e *EntireEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.Engine.AllocateIDByKey(ctx, key)
+}

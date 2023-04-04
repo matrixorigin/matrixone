@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -51,6 +52,33 @@ func newActiveTxn(
 	txn.fsp = fsp
 	txn.remoteService = remoteService
 	return txn
+}
+
+func (txn *activeTxn) lockRemoved(
+	serviceID string,
+	table uint64,
+	removedLocks map[string]struct{},
+	locked bool) {
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
+	}
+
+	v, ok := txn.holdLocks[table]
+	if !ok {
+		return
+	}
+	newV := newCowSlice(txn.fsp, nil)
+	s := v.slice()
+	defer s.unref()
+	s.iter(func(v []byte) bool {
+		if _, ok := removedLocks[unsafeByteSliceToString(v)]; !ok {
+			newV.append([][]byte{v})
+		}
+		return true
+	})
+	v.close()
+	txn.holdLocks[table] = newV
 }
 
 func (txn *activeTxn) lockAdded(
@@ -91,6 +119,7 @@ func (txn *activeTxn) lockAdded(
 func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
+	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint64) (lockTable, error)) error {
 	txn.Lock()
 	defer txn.Unlock()
@@ -115,7 +144,7 @@ func (txn *activeTxn) close(
 			serviceID,
 			txn,
 			table)
-		l.unlock(txn, cs)
+		l.unlock(txn, cs, commitTS)
 		logTxnUnlockTableCompleted(
 			serviceID,
 			txn,
@@ -144,7 +173,7 @@ func (txn *activeTxn) abort(serviceID string, txnID []byte) {
 	if txn.blockedWaiter == nil {
 		return
 	}
-	txn.blockedWaiter.notify(serviceID, ErrDeadLockDetected)
+	txn.blockedWaiter.notify(serviceID, notifyValue{err: ErrDeadLockDetected})
 }
 
 func (txn *activeTxn) fetchWhoWaitingMe(

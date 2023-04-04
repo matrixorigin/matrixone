@@ -17,10 +17,9 @@ package txnimpl
 import (
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -60,7 +59,7 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -98,7 +97,7 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -133,7 +132,7 @@ func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 		},
 		entry:         meta,
 		table:         table,
-		isUncommitted: isLocalSegmentByID(meta.GetSegment().ID),
+		isUncommitted: meta.GetSegment().IsLocal,
 	}
 	return blk
 }
@@ -155,13 +154,8 @@ func (blk *txnBlock) GetTotalChanges() int {
 	return blk.entry.GetBlockData().GetTotalChanges()
 }
 func (blk *txnBlock) IsAppendableBlock() bool { return blk.entry.IsAppendable() }
-func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
+func (blk *txnBlock) ID() types.Blockid       { return blk.entry.ID }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
-func (blk *txnBlock) BatchDedup(pks containers.Vector, invisibility *roaring.Bitmap) (err error) {
-	blkData := blk.entry.GetBlockData()
-	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
-	return blkData.BatchDedup(blk.Txn, pks, invisibility, false)
-}
 
 func (blk *txnBlock) getDBID() uint64 {
 	return blk.entry.GetSegment().GetTable().GetDB().ID
@@ -172,21 +166,21 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaloc string) {
-	return blk.entry.GetVisibleMetaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleMetaLoc(blk.Txn)
 }
 func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
-	return blk.entry.GetVisibleDeltaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleDeltaLoc(blk.Txn)
 }
 func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
 	return
 }
@@ -232,7 +226,7 @@ func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), entry, readed)
+	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().ID, entry, readed)
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {

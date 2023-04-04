@@ -70,7 +70,7 @@ func (it *txnDBIt) Next() {
 		curr := node.GetPayload()
 		curr.RLock()
 		if curr.GetTenantID() == it.txn.GetTenantID() || isSysSharedDB(curr.GetName()) {
-			valid, err = curr.IsVisible(it.txn.GetStartTS(), curr.RWMutex)
+			valid, err = curr.IsVisible(it.txn, curr.RWMutex)
 		}
 		curr.RUnlock()
 		if err != nil {
@@ -101,9 +101,11 @@ func newDatabase(db *txnDB) *txnDatabase {
 	return dbase
 
 }
-func (db *txnDatabase) GetID() uint64   { return db.txnDB.entry.GetID() }
-func (db *txnDatabase) GetName() string { return db.txnDB.entry.GetName() }
-func (db *txnDatabase) String() string  { return db.txnDB.entry.String() }
+func (db *txnDatabase) GetID() uint64        { return db.txnDB.entry.ID }
+func (db *txnDatabase) GetName() string      { return db.txnDB.entry.GetName() }
+func (db *txnDatabase) String() string       { return db.txnDB.entry.String() }
+func (db *txnDatabase) IsSubscription() bool { return db.txnDB.entry.IsSubscription() }
+func (db *txnDatabase) GetCreateSql() string { return db.txnDB.entry.GetCreateSql() }
 
 func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)
@@ -133,7 +135,7 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
@@ -154,7 +156,7 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
@@ -175,7 +177,7 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+		schema.Constraint = []byte(latest.BaseNode.SchemaConstraints)
 	}
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
