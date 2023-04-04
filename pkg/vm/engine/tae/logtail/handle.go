@@ -608,7 +608,7 @@ func LoadCheckpointEntries(
 	dbName string,
 	fs fileservice.FileService) ([]*api.Entry, error) {
 	if metLoc == "" {
-		return nil , nil
+		return nil, nil
 	}
 	now := time.Now()
 	defer func() {

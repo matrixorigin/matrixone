@@ -219,10 +219,10 @@ func (blk *txnBlock) GetColumnDataById(colIdx int) (*model.ColumnView, error) {
 }
 
 func (blk *txnBlock) Prefetch(idxes []uint16) error {
-	if !blk.isUncommitted {
-		return blk.entry.GetBlockData().Prefetch(idxes)
+	if blk.isUncommitted {
+		return blk.table.localSegment.Prefetch(blk.entry, idxes)
 	}
-	return nil
+	return blk.entry.GetBlockData().Prefetch(idxes)
 }
 
 func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
