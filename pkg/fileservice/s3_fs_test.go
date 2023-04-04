@@ -98,9 +98,7 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				-1,
-				-1,
-				"",
+				DisabledCacheConfig,
 				nil,
 				true,
 			)
@@ -118,9 +116,7 @@ func TestS3FS(t *testing.T) {
 			config.Endpoint,
 			config.Bucket,
 			"",
-			-1,
-			-1,
-			"",
+			DisabledCacheConfig,
 			nil,
 			true,
 		)
@@ -144,9 +140,9 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				128*1024,
-				-1,
-				"",
+				CacheConfig{
+					MemoryCapacity: 128 * 1024,
+				},
 				nil,
 				false,
 			)
@@ -163,9 +159,11 @@ func TestS3FS(t *testing.T) {
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				-1,
-				128*1024,
-				t.TempDir(),
+				CacheConfig{
+					MemoryCapacity: 1,
+					DiskCapacity:   128 * 1024,
+					DiskPath:       t.TempDir(),
+				},
 				nil,
 				false,
 			)
@@ -418,9 +416,9 @@ func TestS3FSMinioServer(t *testing.T) {
 				endpoint,
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
-				-1,
-				-1,
-				cacheDir,
+				CacheConfig{
+					DiskPath: cacheDir,
+				},
 				nil,
 				true,
 			)
@@ -455,9 +453,9 @@ func BenchmarkS3FS(b *testing.B) {
 			config.Endpoint,
 			config.Bucket,
 			time.Now().Format("2006-01-02.15:04:05.000000"),
-			-1,
-			-1,
-			cacheDir,
+			CacheConfig{
+				DiskPath: cacheDir,
+			},
 			nil,
 			true,
 		)
