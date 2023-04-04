@@ -16,7 +16,6 @@ package txnentries
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -60,87 +59,6 @@ func newMergeBlocksCmd(
 	}
 }
 
-func WriteSegID(w io.Writer, id *common.ID) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, id.TableID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, id.SegmentID); err != nil {
-		return
-	}
-	n = 8 + 8
-	return
-}
-
-func ReadSegID(r io.Reader, id *common.ID) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
-		return
-	}
-	n = 8 + 8
-	return
-}
-
-func WriteBlkID(w io.Writer, id *common.ID) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, id.TableID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, id.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, id.BlockID); err != nil {
-		return
-	}
-	n = 8 + 8 + 8
-	return
-}
-
-func ReadBlkID(r io.Reader, id *common.ID) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
-		return
-	}
-	n = 8 + 8 + 8
-	return
-}
-
-func WriteUint32Array(w io.Writer, array []uint32) (n int64, err error) {
-	length := uint32(len(array))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
-		return
-	}
-	n = 4
-	for _, i := range array {
-		if err = binary.Write(w, binary.BigEndian, i); err != nil {
-			return
-		}
-		n += 4
-	}
-	return
-}
-
-func ReadUint32Array(r io.Reader) (array []uint32, n int64, err error) {
-	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
-		return
-	}
-	n = 4
-	array = make([]uint32, length)
-	for i := 0; i < int(length); i++ {
-		if err = binary.Read(r, binary.BigEndian, &array[i]); err != nil {
-			return
-		}
-		n += 4
-	}
-	return
-}
-
 func (cmd *mergeBlocksCmd) GetType() int16 { return CmdMergeBlocks }
 func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := CmdMergeBlocks
@@ -163,9 +81,6 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 		n += common.IDSize
-		// if sn, err = WriteSegID(w, seg); err != nil {
-		// 	return
-		// }
 	}
 
 	createdSegsLength := uint32(len(cmd.createdSegs))
@@ -178,10 +93,6 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 		n += common.IDSize
-		// if sn, err = WriteSegID(w, seg); err != nil {
-		// 	return
-		// }
-		// n += sn
 	}
 
 	droppedBlksLength := uint32(len(cmd.droppedBlks))
@@ -190,10 +101,10 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 4
 	for _, blk := range cmd.droppedBlks {
-		if sn, err = WriteBlkID(w, blk); err != nil {
+		if _, err = w.Write(common.EncodeID(blk)); err != nil {
 			return
 		}
-		n += sn
+		n += common.IDSize
 	}
 
 	createdBlksLength := uint32(len(cmd.createdBlks))
@@ -202,20 +113,23 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 4
 	for _, blk := range cmd.createdBlks {
-		if sn, err = WriteBlkID(w, blk); err != nil {
+		if _, err = w.Write(common.EncodeID(blk)); err != nil {
 			return
 		}
-		n += sn
+		n += common.IDSize
 	}
 
-	if sn, err = WriteUint32Array(w, cmd.toAddr); err != nil {
+	buf := types.EncodeSlice[uint32](cmd.toAddr)
+	if sn, err = common.WriteBytes(buf, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = WriteUint32Array(w, cmd.fromAddr); err != nil {
+	buf = types.EncodeSlice[uint32](cmd.fromAddr)
+	if sn, err = common.WriteBytes(buf, w); err != nil {
 		return
 	}
 	n += sn
+
 	return
 }
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
@@ -262,11 +176,11 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.droppedBlks = make([]*common.ID, dropBlkLength)
 	for i := 0; i < int(dropBlkLength); i++ {
 		id := &common.ID{}
-		if sn, err = ReadBlkID(r, id); err != nil {
+		if _, err = r.Read(common.EncodeID(id)); err != nil {
 			return
 		}
+		n += common.IDSize
 		cmd.droppedBlks[i] = id
-		n += sn
 	}
 	createBlkLength := uint32(0)
 	if _, err = r.Read(types.EncodeUint32(&createBlkLength)); err != nil {
@@ -276,21 +190,24 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.createdBlks = make([]*common.ID, createBlkLength)
 	for i := 0; i < int(createBlkLength); i++ {
 		id := &common.ID{}
-		if sn, err = ReadBlkID(r, id); err != nil {
+		if _, err = r.Read(common.EncodeID(id)); err != nil {
 			return
 		}
+		n += common.IDSize
 		cmd.createdBlks[i] = id
-		n += sn
 	}
+	var buf []byte
+	if buf, sn, err = common.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
+	cmd.toAddr = types.DecodeSlice[uint32](buf)
+	if buf, sn, err = common.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
+	cmd.fromAddr = types.DecodeSlice[uint32](buf)
 
-	if cmd.toAddr, sn, err = ReadUint32Array(r); err != nil {
-		return
-	}
-	n += sn
-	if cmd.fromAddr, sn, err = ReadUint32Array(r); err != nil {
-		return
-	}
-	n += sn
 	return
 }
 func (cmd *mergeBlocksCmd) Marshal() (buf []byte, err error) {
