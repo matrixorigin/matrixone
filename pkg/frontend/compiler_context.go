@@ -520,6 +520,13 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			Primary: hideKey.Primary,
 		})
 	}
+	// cols = append(cols, plan2.MakeRowIdColDef())
+	// if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+	// 	cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	// }
+	// if clusterByDef != nil {
+	// 	cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+	// }
 
 	//convert
 	obj := &plan2.ObjectRef{
