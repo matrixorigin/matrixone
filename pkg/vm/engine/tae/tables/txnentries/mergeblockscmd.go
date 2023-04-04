@@ -148,12 +148,12 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 
-	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&cmd.id)); err != nil {
 		return
 	}
 
 	droppedSegsLength := uint32(len(cmd.droppedSegs))
-	if err = binary.Write(w, binary.BigEndian, droppedSegsLength); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&droppedSegsLength)); err != nil {
 		return
 	}
 	n = 2 + 4 + 4
@@ -166,7 +166,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	createdSegsLength := uint32(len(cmd.createdSegs))
-	if err = binary.Write(w, binary.BigEndian, createdSegsLength); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&createdSegsLength)); err != nil {
 		return
 	}
 	n += 4
@@ -178,7 +178,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	droppedBlksLength := uint32(len(cmd.droppedBlks))
-	if err = binary.Write(w, binary.BigEndian, droppedBlksLength); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&droppedBlksLength)); err != nil {
 		return
 	}
 	n += 4
@@ -190,7 +190,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	createdBlksLength := uint32(len(cmd.createdBlks))
-	if err = binary.Write(w, binary.BigEndian, createdBlksLength); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&createdBlksLength)); err != nil {
 		return
 	}
 	n += 4
@@ -212,12 +212,12 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &cmd.id); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&cmd.id)); err != nil {
 		return
 	}
 	n = 4
 	dropSegmentLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &dropSegmentLength); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&dropSegmentLength)); err != nil {
 		return
 	}
 	var sn int64
@@ -233,7 +233,7 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 
 	createSegmentLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &createSegmentLength); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&createSegmentLength)); err != nil {
 		return
 	}
 	n += 4
@@ -248,7 +248,7 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 
 	dropBlkLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &dropBlkLength); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&dropBlkLength)); err != nil {
 		return
 	}
 	n += 4
@@ -262,7 +262,7 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 	}
 	createBlkLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &createBlkLength); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&createBlkLength)); err != nil {
 		return
 	}
 	n += 4
