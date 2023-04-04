@@ -573,7 +573,7 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 func (ses *Session) GetBackgroundHandlerWithBatchFetcher(ctx context.Context) *BackgroundHandler {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, ses.autoIncrCaches),
+		ses: NewBackgroundSession(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, ses.autoIncrCacheManager),
 	}
 	bh.ses.SetOutputCallback(batchFetcher)
 	return bh
