@@ -191,7 +191,10 @@ func saveQueryResultMeta(ses *Session) error {
 		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
 	}
 
-	sp, err := ses.p.Marshal()
+	var sp []byte
+	if ses.p != nil {
+		sp, err = ses.p.Marshal()
+	}
 	if err != nil {
 		return err
 	}

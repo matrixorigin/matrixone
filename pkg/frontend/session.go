@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"runtime"
 	"strings"
 	"sync"
@@ -110,6 +111,10 @@ type Session struct {
 
 	//all the result set of executing the sql in background task
 	allResultSet []*MysqlResultSet
+
+	// result batch of executing the sql in background task
+	// set by func batchFetcher
+	resultBatch *batch.Batch
 
 	tenant *TenantInfo
 
@@ -564,6 +569,15 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 	return NewBackgroundHandler(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCaches)
 }
 
+func (ses *Session) GetBackgroundHandlerWithBatchFetcher(ctx context.Context) *BackgroundHandler {
+	bh := &BackgroundHandler{
+		mce: NewMysqlCmdExecutor(),
+		ses: NewBackgroundSession(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, ses.autoIncrCaches),
+	}
+	bh.ses.SetOutputCallback(batchFetcher)
+	return bh
+}
+
 func (ses *Session) GetIsInternal() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -745,6 +759,57 @@ func (ses *Session) ClearAllMysqlResultSet() {
 	if ses.allResultSet != nil {
 		ses.allResultSet = ses.allResultSet[:0]
 	}
+}
+
+// ClearResultBatch does not call Batch.Clear().
+func (ses *Session) ClearResultBatch() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.resultBatch = nil
+}
+
+func (ses *Session) GetResultBatch() *batch.Batch {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.resultBatch
+}
+
+func (ses *Session) SaveResultSet() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if len(ses.allResultSet) == 0 && ses.mrs != nil {
+		ses.allResultSet = []*MysqlResultSet{ses.mrs}
+	}
+}
+
+func (ses *Session) AppendResultBatch(bat *batch.Batch) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.resultBatch == nil {
+		// just copy
+		var err error
+		copied := &batch.Batch{
+			Cnt:   1,
+			Attrs: make([]string, len(bat.Attrs)),
+			Vecs:  make([]*vector.Vector, len(bat.Vecs)),
+			Zs:    make([]int64, len(bat.Zs)),
+		}
+		copy(copied.Attrs, bat.Attrs)
+		copy(copied.Zs, bat.Zs)
+		for i := range copied.Vecs {
+			copied.Vecs[i], err = bat.Vecs[i].Dup(ses.mp)
+			if err != nil {
+				return err
+			}
+		}
+		ses.resultBatch = copied
+	} else {
+		_, err := ses.resultBatch.Append(ses.connectCtx, ses.mp, bat)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
@@ -1321,6 +1386,18 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
+// batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
+// Session will merge all batches in one batch.
+// It will not send the result to the client.
+func batchFetcher(handle interface{}, dataSet *batch.Batch) error {
+	if handle == nil || dataSet == nil {
+		return nil
+	}
+	ses := handle.(*Session)
+	ses.SaveResultSet()
+	return ses.AppendResultBatch(dataSet)
+}
+
 // getResultSet extracts the result set
 func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) {
 	results := bh.GetExecResultSet()
@@ -1426,6 +1503,14 @@ func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
 
 func (bh *BackgroundHandler) ClearExecResultSet() {
 	bh.ses.ClearAllMysqlResultSet()
+}
+
+func (bh *BackgroundHandler) ClearExecResultBatch() {
+	bh.ses.ClearResultBatch()
+}
+
+func (bh *BackgroundHandler) GetExecResultBatch() *batch.Batch {
+	return bh.ses.GetResultBatch()
 }
 
 type SqlHelper struct {

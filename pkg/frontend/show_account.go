@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
@@ -111,20 +114,21 @@ func getSqlForAccountInfo(accountId uint64) string {
 	return fmt.Sprintf(getAccountInfoFormat, accountId)
 }
 
-func getSqlForTableStats(accountId uint64) string {
+func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormat, accountId)
 }
 
 func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) error {
 	var err error
 	var sql string
-	var accountIds []uint64
-	var rsOfMoAccount *MysqlResultSet
-	var rsOfEachAccount []*MysqlResultSet
-	var tempRS, outputRS *MysqlResultSet
-	outputRS = &MysqlResultSet{}
+	var accountIds []int32
+	var resultBatchOfMoAccount *batch.Batch
+	var resultBatchOfEachAccount []*batch.Batch
+	var tempBatch *batch.Batch
+	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
+	outputBatch := batch.NewWithSize(finalColumnCount)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundHandlerWithBatchFetcher(ctx)
 	defer bh.Close()
 
 	account := ses.GetTenantInfo()
@@ -144,7 +148,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		//step2.1: get all account info from mo_account;
 
 		sql = getSqlForAllAccountInfo(sa.Like)
-		rsOfMoAccount, accountIds, err = getAccountInfo(ctx, bh, sql, true)
+		resultBatchOfMoAccount, accountIds, err = getAccountInfo(ctx, bh, sql, true)
+		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
+		MoAccountColumns = bh.ses.rs
+		bh.ClearExecResultSet()
 		if err != nil {
 			goto handleFailed
 		}
@@ -153,19 +160,32 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		//get the admin_name, table size and table rows.
 		for _, id := range accountIds {
 			newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
-			tempRS, err = getTableStats(newCtx, bh, id)
+			tempBatch, err = getTableStats(newCtx, bh, id)
 			if err != nil {
 				goto handleFailed
 			}
-			rsOfEachAccount = append(rsOfEachAccount, tempRS)
+			resultBatchOfEachAccount = append(resultBatchOfEachAccount, tempBatch)
 		}
+		rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
+		EachAccountColumns = bh.ses.rs
+		bh.ClearExecResultSet()
 
 		//step3: merge result set from mo_account and table stats from each account
-		err = mergeOutputResult(ctx, outputRS, rsOfMoAccount, rsOfEachAccount)
+		err = mergeOutputResult(ses, outputBatch, resultBatchOfMoAccount, resultBatchOfEachAccount)
+		if err != nil {
+			goto handleFailed
+		}
+
+		outputRS := &MysqlResultSet{}
+		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, outputBatch, ctx, ses)
 		if err != nil {
 			goto handleFailed
 		}
 		ses.SetMysqlResultSet(outputRS)
+
+		for _, b := range resultBatchOfEachAccount {
+			b.Clean(ses.GetMemPool())
+		}
 	} else {
 		if sa.Like != nil {
 			err = moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
@@ -175,22 +195,37 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		//step2.1: switch into the sys account, get the account info
 		newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 		sql = getSqlForAccountInfo(uint64(account.GetTenantID()))
-		rsOfMoAccount, _, err = getAccountInfo(newCtx, bh, sql, false)
+		resultBatchOfMoAccount, _, err = getAccountInfo(newCtx, bh, sql, false)
 		if err != nil {
 			goto handleFailed
 		}
+
+		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
+		MoAccountColumns = bh.ses.rs
+		bh.ClearExecResultSet()
 
 		//step2.2: get the admin_name, table size and table rows.
-		tempRS, err = getTableStats(ctx, bh, uint64(account.GetTenantID()))
+		tempBatch, err = getTableStats(ctx, bh, int32(account.GetTenantID()))
+		if err != nil {
+			goto handleFailed
+		}
+		rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
+		EachAccountColumns = bh.ses.rs
+		bh.ClearExecResultSet()
+
+		err = mergeOutputResult(ses, outputBatch, resultBatchOfMoAccount, []*batch.Batch{tempBatch})
 		if err != nil {
 			goto handleFailed
 		}
 
-		err = mergeOutputResult(ctx, outputRS, rsOfMoAccount, []*MysqlResultSet{tempRS})
+		outputRS := &MysqlResultSet{}
+		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, outputBatch, ctx, ses)
 		if err != nil {
 			goto handleFailed
 		}
+
 		ses.SetMysqlResultSet(outputRS)
+		tempBatch.Clean(ses.GetMemPool())
 	}
 
 	//step3: make a response packet.
@@ -199,6 +234,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		goto handleFailed
 	}
 
+	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
+	if openSaveQueryResult(ses) {
+		err = saveResult(ses, outputBatch)
+	}
+
+	outputBatch.Clean(ses.GetMemPool())
+	resultBatchOfMoAccount.Clean(ses.GetMemPool())
 	return err
 
 handleFailed:
@@ -210,95 +252,41 @@ handleFailed:
 	return err
 }
 
-// getAccountInfo gets account info from mo_account under sys account
-func getAccountInfo(ctx context.Context,
-	bh BackgroundExec,
-	sql string,
-	returnAccountIds bool) (*MysqlResultSet, []uint64, error) {
-	var err error
-	var accountIds []uint64
-	var accountId uint64
-	var erArray []ExecResult
-	var rsOfMoAccount *MysqlResultSet
-	var ok bool
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, nil, err
+func mergeRsColumns(rsOfMoAccountColumns *plan.ResultColDef, rsOfEachAccountColumns *plan.ResultColDef) *plan.ResultColDef {
+	def := &plan.ResultColDef{
+		ResultCols: make([]*plan.ColDef, finalColumnCount),
 	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		if returnAccountIds {
-			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-				//account_id
-				accountId, err = erArray[0].GetUint64(ctx, i, 0)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				accountIds = append(accountIds, accountId)
-			}
-		}
-
-		rsOfMoAccount, ok = erArray[0].(*MysqlResultSet)
-		if !ok {
-			return nil, nil, moerr.NewInternalError(ctx, "convert result set failed.")
-		}
-	} else {
-		return nil, nil, moerr.NewInternalError(ctx, "get data from mo_account failed")
-	}
-	return rsOfMoAccount, accountIds, err
+	def.ResultCols[finalIdxOfAccountName] = rsOfMoAccountColumns.ResultCols[idxOfAccountName]
+	def.ResultCols[finalIdxOfAdminName] = rsOfEachAccountColumns.ResultCols[idxOfAdminName]
+	def.ResultCols[finalIdxOfCreated] = rsOfMoAccountColumns.ResultCols[idxOfCreated]
+	def.ResultCols[finalIdxOfStatus] = rsOfMoAccountColumns.ResultCols[idxOfStatus]
+	def.ResultCols[finalIdxOfSuspendedTime] = rsOfMoAccountColumns.ResultCols[idxOfSuspendedTime]
+	def.ResultCols[finalIdxOfDBCount] = rsOfEachAccountColumns.ResultCols[idxOfDBCount]
+	def.ResultCols[finalIdxOfTableCount] = rsOfEachAccountColumns.ResultCols[idxOfTableCount]
+	def.ResultCols[finalIdxOfRowCount] = rsOfEachAccountColumns.ResultCols[idxOfRowCount]
+	def.ResultCols[finalIdxOfSize] = rsOfEachAccountColumns.ResultCols[idxOfSize]
+	def.ResultCols[finalIdxOfComment] = rsOfMoAccountColumns.ResultCols[idxOfComment]
+	return def
 }
 
-// getTableStats gets the table statistics for the account
-func getTableStats(ctx context.Context, bh BackgroundExec, accountId uint64) (*MysqlResultSet, error) {
-	var sql string
-	var err error
-	var erArray []ExecResult
-	var rs *MysqlResultSet
-	var ok bool
-	sql = getSqlForTableStats(accountId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
+func saveResult(ses *Session, outputBatch *batch.Batch) error {
+	if err := saveQueryResult(ses, outputBatch); err != nil {
+		return err
 	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
+	if err := saveQueryResultMeta(ses); err != nil {
+		return err
 	}
-
-	if execResultArrayHasData(erArray) {
-		rs, ok = erArray[0].(*MysqlResultSet)
-		if !ok {
-			err = moerr.NewInternalError(ctx, "convert result set failed")
-			return nil, err
-		}
-	} else {
-		err = moerr.NewInternalError(ctx, "get table stats failed")
-		return nil, err
-	}
-	return rs, err
+	return nil
 }
 
-// mergeOutputResult merges the result set from mo_account and the table status
-// into the final output format
-func mergeOutputResult(ctx context.Context, outputRS *MysqlResultSet, rsOfMoAccount *MysqlResultSet, rsOfEachAccount []*MysqlResultSet) error {
-	var err error
+func initOutputRs(rs *MysqlResultSet, rsOfMoAccount *MysqlResultSet, rsOfEachAccount *MysqlResultSet, outputBatch *batch.Batch, ctx context.Context, ses *Session) error {
 	outputColumns := make([]Column, finalColumnCount)
-
+	var err error
 	outputColumns[finalIdxOfAccountName], err = rsOfMoAccount.GetColumn(ctx, idxOfAccountName)
 	if err != nil {
 		return err
 	}
-	outputColumns[finalIdxOfAdminName], err = rsOfEachAccount[0].GetColumn(ctx, idxOfAdminName)
+	outputColumns[finalIdxOfAdminName], err = rsOfEachAccount.GetColumn(ctx, idxOfAdminName)
 	if err != nil {
 		return err
 	}
@@ -314,19 +302,19 @@ func mergeOutputResult(ctx context.Context, outputRS *MysqlResultSet, rsOfMoAcco
 	if err != nil {
 		return err
 	}
-	outputColumns[finalIdxOfDBCount], err = rsOfEachAccount[0].GetColumn(ctx, idxOfDBCount)
+	outputColumns[finalIdxOfDBCount], err = rsOfEachAccount.GetColumn(ctx, idxOfDBCount)
 	if err != nil {
 		return err
 	}
-	outputColumns[finalIdxOfTableCount], err = rsOfEachAccount[0].GetColumn(ctx, idxOfTableCount)
+	outputColumns[finalIdxOfTableCount], err = rsOfEachAccount.GetColumn(ctx, idxOfTableCount)
 	if err != nil {
 		return err
 	}
-	outputColumns[finalIdxOfRowCount], err = rsOfEachAccount[0].GetColumn(ctx, idxOfRowCount)
+	outputColumns[finalIdxOfRowCount], err = rsOfEachAccount.GetColumn(ctx, idxOfRowCount)
 	if err != nil {
 		return err
 	}
-	outputColumns[finalIdxOfSize], err = rsOfEachAccount[0].GetColumn(ctx, idxOfSize)
+	outputColumns[finalIdxOfSize], err = rsOfEachAccount.GetColumn(ctx, idxOfSize)
 	if err != nil {
 		return err
 	}
@@ -335,51 +323,119 @@ func mergeOutputResult(ctx context.Context, outputRS *MysqlResultSet, rsOfMoAcco
 		return err
 	}
 	for _, o := range outputColumns {
-		outputRS.AddColumn(o)
+		rs.AddColumn(o)
 	}
-	for i, rs := range rsOfEachAccount {
-		outputRow := make([]interface{}, finalColumnCount)
-		outputRow[finalIdxOfAccountName], err = rsOfMoAccount.GetValue(ctx, uint64(i), idxOfAccountName)
-		if err != nil {
-			return err
+
+	n := outputBatch.Vecs[0].Length()
+	for j := 0; j < n; j++ {
+		row := make([]interface{}, rs.GetColumnCount())
+		rs.AddRow(row)
+		var rowIndex = j
+		for i, vec := range outputBatch.Vecs { //col index
+			if vec.IsConstNull() {
+				row[i] = nil
+				continue
+			}
+			if vec.IsConst() {
+				rowIndex = 0
+			}
+
+			err = extractRowFromVector(ses, vec, i, row, rowIndex)
+			if err != nil {
+				return err
+			}
+			rowIndex = j
 		}
-		outputRow[finalIdxOfAdminName], err = rs.GetValue(ctx, 0, idxOfAdminName)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfCreated], err = rsOfMoAccount.GetValue(ctx, uint64(i), idxOfCreated)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfStatus], err = rsOfMoAccount.GetValue(ctx, uint64(i), idxOfStatus)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfSuspendedTime], err = rsOfMoAccount.GetValue(ctx, uint64(i), idxOfSuspendedTime)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfDBCount], err = rs.GetValue(ctx, 0, idxOfDBCount)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfTableCount], err = rs.GetValue(ctx, 0, idxOfTableCount)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfRowCount], err = rs.GetValue(ctx, 0, idxOfRowCount)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfSize], err = rs.GetValue(ctx, 0, idxOfSize)
-		if err != nil {
-			return err
-		}
-		outputRow[finalIdxOfComment], err = rsOfMoAccount.GetValue(ctx, uint64(i), idxOfComment)
-		if err != nil {
-			return err
-		}
-		outputRS.AddRow(outputRow)
 	}
+
 	return err
+}
+
+// getAccountInfo gets account info from mo_account under sys account
+func getAccountInfo(ctx context.Context,
+	bh *BackgroundHandler,
+	sql string,
+	returnAccountIds bool) (*batch.Batch, []int32, error) {
+	var err error
+	var accountIds []int32
+	var rsOfMoAccount *batch.Batch
+
+	bh.ClearExecResultBatch()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rsOfMoAccount = bh.GetExecResultBatch()
+	if rsOfMoAccount == nil || len(rsOfMoAccount.Vecs) == 0 || rsOfMoAccount.Vecs[0].Length() == 0 {
+		return nil, nil, moerr.NewInternalError(ctx, "get data from mo_account failed")
+	}
+	if returnAccountIds {
+		vecLen := rsOfMoAccount.Vecs[0].Length()
+		for row := 0; row < vecLen; row++ {
+			accountIds = append(accountIds, vector.GetFixedAt[int32](rsOfMoAccount.Vecs[0], row))
+		}
+	}
+	return rsOfMoAccount, accountIds, err
+}
+
+// getTableStats gets the table statistics for the account
+func getTableStats(ctx context.Context, bh *BackgroundHandler, accountId int32) (*batch.Batch, error) {
+	var sql string
+	var err error
+	var rs *batch.Batch
+	sql = getSqlForTableStats(accountId)
+	bh.ClearExecResultBatch()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	rs = bh.GetExecResultBatch()
+	if rs == nil || len(rs.Vecs) == 0 || rs.Vecs[0].Length() == 0 {
+		return nil, moerr.NewInternalError(ctx, "get table stats failed")
+	}
+	return rs, err
+}
+
+// mergeOutputResult merges the result set from mo_account and the table status
+// into the final output format
+func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *batch.Batch, rsOfEachAccount []*batch.Batch) error {
+	outputBatch.Vecs[finalIdxOfAccountName] = rsOfMoAccount.Vecs[idxOfAccountName]
+	outputBatch.Vecs[finalIdxOfAdminName] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfAdminName].GetType())
+	outputBatch.Vecs[finalIdxOfCreated] = rsOfMoAccount.Vecs[idxOfCreated]
+	outputBatch.Vecs[finalIdxOfStatus] = rsOfMoAccount.Vecs[idxOfStatus]
+	outputBatch.Vecs[finalIdxOfSuspendedTime] = rsOfMoAccount.Vecs[idxOfSuspendedTime]
+	outputBatch.Vecs[finalIdxOfDBCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfDBCount].GetType())
+	outputBatch.Vecs[finalIdxOfTableCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfTableCount].GetType())
+	outputBatch.Vecs[finalIdxOfRowCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfRowCount].GetType())
+	outputBatch.Vecs[finalIdxOfSize] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfSize].GetType())
+	outputBatch.Vecs[finalIdxOfComment] = rsOfMoAccount.Vecs[idxOfComment]
+
+	var err error
+	mp := ses.GetMemPool()
+	for _, bat := range rsOfEachAccount {
+		err = outputBatch.Vecs[finalIdxOfAdminName].UnionOne(bat.Vecs[idxOfAdminName], 0, mp)
+		if err != nil {
+			return err
+		}
+		err = outputBatch.Vecs[finalIdxOfDBCount].UnionOne(bat.Vecs[idxOfDBCount], 0, mp)
+		if err != nil {
+			return err
+		}
+		err = outputBatch.Vecs[finalIdxOfTableCount].UnionOne(bat.Vecs[idxOfTableCount], 0, mp)
+		if err != nil {
+			return err
+		}
+		err = outputBatch.Vecs[finalIdxOfRowCount].UnionOne(bat.Vecs[idxOfRowCount], 0, mp)
+		if err != nil {
+			return err
+		}
+		err = outputBatch.Vecs[finalIdxOfSize].UnionOne(bat.Vecs[idxOfSize], 0, mp)
+		if err != nil {
+			return err
+		}
+	}
+	outputBatch.Zs = make([]int64, len(rsOfMoAccount.Zs))
+	copy(outputBatch.Zs, rsOfMoAccount.Zs)
+	return nil
 }
