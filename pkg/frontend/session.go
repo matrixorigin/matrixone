@@ -322,6 +322,10 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.userDefinedVars = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		ses.statsCache = plan2.NewStatsCache()
+		// For seq init values.
+		ses.seqCurValues = make(map[uint64]string)
+		ses.seqLastValue = ""
+		ses.sqlHelper = &SqlHelper{ses: ses}
 	}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
@@ -329,12 +333,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
 	ses.SetAutoIncrCacheManager(aicm)
-
-	// For seq init values.
-	ses.seqCurValues = make(map[uint64]string)
-	ses.seqLastValue = ""
-
-	ses.sqlHelper = &SqlHelper{ses: ses}
 
 	var err error
 	if ses.mp == nil {
