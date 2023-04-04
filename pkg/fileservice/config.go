@@ -68,8 +68,12 @@ func NewFileService(cfg Config, perfCounterSets []*perfcounter.CounterSet) (File
 	}
 }
 
-func newMemFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, error) {
-	fs, err := NewMemoryFS(cfg.Name)
+func newMemFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (FileService, error) {
+	fs, err := NewMemoryFS(
+		cfg.Name,
+		cfg.Cache,
+		perfCounters,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +87,7 @@ func newDiskFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (Fil
 	fs, err := NewLocalFS(
 		cfg.Name,
 		cfg.DataDir,
-		int64(cfg.Cache.MemoryCapacity),
-		int64(cfg.Cache.DiskCapacity),
-		cfg.Cache.DiskPath,
+		cfg.Cache,
 		perfCounters,
 	)
 	if err != nil {
@@ -112,9 +114,7 @@ func newMinioFileService(cfg Config, perfCounters []*perfcounter.CounterSet) (Fi
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int64(cfg.Cache.MemoryCapacity),
-		int64(cfg.Cache.DiskCapacity),
-		cfg.Cache.DiskPath,
+		cfg.Cache,
 		perfCounters,
 		false,
 	)
@@ -131,9 +131,7 @@ func newS3FileService(cfg Config, perfCounters []*perfcounter.CounterSet) (FileS
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int64(cfg.Cache.MemoryCapacity),
-		int64(cfg.Cache.DiskCapacity),
-		cfg.Cache.DiskPath,
+		cfg.Cache,
 		perfCounters,
 		false,
 	)

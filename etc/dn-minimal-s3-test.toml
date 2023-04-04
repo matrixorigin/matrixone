@@ -34,6 +34,8 @@ key-prefix = "s3 key preifx"
 memory-capacity = "128MB"
 disk-capacity = "1GB"
 disk-path = "mo-data/file-service-cache"
+disk-min-evict-interval = "7m"
+disk-evict-target = 0.8
 
 [[fileservice]]
 name = "ETL"
