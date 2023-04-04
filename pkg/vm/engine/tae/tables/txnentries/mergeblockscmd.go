@@ -159,10 +159,13 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2 + 4 + 4
 	var sn int64
 	for _, seg := range cmd.droppedSegs {
-		if sn, err = WriteSegID(w, seg); err != nil {
+		if _, err = w.Write(common.EncodeID(seg)); err != nil {
 			return
 		}
-		n += sn
+		n += common.IDSize
+		// if sn, err = WriteSegID(w, seg); err != nil {
+		// 	return
+		// }
 	}
 
 	createdSegsLength := uint32(len(cmd.createdSegs))
@@ -171,10 +174,14 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 4
 	for _, seg := range cmd.createdSegs {
-		if sn, err = WriteSegID(w, seg); err != nil {
+		if _, err = w.Write(common.EncodeID(seg)); err != nil {
 			return
 		}
-		n += sn
+		n += common.IDSize
+		// if sn, err = WriteSegID(w, seg); err != nil {
+		// 	return
+		// }
+		// n += sn
 	}
 
 	droppedBlksLength := uint32(len(cmd.droppedBlks))
@@ -225,10 +232,10 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.droppedSegs = make([]*common.ID, dropSegmentLength)
 	for i := 0; i < int(dropSegmentLength); i++ {
 		id := &common.ID{}
-		if sn, err = ReadSegID(r, id); err != nil {
+		if _, err = r.Read(common.EncodeID(id)); err != nil {
 			return
 		}
-		n += sn
+		n += common.IDSize
 		cmd.droppedSegs[i] = id
 	}
 
@@ -240,11 +247,11 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.createdSegs = make([]*common.ID, createSegmentLength)
 	for i := 0; i < int(createSegmentLength); i++ {
 		id := &common.ID{}
-		if sn, err = ReadSegID(r, id); err != nil {
+		if _, err = r.Read(common.EncodeID(id)); err != nil {
 			return
 		}
+		n += common.IDSize
 		cmd.createdSegs[i] = id
-		n += sn
 	}
 
 	dropBlkLength := uint32(0)
