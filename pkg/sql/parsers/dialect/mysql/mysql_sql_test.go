@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 alter index c visible",
-		output: "alter table t1 alter index c visible",
+		input:  "select 1",
+		output: "select 1",
 	}
 )
 

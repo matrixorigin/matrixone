@@ -111,6 +111,9 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		TenantID: sysAccountID,
 	}
 	ses.SetTenantInfo(tenant)
+	proc := testutil.NewProcess()
+	proc.FileService = ses.pu.FileService
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	//three columns
@@ -156,7 +159,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	//result string
 	wantResult := "0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n"
 	//save blocks
-	proc := testutil.NewProcess()
+
 	for i := 0; i < blockCnt; i++ {
 		data := newBatch(typs, blockCnt, proc)
 		err = saveQueryResult(ses, data)
