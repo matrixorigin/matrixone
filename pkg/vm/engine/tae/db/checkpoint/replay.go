@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sort"
 	"sync"
 	"time"
@@ -133,14 +132,12 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		var ckpReader dataio.Reader
-		ckpReader, err = blockio.NewCheckPointReader(r.fs.Service, metaloc)
+		metaLoc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+
+		err = blockio.PrefetchCkpMeta(r.fs.Service, metaLoc)
 		if err != nil {
 			return
 		}
-
-		blockio.PrefetchBlocksMeta(ckpReader, nil)
 	}
 
 	for i := 0; i < bat.Length(); i++ {
