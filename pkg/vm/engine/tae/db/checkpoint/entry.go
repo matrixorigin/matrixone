@@ -192,7 +192,7 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.PrefetchFrom(context.Background(), reader, common.DefaultAllocator); err != nil {
+	if err = data.PrefetchFrom(context.Background(), fs.Service, e.location); err != nil {
 		return
 	}
 	if err = data.ReadFrom(context.Background(), reader, common.DefaultAllocator); err != nil {

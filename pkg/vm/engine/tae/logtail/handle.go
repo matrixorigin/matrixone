@@ -84,7 +84,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -608,9 +607,9 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) (entries []*api.Entry, err error) {
+	fs fileservice.FileService) ( []*api.Entry,  error) {
 	if metLoc == "" {
-		return
+		return nil , nil
 	}
 	now := time.Now()
 	defer func() {
@@ -622,31 +621,32 @@ func LoadCheckpointEntries(
 	readers := make([]dataio.Reader, len(locations))
 	readerMetas := make([][]objectio.BlockObject, len(locations))
 	for i, key := range locations {
-		readers[i], err = blockio.NewCheckPointReader(fs, key)
-
-		err = blockio.PrefetchBlocksMeta(readers[i], nil)
+		reader, err := blockio.NewCheckPointReader(fs, key)
 		if err != nil {
-			return
+			return nil, err
+		}
+		readers[i] = reader
+		err = blockio.PrefetchCkpMeta(fs, key)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	for i := range locations {
-		readerMetas[i], err = readers[i].LoadBlocksMeta(ctx, common.DefaultAllocator)
+	for _, key := range locations {
+		pref, err := blockio.BuildCkpPrefetch(fs, key)
 		if err != nil {
-			return
+			return nil, err
 		}
-
-		pref := blockio.BuildPrefetch(readers[i], common.DefaultAllocator)
 		for idx, item := range checkpointDataRefer {
 			idxes := make([]uint16, len(item.attrs))
 			for col := range item.attrs {
 				idxes[col] = uint16(col)
 			}
-			pref.AddBlock(idxes, []uint32{readerMetas[i][idx].GetID()})
+			pref.AddBlock(idxes, []uint32{uint32(idx)})
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
-			return
+			return nil, err
 		}
 
 	}
@@ -655,16 +655,16 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
 			if err != nil {
-				return
+				return nil ,err
 			}
 			data.bats[idx] = bat
 		}
 		datas[i] = data
 	}
 
-	entries = make([]*api.Entry, 0)
+	entries := make([]*api.Entry, 0)
 	for i := range locations {
 		data := datas[i]
 		ins, del, cnIns, err := data.GetTableData(tableID)
@@ -710,5 +710,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return
+	return entries, nil
 }

@@ -495,7 +495,7 @@ func (data *CheckpointData) PrefetchFrom(
 		return
 	}
 
-	pref, err := blockio.BuildPrefetch(service, key)
+	pref, err := blockio.BuildCkpPrefetch(service, key)
 	if err != nil {
 		return
 	}

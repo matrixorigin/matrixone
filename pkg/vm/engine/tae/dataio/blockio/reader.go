@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -369,4 +370,32 @@ func PrefetchBlocksMeta(service fileservice.FileService, key string) error {
 		return err
 	}
 	return pipeline.Prefetch(pref)
+}
+
+func PrefetchCkpMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildCkpPrefetch(service, key)
+	if err != nil {
+		return err
+	}
+	return pipeline.Prefetch(pref)
+}
+
+func PrefetchFile(service fileservice.FileService, size int64, name string) error {
+	reader, err := NewFileReader(service, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(context.Background(), size, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	pref := buildPrefetch(reader)
+	for i := range bs {
+		idxes := make([]uint16, bs[i].GetColumnCount())
+		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
+			idxes[a] = a
+		}
+		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+	}
+	return PrefetchWithMerged(pref)
 }
