@@ -101,6 +101,10 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 		if err != nil {
 			return
 		}
+		if view == nil {
+			preparer.Close()
+			return nil, true, nil
+		}
 		task.deletes = view.DeleteMask
 		view.ApplyDeletes()
 		vec := view.Orphan()
@@ -137,6 +141,9 @@ func (task *compactBlockTask) Execute() (err error) {
 	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, empty, err := task.PrepareData()
 	if err != nil {
+		return
+	}
+	if preparer == nil {
 		return
 	}
 	defer preparer.Close()

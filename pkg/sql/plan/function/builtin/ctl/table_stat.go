@@ -15,8 +15,11 @@
 package ctl
 
 import (
+	"context"
 	"strconv"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -44,13 +47,30 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	defer e.Rollback(proc.Ctx, txn)
 	for i := 0; i < count; i++ {
-		db, err := e.Database(proc.Ctx, dbs[i], txn)
-		if err != nil {
-			return nil, err
-		}
-		rel, err := db.Relation(proc.Ctx, tbls[i])
-		if err != nil {
-			return nil, err
+		var rel engine.Relation
+		if isClusterTable(dbs[i], tbls[i]) {
+			//if it is the cluster table in the general account, switch into the sys account
+			ctx := context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			db, err := e.Database(ctx, dbs[i], txn)
+			if err != nil {
+				return nil, err
+			}
+
+			rel, err = db.Relation(ctx, tbls[i])
+			if err != nil {
+				return nil, err
+			}
+
+		} else {
+			db, err := e.Database(proc.Ctx, dbs[i], txn)
+			if err != nil {
+				return nil, err
+			}
+
+			rel, err = db.Relation(proc.Ctx, tbls[i])
+			if err != nil {
+				return nil, err
+			}
 		}
 		rel.Ranges(proc.Ctx, nil)
 		rows, err := rel.Rows(proc.Ctx)
@@ -82,13 +102,30 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	defer e.Rollback(proc.Ctx, txn)
 	for i := 0; i < count; i++ {
-		db, err := e.Database(proc.Ctx, dbs[i], txn)
-		if err != nil {
-			return nil, err
-		}
-		rel, err := db.Relation(proc.Ctx, tbls[i])
-		if err != nil {
-			return nil, err
+		var rel engine.Relation
+		if isClusterTable(dbs[i], tbls[i]) {
+			//if it is the cluster table in the general account, switch into the sys account
+			ctx := context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			db, err := e.Database(ctx, dbs[i], txn)
+			if err != nil {
+				return nil, err
+			}
+
+			rel, err = db.Relation(ctx, tbls[i])
+			if err != nil {
+				return nil, err
+			}
+
+		} else {
+			db, err := e.Database(proc.Ctx, dbs[i], txn)
+			if err != nil {
+				return nil, err
+			}
+
+			rel, err = db.Relation(proc.Ctx, tbls[i])
+			if err != nil {
+				return nil, err
+			}
 		}
 		rel.Ranges(proc.Ctx, nil)
 		rows, err := rel.Rows(proc.Ctx)
@@ -316,3 +353,43 @@ func getValueInStr(value any) string {
 		return ""
 	}
 }
+
+func isClusterTable(dbName, name string) bool {
+	if dbName == moCatalog {
+		//if it is neither among the tables nor the index table,
+		//it is the cluster table.
+		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIndexTable(name string) bool {
+	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
+}
+
+const (
+	moCatalog    = "mo_catalog"
+	sysAccountID = 0
+)
+
+var (
+	predefinedTables = map[string]int8{
+		"mo_database":                0,
+		"mo_tables":                  0,
+		"mo_columns":                 0,
+		"mo_account":                 0,
+		"mo_user":                    0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_stored_procedure":        0,
+		"mo_mysql_compatbility_mode": 0,
+		catalog.AutoIncrTableName:    0,
+		"mo_indexes":                 0,
+		"mo_pubs":                    0,
+	}
+)

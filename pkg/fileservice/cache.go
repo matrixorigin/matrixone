@@ -17,14 +17,33 @@ package fileservice
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-	DiskPath       string        `toml:"disk-path"`
-	DiskCapacity   toml.ByteSize `toml:"disk-capacity"`
+	MemoryCapacity       toml.ByteSize `toml:"memory-capacity"`
+	DiskPath             string        `toml:"disk-path"`
+	DiskCapacity         toml.ByteSize `toml:"disk-capacity"`
+	DiskMinEvictInterval toml.Duration `toml:"disk-min-evict-interval"`
+	DiskEvictTarget      float64       `toml:"disk-evict-target"`
+}
+
+func (c *CacheConfig) SetDefaults() {
+	if c.DiskMinEvictInterval.Duration == 0 {
+		c.DiskMinEvictInterval.Duration = time.Minute * 7
+	}
+	if c.DiskEvictTarget == 0 {
+		c.DiskEvictTarget = 0.8
+	}
+}
+
+const DisableCacheCapacity = 1
+
+var DisabledCacheConfig = CacheConfig{
+	MemoryCapacity: DisableCacheCapacity,
+	DiskCapacity:   DisableCacheCapacity,
 }
 
 // VectorCache caches IOVector

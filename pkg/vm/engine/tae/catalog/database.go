@@ -52,9 +52,9 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return AccessInfoSize, nil
 }
 
-func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (visible, dropped bool) {
+func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], txn txnif.TxnReader) (visible, dropped bool) {
 	db := n.GetPayload()
-	visible, dropped = db.GetVisibility(ts)
+	visible, dropped = db.GetVisibility(txn)
 	return
 }
 
@@ -285,7 +285,7 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 func (e *DBEntry) txnGetNodeByName(
 	tenantID uint32,
 	name string,
-	ts types.TS) (*common.GenericDLNode[*TableEntry], error) {
+	txn txnif.TxnReader) (*common.GenericDLNode[*TableEntry], error) {
 	e.RLock()
 	defer e.RUnlock()
 	fullName := genTblFullName(tenantID, name)
@@ -293,11 +293,11 @@ func (e *DBEntry) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return node.TxnGetNodeLocked(ts)
+	return node.TxnGetNodeLocked(txn)
 }
 
 func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
-	n, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
+	n, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
@@ -308,8 +308,8 @@ func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry
 func (e *DBEntry) GetTableEntryByName(
 	tenantID uint32,
 	name string,
-	ts types.TS) (entry *TableEntry, err error) {
-	n, err := e.txnGetNodeByName(tenantID, name, ts)
+	txn txnif.TxnReader) (entry *TableEntry, err error) {
+	n, err := e.txnGetNodeByName(tenantID, name, txn)
 	if err != nil {
 		return
 	}
@@ -323,7 +323,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 		return
 	}
 	//check whether visible and dropped.
-	visible, dropped := entry.GetVisibility(txn.GetStartTS())
+	visible, dropped := entry.GetVisibility(txn)
 	if !visible || dropped {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -340,7 +340,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
 func (e *DBEntry) DropTableEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
-	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
+	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}

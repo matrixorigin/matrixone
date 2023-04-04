@@ -204,11 +204,7 @@ func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)
 		}
-		n.data = containers.BuildBatch(
-			schema.AllNames(),
-			schema.AllTypes(),
-			schema.AllNullables(),
-			opts)
+		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
 	from := uint32(n.data.Length())
