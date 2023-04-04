@@ -217,6 +217,12 @@ import (
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption 
     startWithOption *tree.StartWithOption 
+
+    whenClause2 *tree.WhenStmt
+    whenClauseList2 []*tree.WhenStmt
+
+    elseIfClause *tree.ElseIfStmt
+    elseIfClauseList []*tree.ElseIfStmt
     subscriptionOption *tree.SubscriptionOption
     accountsSetOption *tree.AccountsSetOption
 }
@@ -249,7 +255,7 @@ import (
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
-%left <str> BETWEEN CASE WHEN THEN ELSE END
+%left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
@@ -397,11 +403,17 @@ import (
 // Declare
 %token <str> DECLARE
 
+// Iteration
+%token <str> LOOP WHILE LEAVE ITERATE UNTIL
+
 // Call
 %token <str> CALL
 
-%type <statement> stmt
-%type <statements> stmt_list
+// sp_begin_sym
+%token <str> SPBEGIN
+
+%type <statement> stmt block_stmt block_type_stmt normal_stmt
+%type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
@@ -435,6 +447,20 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+
+// case statement
+%type <statement> case_stmt
+%type <whenClause2> when_clause2
+%type <whenClauseList2> when_clause_list2
+%type <statements> else_clause_opt2
+
+// if statement
+%type <statement> if_stmt
+%type <elseIfClause> elseif_clause
+%type <elseIfClauseList> elseif_clause_list elseif_clause_list_opt
+
+// iteration
+%type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <str> comment_opt
 %type <subscriptionOption> subcription_opt
@@ -673,7 +699,15 @@ import (
 %%
 
 start_command:
-    stmt_list
+    stmt_type
+
+
+stmt_type:
+    block_stmt
+    {
+        yylex.(*Lexer).AppendStmt($1)
+    }
+|   stmt_list
 
 stmt_list:
     stmt
@@ -689,9 +723,59 @@ stmt_list:
         }
     }
 
+block_stmt:
+    SPBEGIN stmt_list_return END
+    {
+        $$ = tree.NewCompoundStmt($2)
+    }
+
+stmt_list_return:
+    block_type_stmt
+    {
+        $$ = []tree.Statement{$1}
+    }
+|   stmt_list_return ';' block_type_stmt
+    {
+        $$ = append($1, $3)
+    }
+
+block_type_stmt:
+    block_stmt
+|   case_stmt
+|   if_stmt
+|   loop_stmt
+|   repeat_stmt
+|   while_stmt
+|   iterate_stmt
+|   leave_stmt
+|   normal_stmt
+|   declare_stmt
+    {
+        $$ = $1
+    }
+|   /* EMPTY */
+    {
+        $$ = tree.Statement(nil)
+    }
+
 stmt:
-    call_stmt
-|   create_stmt
+    normal_stmt
+    {
+        $$ = $1
+    }
+|   declare_stmt
+|   transaction_stmt
+    {
+        $$ = $1
+    }
+|   /* EMPTY */
+    {
+        $$ = tree.Statement(nil)
+    }
+
+normal_stmt:
+    create_stmt
+|   call_stmt
 |   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
@@ -708,7 +792,6 @@ stmt:
 |   analyze_stmt
 |   update_stmt
 |   use_stmt
-|   transaction_stmt
 |   set_stmt
 |   lock_stmt
 |   revoke_stmt
@@ -716,17 +799,12 @@ stmt:
 |   load_data_stmt
 |   load_extension_stmt
 |   do_stmt
-|   declare_stmt
 |   values_stmt
 |   select_stmt
     {
         $$ = $1
     }
 |   kill_stmt
-|   /* EMPTY */
-    {
-        $$ = tree.Statement(nil)
-    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -791,6 +869,153 @@ call_stmt:
             Name: $2,
             Args: $4,
         }
+    }
+
+
+leave_stmt:
+    LEAVE ident
+    {
+        $$ = &tree.LeaveStmt{
+            Name: tree.Identifier($2.ToLower()),
+        }
+    }
+
+iterate_stmt:
+    ITERATE ident
+    {
+        $$ = &tree.IterateStmt{
+            Name: tree.Identifier($2.ToLower()),
+        }
+    }
+
+while_stmt:
+    WHILE expression DO stmt_list_return END WHILE
+    {
+        $$ = &tree.WhileStmt{
+            Name: "",
+            Cond: $2,
+            Body: $4,
+        }
+    }
+|   ident ':' WHILE expression DO stmt_list_return END WHILE ident
+    {
+        $$ = &tree.WhileStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Cond: $4,
+            Body: $6,
+        }
+    }
+
+repeat_stmt:
+    REPEAT stmt_list_return UNTIL expression END REPEAT
+    {
+        $$ = &tree.RepeatStmt{
+            Name: "",
+            Body: $2,
+            Cond: $4,
+        }
+    }
+|    ident ':' REPEAT stmt_list_return UNTIL expression END REPEAT ident
+    {
+        $$ = &tree.RepeatStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Body: $4,
+            Cond: $6,
+        }
+    }
+
+loop_stmt:
+    LOOP stmt_list_return END LOOP
+    {
+        $$ = &tree.LoopStmt{
+            Name: "",
+            Body: $2,
+        }
+    }
+|   ident ':' LOOP stmt_list_return END LOOP ident
+    {
+        $$ = &tree.LoopStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Body: $4,
+        }
+    }
+
+if_stmt:
+    IF expression THEN stmt_list_return elseif_clause_list_opt else_clause_opt2 END IF
+    {
+        $$ = &tree.IfStmt{
+            Cond: $2,
+            Body: $4,
+            Elifs: $5,
+            Else: $6,
+        }
+    }
+
+elseif_clause_list_opt:
+    {
+        $$ = nil
+    }
+|    elseif_clause_list
+    {
+        $$ = $1
+    }
+
+elseif_clause_list:
+    elseif_clause
+    {
+        $$ = []*tree.ElseIfStmt{$1}
+    }
+|   elseif_clause_list elseif_clause
+    {
+        $$ = append($1, $2)
+    }
+
+elseif_clause:
+    ELSEIF expression THEN stmt_list_return
+    {
+        $$ = &tree.ElseIfStmt{
+            Cond: $2,
+            Body: $4,
+        }
+    }
+
+case_stmt:
+    CASE expression when_clause_list2 else_clause_opt2 END CASE
+    {
+        $$ = &tree.CaseStmt{
+            Expr: $2,
+            Whens: $3,  
+            Else: $4,
+        }
+    }
+
+when_clause_list2:
+    when_clause2
+    {
+        $$ = []*tree.WhenStmt{$1}
+    }
+|   when_clause_list2 when_clause2
+    {
+        $$ = append($1, $2)
+    }
+
+when_clause2:
+    WHEN expression THEN stmt_list_return
+    {
+        $$ = &tree.WhenStmt{
+            Cond: $2,
+            Body: $4,
+        }
+    }
+
+else_clause_opt2:
+    /* empty */
+    {
+        $$ = nil
+    }
+|   ELSE stmt_list_return
+    {
+        $$ = $2
     }
 
 mo_dump_stmt:
@@ -4429,7 +4654,7 @@ create_ddl_stmt:
     create_table_stmt
 |   create_database_stmt
 |   create_index_stmt
-|    create_view_stmt
+|   create_view_stmt
 |   create_function_stmt
 |   create_extension_stmt
 |   create_sequence_stmt
