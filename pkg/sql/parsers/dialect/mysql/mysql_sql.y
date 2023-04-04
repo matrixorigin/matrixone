@@ -6253,11 +6253,16 @@ constaint_def:
         if $1 != "" {
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
-                v.Name = $1
+                v.ConstraintSymbol = $1
             case *tree.ForeignKey:
-                v.Name = $1
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                fmt.Println("--> wuxiliang -- UniqueIndex ConstraintSymbol :" + $1)
+                v.ConstraintSymbol = $1
+                fmt.Println("--> wuxiliang -- v.ConstraintSymbol :" + v.ConstraintSymbol)
             }
         }
+     	fmt.Printf("--> wuxiliang -- $2 : %v \n", $2)
         $$ = $2
     }
 |    constraint_elem

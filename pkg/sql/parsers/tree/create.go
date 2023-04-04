@@ -815,13 +815,17 @@ func NewIndexOption(k uint64, i IndexType, p string, c string, v VisibleType, e 
 
 type PrimaryKeyIndex struct {
 	tableDefImpl
-	KeyParts    []*KeyPart
-	Name        string
-	Empty       bool
-	IndexOption *IndexOption
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Empty            bool
+	IndexOption      *IndexOption
 }
 
 func (node *PrimaryKeyIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("primary key")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
@@ -902,13 +906,17 @@ func NewIndex(k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
 
 type UniqueIndex struct {
 	tableDefImpl
-	KeyParts    []*KeyPart
-	Name        string
-	Empty       bool
-	IndexOption *IndexOption
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Empty            bool
+	IndexOption      *IndexOption
 }
 
 func (node *UniqueIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("unique key")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
@@ -943,14 +951,18 @@ func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueInde
 
 type ForeignKey struct {
 	tableDefImpl
-	IfNotExists bool
-	KeyParts    []*KeyPart
-	Name        string
-	Refer       *AttributeReference
-	Empty       bool
+	IfNotExists      bool
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Refer            *AttributeReference
+	Empty            bool
 }
 
 func (node *ForeignKey) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("foreign key")
 	if node.IfNotExists {
 		ctx.WriteString(" if not exists")

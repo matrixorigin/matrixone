@@ -27,8 +27,22 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 alter index c visible",
-		output: "alter table t1 alter index c visible",
+		input:  "alter table t1 add constraint unique key (col3, col4)",
+		output: "alter table t1 add unique key (col3, col4)",
+		//input:  "alter table t1 add constraint unique key zxxxxxx (col3, col4)",
+		//output: "alter table t1 add unique key zxxxxxx (col3, col4)",
+		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		//input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+		//output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+		//input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+		//output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+		//input:  "alter table t1 add constraint foreign key fk1 (col4) references dept(deptno)",
+		//output: "alter table t1 add foreign key fk1 (col4) references dept(deptno)",
+		//input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
+		//output: "alter table t1 add foreign key (col4) references dept(deptno)",
 	}
 )
 
@@ -652,10 +666,10 @@ var (
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
