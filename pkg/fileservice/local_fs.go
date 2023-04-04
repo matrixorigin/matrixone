@@ -42,6 +42,7 @@ type LocalFS struct {
 	dirFiles map[string]*os.File
 
 	memCache    *MemCache
+	diskCache   *DiskCache
 	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
@@ -57,6 +58,8 @@ func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*LocalFS, error) {
 
@@ -111,15 +114,53 @@ func NewLocalFS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 	}
-	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(
-			WithLRU(memCacheCapacity),
-			WithPerfCounterSets(perfCounterSets),
-		)
-		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
+
+	if err := fs.initCaches(
+		memCacheCapacity,
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
+}
+
+func (l *LocalFS) initCaches(
+	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
+) error {
+
+	if memCacheCapacity > 0 {
+		l.memCache = NewMemCache(
+			WithLRU(memCacheCapacity),
+			WithPerfCounterSets(l.perfCounterSets),
+		)
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", l.name),
+			zap.Any("capacity", memCacheCapacity),
+		)
+	}
+
+	//if diskCacheCapacity > 0 && diskCachePath != "" {
+	//	var err error
+	//	l.diskCache, err = NewDiskCache(
+	//		diskCachePath,
+	//		diskCacheCapacity,
+	//		l.perfCounterSets,
+	//	)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	logutil.Info("fileservice: disk cache initialized",
+	//		zap.Any("fs-name", l.name),
+	//		zap.Any("capacity", diskCacheCapacity),
+	//		zap.Any("path", diskCachePath),
+	//	)
+	//}
+
+	return nil
 }
 
 func (l *LocalFS) Name() string {
@@ -248,6 +289,18 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 				return
 			}
 			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
+		}()
+	}
+
+	if l.diskCache != nil {
+		if err := l.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = l.diskCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
 
@@ -738,6 +791,9 @@ var _ CachingFileService = new(LocalFS)
 func (l *LocalFS) FlushCache() {
 	if l.memCache != nil {
 		l.memCache.Flush()
+	}
+	if l.diskCache != nil {
+		l.diskCache.Flush()
 	}
 }
 

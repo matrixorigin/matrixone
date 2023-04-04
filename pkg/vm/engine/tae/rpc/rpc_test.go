@@ -181,12 +181,11 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	//add 100 * 50 blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	offset = 0
 	for _, obj := range objNames {
-		metaLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]))
 		}
@@ -374,10 +373,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add two non-appendable blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
-	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1))
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2))
 	metaLocMoBat1 := containers.CopyToMoBatch(metaLocBat1)
@@ -391,7 +389,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, addS3BlkEntry1)
 
 	//add one non-appendable block from S3 into "tbtest" table
-	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3))
 	metaLocMoBat2 := containers.CopyToMoBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
@@ -500,10 +498,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//prepare delete locations.
 	attrs = []string{catalog2.BlockMeta_DeltaLoc}
 	vecTypes = []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable = []bool{false}
+
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0
-	delLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	delLocBat.Vecs[0].Append([]byte(delLoc1))
 	delLocBat.Vecs[0].Append([]byte(delLoc2))
 	delLocBat.Vecs[0].Append([]byte(delLoc3))
@@ -1452,7 +1450,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	go func() {
 		//start 1pc txn ,read "dbtest"'s ID
 		ctx := context.TODO()
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		//reader should wait until the writer committed.
 		dbNames, _ = txnEngine.DatabaseNames(ctx, txn)
@@ -1539,7 +1537,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1pc txn ,read table ID
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1596,7 +1594,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1PC txn , read table
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1677,7 +1675,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//read, there should be 80 rows left.
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)

@@ -54,7 +54,7 @@ DROP TABLE t1;
 
 
 #EXTREME VALUE
--- @bvt:issue#8562
+
 select extract(DAY_MINUTE FROM "02 10:11:12");
 select extract(DAY_SECOND FROM "225 10:11:12");
 select extract(HOUR_MINUTE FROM "10:11:12");
@@ -64,7 +64,7 @@ select extract(MINUTE_SECOND FROM "10:11:12");
 
 #EXTREME VALUE
 SELECT EXTRACT(HOUR FROM '100000:02:03');
--- @bvt:issue
+
 
 select reverse(concat_ws(",",extract(year from 20090702)));
 

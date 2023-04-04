@@ -326,8 +326,13 @@ func (w *waiter) awakeNextWaiter(serviceID string) *waiter {
 }
 
 func (w *waiter) reset(serviceID string) {
-	if w.waiters.len() > 0 || len(w.c) > 0 {
-		panic("BUG: waiter should be empty.")
+	waiters := w.waiters.len()
+	notifies := len(w.c)
+	if waiters > 0 || notifies > 0 {
+		panic(fmt.Sprintf("BUG: waiter should be empty. %s, waiters %d, notifies %d",
+			w.String(),
+			waiters,
+			notifies))
 	}
 
 	logWaiterContactPool(serviceID, w, "put")
