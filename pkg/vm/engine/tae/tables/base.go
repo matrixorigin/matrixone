@@ -259,6 +259,21 @@ func (blk *baseBlock) FillPersistedDeletes(
 	return nil
 }
 
+func (blk *baseBlock) Prefetch(idxes []uint16) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		return nil
+	} else {
+		key := blk.meta.GetMetaLoc()
+		_, _, meta, _, err := blockio.DecodeLocation(key)
+		if err != nil {
+			return err
+		}
+		return blockio.Prefetch(idxes, []uint32{meta.Id()}, blk.fs.Service, key)
+	}
+}
+
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
