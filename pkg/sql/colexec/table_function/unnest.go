@@ -116,31 +116,31 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	jsonVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
-		return false, err
+		return true, err
 	}
 	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
+		return true, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
 	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
-		return false, err
+		return true, err
 	}
 	if pathVec.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
+		return true, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
 	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
 	if err != nil {
 		return false, err
 	}
 	if outerVec.GetType().Oid != types.T_bool {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
+		return true, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
 	}
 	if !pathVec.IsConst() || !outerVec.IsConst() {
-		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
+		return true, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
 	path, err = types.ParseStringToPath(pathVec.GetStringAt(0))
 	if err != nil {
-		return false, err
+		return true, err
 	}
 	outer = vector.MustFixedCol[bool](outerVec)[0]
 	param := unnestParam{}

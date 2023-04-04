@@ -212,11 +212,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			if childNode.NodeType == plan.Node_VALUE_SCAN {
 				break
 			}
-
 			for _, expr := range node.TblFuncExprList {
 				increaseRefCnt(expr, colRefCnt)
 			}
-
 			childMap, err := builder.remapAllColRefs(childId, colRefCnt)
 
 			if err != nil {
@@ -224,6 +222,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 
 			for _, expr := range node.TblFuncExprList {
+				decreaseRefCnt(expr, colRefCnt)
 				err = builder.remapExpr(expr, childMap.globalToLocal)
 				if err != nil {
 					return nil, err
@@ -1666,7 +1665,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx, -1)
+		return builder.buildTable(stmt[0], ctx, -1, nil)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -1709,7 +1708,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	// return leftChildID, err
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32) (nodeID int32, err error) {
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
@@ -1873,7 +1872,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				})
-				return builder.buildTable(newTableName, ctx, preNodeId)
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
 
@@ -1887,7 +1886,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx, preNodeId)
+			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
@@ -1895,10 +1894,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if tbl.Id() == "result_scan" {
 			return builder.buildResultScan(tbl, ctx)
 		}
-		return builder.buildTableFunction(tbl, ctx, preNodeId)
+		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx, preNodeId)
+		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
@@ -1907,7 +1906,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 
-		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId)
+		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 		if err != nil {
 			return
 		}
@@ -2117,14 +2116,14 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -2546,12 +2545,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	return nodeID, cantPushdown
 }
 
-func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, preNodeId int32) (int32, error) {
+func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (int32, error) {
 	var (
 		childId int32 = -1
 		err     error
 		nodeId  int32
 	)
+
 	if preNodeId == -1 {
 		scanNode := &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
@@ -2559,7 +2559,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		childId = builder.appendNode(scanNode, ctx)
 		ctx.binder = NewTableBinder(builder, ctx)
 	} else {
-		ctx.binder = NewTableBinder(builder, builder.ctxByNode[preNodeId])
+		ctx.binder = NewTableBinder(builder, leftCtx)
 		childId = builder.copyNode(ctx, preNodeId)
 	}
 
