@@ -400,13 +400,10 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	reader, err := blockio.NewObjectReader(
-		h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
 	if err != nil {
 		return nil
 	}
-
-	pref := blockio.BuildPrefetch(reader, nil)
 	for _, key := range req.DeltaLocs {
 		_, id, _, _, err := blockio.DecodeLocation(key)
 		if err != nil {

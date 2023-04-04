@@ -304,7 +304,7 @@ var (
 			"when relkind = 'v'  then 'VIEW' " +
 			"when relkind = 'e' then 'EXTERNAL TABLE' " +
 			"when relkind = 'r' then 'BASE TABLE' " +
-			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
+			"else 'INTERNAL TABLE' end) AS TABLE_TYPE," +
 			"if(relkind = 'r','Tae',NULL) AS ENGINE," +
 			"if(relkind = 'v',NULL,10) AS VERSION," +
 			"'Compressed' AS ROW_FORMAT," +
