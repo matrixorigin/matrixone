@@ -2198,6 +2198,79 @@ var (
 		input: "use db1; select * from t",
 	}, {
 		input: "use db1; select * from t; use db2; select * from t2",
+	}, {
+		input: `BEGIN
+					DECLARE x,y VARCHAR(10);
+					DECLARE z INT;
+					DECLARE fl FLOAT DEFAULT 1.0;
+				END`,
+		output: `begin declare x y varchar(10) default null; declare z int default null; declare fl float default 1.0; end`,
+	}, {
+		input: `BEGIN
+					CASE v
+						WHEN 2 THEN SELECT v;
+						WHEN 3 THEN SELECT 0;
+					ELSE
+						BEGIN
+							CASE v
+								WHEN 4 THEN SELECT v;
+								WHEN 5 THEN SELECT 0;
+							ELSE
+								BEGIN
+								END
+							END CASE;
+						END
+					END CASE; 
+				END`,
+		output: "begin case v when 2 then select v; when 3 then select 0; else begin case v when 4 then select v; when 5 then select 0; else begin end; end case; end; end case; end",
+	}, {
+		input: `BEGIN
+					IF n > m THEN SET s = '>';
+					ELSEIF n = m THEN SET s = '=';
+					ELSE SET s = '<';
+					END IF;
+				END`,
+		output: "begin if n > m then set s = >; elseif n = m then set s = =; else set s = <; end if; end",
+	}, {
+		input: `BEGIN					
+					IF n = m THEN SET s = 'equals';
+					ELSE
+						IF n > m THEN SET s = 'greater';
+						ELSE SET s = 'less';
+						END IF;
+						SET s = CONCAT('is ', s, ' than');
+					END IF;
+					SET s = CONCAT(n, ' ', s, ' ', m, '.');
+				END`,
+		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = concat(is , s,  than); end if; set s = concat(n,  , s,  , m, .); end",
+	}, {
+		input: `BEGIN					
+					label1: LOOP
+						SET p1 = p1 + 1;
+						IF p1 < 10 THEN
+							ITERATE label1;
+						END IF;
+						LEAVE label1;
+					END LOOP label1;
+					SET @x = p1;
+				END`,
+		output: "begin label1: loop set p1 = p1 + 1; if p1 < 10 then iterate label1; end if; leave label1; end loop label1; set x = p1; end",
+	}, {
+		input: `BEGIN
+					SET @x = 0;
+					REPEAT
+						SET @x = @x + 1;
+					UNTIL @x > p1 END REPEAT;
+				END`,
+		output: "begin set x = 0; repeat set x = @x + 1; until @x > p1 end repeat; end",
+	}, {
+		input: `BEGIN
+					DECLARE v1 INT DEFAULT 5;
+					WHILE v1 > 0 DO
+						SET v1 = v1 - 1;
+					END WHILE;
+				END`,
+		output: "begin declare v1 int default 5; while v1 > 0 do set v1 = v1 - 1; end while; end",
 	}}
 )
 

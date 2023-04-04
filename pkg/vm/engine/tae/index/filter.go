@@ -20,6 +20,7 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
@@ -29,11 +30,15 @@ const FuseFilterError = "too many iterations, you probably have duplicate keys"
 
 type StaticFilter interface {
 	MayContainsKey(key any) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
+	MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	GetMemoryUsage() uint32
 	Print() string
+}
+
+func hashV1(v []byte) uint64 {
+	return xxhash.Sum64(v)
 }
 
 type binaryFuseFilter struct {
@@ -43,17 +48,14 @@ type binaryFuseFilter struct {
 
 func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.GetType()}
-	hashes := make([]uint64, 0)
-	op := func(v any, _ bool, _ int) error {
-		hash, err := types.Hash(v, sf.typ)
-		if err != nil {
-			return err
-		}
+	hashes := make([]uint64, 0, data.Length())
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
 		hashes = append(hashes, hash)
 		return nil
 	}
 	var err error
-	if err = data.ForeachShallow(op, nil); err != nil {
+	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -78,26 +80,21 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 }
 
 func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
-	hash, err := types.Hash(key, filter.typ)
-	if err != nil {
-		return false, err
-	}
+	v := types.EncodeValue(key, filter.typ)
+	hash := hashV1(v)
 	if filter.inner.Contains(hash) {
 		return true, nil
 	}
 	return false, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error) {
 	positive := roaring.NewBitmap()
 	row := uint32(0)
 	exist := false
 
-	op := func(v any, _ bool, _ int) error {
-		hash, err := types.Hash(v, filter.typ)
-		if err != nil {
-			return err
-		}
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
 		if filter.inner.Contains(hash) {
 			positive.Add(row)
 		}
@@ -105,7 +102,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visib
 		return nil
 	}
 
-	if err := keys.ForeachShallow(op, visibility); err != nil {
+	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {

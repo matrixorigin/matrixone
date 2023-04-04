@@ -357,6 +357,8 @@ func (blk *ablock) GetByFilter(
 	}
 }
 
+// only used by tae only
+// not to optimize it
 func (blk *ablock) getPersistedRowByFilter(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
@@ -574,35 +576,6 @@ func (blk *ablock) inMemoryBatchDedup(
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 
-func (blk *ablock) dedupClosure(
-	vec containers.Vector,
-	txn txnif.TxnReader,
-	isCommitting bool,
-	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, bool, int) error {
-	return func(v1 any, _ bool, _ int) (err error) {
-		return vec.ForeachShallow(func(v2 any, _ bool, row int) error {
-			if mask != nil && mask.ContainsInt(row) {
-				return nil
-			}
-			if compute.CompareGeneric(v1, v2, vec.GetType()) == 0 {
-				commitTSVec, err := blk.LoadPersistedCommitTS()
-				if err != nil {
-					return err
-				}
-				defer commitTSVec.Close()
-				commiTs := commitTSVec.Get(row).(types.TS)
-				if commiTs.Greater(txn.GetStartTS()) {
-					return txnif.ErrTxnWWConflict
-				}
-				entry := common.TypeStringValue(vec.GetType(), v1)
-				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-			}
-			return nil
-		}, nil)
-	}
-}
-
 func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -624,7 +597,7 @@ func (blk *ablock) BatchDedup(
 			precommit,
 			keys,
 			rowmask,
-			blk.dedupClosure)
+			dedupABlkClosureFactory(blk.LoadPersistedCommitTS))
 	}
 }
 
