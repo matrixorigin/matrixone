@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -290,7 +291,8 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 var genFactory = func() table.WriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
-		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})
+		sw := sqlWriter.NewSqlWriter(tbl, context.TODO())
+		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{}, sw)
 	}
 }
 

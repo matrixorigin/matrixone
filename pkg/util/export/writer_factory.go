@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
@@ -36,7 +37,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...))
+			return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...), sqlWriter.NewSqlWriter(tbl, ctx))
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)

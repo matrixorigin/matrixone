@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 var (
@@ -12,9 +13,10 @@ var (
 )
 
 // sqlWriterDBUser holds the db user for logger
-var sqlWriterDBUser atomic.Value
-
-var dbAddressFunc atomic.Value
+var (
+	sqlWriterDBUser atomic.Value
+	dbAddressFunc   atomic.Value
+)
 
 const DBLoggerUser = "mo_logger"
 
@@ -42,29 +44,11 @@ func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context) (string, error))
 }
 
-func NewSQLWriter(dbname string, ctx context.Context) (*SQLWriter, error) {
-	dbUser := GetSQLWriterDBUser()
-	if dbUser != nil {
-		return nil, errNotReady
-	}
-
-	addressFunc := GetSQLWriterDBAddressFunc()
-	if addressFunc == nil {
-		return nil, errNotReady
-	}
-	dbAddress, err := addressFunc(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	sw := &SQLWriter{
+func NewSqlWriter(tbl *table.Table, ctx context.Context) *BaseSqlWriter {
+	sw := &BaseSqlWriter{
 		ctx:          ctx,
-		dbname:       dbname,
 		forceNewConn: true,
-		dsn:          dbUser.UserName + ":" + dbUser.Password + "@tcp(" + dbAddress + ")/" + dbname + "?timeout=15s",
+		table:        tbl,
 	}
-	_, initErr := sw.initOrRefreshDBConn()
-	if initErr != nil {
-		return nil, initErr
-	}
-	return sw, nil
+	return sw
 }

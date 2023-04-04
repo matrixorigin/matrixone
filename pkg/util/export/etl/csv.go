@@ -23,22 +23,25 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
-	ctx    context.Context
-	buf    *bytes.Buffer
-	writer io.StringWriter
+	ctx       context.Context
+	buf       *bytes.Buffer
+	writer    io.StringWriter
+	sqlWriter sqlWriter.BaseSqlWriter
 }
 
-func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter) *CSVWriter {
+func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter, sqlWriter *sqlWriter.BaseSqlWriter) *CSVWriter {
 	w := &CSVWriter{
-		ctx:    ctx,
-		buf:    buf,
-		writer: writer,
+		ctx:       ctx,
+		buf:       buf,
+		writer:    writer,
+		sqlWriter: *sqlWriter,
 	}
 	return w
 }
@@ -58,13 +61,21 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
-	n, err := w.writer.WriteString(w.buf.String())
-	if err != nil {
-		return 0, err
+	// First write rows to sqlWrite, if not working, write to csv file
+	if n, err := w.sqlWriter.WriteRows(w.GetContent()); err != nil {
+		m, err := w.writer.WriteString(w.buf.String())
+		if err != nil {
+			return 0, err
+		}
+		w.writer = nil
+		w.buf = nil
+		return m, nil
+
+	} else {
+		w.writer = nil
+		w.buf = nil
+		return n, nil
 	}
-	w.writer = nil
-	w.buf = nil
-	return n, nil
 }
 
 func writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
