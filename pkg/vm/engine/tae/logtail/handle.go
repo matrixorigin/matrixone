@@ -73,7 +73,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -607,7 +606,7 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) ( []*api.Entry,  error) {
+	fs fileservice.FileService) ([]*api.Entry, error) {
 	if metLoc == "" {
 		return nil , nil
 	}
@@ -619,7 +618,6 @@ func LoadCheckpointEntries(
 	datas := make([]*CheckpointData, len(locations))
 
 	readers := make([]dataio.Reader, len(locations))
-	readerMetas := make([][]objectio.BlockObject, len(locations))
 	for i, key := range locations {
 		reader, err := blockio.NewCheckPointReader(fs, key)
 		if err != nil {
@@ -655,7 +653,7 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
 			if err != nil {
 				return nil ,err
 			}
