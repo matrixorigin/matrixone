@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -51,15 +50,6 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 		sa1 := one.(*tree.ShowAccounts)
 		r1 := getSqlForAllAccountInfo(sa1.Like)
 		assert.Equal(t, a.want, r1)
-	}
-}
-
-func getColumnDef(name string, typ defines.MysqlType) Column {
-	return &MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       name,
-			columnType: typ,
-		},
 	}
 }
 
