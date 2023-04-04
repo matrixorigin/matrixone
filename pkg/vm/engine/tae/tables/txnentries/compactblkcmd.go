@@ -16,7 +16,6 @@ package txnentries
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -48,56 +47,31 @@ func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&cmd.id)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.from.TableID); err != nil {
+	if _, err = w.Write(common.EncodeID(cmd.from)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.from.SegmentID); err != nil {
+	if _, err = w.Write(common.EncodeID(cmd.to)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, cmd.from.BlockID); err != nil {
-		return
-	}
-
-	if err = binary.Write(w, binary.BigEndian, cmd.to.TableID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, cmd.to.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, cmd.to.BlockID); err != nil {
-		return
-	}
-	n = 2 + 4 + 8 + 8 + 8 + 8 + 8 + 8
+	n = 2 + 4 + 2*common.IDSize
 	return
 }
 func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.from = &common.ID{}
-	if err = binary.Read(r, binary.BigEndian, &cmd.id); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &cmd.from.TableID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &cmd.from.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &cmd.from.BlockID); err != nil {
-		return
-	}
 	cmd.to = &common.ID{}
-	if err = binary.Read(r, binary.BigEndian, &cmd.to.TableID); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&cmd.id)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &cmd.to.SegmentID); err != nil {
+	if _, err = r.Read(common.EncodeID(cmd.from)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &cmd.to.BlockID); err != nil {
+	if _, err = r.Read(common.EncodeID(cmd.to)); err != nil {
 		return
 	}
-	n = 4 + 8 + 8 + 8 + 8 + 8 + 8
+	n = 4 + 2*common.IDSize
 	return
 }
 func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
