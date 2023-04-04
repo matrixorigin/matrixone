@@ -655,7 +655,7 @@ func LoadCheckpointEntries(
 			var bat *containers.Batch
 			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
 			if err != nil {
-				return nil ,err
+				return nil, err
 			}
 			data.bats[idx] = bat
 		}
