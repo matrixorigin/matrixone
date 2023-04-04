@@ -110,7 +110,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -204,29 +204,120 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				})
 			}
 		}
+		childId := node.Children[0]
+		childNode := builder.qry.Nodes[childId]
 
-		if node.NodeType == plan.Node_FUNCTION_SCAN {
-			childId := node.Children[0]
-			childNode := builder.qry.Nodes[childId]
+		if childNode.NodeType == plan.Node_VALUE_SCAN {
+			break
+		}
+		for _, expr := range node.TblFuncExprList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+		childMap, err := builder.remapAllColRefs(childId, colRefCnt)
 
-			if childNode.NodeType == plan.Node_VALUE_SCAN {
-				break
-			}
-			for _, expr := range node.TblFuncExprList {
-				increaseRefCnt(expr, colRefCnt)
-			}
-			childMap, err := builder.remapAllColRefs(childId, colRefCnt)
+		if err != nil {
+			return nil, err
+		}
 
+		for _, expr := range node.TblFuncExprList {
+			decreaseRefCnt(expr, colRefCnt)
+			err = builder.remapExpr(expr, childMap.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
+		}
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, colRefCnt)
+		}
 
-			for _, expr := range node.TblFuncExprList {
-				decreaseRefCnt(expr, colRefCnt)
-				err = builder.remapExpr(expr, childMap.globalToLocal)
-				if err != nil {
-					return nil, err
-				}
+		internalRemapping := &ColRefRemapping{
+			globalToLocal: make(map[[2]int32][2]int32),
+		}
+
+		tag := node.BindingTags[0]
+		newTableDef := &plan.TableDef{
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
+			TableType:     node.TableDef.TableType,
+			OriginCols:    node.TableDef.OriginCols,
+		}
+
+		for i, col := range node.TableDef.Cols {
+			globalRef := [2]int32{tag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			internalRemapping.addColRef(globalRef)
+
+			newTableDef.Cols = append(newTableDef.Cols, col)
+		}
+
+		if len(newTableDef.Cols) == 0 {
+			internalRemapping.addColRef([2]int32{tag, 0})
+			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+		}
+
+		node.TableDef = newTableDef
+
+		for _, expr := range node.FilterList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i, col := range node.TableDef.Cols {
+			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
+				continue
+			}
+
+			remapping.addColRef(internalRemapping.localToGlobal[i])
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(node.TableDef.Cols) == 0 {
+				globalRef := [2]int32{tag, 0}
+				remapping.addColRef(globalRef)
+
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
+			} else {
+				remapping.addColRef(internalRemapping.localToGlobal[0])
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+						},
+					},
+				})
 			}
 		}
 
@@ -2271,6 +2362,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			canTurnInner := true
 
 			joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
+			if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
+				joinSides[i] = JoinSideNone
+			}
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
 				for _, arg := range f.F.Args {
 					if getJoinSide(arg, leftTags, rightTags, markTag) == JoinSideBoth {
@@ -2361,7 +2455,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 					leftPushdown = append(leftPushdown, filter)
-
 				default:
 					cantPushdown = append(cantPushdown, filter)
 				}
@@ -2514,14 +2607,26 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_FUNCTION_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-		childId := node.Children[0]
-		childId, err := builder.pushdownFilters(childId, nil, separateNonEquiConds)
-		if err != nil {
-			return 0, err
+		for _, filter := range filters {
+			if containsTag(filter, node.BindingTags[0]) {
+				node.FilterList = append(node.FilterList, filter)
+			}
 		}
+	case plan.Node_FUNCTION_SCAN:
+		pushdownFilters := make([]*plan.Expr, 0)
+		selfFilters := make([]*plan.Expr, 0)
+		for _, filter := range filters {
+			tag := findFilterTag(filter)
+			if tag == -1 || tag != node.BindingTags[0] {
+				pushdownFilters = append(pushdownFilters, DeepCopyExpr(filter))
+			}
+			if tag == -1 || tag == node.BindingTags[0] {
+				selfFilters = append(selfFilters, DeepCopyExpr(filter))
+			}
+		}
+		node.FilterList = append(node.FilterList, selfFilters...)
+		childId := node.Children[0]
+		childId, _ = builder.pushdownFilters(childId, pushdownFilters, separateNonEquiConds)
 		node.Children[0] = childId
 
 	default:
@@ -2593,4 +2698,20 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+func findFilterTag(filter *Expr) int32 {
+	switch ex := filter.Expr.(type) {
+	case *plan.Expr_Col:
+		return ex.Col.RelPos
+	case *plan.Expr_F:
+		for _, arg := range ex.F.Args {
+			if tag := findFilterTag(arg); tag != -1 {
+				return tag
+			}
+		}
+		return -1
+	default:
+		return -1
+	}
 }
