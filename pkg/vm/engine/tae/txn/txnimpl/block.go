@@ -217,6 +217,14 @@ func (blk *txnBlock) GetColumnDataById(colIdx int) (*model.ColumnView, error) {
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx)
 }
+
+func (blk *txnBlock) Prefetch(idxes []uint16) error {
+	if !blk.isUncommitted {
+		return blk.entry.GetBlockData().Prefetch(idxes)
+	}
+	return nil
+}
+
 func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		attrId := blk.table.entry.GetSchema().GetColIdx(attr)

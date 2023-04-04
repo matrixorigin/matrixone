@@ -65,6 +65,7 @@ type BlockReader interface {
 	GetDeltaLoc() string
 	Fingerprint() *common.ID
 	Rows() int
+	Prefetch(idxes []uint16) error
 
 	// Why need rowmask?
 	// We don't update the index until committing the transaction. Before that, even if we deleted a row
