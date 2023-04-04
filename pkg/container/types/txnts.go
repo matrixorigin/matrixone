@@ -320,16 +320,6 @@ func MockColTypes(colCnt int) (ct []Type) {
 	return
 }
 
-func BuildRowid(a, b int64) (ret Rowid) {
-	copy(ret[0:8], EncodeInt64(&a))
-	copy(ret[0:8], EncodeInt64(&b))
-	return
-}
-
 func CompareTSTSAligned(a, b TS) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
-}
-
-func CompareRowidRowidAligned(a, b Rowid) int64 {
 	return int64(bytes.Compare(a[:], b[:]))
 }

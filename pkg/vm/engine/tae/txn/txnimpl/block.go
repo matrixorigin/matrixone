@@ -59,7 +59,7 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -97,7 +97,7 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -166,10 +166,10 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaloc string) {
-	return blk.entry.GetVisibleMetaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleMetaLoc(blk.Txn)
 }
 func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
-	return blk.entry.GetVisibleDeltaLoc(blk.Txn.GetStartTS())
+	return blk.entry.GetVisibleDeltaLoc(blk.Txn)
 }
 func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 	blkID := blk.Fingerprint()

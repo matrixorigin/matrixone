@@ -45,14 +45,14 @@ func (c *testCluster) buildFileServices() *fileServices {
 	dnServiceNum := c.opt.initial.dnServiceNum
 	cnServiceNum := c.opt.initial.cnServiceNum
 
-	factory := func(dir string, name string) fileservice.FileService {
+	factory := func(_ string, name string) fileservice.FileService {
 		fs, err := fileservice.NewMemoryFS(name)
 		require.NoError(c.t, err)
 		return fs
 	}
 	if c.opt.keepData {
 		factory = func(dir string, name string) fileservice.FileService {
-			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0, nil)
+			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0, 0, "", nil)
 			require.NoError(c.t, err)
 			return fs
 		}

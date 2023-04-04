@@ -531,6 +531,8 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 
 const TimeConsumed = "Time Consumed"
 const WaitTime = "Wait Time"
+const ScanTime = "Scan Time"
+const InsertTime = "Insert Time"
 
 const InputRows = "Input Rows"
 const OutputRows = "Output Rows"
@@ -556,6 +558,16 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  WaitTime,
 				Value: analyzeInfo.WaitTimeConsumed,
+				Unit:  "ns",
+			},
+			{
+				Name:  ScanTime,
+				Value: analyzeInfo.ScanTime,
+				Unit:  "ns",
+			},
+			{
+				Name:  InsertTime,
+				Value: analyzeInfo.InsertTime,
 				Unit:  "ns",
 			},
 		}
