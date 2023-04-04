@@ -57,9 +57,7 @@ const (
 func NewLocalFS(
 	name string,
 	rootPath string,
-	memCacheCapacity int64,
-	diskCacheCapacity int64,
-	diskCachePath string,
+	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*LocalFS, error) {
 
@@ -115,35 +113,28 @@ func NewLocalFS(
 		perfCounterSets: perfCounterSets,
 	}
 
-	if err := fs.initCaches(
-		memCacheCapacity,
-		diskCacheCapacity,
-		diskCachePath,
-	); err != nil {
+	if err := fs.initCaches(cacheConfig); err != nil {
 		return nil, err
 	}
 
 	return fs, nil
 }
 
-func (l *LocalFS) initCaches(
-	memCacheCapacity int64,
-	diskCacheCapacity int64,
-	diskCachePath string,
-) error {
+func (l *LocalFS) initCaches(config CacheConfig) error {
+	config.SetDefaults()
 
-	if memCacheCapacity > 0 {
+	if config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			WithLRU(memCacheCapacity),
+			WithLRU(int64(config.MemoryCapacity)),
 			WithPerfCounterSets(l.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
-			zap.Any("capacity", memCacheCapacity),
+			zap.Any("config", config),
 		)
 	}
 
-	//if diskCacheCapacity > 0 && diskCachePath != "" {
+	//if diskCacheCapacity > DisableCacheCapacity && diskCachePath != "" {
 	//	var err error
 	//	l.diskCache, err = NewDiskCache(
 	//		diskCachePath,
