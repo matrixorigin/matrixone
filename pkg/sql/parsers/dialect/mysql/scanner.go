@@ -123,7 +123,18 @@ func (s *Scanner) Scan() (int, string) {
 			return ASSIGNMENT, ""
 		}
 		// Like mysql -h ::1 ?
-		return s.scanBindVar()
+		id, str := s.scanBindVar()
+		if id == LEX_ERROR {
+			// test for 'label:'
+			s.skipBlank()
+			// LOOP WHILE REPEAT
+			if s.cur() != 'L' && s.cur() != 'l' && s.cur() != 'W' && s.cur() != 'w' && s.cur() != 'R' && s.cur() != 'r' {
+				return id, str
+			}
+			return ':', ""
+		} else {
+			return id, str
+		}
 	case ch == ';':
 		s.inc()
 		return ';', ""
@@ -559,7 +570,24 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, keywordName
+		// make transaction statements coexist with plsql
+		if lower == "begin" {
+			cur := s.Pos
+			s.skipBlank()
+			if s.cur() == ';' || s.cur() == eofChar { // "begin ;" situation
+				s.Pos = cur
+				return keywordID, keywordName
+			}
+			typ, _ := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			if typ == WORK || typ == TRANSACTION {
+				s.Pos = cur
+				return keywordID, keywordName
+			}
+			s.Pos = cur
+			return SPBEGIN, keywordName
+		} else {
+			return keywordID, keywordName
+		}
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
