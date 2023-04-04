@@ -138,7 +138,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.PrefetchFrom(ctx, reader, common.DefaultAllocator); err != nil {
+	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
 		return
 	}
 	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
@@ -155,16 +155,11 @@ func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
-	if err != nil {
-		return
-	}
-
 	data = logtail.NewCheckpointData()
 	if err = data.PrefetchFrom(
 		ctx,
-		reader,
-		common.DefaultAllocator,
+		fs.Service,
+		e.location,
 	); err != nil {
 		return
 	}
@@ -197,7 +192,7 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.PrefetchFrom(context.Background(), reader, common.DefaultAllocator); err != nil {
+	if err = data.PrefetchFrom(context.Background(), fs.Service, e.location); err != nil {
 		return
 	}
 	if err = data.ReadFrom(context.Background(), reader, common.DefaultAllocator); err != nil {

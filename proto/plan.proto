@@ -404,13 +404,12 @@ message TableDef {
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;
-	repeated ColDef origin_cols	= 25;
 
 	// XXX: Deprecated and to be removed soon.
-	repeated DefType defs	= 31;
-	map<string, int32> name2col_index = 32;
-	bool isLocked = 33;
-	TableLockType tableLockType = 34;
+	repeated DefType defs	= 25;
+	map<string, int32> name2col_index = 26;
+	bool isLocked = 27;
+	TableLockType tableLockType = 28;
 }
 
 message TableFunction{

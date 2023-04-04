@@ -528,10 +528,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		SubscriptionName: subscriptionName,
 		PubAccountId:     pubAccountId,
 	}
-	originCols := make([]*plan2.ColDef, len(cols))
-	for i, col := range cols {
-		originCols[i] = plan2.DeepCopyColDef(col)
-	}
 
 	tableDef := &plan2.TableDef{
 		TblId:     tableId,
@@ -547,7 +543,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Fkeys:        foreignKeys,
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,
-		OriginCols:   originCols,
 		Indexes:      indexes,
 	}
 	return obj, tableDef
