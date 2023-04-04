@@ -354,15 +354,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
-	proc := process.New(
-		context.Background(),
-		ses.GetMemPool(),
-		ses.GetTxnHandler().GetTxnClient(),
-		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService,
-		pu.LockService,
-		aicm)
-	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 

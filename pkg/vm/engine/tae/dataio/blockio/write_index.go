@@ -19,7 +19,6 @@ import (
 
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -191,14 +190,13 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()
 	}
-	vec.ForeachShallow(func(v any, isnull bool, row int) error {
-		if isnull {
-			return nil
+	containers.ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+		if isNull {
+			return
 		}
-		b.sks[idx].Insert(types.EncodeValue(v, vec.GetType()))
-		return nil
-	}, nil)
-
+		b.sks[idx].Insert(v)
+		return
+	})
 }
 
 func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZoneMap) {
