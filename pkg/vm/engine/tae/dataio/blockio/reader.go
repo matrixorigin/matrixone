@@ -318,7 +318,7 @@ func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		bf, err := index.NewBinaryFuseFilterFromSource(decompressed)
+		bf, err := index.DecodeBloomFilter(decompressed)
 		if err != nil {
 			return nil, 0, err
 		}
