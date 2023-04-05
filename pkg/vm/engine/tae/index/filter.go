@@ -28,6 +28,14 @@ import (
 
 const FuseFilterError = "too many iterations, you probably have duplicate keys"
 
+func DecodeBloomFilter(data []byte) (StaticFilter, error) {
+	sf := binaryFuseFilter{}
+	if err := sf.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return &sf, nil
+}
+
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
 	MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error)
@@ -45,7 +53,6 @@ type binaryFuseFilter struct {
 }
 
 func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
-	sf := &binaryFuseFilter{}
 	hashes := make([]uint64, 0, data.Length())
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -67,31 +74,20 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 			}
 		}
 	}
+	sf := &binaryFuseFilter{}
 	sf.BinaryFuse8 = *inner
 	return sf, nil
 }
 
-func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
-	sf := binaryFuseFilter{}
-	if err := sf.Unmarshal(data); err != nil {
-		return nil, err
-	}
-	return &sf, nil
-}
-
 func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
 	hash := hashV1(key)
-	if filter.Contains(hash) {
-		return true, nil
-	}
-	return false, nil
+	return filter.Contains(hash), nil
 }
 
 func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error) {
 	positive := roaring.NewBitmap()
-	row := uint32(0)
-	exist := false
 
+	row := uint32(0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
 		if filter.Contains(hash) {
@@ -104,10 +100,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool
 	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op); err != nil {
 		return false, nil, err
 	}
-	if positive.GetCardinality() != 0 {
-		exist = true
-	}
-	return exist, positive, nil
+	return !positive.IsEmpty(), positive, nil
 }
 
 func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
