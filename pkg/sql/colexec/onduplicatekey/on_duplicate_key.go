@@ -107,11 +107,16 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	delRowIdVec := vector.NewVec(types.T_Rowid.ToType())
 
 	var oldUniqueRowIdVec []types.Rowid
+	var oldUniquePkVec *vector.Vector
 	var delUniqueRowIdVec *vector.Vector
+	var delUniquePkVec *vector.Vector
 	if len(insertArg.IdxIdx) > 0 {
 		// for now, only support one unique constraint
 		oldUniqueRowIdVec = vector.MustFixedCol[types.Rowid](originBatch.Vecs[insertArg.IdxIdx[0]])
+		oldUniquePkVec = originBatch.Vecs[insertArg.IdxIdx[0]+1]
+
 		delUniqueRowIdVec = vector.NewVec(types.T_Rowid.ToType())
+		delUniquePkVec = vector.NewVec(*oldUniquePkVec.GetType())
 	}
 
 	for i := 0; i < originBatch.Length(); i++ {
@@ -177,6 +182,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					if err != nil {
 						return nil, err
 					}
+					err = delUniquePkVec.UnionOne(oldUniquePkVec, int64(i), proc.GetMPool())
+					if err != nil {
+						return nil, err
+					}
 				}
 
 				newBatch, err := updateOldBatch(newBatch, i, originBatch, updateExpr, proc, columnCount, attrs)
@@ -212,9 +221,15 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 		// delete unique table rows
 		if len(insertArg.IdxIdx) > 0 {
+			// when refactor finish, we use these code:
+			// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
+			// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+			// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+			// deleteUniqueBatch.SetVector(1, delUniquePkVec)
 			deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
 			deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
 			deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+
 			err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
 			if err != nil {
 				deleteUniqueBatch.Clean(proc.Mp())

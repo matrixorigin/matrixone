@@ -211,6 +211,21 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		sortColDef = schema.PhyAddrKey
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
+
+	idxes := make([]uint16, 0)
+	for _, def := range schema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		idxes = append(idxes, uint16(def.Idx))
+	}
+	for _, block := range task.compacted {
+		err = block.Prefetch(idxes)
+		if err != nil {
+			return
+		}
+	}
+
 	for i, block := range task.compacted {
 		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
 			return
