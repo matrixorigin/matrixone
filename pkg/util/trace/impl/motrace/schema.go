@@ -102,7 +102,7 @@ var (
 			resultCntCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
-		Engine:           table.ExternalTableEngine,
+		Engine:           table.NormalTableEngine,
 		Comment:          "record each statement and stats info",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,

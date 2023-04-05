@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -221,7 +222,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			mustExec(sql)
 		}
 	} else {
-		optFactory := table.GetOptionFactory(ctx, table.ExternalTableEngine)
+		optFactory := table.GetOptionFactory(ctx, table.NormalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -346,7 +347,7 @@ var SingleMetricTable = &table.Table{
 	Table:            `metric`,
 	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
-	Engine:           table.ExternalTableEngine,
+	Engine:           table.NormalTableEngine,
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
