@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 	"unsafe"
 
@@ -327,8 +328,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	name := common.NewObjectName(&task.toSegEntry.ID, 0)
-	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
+	name := objectio.BuildObjectName(task.toSegEntry.ID, 0)
+	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name.ToString())
 	if err != nil {
 		return err
 	}

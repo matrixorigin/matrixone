@@ -58,8 +58,10 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
-	name := task.meta.ID.ObjectString()
-	writer, err := blockio.NewBlockWriter(task.fs.Service, name)
+	seg := task.meta.ID.Segment()
+	num, _ := task.meta.ID.Offsets()
+	name := objectio.BuildObjectName(*seg, num)
+	writer, err := blockio.NewBlockWriter(task.fs.Service, name.ToString())
 	if err != nil {
 		return err
 	}
