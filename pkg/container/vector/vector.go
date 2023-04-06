@@ -1496,8 +1496,8 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 	return fmt.Sprintf("%v-%s", col, v.nsp)
 }
 
-// Window returns a "window" into the Vec. 
-// It selects a half-open range (i.e.[start, end)). 
+// Window returns a "window" into the Vec.
+// It selects a half-open range (i.e.[start, end)).
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
