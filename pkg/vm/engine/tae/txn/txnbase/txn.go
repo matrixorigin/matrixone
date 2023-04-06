@@ -97,6 +97,14 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start, snapshot
 	return txn
 }
 
+func MockTxnReaderWithStartTS(startTS types.TS) *Txn {
+	return &Txn{
+		TxnCtx: &TxnCtx{
+			StartTS: startTS,
+		},
+	}
+}
+
 func NewPersistedTxn(
 	mgr *TxnManager,
 	ctx *TxnCtx,
@@ -251,7 +259,8 @@ func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
-	return txn.doCommit(false)
+	err = txn.doCommit(false)
+	return
 }
 
 // CommitInRecovery is called during recovery

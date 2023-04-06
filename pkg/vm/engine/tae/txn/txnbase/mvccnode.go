@@ -73,11 +73,11 @@ func (un *TxnMVCCNode) Set1PC() {
 }
 
 // Check w-w confilct
-func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
+func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	// If node is held by a active txn
 	if !un.IsCommitted() {
 		// No conflict if it is the same txn
-		if un.IsSameTxn(ts) {
+		if un.IsSameTxn(txn) {
 			return nil
 		}
 		return txnif.ErrTxnWWConflict
@@ -86,7 +86,7 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 	// For a committed node, it is w-w conflict if ts is lt the node commit ts
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
-	if un.End.Greater(ts) {
+	if un.End.Greater(txn.GetStartTS()) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
@@ -94,12 +94,30 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 
 // Check whether is mvcc node is visible to ts
 // Make sure all the relevant prepared txns should be committed|rollbacked
-func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
+func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 	// Node is always visible to its born txn
-	if un.IsSameTxn(ts) {
+	if un.IsSameTxn(txn) {
 		return true
 	}
 
+	// The born txn of this node has not been commited|rollbacked
+	if un.IsActive() || un.IsCommitting() {
+		return false
+	}
+
+	// Node is visible if the commit ts is le ts
+	if un.End.LessEq(txn.GetStartTS()) && !un.Aborted {
+		return true
+	}
+
+	// Node is not invisible if the commit ts is gt ts
+	return false
+
+}
+
+// Check whether is mvcc node is visible to ts
+// Make sure all the relevant prepared txns should be committed|rollbacked
+func (un *TxnMVCCNode) IsVisibleByTS(ts types.TS) (visible bool) {
 	// The born txn of this node has not been commited|rollbacked
 	if un.IsActive() || un.IsCommitting() {
 		return false
@@ -226,11 +244,15 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	return true, un.Txn
 }
 
-func (un *TxnMVCCNode) IsSameTxn(ts types.TS) bool {
+func (un *TxnMVCCNode) IsSameTxn(txn txnif.TxnReader) bool {
 	if un.Txn == nil {
 		return false
 	}
-	return un.Txn.GetStartTS().Equal(ts)
+	// for appendnode test
+	if txn == nil {
+		return false
+	}
+	return un.Txn.GetID() == txn.GetID()
 }
 
 func (un *TxnMVCCNode) IsActive() bool {

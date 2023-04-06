@@ -28,10 +28,9 @@ func TestBatch1a(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(4)[2:] // int32, int64
 	attrs := []string{"attr1", "attr2"}
-	nullable := []bool{false, true}
 	opts := Options{}
 	opts.Capacity = 0
-	bat := BuildBatch(attrs, vecTypes, nullable, opts)
+	bat := BuildBatch(attrs, vecTypes, opts)
 	bat.Vecs[0].Append(int32(1))
 	bat.Vecs[0].Append(int32(2))
 	bat.Vecs[0].Append(int32(3))
@@ -63,10 +62,9 @@ func TestBatch1b(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(14)[12:] // Varchar, Char
 	attrs := []string{"attr1", "attr2"}
-	nullable := []bool{false, true}
 	opts := Options{}
 	opts.Capacity = 0
-	bat := BuildBatch(attrs, vecTypes, nullable, opts)
+	bat := BuildBatch(attrs, vecTypes, opts)
 	bat.Vecs[0].Append([]byte("a"))
 	bat.Vecs[0].Append([]byte("b"))
 	bat.Vecs[0].Append([]byte("c"))
