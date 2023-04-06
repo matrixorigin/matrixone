@@ -83,8 +83,8 @@ func (memo *TxnMemo) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(types.EncodeInt8(&isCatalogChanged)); err != nil {
 		return
 	}
-	if isCatalogChanged==1{
-		memo.isCatalogChanged=true
+	if isCatalogChanged == 1 {
+		memo.isCatalogChanged = true
 	}
 	n += 1
 	return
