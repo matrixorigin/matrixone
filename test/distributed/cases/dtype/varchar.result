@@ -1,3 +1,29 @@
+drop table if exists t0;
+create table t0 (a varchar(10));
+insert into t0 values('0.0001');
+insert into t0 values('5');
+insert into t0 values('0.3');
+insert into t0 values('-2.22');
+select a+0.5 from t0;
+0.5001
+5.5
+0.8
+-1.72
+select a-0.5 from t0;
+-0.4999
+4.5
+-0.2
+-2.72
+select a*0.5 from t0;
+0.00005
+2.5
+0.15
+-1.11
+select a/0.5 from t0;
+0.0002
+10
+0.6
+-4.44
 drop table if exists t1;
 create table t1 (a varchar(10));
 insert into t1 values('abcdef');
