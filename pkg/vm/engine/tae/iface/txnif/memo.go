@@ -62,7 +62,11 @@ func (memo *TxnMemo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += tmpn
-	if _, err = w.Write(types.EncodeBool(&memo.isCatalogChanged)); err != nil {
+	isCatalogChanged := int8(0)
+	if memo.isCatalogChanged {
+		isCatalogChanged = 1
+	}
+	if _, err = w.Write(types.EncodeInt8(&isCatalogChanged)); err != nil {
 		return
 	}
 	n += 1
@@ -75,7 +79,8 @@ func (memo *TxnMemo) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += tmpn
-	if _, err = r.Read(types.EncodeBool(&memo.isCatalogChanged)); err != nil {
+	isCatalogChanged := int8(0)
+	if _, err = r.Read(types.EncodeInt8(&isCatalogChanged)); err != nil {
 		return
 	}
 	n += 1
