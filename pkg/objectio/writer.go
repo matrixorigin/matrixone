@@ -36,18 +36,34 @@ type ObjectWriter struct {
 	totalRow uint32
 	colmeta  []ObjectColumnMeta
 	buffer   *ObjectBuffer
-	name     string
+	nameStr  string
 	lastId   uint32
+	name     ObjectName
 }
 
 func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
 	object := NewObject(name, fs)
 	writer := &ObjectWriter{
-		name:   name,
-		object: object,
-		buffer: NewObjectBuffer(name),
-		blocks: make([]BlockObject, 0),
-		lastId: 0,
+		nameStr: name,
+		object:  object,
+		buffer:  NewObjectBuffer(name),
+		blocks:  make([]BlockObject, 0),
+		lastId:  0,
+	}
+	err := writer.WriteHeader()
+	return writer, err
+}
+
+func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (Writer, error) {
+	nameStr := name.String()
+	object := NewObject(nameStr, fs)
+	writer := &ObjectWriter{
+		nameStr: nameStr,
+		name:    name,
+		object:  object,
+		buffer:  NewObjectBuffer(nameStr),
+		blocks:  make([]BlockObject, 0),
+		lastId:  0,
 	}
 	err := writer.WriteHeader()
 	return writer, err
@@ -202,7 +218,7 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		if err = w.object.fs.Delete(ctx, w.name); err != nil {
+		if err = w.object.fs.Delete(ctx, w.nameStr); err != nil {
 			return err
 		}
 		return w.object.fs.Write(ctx, w.buffer.GetData())

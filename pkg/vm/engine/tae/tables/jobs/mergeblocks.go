@@ -329,7 +329,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	name := objectio.BuildObjectName(task.toSegEntry.ID, 0)
-	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name.ToString())
+	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name.String())
 	if err != nil {
 		return err
 	}

@@ -33,7 +33,8 @@ type BlockWriter struct {
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
-	name           string
+	nameStr        string
+	name           objectio.ObjectName
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -44,6 +45,19 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	return &BlockWriter{
 		writer:  writer,
 		isSetPK: false,
+		nameStr: name,
+	}, nil
+}
+
+func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*BlockWriter, error) {
+	writer, err := objectio.NewObjectWriterNew(name, fs)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockWriter{
+		writer:  writer,
+		isSetPK: false,
+		nameStr: name.String(),
 		name:    name,
 	}, nil
 }
@@ -129,7 +143,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
-		logutil.Info("[WriteEnd]", common.OperationField(w.name),
+		logutil.Info("[WriteEnd]", common.OperationField(w.nameStr),
 			common.OperandField("[Size=0]"))
 		return blocks, objectio.Extent{}, err
 	}
@@ -141,10 +155,10 @@ func (w *BlockWriter) String(
 	blocks []objectio.BlockObject) string {
 	size, err := GetObjectSizeWithBlocks(blocks)
 	if err != nil {
-		return fmt.Sprintf("name: %s, err: %s", w.name, err.Error())
+		return fmt.Sprintf("name: %s, err: %s", w.nameStr, err.Error())
 	}
 	return fmt.Sprintf("name: %s, block count: %d, size: %d",
-		w.name,
+		w.nameStr,
 		len(blocks),
 		size,
 	)

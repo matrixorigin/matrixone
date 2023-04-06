@@ -105,6 +105,7 @@ type BlockObject interface {
 	GetID() uint32
 
 	GetColumnCount() uint16
+	GetName() ObjectName
 }
 
 // ColumnObject is a vector in a batch written to fileservice

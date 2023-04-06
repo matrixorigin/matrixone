@@ -113,6 +113,15 @@ func EncodeLocation(
 	return metaLoc, nil
 }
 
+// EncodeLocation Generate a metaloc from an object file
+func EncodeLocationNew(
+	name objectio.ObjectName,
+	extent objectio.Extent,
+	rows uint32,
+	id uint32) objectio.Location {
+	return objectio.BuildLocation(name, extent, rows, id)
+}
+
 func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
 	info := strings.Split(metaLoc, ":")
 	name = info[0]

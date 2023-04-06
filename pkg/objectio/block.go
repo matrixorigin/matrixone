@@ -62,6 +62,10 @@ func (b *Block) GetExtent() Extent {
 	return b.extent
 }
 
+func (b *Block) GetName() ObjectName {
+	return b.name
+}
+
 func (b *Block) GetColumn(idx uint16) (*ColumnBlock, error) {
 	if idx >= uint16(len(b.columns)) {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+

@@ -28,15 +28,29 @@ import (
 )
 
 type ObjectReader struct {
-	object *Object
-	name   string
+	object  *Object
+	nameStr string
+	name    ObjectName
 	ReaderOptions
 }
 
 func NewObjectReader(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
 	reader := &ObjectReader{
-		name:   name,
-		object: NewObject(name, fs),
+		nameStr: name,
+		object:  NewObject(name, fs),
+	}
+	for _, f := range opts {
+		f(&reader.ReaderOptions)
+	}
+	return reader, nil
+}
+
+func NewObjectReaderNew(name ObjectName, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
+	str := name.String()
+	reader := &ObjectReader{
+		nameStr: str,
+		name:    name,
+		object:  NewObject(str, fs),
 	}
 	for _, f := range opts {
 		f(&reader.ReaderOptions)
@@ -52,7 +66,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 	}
 
 	metas := &fileservice.IOVector{
-		FilePath: r.name,
+		FilePath: r.nameStr,
 		Entries:  make([]fileservice.IOEntry, 1, l),
 		NoCache:  r.noCache,
 	}
@@ -166,7 +180,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 		}
 	}
 	data := &fileservice.IOVector{
-		FilePath: r.name,
+		FilePath: r.nameStr,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
 		NoCache:  r.noCache,
 	}
@@ -199,7 +213,7 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 		return nil, err
 	}
 	data := &fileservice.IOVector{
-		FilePath: r.name,
+		FilePath: r.nameStr,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, block := range ids {
@@ -237,7 +251,7 @@ func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.
 
 func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
 	data := &fileservice.IOVector{
-		FilePath: r.name,
+		FilePath: r.nameStr,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: fileSize - size,
