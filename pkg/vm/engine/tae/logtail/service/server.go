@@ -361,6 +361,13 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.logger
 
+	e, ok := <-s.event.C
+	if !ok {
+		logger.Info("publishemtn channel closed")
+		return
+	}
+	s.waterline.Advance(e.to)
+
 	for {
 		select {
 		case <-ctx.Done():
