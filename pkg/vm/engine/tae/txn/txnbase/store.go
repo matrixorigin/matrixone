@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -36,7 +37,7 @@ func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
 	zm []dataio.Index,
-	metaLocs []string,
+	metaLocs []objectio.Location,
 ) error {
 	return nil
 }
@@ -104,11 +105,15 @@ func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *common.
 	return
 }
 
-func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un string) (err error)  { return }
-func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un string) (err error) { return }
-func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)           { return }
-func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)         { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error)         { return }
+func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un objectio.Location) (err error) {
+	return
+}
+func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un objectio.Location) (err error) {
+	return
+}
+func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
+func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error) { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }

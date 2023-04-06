@@ -400,7 +400,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, nil)
 	if err != nil {
 		return nil
 	}
@@ -771,7 +771,7 @@ func (h *Handle) HandleWrite(
 			err = tb.AddBlksWithMetaLoc(
 				ctx,
 				nil,
-				req.MetaLocs)
+				nil)
 			return
 		}
 		//check the input batch passed by cn is valid.

@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"time"
 
@@ -117,7 +118,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
 	zm []dataio.Index,
-	metaLocs []string) error {
+	metaLocs []objectio.Location) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
@@ -373,14 +374,14 @@ func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	return table.SoftDeleteBlock(id)
 }
-func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc string) (err error) {
+func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
 	return table.UpdateMetaLoc(id, metaLoc)
 }
-func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc string) (err error) {
+func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return

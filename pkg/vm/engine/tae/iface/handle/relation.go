@@ -15,6 +15,7 @@
 package handle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,7 +52,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(zm []dataio.Index, metaLcos []string) error
+	AddBlksWithMetaLoc(zm []dataio.Index, metaLcos []objectio.Location) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

@@ -24,14 +24,23 @@ import (
 // provides the merge function, which can merge the prefetch requests of
 // multiple blocks in an object/file
 type prefetch struct {
-	name   string
-	meta   objectio.Extent
-	ids    map[uint32]*objectio.ReadBlockOptions
-	reader objectio.Reader
+	name    objectio.ObjectName
+	nameStr string
+	meta    objectio.Extent
+	ids     map[uint32]*objectio.ReadBlockOptions
+	reader  objectio.Reader
 }
 
-func BuildPrefetch(service fileservice.FileService, key string) (prefetch, error) {
-	reader, err := NewObjectReader(service, key)
+func BuildPrefetch(service fileservice.FileService, key objectio.Location) (prefetch, error) {
+	reader, err := NewObjectReaderNew(service, key)
+	if err != nil {
+		return prefetch{}, err
+	}
+	return buildPrefetch(reader), nil
+}
+
+func BuildPrefetchNew(service fileservice.FileService, key objectio.Location) (prefetch, error) {
+	reader, err := NewObjectReaderNew(service, key)
 	if err != nil {
 		return prefetch{}, err
 	}
@@ -49,10 +58,11 @@ func BuildCkpPrefetch(service fileservice.FileService, key string) (prefetch, er
 func buildPrefetch(reader dataio.Reader) prefetch {
 	ids := make(map[uint32]*objectio.ReadBlockOptions)
 	return prefetch{
-		name:   reader.GetObjectName(),
-		meta:   reader.GetObjectExtent(),
-		ids:    ids,
-		reader: reader.GetObjectReader(),
+		name:    reader.GetObjectName(),
+		nameStr: reader.GetObjectName().String(),
+		meta:    reader.GetObjectExtent(),
+		ids:     ids,
+		reader:  reader.GetObjectReader(),
 	}
 }
 
@@ -86,13 +96,13 @@ func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
 func mergePrefetch(processes []prefetch) map[string]prefetch {
 	pc := make(map[string]prefetch)
 	for _, p := range processes {
-		if pc[p.name].name == "" {
-			pc[p.name] = p
+		if pc[p.nameStr].name == nil {
+			pc[p.nameStr] = p
 			continue
 		}
-		pre := pc[p.name]
+		pre := pc[p.nameStr]
 		pre.mergeIds(p.ids)
-		pc[p.name] = pre
+		pc[p.nameStr] = pre
 
 	}
 	return pc

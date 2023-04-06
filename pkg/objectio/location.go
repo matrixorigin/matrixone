@@ -63,6 +63,10 @@ func (l Location) ID() uint32 {
 	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
+func (l Location) String() string {
+	return fmt.Sprintf("%v-%v-%d-%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
+}
+
 func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
 	var name [FileNameLen]byte
 	copy(name[:types.UuidSize], types.EncodeUuid(&uuid))
@@ -80,4 +84,12 @@ func (o ObjectName) Marshal() []byte {
 
 func (o ObjectName) String() string {
 	return fmt.Sprintf("%v-%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
+}
+
+func (o ObjectName) Sid() types.Uuid {
+	return types.DecodeUuid(o[:types.UuidSize])
+}
+
+func (o ObjectName) Num() uint16 {
+	return types.DecodeUint16(o[:types.UuidSize:FileNameLen])
 }

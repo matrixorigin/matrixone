@@ -73,7 +73,7 @@ type Reader interface {
 	LoadAllColumns(ctx context.Context, idxes []uint16,
 		size int64, m *mpool.MPool) ([]*batch.Batch, error)
 
-	GetObjectName() string
+	GetObjectName() objectio.ObjectName
 	GetObjectExtent() objectio.Extent
 	GetObjectReader() objectio.Reader
 }

@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -578,7 +579,7 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 
 func (tbl *txnTable) AddBlksWithMetaLoc(
 	zm []dataio.Index,
-	metaLocs []string) (err error) {
+	metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -590,18 +591,14 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 		if skip == txnif.PKDedupSkipNone {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
+				reader, err := blockio.NewObjectReaderNew(tbl.store.dataFactory.Fs.Service, loc)
 				if err != nil {
 					return err
 				}
 				bats, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					[]uint32{loc.ID()},
 					nil,
 				)
 				if err != nil {
@@ -768,7 +765,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	return block.GetValue(tbl.store.txn, int(row), int(col))
 }
 
-func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
+func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -777,7 +774,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	if err != nil {
 		panic(err)
 	}
-	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaloc)
+	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaLoc)
 	if err != nil {
 		return
 	}
@@ -787,7 +784,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	return
 }
 
-func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
+func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -887,7 +884,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 // DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
@@ -910,18 +907,14 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
+				reader, err := blockio.NewObjectReaderNew(tbl.store.dataFactory.Fs.Service, loc)
 				if err != nil {
 					return err
 				}
 				bats, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					[]uint32{loc.ID()},
 					nil,
 				)
 				if err != nil {

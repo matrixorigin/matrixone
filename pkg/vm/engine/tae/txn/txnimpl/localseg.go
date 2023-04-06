@@ -16,9 +16,9 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -82,7 +82,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc string, deltaLoc string, zm dataio.Index) {
+func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm dataio.Index) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
 		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
@@ -245,8 +245,9 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	}
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
-	name, blkn, _, _, _ := blockio.DecodeLocation(metaloc)
-	sid, filen := common.MustSegmentidFromMetalocName(name)
+	blkn := metaloc.ID()
+	sid := metaloc.Name().Sid()
+	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {
 		if seg.nseg == nil {
@@ -326,10 +327,10 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	zm []dataio.Index,
-	metaLocs []string,
+	metaLocs []objectio.Location,
 ) (err error) {
 	for i, metaLoc := range metaLocs {
-		seg.registerNode(metaLoc, "", nil)
+		seg.registerNode(metaLoc, nil, nil)
 		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
 		if pkVecs != nil && skip == txnif.PKDedupSkipNone {

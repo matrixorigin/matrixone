@@ -45,44 +45,6 @@ func (d *Delta) GetKey() string          { return d.key }
 func (d *Delta) GetLoc() objectio.Extent { return d.loc }
 func (d *Delta) GetObjectSize() uint32   { return d.objectSize }
 
-func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
-	info := strings.Split(metaLoc, ":")
-	name := info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	id, err := strconv.ParseUint(location[3], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	objectSize, err := strconv.ParseUint(info[3], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	meta := &Meta{
-		key:        name,
-		loc:        extent,
-		rows:       uint32(rows),
-		objectSize: uint32(objectSize),
-	}
-	return meta, nil
-}
-
 func EncodeLocationFromMetas(name string, blks []objectio.BlockObject) string {
 	offset := blks[0].GetExtent().Offset()
 	length := blks[0].GetExtent().Length()

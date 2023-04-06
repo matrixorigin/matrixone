@@ -121,7 +121,7 @@ func jobFactory(
 func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pref.name),
+		makeName(pref.nameStr),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
@@ -142,7 +142,7 @@ func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pref.name),
+		makeName(pref.nameStr),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO

@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -198,11 +199,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		var metaLocABlk string
-		metaLocABlk, err = blockio.EncodeLocation(
+		metaLocABlk := blockio.EncodeLocationNew(
+			ablockTask.blocks[0].GetName(),
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
-			ablockTask.blocks)
+			ablockTask.blocks[0].GetID())
 		if err != nil {
 			return
 		}
@@ -210,11 +211,12 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			var deltaLoc string
-			deltaLoc, err = blockio.EncodeLocation(
+			var deltaLoc objectio.Location
+			deltaLoc = blockio.EncodeLocationNew(
+				ablockTask.blocks[1].GetName(),
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
-				ablockTask.blocks)
+				ablockTask.blocks[1].GetID())
 			if err != nil {
 				return
 			}
@@ -288,10 +290,11 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
-	metaLoc, err := blockio.EncodeLocation(
+	metaLoc := blockio.EncodeLocationNew(
+		ioTask.blocks[0].GetName(),
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
-		ioTask.blocks)
+		ioTask.blocks[0].GetID())
 	if err != nil {
 		return
 	}
@@ -300,11 +303,12 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if deletes != nil {
-		var deltaLoc string
-		deltaLoc, err = blockio.EncodeLocation(
+		var deltaLoc objectio.Location
+		deltaLoc = blockio.EncodeLocationNew(
+			ioTask.blocks[1].GetName(),
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
-			ioTask.blocks)
+			ioTask.blocks[1].GetID())
 		if err != nil {
 			return
 		}

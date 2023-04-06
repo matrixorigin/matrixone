@@ -34,7 +34,7 @@ import (
 
 type BlockReader struct {
 	reader  objectio.Reader
-	key     string
+	key     objectio.Location
 	name    string
 	meta    objectio.Extent
 	manager *IoPipeline
@@ -62,6 +62,17 @@ func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader
 		reader:  reader,
 		name:    name,
 		meta:    meta,
+		manager: pipeline,
+	}, nil
+}
+func NewObjectReaderNew(service fileservice.FileService, key objectio.Location) (dataio.Reader, error) {
+	reader, err := objectio.NewObjectReaderNew(key.Name(), service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader:  reader,
+		key:     key,
 		manager: pipeline,
 	}, nil
 }
@@ -99,7 +110,6 @@ func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Re
 		return nil, err
 	}
 	return &BlockReader{
-		key:     key,
 		reader:  reader,
 		name:    name,
 		meta:    locs[0],
@@ -211,11 +221,7 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 }
 
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	_, locs, err := DecodeLocationToMetas(r.key)
-	if err != nil {
-		return nil, err
-	}
-	meta, err := r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.key.Extent()}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -284,8 +290,8 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 	return bat, nil
 }
 
-func (r *BlockReader) GetObjectName() string {
-	return r.name
+func (r *BlockReader) GetObjectName() objectio.ObjectName {
+	return r.key.Name()
 }
 func (r *BlockReader) GetObjectExtent() objectio.Extent {
 	return r.meta
@@ -354,7 +360,7 @@ func PrefetchWithMerged(pref prefetch) error {
 	return pipeline.Prefetch(pref)
 }
 
-func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key string) error {
+func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key objectio.Location) error {
 
 	pref, err := BuildPrefetch(service, key)
 	if err != nil {
@@ -364,7 +370,7 @@ func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key
 	return pipeline.Prefetch(pref)
 }
 
-func PrefetchBlocksMeta(service fileservice.FileService, key string) error {
+func PrefetchBlocksMeta(service fileservice.FileService, key objectio.Location) error {
 	pref, err := BuildPrefetch(service, key)
 	if err != nil {
 		return err

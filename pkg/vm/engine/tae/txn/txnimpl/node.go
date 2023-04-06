@@ -152,9 +152,5 @@ func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 
 func (n *node) Prefetch(idxes []uint16) error {
 	key := n.meta.GetMetaLoc()
-	_, _, meta, _, err := blockio.DecodeLocation(key)
-	if err != nil {
-		return err
-	}
-	return blockio.Prefetch(idxes, []uint32{meta.Id()}, n.fs.Service, key)
+	return blockio.Prefetch(idxes, []uint32{key.ID()}, n.fs.Service, key)
 }

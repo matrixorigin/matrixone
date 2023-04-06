@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -167,7 +168,7 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 
 func (h *txnRelation) AddBlksWithMetaLoc(
 	zm []dataio.Index,
-	metaLocs []string) error {
+	metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),

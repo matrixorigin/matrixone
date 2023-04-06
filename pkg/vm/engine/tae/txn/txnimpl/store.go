@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -179,7 +180,7 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
 	zm []dataio.Index,
-	metaLoc []string,
+	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
@@ -197,7 +198,7 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
-func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -208,7 +209,7 @@ func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string)
 	return db.UpdateMetaLoc(id, metaLoc)
 }
 
-func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err

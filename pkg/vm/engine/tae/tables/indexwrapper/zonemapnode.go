@@ -24,23 +24,22 @@ import (
 )
 
 type ZmReader struct {
-	metaKey string
+	metaKey objectio.Location
 	idx     uint16
 	reader  dataio.Reader
 }
 
-func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
-	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
+func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *ZmReader {
+	reader, _ := blockio.NewObjectReaderNew(fs.Service, metaLoc)
 	return &ZmReader{
-		metaKey: metaloc,
+		metaKey: metaLoc,
 		idx:     idx,
 		reader:  reader,
 	}
 }
 
 func (r *ZmReader) getZoneMap() (dataio.Index, error) {
-	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{r.metaKey.ID()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err

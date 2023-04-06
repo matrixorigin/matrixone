@@ -167,21 +167,17 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		return
 	}
 	location := blk.meta.GetMetaLoc()
-	if location == "" {
+	if location == nil {
 		return
 	}
-	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
-	if err != nil {
-		return
-	}
-	_, id, _, _, err := blockio.DecodeLocation(location)
+	reader, err := blockio.NewObjectReaderNew(blk.fs.Service, location)
 	if err != nil {
 		return
 	}
 	bat, err := reader.LoadColumns(
 		context.Background(),
 		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
-		[]uint32{id},
+		[]uint32{location.ID()},
 		nil,
 	)
 	if err != nil {
@@ -224,7 +220,7 @@ func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
-	if location == "" {
+	if location == nil {
 		return
 	}
 	return LoadPersistedDeletes(
@@ -266,11 +262,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		_, _, meta, _, err := blockio.DecodeLocation(key)
-		if err != nil {
-			return err
-		}
-		return blockio.Prefetch(idxes, []uint32{meta.Id()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint32{key.ID()}, blk.fs.Service, key)
 	}
 }
 
@@ -563,14 +555,10 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 func (blk *baseBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
 	metaLoc := blk.meta.GetMetaLoc()
-	if metaLoc == "" {
+	if metaLoc == nil {
 		return rows
 	}
-	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
-	if err != nil {
-		panic(err)
-	}
-	fileRows := uint64(meta.GetRows())
+	fileRows := uint64(metaLoc.Rows())
 	if rows > fileRows {
 		return rows
 	}

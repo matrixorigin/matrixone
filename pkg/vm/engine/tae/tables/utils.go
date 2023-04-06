@@ -43,47 +43,35 @@ func LoadPersistedColumnData(
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
-	location string,
+	location objectio.Location,
 ) (vec containers.Vector, err error) {
-	_, _, meta, rows, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return nil, err
-	}
 	if def.IsPhyAddr() {
-		return constructRowId(id, rows)
+		return constructRowId(id, location.Rows())
 	}
-	reader, err := blockio.NewObjectReader(fs.Service, location)
+	reader, err := blockio.NewObjectReaderNew(fs.Service, location)
 	if err != nil {
 		return
 	}
-	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, []uint32{meta.Id()}, nil)
+	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, []uint32{location.ID()}, nil)
 	if err != nil {
 		return
 	}
 	return containers.NewVectorWithSharedMemory(bat[0].Vecs[0]), nil
 }
 
-func ReadPersistedBlockRow(location string) int {
-	meta, err := blockio.DecodeMetaLocToMeta(location)
-	if err != nil {
-		panic(err)
-	}
-	return int(meta.GetRows())
+func ReadPersistedBlockRow(location objectio.Location) int {
+	return int(location.Rows())
 }
 
 func LoadPersistedDeletes(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
-	location string) (bat *containers.Batch, err error) {
-	_, _, meta, _, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return nil, err
-	}
-	reader, err := blockio.NewObjectReader(fs.Service, location)
+	location objectio.Location) (bat *containers.Batch, err error) {
+	reader, err := blockio.NewObjectReaderNew(fs.Service, location)
 	if err != nil {
 		return
 	}
-	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, []uint32{meta.Id()}, nil)
+	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, []uint32{location.ID()}, nil)
 	if err != nil {
 		return
 	}

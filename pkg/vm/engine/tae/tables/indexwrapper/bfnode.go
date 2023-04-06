@@ -28,7 +28,7 @@ import (
 )
 
 type BfReader struct {
-	bfKey  string
+	bfKey  objectio.Location
 	idx    uint16
 	reader dataio.Reader
 	typ    types.Type
@@ -37,22 +37,21 @@ type BfReader struct {
 func NewBfReader(
 	id *common.ID,
 	typ types.Type,
-	metaloc string,
+	metaLoc objectio.Location,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
+	reader, _ := blockio.NewObjectReaderNew(fs.Service, metaLoc)
 
 	return &BfReader{
 		idx:    id.Idx,
-		bfKey:  metaloc,
+		bfKey:  metaLoc,
 		reader: reader,
 		typ:    typ,
 	}
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	_, _, extent, _, _ := blockio.DecodeLocation(r.bfKey)
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{extent.Id()}, nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{r.bfKey.ID()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err

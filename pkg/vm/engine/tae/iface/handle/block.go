@@ -15,6 +15,7 @@
 package handle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,8 +62,8 @@ type BlockReader interface {
 	GetColumnDataByName(string) (*model.ColumnView, error)
 	GetColumnDataById(int) (*model.ColumnView, error)
 	GetMeta() any
-	GetMetaLoc() string
-	GetDeltaLoc() string
+	GetMetaLoc() objectio.Location
+	GetDeltaLoc() objectio.Location
 	Fingerprint() *common.ID
 	Rows() int
 	Prefetch(idxes []uint16) error
@@ -86,8 +87,8 @@ type BlockWriter interface {
 	Append(data *containers.Batch, offset uint32) (uint32, error)
 	Update(row uint32, col uint16, v any) error
 	RangeDelete(start, end uint32, dt DeleteType) error
-	UpdateMetaLoc(metaLoc string) error
-	UpdateDeltaLoc(deltaLoc string) error
+	UpdateMetaLoc(metaLoc objectio.Location) error
+	UpdateDeltaLoc(deltaLoc objectio.Location) error
 
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
