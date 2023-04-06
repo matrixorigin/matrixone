@@ -56,20 +56,17 @@ type AccountRoutineManager struct {
 }
 
 func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) error {
-	if tenantID == sysAccountID {
-		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in RecordRoutine")
-	}
-
-	if rt == nil {
-		return moerr.NewInternalError(ar.ctx, "routine can not be nil in RecordRoutine")
+	if tenantID == sysAccountID || rt != nil {
+		return nil
 	}
 
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	if _, ok := ar.killIdQueue[tenantID]; ok {
 		ar.killQueueMu.Lock()
-		return moerr.NewInternalError(ar.ctx, "account is being suspened or droped in RecordRoutine")
+		return moerr.NewInternalError(ar.ctx, "account is being suspened or droped")
 	}
+
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
 	_, ok := ar.accountId2Routine[tenantID]
@@ -77,16 +74,13 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) err
 		ar.accountId2Routine[tenantID] = make(map[*Routine]bool)
 	}
 	ar.accountId2Routine[tenantID][rt] = true
+
 	return nil
 }
 
-func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) error {
-	if tenantID == sysAccountID {
-		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in DeleteRoutine")
-	}
-
-	if rt == nil {
-		return moerr.NewInternalError(ar.ctx, "routine can not be nil in DeleteRoutine")
+func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
+	if tenantID == sysAccountID || rt != nil {
+		return
 	}
 
 	ar.accountRoutineMu.Lock()
@@ -95,17 +89,16 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) erro
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
 	}
-	return nil
 }
 
-func (ar *AccountRoutineManager) enKillQueue(tenantID int64) error {
+func (ar *AccountRoutineManager) enKillQueue(tenantID int64) {
 	if tenantID == sysAccountID {
-		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in EnKillQueue")
+		return
 	}
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	ar.killIdQueue[tenantID] = true
-	return nil
+
 }
 
 func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
