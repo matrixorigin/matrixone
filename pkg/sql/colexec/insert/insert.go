@@ -16,6 +16,8 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +45,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	insertArg := arg.(*Argument)
 	s3Writer := insertArg.s3Writer
 	bat := proc.InputBatch()
+	logutil.Info(testutil.OperatorReceiveBatch("insert", bat))
+
 	if bat == nil {
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
