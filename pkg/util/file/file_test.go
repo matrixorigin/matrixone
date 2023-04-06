@@ -27,7 +27,7 @@ var (
 )
 
 func TestReadAndWriteFile(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(testPath)
+	fs, err := fileservice.NewMemoryFS(testPath, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
 
 	v, err := ReadFile(fs, testFile)

@@ -15,6 +15,8 @@
 package containers
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -26,7 +28,7 @@ import (
 // ### Shallow copy Functions
 
 func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	return vec.getDownstreamVector()
+	return vec.GetDownstreamVector()
 }
 
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
@@ -47,8 +49,8 @@ func NewVectorWithSharedMemory(v *movec.Vector) Vector {
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
-	vecLen := vec.getDownstreamVector().Length()
-	res, err := vec.getDownstreamVector().CloneWindow(0, vecLen, nil)
+	vecLen := vec.GetDownstreamVector().Length()
+	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -272,9 +274,280 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
-func GetValue(col *movec.Vector, row uint32) any {
-	if col.GetNulls().Np != nil && col.GetNulls().Np.Contains(uint64(row)) {
-		return types.Null{}
+func ForeachVectorWindow(
+	vec Vector,
+	start, length int,
+	op any,
+) (err error) {
+	typ := vec.GetType()
+	if typ.IsVarlen() {
+		return ForeachWindowVarlen(
+			vec,
+			start,
+			length,
+			op.(func([]byte, bool, int) error))
 	}
-	return getNonNullValue(col, row)
+	switch typ.Oid {
+	case types.T_bool:
+		return ForeachWindowFixed[bool](
+			vec,
+			start,
+			length,
+			op.(func(bool, bool, int) error))
+	case types.T_int8:
+		return ForeachWindowFixed[int8](
+			vec,
+			start,
+			length,
+			op.(func(int8, bool, int) error))
+	case types.T_int16:
+		return ForeachWindowFixed[int16](
+			vec,
+			start,
+			length,
+			op.(func(int16, bool, int) error))
+	case types.T_int32:
+		return ForeachWindowFixed[int32](
+			vec,
+			start,
+			length,
+			op.(func(int32, bool, int) error))
+	case types.T_int64:
+		return ForeachWindowFixed[int64](
+			vec,
+			start,
+			length,
+			op.(func(int64, bool, int) error))
+	case types.T_uint8:
+		return ForeachWindowFixed[uint8](
+			vec,
+			start,
+			length,
+			op.(func(uint8, bool, int) error))
+	case types.T_uint16:
+		return ForeachWindowFixed[uint16](
+			vec,
+			start,
+			length,
+			op.(func(uint16, bool, int) error))
+	case types.T_uint32:
+		return ForeachWindowFixed[uint32](
+			vec,
+			start,
+			length,
+			op.(func(uint32, bool, int) error))
+	case types.T_uint64:
+		return ForeachWindowFixed[uint64](
+			vec,
+			start,
+			length,
+			op.(func(uint64, bool, int) error))
+	case types.T_decimal64:
+		return ForeachWindowFixed[types.Decimal64](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal64, bool, int) error))
+	case types.T_decimal128:
+		return ForeachWindowFixed[types.Decimal128](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal128, bool, int) error))
+	case types.T_decimal256:
+		return ForeachWindowFixed[types.Decimal256](
+			vec,
+			start,
+			length,
+			op.(func(types.Decimal256, bool, int) error))
+	case types.T_float32:
+		return ForeachWindowFixed[float32](
+			vec,
+			start,
+			length,
+			op.(func(float32, bool, int) error))
+	case types.T_float64:
+		return ForeachWindowFixed[float64](
+			vec,
+			start,
+			length,
+			op.(func(float64, bool, int) error))
+	case types.T_timestamp:
+		return ForeachWindowFixed[types.Timestamp](
+			vec,
+			start,
+			length,
+			op.(func(types.Timestamp, bool, int) error))
+	case types.T_date:
+		return ForeachWindowFixed[types.Date](
+			vec,
+			start,
+			length,
+			op.(func(types.Date, bool, int) error))
+	case types.T_time:
+		return ForeachWindowFixed[types.Time](
+			vec,
+			start,
+			length,
+			op.(func(types.Time, bool, int) error))
+	case types.T_datetime:
+		return ForeachWindowFixed[types.Datetime](
+			vec,
+			start,
+			length,
+			op.(func(types.Datetime, bool, int) error))
+	case types.T_TS:
+		return ForeachWindowFixed[types.TS](
+			vec,
+			start,
+			length,
+			op.(func(types.TS, bool, int) error))
+	case types.T_Blockid:
+		return ForeachWindowFixed[types.Blockid](
+			vec,
+			start,
+			length,
+			op.(func(types.Blockid, bool, int) error))
+	case types.T_uuid:
+		return ForeachWindowFixed[types.Uuid](
+			vec,
+			start,
+			length,
+			op.(func(types.Uuid, bool, int) error))
+	case types.T_Rowid:
+		return ForeachWindowFixed[types.Rowid](
+			vec,
+			start,
+			length,
+			op.(func(types.Rowid, bool, int) error))
+	default:
+		panic(fmt.Sprintf("unsupported type: %s", typ.String()))
+	}
+}
+
+func ForeachWindowBytes(
+	vec Vector,
+	start, length int,
+	op ItOpT[[]byte],
+) (err error) {
+	typ := vec.GetType()
+	if typ.IsVarlen() {
+		return ForeachWindowVarlen(vec, start, length, op)
+	}
+	cnVec := vec.GetDownstreamVector()
+	tsize := typ.TypeSize()
+	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
+	for i := 0; i < length; i++ {
+		if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func ForeachWindowFixed[T any](
+	vec Vector,
+	start, length int,
+	op ItOpT[T],
+) (err error) {
+	src := vec.(*vector[T])
+	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
+	for i, v := range slice {
+		if err = op(v, src.IsNull(i+start), i+start); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func ForeachWindowVarlen(
+	vec Vector,
+	start, length int,
+	op ItOpT[[]byte],
+) (err error) {
+	src := vec.(*vector[[]byte])
+	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
+	slice = slice[start : start+length]
+	for i, v := range slice {
+		if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any {
+	if t.FixedLength() < 0 {
+		overload := overloads[t].(func(...any) func([]byte, bool, int) error)
+		return overload(args...)
+	}
+	switch t {
+	case types.T_bool:
+		overload := overloads[t].(func(...any) func(bool, bool, int) error)
+		return overload(args...)
+	case types.T_int8:
+		overload := overloads[t].(func(...any) func(int8, bool, int) error)
+		return overload(args...)
+	case types.T_int16:
+		overload := overloads[t].(func(...any) func(int16, bool, int) error)
+		return overload(args...)
+	case types.T_int32:
+		overload := overloads[t].(func(...any) func(int32, bool, int) error)
+		return overload(args...)
+	case types.T_int64:
+		overload := overloads[t].(func(...any) func(int64, bool, int) error)
+		return overload(args...)
+	case types.T_uint8:
+		overload := overloads[t].(func(...any) func(uint8, bool, int) error)
+		return overload(args...)
+	case types.T_uint16:
+		overload := overloads[t].(func(...any) func(uint16, bool, int) error)
+		return overload(args...)
+	case types.T_uint32:
+		overload := overloads[t].(func(...any) func(uint32, bool, int) error)
+		return overload(args...)
+	case types.T_uint64:
+		overload := overloads[t].(func(...any) func(uint64, bool, int) error)
+		return overload(args...)
+	case types.T_float32:
+		overload := overloads[t].(func(...any) func(float32, bool, int) error)
+		return overload(args...)
+	case types.T_float64:
+		overload := overloads[t].(func(...any) func(float64, bool, int) error)
+		return overload(args...)
+	case types.T_decimal64:
+		overload := overloads[t].(func(...any) func(types.Decimal64, bool, int) error)
+		return overload(args...)
+	case types.T_decimal128:
+		overload := overloads[t].(func(...any) func(types.Decimal128, bool, int) error)
+		return overload(args...)
+	case types.T_decimal256:
+		overload := overloads[t].(func(...any) func(types.Decimal256, bool, int) error)
+		return overload(args...)
+	case types.T_timestamp:
+		overload := overloads[t].(func(...any) func(types.Timestamp, bool, int) error)
+		return overload(args...)
+	case types.T_time:
+		overload := overloads[t].(func(...any) func(types.Time, bool, int) error)
+		return overload(args...)
+	case types.T_date:
+		overload := overloads[t].(func(...any) func(types.Date, bool, int) error)
+		return overload(args...)
+	case types.T_datetime:
+		overload := overloads[t].(func(...any) func(types.Datetime, bool, int) error)
+		return overload(args...)
+	case types.T_TS:
+		overload := overloads[t].(func(...any) func(types.TS, bool, int) error)
+		return overload(args...)
+	case types.T_Rowid:
+		overload := overloads[t].(func(...any) func(types.Rowid, bool, int) error)
+		return overload(args...)
+	case types.T_Blockid:
+		overload := overloads[t].(func(...any) func(types.Blockid, bool, int) error)
+		return overload(args...)
+	case types.T_uuid:
+		overload := overloads[t].(func(...any) func(types.Uuid, bool, int) error)
+		return overload(args...)
+	}
+	panic(fmt.Sprintf("unsupported type: %s", t.String()))
 }

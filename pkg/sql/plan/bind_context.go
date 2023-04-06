@@ -69,16 +69,6 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	return nil
 }
 
-func (bc *BindContext) getAllCte(ret []*CTERef) []*CTERef {
-	for k := range bc.cteByName {
-		ret = append(ret, bc.cteByName[k])
-	}
-	if bc.parent != nil {
-		return bc.parent.getAllCte(ret)
-	}
-	return ret
-}
-
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc

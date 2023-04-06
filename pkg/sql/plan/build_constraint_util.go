@@ -1022,7 +1022,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx,-1,nil)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1036,8 +1036,16 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 
-					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
-					rightIdxPos := int32(0)
+					var rightRowIdPos int32 = -1
+					var rightIdxPos int32 = -1 //it's also a primary key.
+					// it's better to get pos from tableDef
+					for colIdx, col := range rightTableDef.Cols {
+						if col.Name == catalog.Row_ID {
+							rightRowIdPos = int32(colIdx)
+						} else if col.Name == catalog.IndexTableIndexColName {
+							rightIdxPos = int32(colIdx)
+						}
+					}
 
 					// append projection
 					info.projectList = append(info.projectList, &plan.Expr{
@@ -1049,6 +1057,20 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					})
+					// we only keep column index of row_id.
+					// primary key column index = column index of row_id + 1
+					info.onIdx = append(info.onIdx, info.idx)
+					info.idx = info.idx + 1
+					info.projectList = append(info.projectList, &plan.Expr{
+						Typ: rightTableDef.Cols[rightIdxPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: rightIdxPos,
+							},
+						},
+					})
+					info.idx = info.idx + 1
 
 					rightExpr := &plan.Expr{
 						Typ: rightTableDef.Cols[rightIdxPos].Typ,
@@ -1116,8 +1138,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					bindCtx.binder = NewTableBinder(builder, bindCtx)
 					info.rootId = newRootId
 					info.onIdxTbl = append(info.onIdxTbl, idxRef)
-					info.onIdx = append(info.onIdx, info.idx)
-					info.idx = info.idx + 1
 				}
 			}
 		}
@@ -1169,7 +1189,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					joinCtx := NewBindContext(builder, bindCtx)
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(childTableDef.Name), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx,-1,nil)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1403,7 +1423,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			rightCtx := NewBindContext(builder, joinCtx)
 			astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
-			rightId, err := builder.buildTable(astTblName, rightCtx,-1,nil)
+			rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 			if err != nil {
 				return err
 			}

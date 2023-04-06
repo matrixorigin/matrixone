@@ -76,7 +76,7 @@ func (index *immutableIndex) BatchDedup(
 		return
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, nil)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)
