@@ -742,10 +742,12 @@ func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
 	return ses.mrs
 }
 
-func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+func (ses *Session) SetMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.allResultSet = append(ses.allResultSet, mrs)
+	if len(ses.allResultSet) == 0 {
+		ses.allResultSet = append(ses.allResultSet, mrs)
+	}
 }
 
 func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
@@ -1383,7 +1385,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	ses.AppendMysqlResultSetOfBackgroundTask(ses.GetMysqlResultSet())
+	ses.SetMysqlResultSetOfBackgroundTask(ses.GetMysqlResultSet())
 	return nil
 }
 
