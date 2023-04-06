@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -147,4 +148,13 @@ func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 	}
 	view.SetData(vec)
 	return
+}
+
+func (n *node) Prefetch(idxes []uint16) error {
+	key := n.meta.GetMetaLoc()
+	_, _, meta, _, err := blockio.DecodeLocation(key)
+	if err != nil {
+		return err
+	}
+	return blockio.Prefetch(idxes, []uint32{meta.Id()}, n.fs.Service, key)
 }
