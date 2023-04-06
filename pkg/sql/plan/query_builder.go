@@ -2338,3 +2338,38 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	}
 	return builder.compCtx.GetContext()
 }
+
+func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
+	switch node.NodeType {
+	case plan.Node_FUNCTION_SCAN:
+		if onlyContainsTag(expr, node.BindingTags[0]) {
+			return true
+		}
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+		return onlyContainsTag(expr, node.BindingTags[0])
+	case plan.Node_JOIN:
+		if containsTag(expr, builder.qry.Nodes[node.Children[0]].BindingTags[0]) && containsTag(expr, builder.qry.Nodes[node.Children[1]].BindingTags[0]) {
+			return true
+		}
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+	}
+}

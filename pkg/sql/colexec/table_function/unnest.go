@@ -123,7 +123,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	if pathVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
