@@ -61,7 +61,7 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
-	// First write rows to sqlWrite, if not working, write to csv file
+	// First write rows to sqlWriter, if not working, write to csv file
 	if n, err := w.sqlWriter.WriteRows(w.GetContent()); err != nil {
 		m, err := w.writer.WriteString(w.buf.String())
 		if err != nil {

@@ -24,6 +24,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
@@ -276,5 +277,10 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	// Filter out the MO_LOGGER SQL statements
+	if s.User == sqlWriter.MOLoggerUser {
+		return nil
+	}
+
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 }

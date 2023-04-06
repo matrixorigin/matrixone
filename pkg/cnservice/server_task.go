@@ -96,8 +96,8 @@ func (s *service) initSqlWriterFactory() {
 	sqlWriter.SetSQLWriterDBAddressFunc(func(context.Context) (string, error) { return s.cfg.SQLAddress, nil })
 }
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
-	frontend.SetSpecialUser(sqlWriter.DBLoggerUser, []byte(command.User.Password))
-	sqlWriter.SetSQLWriterDBUser(sqlWriter.DBLoggerUser, command.User.Password)
+	frontend.SetSpecialUser(sqlWriter.MOLoggerUser, []byte(command.User.Password))
+	sqlWriter.SetSQLWriterDBUser(sqlWriter.MOLoggerUser, command.User.Password)
 }
 
 func (s *service) startTaskRunner() {

@@ -18,7 +18,7 @@ var (
 	dbAddressFunc   atomic.Value
 )
 
-const DBLoggerUser = "mo_logger"
+const MOLoggerUser = "mo_logger"
 
 type DBUser struct {
 	UserName string

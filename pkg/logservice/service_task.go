@@ -52,7 +52,7 @@ func (s *Service) initSqlWriterFactory() {
 	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
 }
 func (s *Service) createSQLLogger(command *logservicepb.CreateTaskService) {
-	sqlWriter.SetSQLWriterDBUser(sqlWriter.DBLoggerUser, command.User.Password)
+	sqlWriter.SetSQLWriterDBUser(sqlWriter.MOLoggerUser, command.User.Password)
 }
 
 func (s *Service) initTaskHolder() {

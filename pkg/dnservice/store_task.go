@@ -47,8 +47,8 @@ func (s *store) initSqlWriterFactory() {
 }
 func (s *store) createSQLLogger(command *logservicepb.CreateTaskService) {
 	// convert username to "mo_logger"
-	frontend.SetSpecialUser(sqlWriter.DBLoggerUser, []byte(command.User.Password))
-	sqlWriter.SetSQLWriterDBUser(sqlWriter.DBLoggerUser, command.User.Password)
+	frontend.SetSpecialUser(sqlWriter.MOLoggerUser, []byte(command.User.Password))
+	sqlWriter.SetSQLWriterDBUser(sqlWriter.MOLoggerUser, command.User.Password)
 }
 
 func (s *store) initTaskHolder() {
