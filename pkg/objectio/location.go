@@ -63,7 +63,21 @@ func (l Location) ID() uint32 {
 	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
+func (l Location) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&l)), LocationLen)
+}
+
+func (l Location) IsEmpty() bool {
+	if len(l) == 0 {
+		return true
+	}
+	return false
+}
+
 func (l Location) String() string {
+	if len(l) == 0 {
+		return ""
+	}
 	return fmt.Sprintf("%v-%v-%d-%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
 }
 
