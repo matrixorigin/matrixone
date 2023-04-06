@@ -156,14 +156,6 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) error {
 
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) error {
 	tblName := string(stmt.Table.ObjectName)
-	// dbName := string(stmt.Table.SchemaName)
-	// _, tableDef := ctx.Resolve(dbName, tblName)
-	// if tableDef == nil {
-	// 	return moerr.NewInternalError(ctx.GetContext(), "invalid table name: %s", string(stmt.Table.ObjectName))
-	// }
-	// if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
-	// 	return moerr.NewInternalError(ctx.GetContext(), "the load data column list is larger than table column")
-	// }
 	colToIndex := make(map[int32]string, 0)
 	if len(stmt.Param.Tail.ColumnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
