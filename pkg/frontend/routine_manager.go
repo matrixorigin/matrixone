@@ -211,8 +211,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 					accountName = account.GetTenant()
 				}
 				metric.ConnectionCounter(accountName).Dec()
-				tenantID := ses.GetTenantInfo().GetTenantID()
-				rm.accountRoutine.deleteRoutine(int64(tenantID), rt)
+				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 			})
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
