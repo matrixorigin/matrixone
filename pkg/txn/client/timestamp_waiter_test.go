@@ -37,9 +37,9 @@ func TestGetTimestamp(t *testing.T) {
 			for i := int64(1); i < 100; i++ {
 				ts := newTestTimestamp(i)
 				tw.latestTS.Store(&ts)
-				ts, err := tw.GetTimestamp(ctx, newTestTimestamp(i-1))
+				v, err := tw.GetTimestamp(ctx, newTestTimestamp(i))
 				require.NoError(t, err)
-				assert.Equal(t, ts, ts)
+				assert.Equal(t, ts.Next(), v)
 			}
 		},
 	)
@@ -63,19 +63,20 @@ func TestGetTimestampWithNotified(t *testing.T) {
 	runTimestampWaiterTests(
 		t,
 		func(tw *timestampWaiter) {
-			timeout := time.Millisecond * 100
+			timeout := time.Second * 10
 			ctx, cancel := context.WithTimeout(context.TODO(), timeout)
 			defer cancel()
 
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				tw.NotifyLatestCommitTS(newTestTimestamp(11))
+				tw.NotifyLatestCommitTS(newTestTimestamp(10))
 			}()
 			<-c
 			ts, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
 			require.NoError(t, err)
-			assert.Equal(t, newTestTimestamp(11), ts)
+			v := newTestTimestamp(10)
+			assert.Equal(t, v.Next(), ts)
 		},
 	)
 }

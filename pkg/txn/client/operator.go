@@ -128,16 +128,25 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+// WithUpdateLastCommitTSFunc we maintain a CN-based last commit timestamp to ensure that a
+// session with that CN can see previous writes.
+func WithUpdateLastCommitTSFunc(value func(timestamp.Timestamp)) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.updateLastCommitTSFunc = value
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	txnID  []byte
 
 	option struct {
-		readyOnly        bool
-		enableCacheWrite bool
-		disable1PCOpt    bool
-		coordinator      bool
-		lockService      lockservice.LockService
+		readyOnly              bool
+		enableCacheWrite       bool
+		disable1PCOpt          bool
+		coordinator            bool
+		lockService            lockservice.LockService
+		updateLastCommitTSFunc func(timestamp.Timestamp)
 	}
 
 	mu struct {
@@ -410,6 +419,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.mu.Lock()
 		defer func() {
 			tc.mu.closed = true
+			if tc.option.updateLastCommitTSFunc != nil {
+				tc.option.updateLastCommitTSFunc(tc.mu.txn.CommitTS)
+			}
 			tc.mu.Unlock()
 		}()
 		if tc.needUnlockLocked() {

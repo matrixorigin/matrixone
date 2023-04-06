@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -55,6 +56,16 @@ type txnClient struct {
 	generator       TxnIDGenerator
 	lockService     lockservice.LockService
 	timestampWaiter TimestampWaiter
+
+	mu struct {
+		sync.RWMutex
+		// we maintain a CN-based last commit timestamp to ensure that
+		// a txn with that CN can see previous writes.
+		// FIXME(fagongzi): this is a remedial solution to disable the
+		// cn-based commit ts when the session-level last commit ts have
+		// been processed.
+		latestCommitTS timestamp.Timestamp
+	}
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
@@ -93,6 +104,7 @@ func (client *txnClient) New(
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
 	if client.timestampWaiter != nil {
+		minTS = client.adjustTimestamp(minTS)
 		ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
 		if err != nil {
 			return nil, err
@@ -101,6 +113,8 @@ func (client *txnClient) New(
 			minTS,
 			ts)
 		txnMeta.SnapshotTS = ts
+		options = append(options,
+			WithUpdateLastCommitTSFunc(client.updateLastCommitTS))
 	}
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
@@ -133,4 +147,21 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 		return v.(txn.TxnMode)
 	}
 	return txn.TxnMode_Pessimistic
+}
+
+func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.mu.latestCommitTS.Less(ts) {
+		client.mu.latestCommitTS = ts
+	}
+}
+
+func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	if ts.Less(client.mu.latestCommitTS) {
+		return client.mu.latestCommitTS
+	}
+	return ts
 }

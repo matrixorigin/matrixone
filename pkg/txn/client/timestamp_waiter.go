@@ -57,8 +57,8 @@ func (tw *timestampWaiter) GetTimestamp(
 	ctx context.Context,
 	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
 	latest := tw.latestTS.Load()
-	if latest != nil && latest.Greater(ts) {
-		return *latest, nil
+	if latest != nil && latest.GreaterEq(ts) {
+		return latest.Next(), nil
 	}
 
 	w := tw.addToWait(ts)
@@ -69,7 +69,7 @@ func (tw *timestampWaiter) GetTimestamp(
 		}
 	}
 	v := tw.latestTS.Load()
-	return *v, nil
+	return v.Next(), nil
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
@@ -84,7 +84,7 @@ func (tw *timestampWaiter) Close() {
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) *waiter {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if tw.mu.lastNotified.Greater(ts) {
+	if tw.mu.lastNotified.GreaterEq(ts) {
 		return nil
 	}
 
@@ -99,7 +99,7 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 	defer tw.mu.Unlock()
 	waiters := tw.mu.waiters[:0]
 	for idx, w := range tw.mu.waiters {
-		if w != nil && ts.Greater(w.waitAfter) {
+		if w != nil && ts.GreaterEq(w.waitAfter) {
 			w.notify()
 			w.unref()
 			tw.mu.waiters[idx] = nil
