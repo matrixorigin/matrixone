@@ -60,8 +60,8 @@ func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 func (task *flushBlkTask) Execute() error {
 	seg := task.meta.ID.Segment()
 	num, _ := task.meta.ID.Offsets()
-	name := objectio.BuildObjectName(*seg, num)
-	writer, err := blockio.NewBlockWriter(task.fs.Service, name.ToString())
+	name := objectio.BuildObjectName(seg, num)
+	writer, err := blockio.NewBlockWriter(task.fs.Service, name.String())
 	if err != nil {
 		return err
 	}

@@ -39,10 +39,10 @@ type Block struct {
 	extent Extent
 
 	// name is the file name or object name of the block
-	name string
+	name ObjectName
 }
 
-func NewBlock(colCnt uint16, object *Object, name string) BlockObject {
+func NewBlock(colCnt uint16, object *Object, name ObjectName) BlockObject {
 	header := BlockHeader{
 		columnCount: colCnt,
 	}

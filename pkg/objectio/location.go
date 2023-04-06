@@ -44,22 +44,22 @@ func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Locat
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
-func (l Location) GetName() ObjectName {
+func (l Location) Name() ObjectName {
 	var name ObjectName
 	return name.Unmarshal(l[:FileNameLen])
 }
 
-func (l Location) GetExtent() Extent {
+func (l Location) Extent() Extent {
 	extent := Extent{}
 	extent.Unmarshal(l[ExtentOff : ExtentOff+ExtentLen])
 	return extent
 }
 
-func (l Location) GetRows() uint32 {
+func (l Location) Rows() uint32 {
 	return types.DecodeUint32(l[RowsOff : RowsOff+RowsLen])
 }
 
-func (l Location) GetID() uint32 {
+func (l Location) ID() uint32 {
 	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
@@ -78,6 +78,6 @@ func (o ObjectName) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&o)), FileNameLen)
 }
 
-func (o ObjectName) ToString() string {
+func (o ObjectName) String() string {
 	return fmt.Sprintf("%v-%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
 }

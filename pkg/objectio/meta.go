@@ -93,11 +93,11 @@ func (meta *ObjectColumnMeta) Read(bs []byte) (err error) {
 // Reserved = 34 bytes reserved space
 type BlockMeta struct {
 	header BlockHeader
-	name   string
+	name   ObjectName
 }
 
 func (bm *BlockMeta) GetName() string {
-	return bm.name
+	return bm.name.String()
 }
 
 func (bm *BlockMeta) GetHeader() BlockHeader {
