@@ -38,7 +38,7 @@ func TestLogList_Sort(t *testing.T) {
 		{Ts: &timestamp.Timestamp{PhysicalTime: 2}, Table: &api.TableID{TbId: 1}},
 		{Ts: &timestamp.Timestamp{PhysicalTime: 3}, Table: &api.TableID{TbId: 1}},
 	}
-	lists.Sort()
+	lists.insertionSort()
 	expectedT := []int64{1, 1, 1, 2, 3}
 	expectedI := []uint64{1, 2, 3, 1, 1}
 	for i := range lists {
