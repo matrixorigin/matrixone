@@ -213,3 +213,7 @@ func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error
 	}
 	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
 }
+
+func (n *anode) Prefetch(idxes []uint16) error {
+	return nil
+}

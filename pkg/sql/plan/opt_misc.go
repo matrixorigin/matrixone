@@ -185,6 +185,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			markTag = node.BindingTags[0]
 		}
 
+		node.OnList = splitPlanConjunctions(node.OnList)
+
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
 				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
