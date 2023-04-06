@@ -308,7 +308,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = math.Min(out1, out2) * 0.8
+				outcnt = out1 * out2 / tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -359,7 +359,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	ndvRate := (distinctValNum / blockNumTotal)
 	if distinctValNum <= 100 || ndvRate < 0.4 {
 		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 2) / coefficient
+		ndv = (distinctValNum + 4) / coefficient
 	} else {
 		// assume ndv is high
 		ndv = tableCnt * ndvRate * coefficient
