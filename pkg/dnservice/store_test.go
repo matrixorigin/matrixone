@@ -59,11 +59,11 @@ func TestAddReplica(t *testing.T) {
 }
 
 func TestStartWithReplicas(t *testing.T) {
-	localFS, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	localFS, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
 
 	factory := func(name string) (*fileservice.FileServices, error) {
-		s3fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName)
+		s3fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -145,18 +145,21 @@ func runDNStoreTest(
 	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
 			defines.LocalFileServiceName,
+			fileservice.DisabledCacheConfig, nil,
 		)
 		if err != nil {
 			return nil, err
 		}
 		s3, err := fileservice.NewMemoryFS(
 			defines.SharedFileServiceName,
+			fileservice.DisabledCacheConfig, nil,
 		)
 		if err != nil {
 			return nil, err
 		}
 		etl, err := fileservice.NewMemoryFS(
 			defines.ETLFileServiceName,
+			fileservice.DisabledCacheConfig, nil,
 		)
 		if err != nil {
 			return nil, err
@@ -186,7 +189,7 @@ func runDNStoreTestWithFileServiceFactory(
 
 	if fsFactory == nil {
 		fsFactory = func(name string) (*fileservice.FileServices, error) {
-			fs, err := fileservice.NewMemoryFS(name)
+			fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
 			if err != nil {
 				return nil, err
 			}

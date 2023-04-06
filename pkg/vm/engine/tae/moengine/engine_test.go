@@ -23,6 +23,7 @@ import (
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -378,7 +379,11 @@ func TestCopy1(t *testing.T) {
 	v1.Update(5, types.Null{})
 	mv1 := containers.CopyToMoVec(v1)
 	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), containers.GetValue(mv1, uint32(i)))
+		if v1.IsNull(i) {
+			assert.True(t, mv1.GetNulls().Contains(uint64(i)))
+		} else {
+			assert.Equal(t, v1.Get(i).([]byte), mv1.GetBytesAt(i))
+		}
 	}
 
 	t2 := types.T_date.ToType()
@@ -387,7 +392,11 @@ func TestCopy1(t *testing.T) {
 	v2.Update(6, types.Null{})
 	mv2 := containers.CopyToMoVec(v2)
 	for i := 0; i < v2.Length(); i++ {
-		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
+		if v2.IsNull(i) {
+			assert.True(t, mv2.GetNulls().Contains(uint64(i)))
+		} else {
+			assert.Equal(t, v2.Get(i).(types.Date), vector.GetFixedAt[types.Date](mv2, i))
+		}
 	}
 
 	v3 := containers.NewVectorWithSharedMemory(mv2)

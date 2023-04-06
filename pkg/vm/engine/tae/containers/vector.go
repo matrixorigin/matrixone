@@ -17,13 +17,14 @@ package containers
 import (
 	"bytes"
 	"fmt"
+	"io"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"io"
 )
 
 // DN vector is different from CN vector by
@@ -267,7 +268,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	err := vec.downstreamVector.Union(src.getDownstreamVector(), sels, vec.GetAllocator())
+	err := vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
 	if err != nil {
 		panic(err)
 	}
@@ -372,7 +373,7 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	vec.downstreamVector.Shrink(dels, true)
 }
 
-func (vec *vector[T]) getDownstreamVector() *cnVector.Vector {
+func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 	return vec.downstreamVector
 }
 

@@ -259,6 +259,21 @@ func (blk *baseBlock) FillPersistedDeletes(
 	return nil
 }
 
+func (blk *baseBlock) Prefetch(idxes []uint16) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		return nil
+	} else {
+		key := blk.meta.GetMetaLoc()
+		_, _, meta, _, err := blockio.DecodeLocation(key)
+		if err != nil {
+			return err
+		}
+		return blockio.Prefetch(idxes, []uint32{meta.Id()}, blk.fs.Service, key)
+	}
+}
+
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
@@ -345,7 +360,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 	dedupClosure func(
 		containers.Vector,
 		txnif.TxnReader,
-		bool,
 		*roaring.Bitmap,
 		*catalog.ColDef,
 	) func(any, bool, int) error) (err error) {
@@ -373,7 +387,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), txn, isCommitting, view.DeleteMask, def)
+	dedupFn := dedupClosure(view.GetData(), txn, view.DeleteMask, def)
 	err = keys.ForeachShallow(dedupFn, sels)
 	return
 }
