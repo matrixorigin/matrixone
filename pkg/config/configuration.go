@@ -152,6 +152,9 @@ var (
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
+
+	// defaultKillRountinesInterval default: 1 minutes
+	defaultKillRountinesInterval = 1
 )
 
 // FrontendParameters of the frontend
@@ -294,6 +297,8 @@ type FrontendParameters struct {
 	PrintDebug bool `toml:"printDebug"`
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
+
+	KillRountinesInterval int `toml:"killRountinesInterval"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -419,6 +424,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.PrintDebugInterval == 0 {
 		fp.PrintDebugInterval = defaultPrintDebugInterval
+	}
+
+	if fp.KillRountinesInterval == 0 {
+		fp.KillRountinesInterval = defaultKillRountinesInterval
 	}
 }
 

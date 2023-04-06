@@ -48,8 +48,9 @@ type RoutineManager struct {
 }
 
 type AccountRoutineManager struct {
-	mu                sync.RWMutex
-	killIdQueue       []int64
+	killQueueMu       sync.RWMutex
+	killIdQueue       map[int64]bool
+	accountRoutineMu  sync.RWMutex
 	accountId2Routine map[int64]map[*Routine]bool
 }
 
@@ -58,8 +59,14 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) {
 		return
 	}
 
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
+	ar.killQueueMu.Lock()
+	defer ar.killQueueMu.Unlock()
+	if _, ok := ar.killIdQueue[tenantID]; ok {
+		ar.killQueueMu.Lock()
+		return
+	}
+	ar.accountRoutineMu.Lock()
+	defer ar.accountRoutineMu.Unlock()
 	_, ok := ar.accountId2Routine[tenantID]
 	if !ok || ar.accountId2Routine[tenantID] == nil {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]bool)
@@ -72,20 +79,11 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 		return
 	}
 
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
+	ar.accountRoutineMu.Lock()
+	defer ar.accountRoutineMu.Unlock()
 	_, ok := ar.accountId2Routine[tenantID]
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
-	}
-}
-
-func (ar *AccountRoutineManager) clearAccountRoutineMap(tenantID int64) {
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
-	_, ok := ar.accountId2Routine[tenantID]
-	if ok {
-		ar.accountId2Routine[tenantID] = nil
 	}
 }
 
@@ -93,31 +91,9 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64) {
 	if tenantID == sysAccountID {
 		return
 	}
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
-	ar.killIdQueue = append(ar.killIdQueue, tenantID)
-}
-
-func (ar *AccountRoutineManager) cleanKillQueue() {
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
-	ar.killIdQueue = make([]int64, 0)
-}
-
-func (ar *AccountRoutineManager) getKillQueue() []int64 {
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
-	return ar.killIdQueue
-}
-
-func (ar *AccountRoutineManager) getAccountId2Routine() map[int64]map[*Routine]bool {
-	ar.mu.Lock()
-	defer ar.mu.Unlock()
-	return ar.accountId2Routine
-}
-
-func (rm *RoutineManager) GetAccountRoutine() *AccountRoutineManager {
-	return rm.accountRoutine
+	ar.killQueueMu.Lock()
+	defer ar.killQueueMu.Unlock()
+	ar.killIdQueue[tenantID] = true
 }
 
 func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
@@ -224,7 +200,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				}
 				metric.ConnectionCounter(accountName).Dec()
 				tenantID := ses.GetTenantInfo().GetTenantID()
-				rm.GetAccountRoutine().deleteRoutine(int64(tenantID), rt)
+				rm.accountRoutine.deleteRoutine(int64(tenantID), rt)
 			})
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
@@ -253,7 +229,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 		if killConnection {
 			logutil.Infof("kill connection %d", id)
 			rt.killConnection(killMyself)
-			rm.GetAccountRoutine().deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
+			rm.accountRoutine.deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
 		} else {
 			logutil.Infof("kill query %s on the connection %d", statementId, id)
 			rt.killQuery(killMyself, statementId)
@@ -438,11 +414,37 @@ func (rm *RoutineManager) printDebug() {
 	logutil.Info(bb.String())
 }
 
+func (rm *RoutineManager) KillRoutineConnections() {
+	ar := rm.accountRoutine
+	ar.killQueueMu.Lock()
+	if len(ar.killIdQueue) != 0 {
+		for account := range ar.killIdQueue {
+			//kill all routine to this account
+			ar.accountRoutineMu.Lock()
+			if rtMap, ok := ar.accountId2Routine[account]; ok {
+				for rt := range rtMap {
+					if rt != nil {
+						// kill connect of this routine
+						rt.killConnection(false)
+					}
+				}
+				//remove accountRoutineMap  for the account
+				delete(ar.accountId2Routine, account)
+			}
+			ar.accountRoutineMu.Unlock()
+		}
+		//clean kill queue
+		ar.killIdQueue = make(map[int64]bool)
+	}
+	ar.killQueueMu.Unlock()
+}
+
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
-		mu:                sync.RWMutex{},
+		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]bool),
-		killIdQueue:       make([]int64, 0),
+		accountRoutineMu:  sync.RWMutex{},
+		killIdQueue:       make(map[int64]bool),
 	}
 	rm := &RoutineManager{
 		ctx:            ctx,
@@ -477,28 +479,13 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 	//add kill connect routine
 	go func() {
 		for {
-			if len(rm.GetAccountRoutine().getKillQueue()) != 0 {
-
-				for _, account := range rm.GetAccountRoutine().getKillQueue() {
-					//kill all routine to this account
-					if rtMap, ok := rm.GetAccountRoutine().getAccountId2Routine()[account]; ok {
-						for rt := range rtMap {
-							if rt != nil {
-								// kill connect of this routine
-								rt.killConnection(false)
-								//remove  routine record of this routine
-								rm.GetAccountRoutine().deleteRoutine(account, rt)
-							}
-						}
-						//remove accountRoutineMap  for the account
-						rm.GetAccountRoutine().clearAccountRoutineMap(account)
-					}
-				}
-				//clean kill queue
-				rm.GetAccountRoutine().cleanKillQueue()
-
+			select {
+			case <-rm.ctx.Done():
+				return
+			default:
 			}
-			time.Sleep(time.Duration(1 * time.Minute))
+			rm.KillRoutineConnections()
+			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Minute))
 		}
 	}()
 

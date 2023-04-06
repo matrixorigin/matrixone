@@ -2482,7 +2482,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	//if alter account suspend, add the account to kill queue
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
-			ses.getRoutineManager().GetAccountRoutine().enKillQueue(int64(targetAccountId))
+			ses.getRoutineManager().accountRoutine.enKillQueue(int64(targetAccountId))
 		}
 	}
 
@@ -3330,7 +3330,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	//if drop the account, add the account to kill queue
-	ses.getRoutineManager().GetAccountRoutine().enKillQueue(accountId)
+	ses.getRoutineManager().accountRoutine.enKillQueue(accountId)
 	return err
 
 handleFailed:
