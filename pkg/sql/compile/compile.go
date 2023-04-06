@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -249,11 +248,12 @@ func (c *Compile) Run(_ uint64) error {
 		c.scope = nil
 		close(errC)
 	}()
-	var err error
 	for e := range errC {
-		err = errors.Join(err, e)
+		if e != nil {
+			return e
+		}
 	}
-	return err
+	return nil
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
