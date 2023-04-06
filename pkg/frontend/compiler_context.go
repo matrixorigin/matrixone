@@ -504,29 +504,17 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		})
 	}
 
-	if tcc.GetQueryType() != TXN_DEFAULT {
-		hideKeys, err := table.GetHideKeys(ctx)
-		if err != nil {
-			return nil, nil
-		}
-		hideKey := hideKeys[0]
-		cols = append(cols, &plan2.ColDef{
-			Name: hideKey.Name,
-			Typ: &plan2.Type{
-				Id:    int32(hideKey.Type.Oid),
-				Width: hideKey.Type.Width,
-				Scale: hideKey.Type.Scale,
-			},
-			Primary: hideKey.Primary,
-		})
+	rowIdCol := plan2.MakeRowIdColDef()
+	// if tcc.GetQueryType() != TXN_DEFAULT {
+	// 	rowIdCol.Hidden = false
+	// }
+	cols = append(cols, rowIdCol)
+	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 	}
-	// cols = append(cols, plan2.MakeRowIdColDef())
-	// if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-	// 	cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-	// }
-	// if clusterByDef != nil {
-	// 	cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
-	// }
+	if clusterByDef != nil {
+		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+	}
 
 	//convert
 	obj := &plan2.ObjectRef{
