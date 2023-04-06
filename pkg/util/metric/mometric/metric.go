@@ -76,7 +76,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		opt.ApplyTo(&initOpts)
 	}
 	// init global variables
-	initConfigByParamaterUnit(SV)
+	initConfigByParameterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
 		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
@@ -174,7 +174,7 @@ func registerAllMetrics() {
 	}
 }
 
-func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
+func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetExportToProm(SV.EnableMetricToProm)
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
