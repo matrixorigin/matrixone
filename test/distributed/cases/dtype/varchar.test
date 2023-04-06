@@ -9,7 +9,7 @@ create table t0 (a varchar(10));
 insert into t0 values('0.0001');
 insert into t0 values('5');
 insert into t0 values('0.3');
-insert into t0 values('-2.22');
+insert into t0 values('-1.22');
 select a+0.5 from t0;
 select a-0.5 from t0;
 select a*0.5 from t0;
