@@ -48,22 +48,27 @@ type RoutineManager struct {
 }
 
 type AccountRoutineManager struct {
+	ctx               context.Context
 	killQueueMu       sync.RWMutex
 	killIdQueue       map[int64]bool
 	accountRoutineMu  sync.RWMutex
 	accountId2Routine map[int64]map[*Routine]bool
 }
 
-func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) {
-	if tenantID == sysAccountID || rt == nil {
-		return
+func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) error {
+	if tenantID == sysAccountID {
+		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in RecordRoutine")
+	}
+
+	if rt == nil {
+		return moerr.NewInternalError(ar.ctx, "routine can not be nil in RecordRoutine")
 	}
 
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	if _, ok := ar.killIdQueue[tenantID]; ok {
 		ar.killQueueMu.Lock()
-		return
+		return moerr.NewInternalError(ar.ctx, "account is being suspened or droped in RecordRoutine")
 	}
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
@@ -72,11 +77,16 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]bool)
 	}
 	ar.accountId2Routine[tenantID][rt] = true
+	return nil
 }
 
-func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
-	if tenantID == sysAccountID || rt == nil {
-		return
+func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) error {
+	if tenantID == sysAccountID {
+		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in DeleteRoutine")
+	}
+
+	if rt == nil {
+		return moerr.NewInternalError(ar.ctx, "routine can not be nil in DeleteRoutine")
 	}
 
 	ar.accountRoutineMu.Lock()
@@ -85,15 +95,17 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
 	}
+	return nil
 }
 
-func (ar *AccountRoutineManager) enKillQueue(tenantID int64) {
+func (ar *AccountRoutineManager) enKillQueue(tenantID int64) error {
 	if tenantID == sysAccountID {
-		return
+		return moerr.NewInternalError(ar.ctx, "tenant can not be sysyem account in EnKillQueue")
 	}
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	ar.killIdQueue[tenantID] = true
+	return nil
 }
 
 func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
@@ -445,6 +457,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		accountId2Routine: make(map[int64]map[*Routine]bool),
 		accountRoutineMu:  sync.RWMutex{},
 		killIdQueue:       make(map[int64]bool),
+		ctx:               ctx,
 	}
 	rm := &RoutineManager{
 		ctx:            ctx,
