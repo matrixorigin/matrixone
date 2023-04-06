@@ -492,6 +492,12 @@ func (seg *localSegment) GetColumnDataById(
 	return n.GetColumnDataById(colIdx)
 }
 
+func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
+	_, pos := blk.ID.Offsets()
+	n := seg.nodes[int(pos)]
+	return n.Prefetch(idxes)
+}
+
 func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]

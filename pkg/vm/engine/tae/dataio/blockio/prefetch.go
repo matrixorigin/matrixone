@@ -15,7 +15,7 @@
 package blockio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 )
@@ -27,18 +27,32 @@ type prefetch struct {
 	name   string
 	meta   objectio.Extent
 	ids    map[uint32]*objectio.ReadBlockOptions
-	pool   *mpool.MPool
 	reader objectio.Reader
 }
 
-func BuildPrefetch(reader dataio.Reader, m *mpool.MPool) prefetch {
+func BuildPrefetch(service fileservice.FileService, key string) (prefetch, error) {
+	reader, err := NewObjectReader(service, key)
+	if err != nil {
+		return prefetch{}, err
+	}
+	return buildPrefetch(reader), nil
+}
+
+func BuildCkpPrefetch(service fileservice.FileService, key string) (prefetch, error) {
+	reader, err := NewCheckPointReader(service, key)
+	if err != nil {
+		return prefetch{}, err
+	}
+	return buildPrefetch(reader), nil
+}
+
+func buildPrefetch(reader dataio.Reader) prefetch {
 	ids := make(map[uint32]*objectio.ReadBlockOptions)
 	return prefetch{
 		name:   reader.GetObjectName(),
 		meta:   reader.GetObjectExtent(),
 		ids:    ids,
 		reader: reader.GetObjectReader(),
-		pool:   m,
 	}
 }
 

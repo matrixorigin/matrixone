@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -33,6 +35,8 @@ import (
 
 type DiskCache struct {
 	capacity        int64
+	evictInterval   time.Duration
+	evictTarget     float64
 	path            string
 	fileExists      sync.Map
 	perfCounterSets []*perfcounter.CounterSet
@@ -44,26 +48,42 @@ type DiskCache struct {
 
 	evictState struct {
 		sync.Mutex
-		pending bool
+		timer        *time.Timer
+		newlyWritten int64
 	}
 }
 
 func NewDiskCache(
 	path string,
 	capacity int64,
+	evictInterval time.Duration,
+	evictTarget float64,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*DiskCache, error) {
+
+	if evictInterval == 0 {
+		panic("zero evict interval")
+	}
+	if evictTarget == 0 {
+		panic("zero evict target")
+	}
+	if evictTarget > 1 {
+		panic("evict target greater than 1")
+	}
+
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
 	}
 	ret := &DiskCache{
 		capacity:        capacity,
+		evictInterval:   evictInterval,
+		evictTarget:     evictTarget,
 		path:            path,
 		perfCounterSets: perfCounterSets,
 	}
 	ret.settingContent.m = make(map[string]chan struct{})
-	ret.triggerEvict(context.TODO())
+	ret.triggerEvict(context.TODO(), 0)
 	return ret, nil
 }
 
@@ -265,7 +285,7 @@ func (d *DiskCache) Update(
 				numError++
 				continue // ignore error
 			}
-			d.triggerEvict(ctx)
+			d.triggerEvict(ctx, int64(n))
 			linkTarget = dataPath
 		}
 
@@ -274,7 +294,8 @@ func (d *DiskCache) Update(
 			if os.IsExist(err) {
 				// ok
 			} else {
-				return err
+				numError++
+				continue // ignore error
 			}
 		}
 
@@ -288,21 +309,59 @@ func (d *DiskCache) Flush() {
 	//TODO
 }
 
-func (d *DiskCache) triggerEvict(ctx context.Context) {
+func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
 	d.evictState.Lock()
 	defer d.evictState.Unlock()
-	if d.evictState.pending {
+
+	d.evictState.newlyWritten += bytesWritten
+
+	if d.evictState.timer != nil {
+		// has pending eviction
+
+		newlyWrittenThreshold := int64(math.Ceil(float64(d.capacity) * (1 - d.evictTarget)))
+		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
+			if d.evictState.timer.Stop() {
+				// evict immediately
+				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
+					zap.Any("newly-written", d.evictState.newlyWritten),
+					zap.Any("newly-written-threshold", newlyWrittenThreshold),
+				)
+				// timer stopped, start eviction
+				// before the following eviction is end, further calls of triggerEvict will not go this path, since timer.Stop will return false
+				perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+					set.FileService.Cache.Disk.EvictImmediately.Add(1)
+				}, d.perfCounterSets...)
+				go func() {
+					defer func() {
+						d.evictState.Lock()
+						d.evictState.timer = nil
+						d.evictState.newlyWritten = 0
+						d.evictState.Unlock()
+					}()
+					d.evict(ctx)
+				}()
+			}
+			return
+		}
+
 		return
 	}
-	d.evictState.pending = true
-	time.AfterFunc(time.Minute*7, func() {
-		defer func() {
-			d.evictState.Lock()
-			d.evictState.pending = false
-			d.evictState.Unlock()
-		}()
-		d.evict(ctx)
-	})
+
+	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+		set.FileService.Cache.Disk.EvictPending.Add(1)
+	}, d.perfCounterSets...)
+	d.evictState.timer = time.AfterFunc(
+		d.evictInterval,
+		func() {
+			defer func() {
+				d.evictState.Lock()
+				d.evictState.timer = nil
+				d.evictState.newlyWritten = 0
+				d.evictState.Unlock()
+			}()
+			d.evict(ctx)
+		},
+	)
 }
 
 func (d *DiskCache) evict(ctx context.Context) {
@@ -338,14 +397,15 @@ func (d *DiskCache) evict(ctx context.Context) {
 			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 				set.FileService.Cache.Disk.Evict.Add(numDeleted)
 			}, d.perfCounterSets...)
-			logutil.Info("disk info eviction",
+			logutil.Info("disk cache: eviction finished",
 				zap.Any("files", numDeleted),
 				zap.Any("bytes", bytesDeleted),
 			)
 		}
 	}()
+	target := int64(float64(d.capacity) * d.evictTarget)
 	for path, size := range paths {
-		if sumSize <= d.capacity {
+		if sumSize <= target {
 			break
 		}
 		if err := os.Remove(path); err != nil {
@@ -454,13 +514,18 @@ func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done fun
 	var doneOnce sync.Once
 	return f, func(ctx context.Context) (err error) {
 		doneOnce.Do(func() {
+			var info fs.FileInfo
+			info, err = f.Stat()
+			if err != nil {
+				return
+			}
 			if err = f.Close(); err != nil {
 				return
 			}
 			if err = os.Rename(tmpPath, contentPath); err != nil {
 				return
 			}
-			d.triggerEvict(ctx)
+			d.triggerEvict(ctx, info.Size())
 		})
 		return
 	}, f.Close, nil

@@ -7,21 +7,19 @@ select * from v1;
 true
 drop view v1;
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
-[unknown result because it is related to issue#3307]
+1
+1
 create view v1 as SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
-[unknown result because it is related to issue#3307]
 select * from v1;
-[unknown result because it is related to issue#3307]
+1
+1
 drop view v1;
-[unknown result because it is related to issue#3307]
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
-[unknown result because it is related to issue#3556]
+1
 create view v1 as SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
-[unknown result because it is related to issue#3556]
 select * from v1;
-[unknown result because it is related to issue#3556]
+1
 drop view v1;
-[unknown result because it is related to issue#3556]
 SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c ORDER BY id);
 id
 1
@@ -271,13 +269,19 @@ INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
 (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
 (5,2), (1,8), (7,0), (0,9), (9,5);
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
-[unknown result because it is related to issue#3307]
+int_nokey	int_key
+9	9
+0	0
+5	5
+0	0
 create view v1 as SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
-[unknown result because it is related to issue#3307]
 select * from v1;
-[unknown result because it is related to issue#3307]
+int_nokey	int_key
+9	9
+0	0
+5	5
+0	0
 drop view v1;
-[unknown result because it is related to issue#3307]
 DROP TABLE IF EXISTS c;
 drop table if exists t1;
 drop table if exists t2;

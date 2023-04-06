@@ -65,7 +65,8 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 	if err != nil {
 		return
 	}
-	return bf.MayContainsKey(key)
+	v := types.EncodeValue(key, r.typ)
+	return bf.MayContainsKey(v)
 }
 
 func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roaring.Bitmap, err error) {
