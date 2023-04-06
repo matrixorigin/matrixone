@@ -268,7 +268,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	err := vec.downstreamVector.Union(src.getDownstreamVector(), sels, vec.GetAllocator())
+	err := vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
 	if err != nil {
 		panic(err)
 	}
@@ -373,7 +373,7 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	vec.downstreamVector.Shrink(dels, true)
 }
 
-func (vec *vector[T]) getDownstreamVector() *cnVector.Vector {
+func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 	return vec.downstreamVector
 }
 

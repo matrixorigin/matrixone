@@ -16,15 +16,16 @@ package plan
 
 import (
 	"context"
+	"math"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"sort"
-	"strings"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -184,13 +185,17 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
-	binding := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
 	}
-	s := sc.GetStatsInfoMap(binding.tableID)
-	return s.NdvMap[binding.cols[col.ColPos]]
+
+	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+		s := sc.GetStatsInfoMap(binding.tableID)
+		return s.NdvMap[binding.cols[col.ColPos]]
+	} else {
+		return -1
+	}
 }
 
 func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {

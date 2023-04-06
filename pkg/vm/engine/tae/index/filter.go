@@ -20,6 +20,7 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
@@ -27,49 +28,7 @@ import (
 
 const FuseFilterError = "too many iterations, you probably have duplicate keys"
 
-type StaticFilter interface {
-	MayContainsKey(key any) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
-	Marshal() ([]byte, error)
-	Unmarshal(buf []byte) error
-	GetMemoryUsage() uint32
-	Print() string
-}
-
-type binaryFuseFilter struct {
-	typ   types.Type
-	inner *xorfilter.BinaryFuse8
-}
-
-func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
-	sf := &binaryFuseFilter{typ: data.GetType()}
-	hashes := make([]uint64, 0)
-	op := func(v any, _ bool, _ int) error {
-		hash, err := types.Hash(v, sf.typ)
-		if err != nil {
-			return err
-		}
-		hashes = append(hashes, hash)
-		return nil
-	}
-	var err error
-	if err = data.ForeachShallow(op, nil); err != nil {
-		return nil, err
-	}
-	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		if err.Error() == FuseFilterError {
-			// 230+ duplicate keys in hashes
-			// block was deleted 115+ rows
-			hashes = lo.Uniq(hashes)
-			if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return sf, nil
-}
-
-func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
+func DecodeBloomFilter(data []byte) (StaticFilter, error) {
 	sf := binaryFuseFilter{}
 	if err := sf.Unmarshal(data); err != nil {
 		return nil, err
@@ -77,64 +36,85 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 	return &sf, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
-	hash, err := types.Hash(key, filter.typ)
-	if err != nil {
-		return false, err
-	}
-	if filter.inner.Contains(hash) {
-		return true, nil
-	}
-	return false, nil
+type StaticFilter interface {
+	MayContainsKey(key []byte) (bool, error)
+	MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error)
+	Marshal() ([]byte, error)
+	Unmarshal(buf []byte) error
+	String() string
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
-	positive := roaring.NewBitmap()
-	row := uint32(0)
-	exist := false
+func hashV1(v []byte) uint64 {
+	return xxhash.Sum64(v)
+}
 
-	op := func(v any, _ bool, _ int) error {
-		hash, err := types.Hash(v, filter.typ)
-		if err != nil {
-			return err
+type binaryFuseFilter struct {
+	xorfilter.BinaryFuse8
+}
+
+func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
+	hashes := make([]uint64, 0, data.Length())
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
+		hashes = append(hashes, hash)
+		return nil
+	}
+	var err error
+	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op); err != nil {
+		return nil, err
+	}
+	var inner *xorfilter.BinaryFuse8
+	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+		if err.Error() == FuseFilterError {
+			// 230+ duplicate keys in hashes
+			// block was deleted 115+ rows
+			hashes = lo.Uniq(hashes)
+			if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+				return nil, err
+			}
 		}
-		if filter.inner.Contains(hash) {
+	}
+	sf := &binaryFuseFilter{}
+	sf.BinaryFuse8 = *inner
+	return sf, nil
+}
+
+func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
+	hash := hashV1(key)
+	return filter.Contains(hash), nil
+}
+
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error) {
+	positive := roaring.NewBitmap()
+
+	row := uint32(0)
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
+		if filter.Contains(hash) {
 			positive.Add(row)
 		}
 		row++
 		return nil
 	}
 
-	if err := keys.ForeachShallow(op, visibility); err != nil {
+	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op); err != nil {
 		return false, nil, err
 	}
-	if positive.GetCardinality() != 0 {
-		exist = true
-	}
-	return exist, positive, nil
+	return !positive.IsEmpty(), positive, nil
 }
 
 func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	dat, tlen := types.EncodeType(&filter.typ)
-	lendat := types.EncodeInt32(&tlen)
-	if _, err = w.Write(lendat); err != nil {
-		return nil, err
-	}
-	if _, err = w.Write(dat); err != nil {
-		return nil, err
-	}
-
 	if _, err = types.WriteValues(
 		&w,
-		filter.inner.Seed,
-		filter.inner.SegmentLength,
-		filter.inner.SegmentLengthMask,
-		filter.inner.SegmentCount,
-		filter.inner.SegmentCountLength); err != nil {
+		filter.Seed,
+		filter.SegmentLength,
+		filter.SegmentLengthMask,
+		filter.SegmentCount,
+		filter.SegmentCountLength); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeSlice(filter.inner.Fingerprints)); err != nil {
+	if _, err = w.Write(types.EncodeSlice(filter.Fingerprints)); err != nil {
 		return
 	}
 	buf = w.Bytes()
@@ -142,47 +122,32 @@ func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 }
 
 func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
-	length := types.DecodeInt32(buf[:4])
-	buf = buf[4:]
-	filter.typ = types.DecodeType(buf[:length])
-	buf = buf[length:]
-	filter.inner = &xorfilter.BinaryFuse8{}
-	filter.inner.Seed = types.DecodeFixed[uint64](buf[:8])
+	filter.Seed = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	filter.inner.SegmentLength = types.DecodeFixed[uint32](buf[:4])
+	filter.SegmentLength = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentLengthMask = types.DecodeFixed[uint32](buf[:4])
+	filter.SegmentLengthMask = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentCount = types.DecodeFixed[uint32](buf[:4])
+	filter.SegmentCount = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
+	filter.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.Fingerprints = types.DecodeSlice[uint8](buf)
+	filter.Fingerprints = types.DecodeSlice[uint8](buf)
 	return nil
 }
 
-func (filter *binaryFuseFilter) Print() string {
+func (filter *binaryFuseFilter) String() string {
 	s := "<SF>\n"
-	s += filter.typ.String()
+	s += strconv.Itoa(int(filter.SegmentCount))
 	s += "\n"
-	s += strconv.Itoa(int(filter.inner.SegmentCount))
+	s += strconv.Itoa(int(filter.SegmentCountLength))
 	s += "\n"
-	s += strconv.Itoa(int(filter.inner.SegmentCountLength))
+	s += strconv.Itoa(int(filter.SegmentLength))
 	s += "\n"
-	s += strconv.Itoa(int(filter.inner.SegmentLength))
+	s += strconv.Itoa(int(filter.SegmentLengthMask))
 	s += "\n"
-	s += strconv.Itoa(int(filter.inner.SegmentLengthMask))
-	s += "\n"
-	s += strconv.Itoa(len(filter.inner.Fingerprints))
+	s += strconv.Itoa(len(filter.Fingerprints))
 	s += "\n"
 	s += "</SF>"
 	return s
-}
-
-func (filter *binaryFuseFilter) GetMemoryUsage() uint32 {
-	size := uint32(0)
-	size += 8
-	size += 4 * 4
-	size += uint32(len(filter.inner.Fingerprints))
-	return size
 }

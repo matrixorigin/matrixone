@@ -17,12 +17,13 @@ package containers
 import (
 	"bytes"
 	"fmt"
+	"io"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"io"
 )
 
 type windowBase struct {
@@ -177,7 +178,7 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (win *vectorWindow[T]) getDownstreamVector() *cnVector.Vector {
+func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
 	res, _ := win.ref.downstreamVector.CloneWindow(win.offset, win.offset+win.length, nil)
 	return res
 }

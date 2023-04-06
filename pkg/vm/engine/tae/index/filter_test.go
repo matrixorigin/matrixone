@@ -37,39 +37,32 @@ func TestStaticFilterNumeric(t *testing.T) {
 	var res bool
 	var exist bool
 
-	res, err = sf.MayContainsKey(int32(1209))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(1209), typ))
 	require.NoError(t, err)
 	require.True(t, res)
 
-	res, err = sf.MayContainsKey(int32(5555))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(5555), typ))
 	require.NoError(t, err)
 	require.True(t, res)
 
-	res, err = sf.MayContainsKey(int32(40000))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(40000), typ))
 	require.NoError(t, err)
 	require.False(t, res)
 
 	require.Panics(t, func() {
-		res, err = sf.MayContainsKey(int16(0))
+		res, err = sf.MayContainsKey(types.EncodeValue(int16(0), typ))
 	})
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
-	visibility := roaring.NewBitmap()
-	visibility.AddRange(uint64(0), uint64(1000))
-	exist, positive, err = sf.MayContainsAnyKeys(query, visibility)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1000), positive.GetCardinality())
-	require.True(t, exist)
-
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query, nil)
+	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -87,7 +80,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
 	require.True(t, exist)
@@ -100,6 +93,16 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 	defer data.Close()
 	_, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
+}
+
+func BenchmarkCreateFilter(b *testing.B) {
+	rows := 1000
+	data := containers.MockVector2(types.T_int64.ToType(), rows, 0)
+	defer data.Close()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		NewBinaryFuseFilter(data)
+	}
 }
 
 func TestStaticFilterString(t *testing.T) {
@@ -124,14 +127,14 @@ func TestStaticFilterString(t *testing.T) {
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query, nil)
+	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -149,7 +152,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
 	require.True(t, exist)

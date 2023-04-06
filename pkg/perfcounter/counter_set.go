@@ -45,13 +45,16 @@ type FileServiceCounterSet struct {
 			Hit  stats.Counter
 		}
 		Disk struct {
-			Read           stats.Counter
-			Hit            stats.Counter
-			GetFileContent stats.Counter
-			SetFileContent stats.Counter
-			OpenFile       stats.Counter
-			StatFile       stats.Counter
-			Error          stats.Counter
+			Read             stats.Counter
+			Hit              stats.Counter
+			GetFileContent   stats.Counter
+			SetFileContent   stats.Counter
+			OpenFile         stats.Counter
+			StatFile         stats.Counter
+			Error            stats.Counter
+			Evict            stats.Counter
+			EvictPending     stats.Counter
+			EvictImmediately stats.Counter
 		}
 	}
 
