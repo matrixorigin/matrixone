@@ -37,7 +37,7 @@ type ObjectName []byte
 
 func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Location {
 	var location [LocationLen]byte
-	copy(location[:FileNameLen], name.Marshal())
+	copy(location[:FileNameLen], name)
 	copy(location[ExtentOff:ExtentOff+ExtentSize], extent.Marshal())
 	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
 	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
@@ -45,8 +45,7 @@ func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Locat
 }
 
 func (l Location) Name() ObjectName {
-	var name ObjectName
-	return name.Unmarshal(l[:FileNameLen])
+	return ObjectName(l[:FileNameLen])
 }
 
 func (l Location) Extent() Extent {
@@ -61,10 +60,6 @@ func (l Location) Rows() uint32 {
 
 func (l Location) ID() uint32 {
 	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
-}
-
-func (l Location) Marshal() []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&l)), LocationLen)
 }
 
 func (l Location) IsEmpty() bool {
@@ -88,14 +83,6 @@ func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), FileNameLen)
 }
 
-func (o ObjectName) Unmarshal(data []byte) ObjectName {
-	return *(*ObjectName)(unsafe.Pointer(&data[0]))
-}
-
-func (o ObjectName) Marshal() []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&o)), FileNameLen)
-}
-
 func (o ObjectName) String() string {
 	return fmt.Sprintf("%v-%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
 }
@@ -105,5 +92,5 @@ func (o ObjectName) Sid() types.Uuid {
 }
 
 func (o ObjectName) Num() uint16 {
-	return types.DecodeUint16(o[:types.UuidSize:FileNameLen])
+	return types.DecodeUint16(o[types.UuidSize:FileNameLen])
 }

@@ -784,7 +784,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 			continue
 		}
 		metaNode := node
-		if metaNode.BaseNode.MetaLoc == nil || metaNode.Aborted {
+		if metaNode.BaseNode.MetaLoc.IsEmpty() || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
 				collector.data.bats[BLKDNMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&entry.ID))
 				collector.data.bats[BLKDNMetaDeleteIDX].GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())

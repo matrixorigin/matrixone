@@ -454,7 +454,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 	for _, node := range mvccNodes {
 		metaNode := node
-		if metaNode.BaseNode.MetaLoc != nil && !metaNode.IsAborted() {
+		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
@@ -462,12 +462,12 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	if n := len(mvccNodes); n > 0 {
 		newest := mvccNodes[n-1]
 		if e.IsAppendable() {
-			if newest.BaseNode.MetaLoc != nil {
+			if !newest.BaseNode.MetaLoc.IsEmpty() {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if newest.BaseNode.DeltaLoc != nil && newest.GetEnd().GreaterEq(b.end) {
+			if !newest.BaseNode.DeltaLoc.IsEmpty() && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}

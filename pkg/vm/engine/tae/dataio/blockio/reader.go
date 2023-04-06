@@ -73,6 +73,7 @@ func NewObjectReaderNew(service fileservice.FileService, key objectio.Location) 
 	return &BlockReader{
 		reader:  reader,
 		key:     key,
+		meta:    key.Extent(),
 		manager: pipeline,
 	}, nil
 }

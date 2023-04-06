@@ -61,7 +61,7 @@ func (task *flushBlkTask) Execute() error {
 	seg := task.meta.ID.Segment()
 	num, _ := task.meta.ID.Offsets()
 	name := objectio.BuildObjectName(seg, num)
-	writer, err := blockio.NewBlockWriter(task.fs.Service, name.String())
+	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name)
 	if err != nil {
 		return err
 	}

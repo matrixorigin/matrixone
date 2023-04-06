@@ -167,7 +167,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		return
 	}
 	location := blk.meta.GetMetaLoc()
-	if location == nil {
+	if location.IsEmpty() {
 		return
 	}
 	reader, err := blockio.NewObjectReaderNew(blk.fs.Service, location)
@@ -220,7 +220,7 @@ func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
-	if location == nil {
+	if location.IsEmpty() {
 		return
 	}
 	return LoadPersistedDeletes(
@@ -555,7 +555,7 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 func (blk *baseBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
 	metaLoc := blk.meta.GetMetaLoc()
-	if metaLoc == nil {
+	if metaLoc.IsEmpty() {
 		return rows
 	}
 	fileRows := uint64(metaLoc.Rows())

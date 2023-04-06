@@ -709,8 +709,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 				return nil
 			}
 			metaLoc := blk.GetMetaLoc()
-			assert.True(t, metaLoc != nil)
-			if bytes.Compare(metaLoc.Marshal(), metaLoc1.Marshal()) == 0 {
+			assert.True(t, !metaLoc.IsEmpty())
+			if bytes.Compare(metaLoc, metaLoc1) == 0 {
 				view, err := blk.GetColumnDataById(2)
 				assert.NoError(t, err)
 				defer view.Close()

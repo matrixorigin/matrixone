@@ -298,7 +298,7 @@ func (entry *BlockEntry) GetMetaLoc() objectio.Location {
 	return str
 }
 func (entry *BlockEntry) HasPersistedDeltaData() bool {
-	return entry.GetDeltaLoc() != nil
+	return !entry.GetDeltaLoc().IsEmpty()
 }
 func (entry *BlockEntry) GetDeltaLoc() objectio.Location {
 	entry.RLock()

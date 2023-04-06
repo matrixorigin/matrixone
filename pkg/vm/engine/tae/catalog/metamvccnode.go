@@ -56,10 +56,10 @@ func (e *MetadataMVCCNode) String() string {
 
 // for create drop in one txn
 func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
-	if un.MetaLoc != nil {
+	if !un.MetaLoc.IsEmpty() {
 		e.MetaLoc = un.MetaLoc
 	}
-	if un.DeltaLoc != nil {
+	if !un.DeltaLoc.IsEmpty() {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
