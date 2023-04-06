@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -639,7 +638,7 @@ func distributeUpdateResponse(
 	response *logtail.UpdateResponse,
 	recRoutines []routineController) error {
 	list := response.GetLogtailList()
-	logList(list).Sort()
+	logList(list).insertionSort()
 
 	// after sort, the smaller tblId, the smaller the index.
 	var index int
@@ -894,21 +893,17 @@ func consumeLogTailOfPushWithoutLazyLoad(
 
 type logList []logtail.TableLogtail
 
-func (ls logList) Len() int { return len(ls) }
-func (ls logList) Less(i, j int) bool {
-	if ls[i].Ts.Less(*ls[j].Ts) {
-		return true
+func (ls logList) insertionSort() {
+	aLessB := func(a, b int) bool {
+		ts := *ls[b].Ts
+		return ls[a].Ts.Less(ts) || (ls[a].Table.TbId < ls[b].Table.TbId && ls[a].Ts.Equal(ts))
 	}
-	if ls[i].Ts.Equal(*ls[j].Ts) {
-		return compareTableIdLess(ls[i].Table.TbId, ls[j].Table.TbId)
-	}
-	return false
-}
-func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
-func (ls logList) Sort() {
-	sort.Sort(ls)
-}
 
-func compareTableIdLess(i1, i2 uint64) bool {
-	return i1 < i2
+	if len(ls) > 1 {
+		for i := 1; i < len(ls); i++ {
+			for j := i - 1; j >= 0 && aLessB(j+1, j); j-- {
+				ls[j], ls[j+1] = ls[j+1], ls[j]
+			}
+		}
+	}
 }

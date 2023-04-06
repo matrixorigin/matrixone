@@ -53,6 +53,7 @@ type InsertNode interface {
 	PrintDeletes() string
 	GetColumnDataByIds([]int) (*model.BlockView, error)
 	GetColumnDataById(int) (*model.ColumnView, error)
+	Prefetch(idxes []uint16) error
 	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)

@@ -155,11 +155,6 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 	return nil
 }
 
-// Query is only used for testing or debugging
-func (writer *BFWriter) Query(key any) (bool, error) {
-	return writer.impl.MayContainsKey(key)
-}
-
 type ObjectColumnMetasBuilder struct {
 	totalRow uint32
 	metas    []objectio.ObjectColumnMeta
