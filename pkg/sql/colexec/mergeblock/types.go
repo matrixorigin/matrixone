@@ -14,6 +14,7 @@
 package mergeblock
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 
@@ -88,6 +89,26 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			if idx == 0 {
 				arg.AffectedRows += uint64(bat.Length())
 			}
+			//check whether bat is valid
+			len := 0
+			for i, vec := range bat.Vecs {
+				if vec == nil {
+					logutil.Errorf("the vec:%d in bat is nil", i)
+					panic("invalid vector : vector is nil")
+				}
+				if vec.Length() == 0 {
+					logutil.Errorf("the vec:%d in bat is empty", i)
+					panic("invalid vector: vector is empty")
+				}
+				if i == 0 {
+					len = vec.Length()
+				}
+				if vec.Length() != len {
+					logutil.Errorf("the length of vec:%d in bat is not equal to the first vec", i)
+					panic("invalid batch : the length of vectors in batch is not the same")
+				}
+			}
+
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
 		}
 	}
