@@ -298,12 +298,11 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:    node.NotCacheable,
 		CurrentStep:     node.CurrentStep,
-		TargetSteps:     make([]int32, len(node.TargetSteps)),
+		SourceStep:      node.SourceStep,
 	}
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
-	copy(newNode.TargetSteps, node.TargetSteps)
 
 	for idx, expr := range node.ProjectList {
 		newNode.ProjectList[idx] = DeepCopyExpr(expr)
