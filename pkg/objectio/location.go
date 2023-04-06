@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	FileNameLen = 18
+	FileNameLen = types.UuidSize + 2
 	ExtentOff   = FileNameLen
 	ExtentLen   = 16
 	RowsOff     = ExtentOff + ExtentLen
@@ -33,25 +33,19 @@ const (
 
 type Location []byte
 
-type locationWriter struct {
-	name   ObjectName
-	extent Extent
-	rows   uint32
-	id     uint32
-}
+type ObjectName []byte
 
 func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Location {
-	writer := locationWriter{
-		name:   name,
-		extent: extent,
-		rows:   rows,
-		id:     id,
-	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&writer)), LocationLen)
+	var location [LocationLen]byte
+	copy(location[:FileNameLen], name.Marshal())
+	copy(location[ExtentOff:ExtentOff+ExtentSize], extent.Marshal())
+	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
+	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
 func (l Location) GetName() ObjectName {
-	name := ObjectName{}
+	var name ObjectName
 	return name.Unmarshal(l[:FileNameLen])
 }
 
@@ -69,22 +63,21 @@ func (l Location) GetID() uint32 {
 	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
-type ObjectName struct {
-	segment types.Uuid
-	num     uint16
-}
-
 func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
-	return ObjectName{
-		segment: uuid,
-		num:     num,
-	}
+	var name [FileNameLen]byte
+	copy(name[:types.UuidSize], types.EncodeUuid(&uuid))
+	copy(name[types.UuidSize:FileNameLen], types.EncodeUint16(&num))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), FileNameLen)
 }
 
 func (o ObjectName) Unmarshal(data []byte) ObjectName {
 	return *(*ObjectName)(unsafe.Pointer(&data[0]))
 }
 
+func (o ObjectName) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&o)), FileNameLen)
+}
+
 func (o ObjectName) ToString() string {
-	return fmt.Sprintf("%v-%d", o.segment.ToString(), o.num)
+	return fmt.Sprintf("%v-%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
 }
