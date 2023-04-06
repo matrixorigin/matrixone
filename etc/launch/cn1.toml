@@ -38,3 +38,6 @@ type = "memory"
 
 [observability]
 statusPort = 9001
+
+[cn.txn]
+non-freshness = false
