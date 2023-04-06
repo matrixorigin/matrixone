@@ -73,14 +73,12 @@ insert into indup_02 values(3,'aaa','bbb',30) on duplicate key update col1=col1+
 select * from indup_02;
 --insert primary key duplicate data, update data pk conflict other insert data
 insert into indup_02 values(3,'aaa','bbb',30),(30,'abc','abc',10),(11,'a1','b1',300) on duplicate key update col1=col1*10,col4=0;
--- @bvt:issue#8716
 select * from indup_02;
 --insert into select from table duplicate update,update col=function(col) col=constant
 create table indup_tmp(col1 int,col2 varchar(20),col3 varchar(20));
 insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(10,'wine','down'),(300,'box','high');
 insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update indup_02.col3=left(indup_02.col3,2),col2='wow';
 select * from indup_02;
--- @bvt:issue
 delete from indup_02;
 select * from indup_02;
 

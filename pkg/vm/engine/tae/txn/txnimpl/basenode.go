@@ -53,6 +53,7 @@ type InsertNode interface {
 	PrintDeletes() string
 	GetColumnDataByIds([]int) (*model.BlockView, error)
 	GetColumnDataById(int) (*model.ColumnView, error)
+	Prefetch(idxes []uint16) error
 	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
@@ -204,11 +205,7 @@ func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		if opts.Capacity > int(txnbase.MaxNodeRows) {
 			opts.Capacity = int(txnbase.MaxNodeRows)
 		}
-		n.data = containers.BuildBatch(
-			schema.AllNames(),
-			schema.AllTypes(),
-			schema.AllNullables(),
-			opts)
+		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
 	from := uint32(n.data.Length())

@@ -221,7 +221,7 @@ message ExternalName2ColIndex {
 message ExternalScan {
   repeated string attrs = 1;
   repeated int64 file_size = 2;
-  repeated int32 file_offset = 3;
+  repeated int64 file_offset = 3;
   repeated plan.ColDef cols = 4;
   repeated ExternalName2ColIndex name2_col_index = 5;
   string create_sql = 6;

@@ -307,7 +307,6 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 			},
 		},
 	}
-	logutil.Infof("wangjian sql5 is", param.FileOffset, time.Now())
 	if param.Extern.Parallel {
 		vec.Entries[0].Offset = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)])
 		vec.Entries[0].Size = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)+1] - param.FileOffset[2*(param.Fileparam.FileIndex-1)])
@@ -322,8 +321,8 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int32, error) {
-	arr := make([][2]int32, 0)
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int64, error) {
+	arr := make([][2]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
@@ -353,13 +352,13 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 		offset = append(offset, vec.Entries[0].Offset)
 	}
 
-	start := int32(0)
+	start := int64(0)
 	for i := 0; i < mcpu; i++ {
 		if i+1 < mcpu {
-			arr = append(arr, [2]int32{start, int32(offset[i+1] + tailSize[i+1])})
-			start = int32(offset[i+1] + tailSize[i+1])
+			arr = append(arr, [2]int64{start, (offset[i+1] + tailSize[i+1])})
+			start = offset[i+1] + tailSize[i+1]
 		} else {
-			arr = append(arr, [2]int32{start, -1})
+			arr = append(arr, [2]int64{start, -1})
 		}
 	}
 	return arr, nil
@@ -564,7 +563,6 @@ func GetMOcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	return plh, nil
 }
 
-var totalCnt int
 func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
@@ -581,8 +579,6 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	plh := param.plh
 	finish := false
 	cnt, finish, err = plh.moCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
-	totalCnt += cnt
-	logutil.Infof("wangjian sql4 is", totalCnt, time.Now())
 	if err != nil {
 		return nil, err
 	}

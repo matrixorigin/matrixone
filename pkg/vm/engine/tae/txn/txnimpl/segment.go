@@ -53,7 +53,7 @@ func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -88,7 +88,7 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -134,7 +134,7 @@ func (it *segmentIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err

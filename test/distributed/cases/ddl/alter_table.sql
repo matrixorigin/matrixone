@@ -48,10 +48,16 @@ ALTER TABLE t1 ADD UNIQUE idx1 (col2, col3);
 insert into t1 values(7, '1981-05-01','green', 26);
 show index from t1;
 select * from t1;
+alter table t1 alter index idx1 invisible;
+show index from t1;
+alter table t1 alter index idx1 visible;
+show index from t1;
 ALTER TABLE t1 DROP INDEX idx1;
 show index from t1;
 
 ALTER TABLE t1 ADD UNIQUE INDEX idx2 (col2, col3);
+show index from t1;
+alter table t1 alter index idx2 invisible;
 show index from t1;
 ALTER TABLE t1 DROP INDEX idx2;
 show index from t1;
@@ -76,11 +82,15 @@ insert into t2 values(6, '1981-05-01','green', 26);
 
 ALTER TABLE t2 ADD INDEX index1 (col2);
 show index from t2;
+alter table t2 alter index index1 invisible;
+show index from t2;
 select * from t2;
 ALTER TABLE t2 DROP INDEX index1;
 show index from t2;
 
 ALTER TABLE t2 ADD INDEX index2 (col2,col3);
+show index from t2;
+alter table t2 alter index index2 invisible;
 show index from t2;
 ALTER TABLE t2 DROP INDEX index2;
 show index from t2;
@@ -104,11 +114,15 @@ insert into t3 values(6, '1981-05-01','green', 26);
 
 ALTER TABLE t3 ADD INDEX index1 (col2);
 show index from t3;
+alter table t3 alter index index1 invisible;
+show index from t3;
 select * from t3;
 ALTER TABLE t3 DROP INDEX index1;
 show index from t3;
 
 ALTER TABLE t3 ADD UNIQUE INDEX index2 (col2,col3);
+show index from t3;
+alter table t3 alter index index2 invisible;
 show index from t3;
 ALTER TABLE t3 DROP INDEX index2;
 show index from t3;

@@ -518,31 +518,6 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
-func (s *Schema) Nullables() []bool {
-	if len(s.ColDefs) == 0 {
-		return make([]bool, 0)
-	}
-	nulls := make([]bool, 0, len(s.ColDefs)-1)
-	for _, def := range s.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		nulls = append(nulls, def.Nullable())
-	}
-	return nulls
-}
-
-func (s *Schema) AllNullables() []bool {
-	if len(s.ColDefs) == 0 {
-		return make([]bool, 0)
-	}
-	nulls := make([]bool, 0, len(s.ColDefs))
-	for _, def := range s.ColDefs {
-		nulls = append(nulls, def.Nullable())
-	}
-	return nulls
-}
-
 func (s *Schema) AllTypes() []types.Type {
 	if len(s.ColDefs) == 0 {
 		return make([]types.Type, 0)

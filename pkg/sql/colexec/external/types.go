@@ -47,10 +47,9 @@ type ExParamConst struct {
 	CreateSql     string
 	Attrs         []string
 	Cols          []*plan.ColDef
-	OriginCols    []*plan.ColDef
 	FileList      []string
 	FileSize      []int64
-	FileOffset    []int32
+	FileOffset    []int64
 	Name2ColIndex map[string]int32
 	Ctx           context.Context
 	Extern        *tree.ExternParam

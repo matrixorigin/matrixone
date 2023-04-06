@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sort"
 	"sync"
 	"time"
@@ -73,7 +72,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
-	nullables := CheckpointSchema.Nullables()
 	t0 := time.Now()
 	for i := range colNames {
 		if len(bats) == 0 {
@@ -81,9 +79,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
+			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i], nullables[i])
+			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}
@@ -134,14 +132,12 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		var ckpReader dataio.Reader
-		ckpReader, err = blockio.NewCheckPointReader(r.fs.Service, metaloc)
+		metaLoc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+
+		err = blockio.PrefetchCkpMeta(r.fs.Service, metaLoc)
 		if err != nil {
 			return
 		}
-
-		blockio.PrefetchBlocksMeta(ckpReader, nil)
 	}
 
 	for i := 0; i < bat.Length(); i++ {

@@ -76,6 +76,7 @@ type Block interface {
 	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int) (*model.BlockView, error)
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int) (*model.ColumnView, error)
+	Prefetch(idxes []uint16) error
 	GetMeta() any
 	GetBufMgr() base.INodeManager
 

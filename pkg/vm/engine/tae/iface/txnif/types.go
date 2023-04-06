@@ -68,7 +68,7 @@ type TxnReader interface {
 	GetLSN() uint64
 	GetMemo() *TxnMemo
 
-	SameTxn(startTs types.TS) bool
+	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
 }
@@ -158,7 +158,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
 type BaseNode[T any] interface {
 	Update(o T)
@@ -175,13 +175,14 @@ type BaseMVCCNode interface {
 	String() string
 	IsNil() bool
 
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
+	IsVisibleByTS(ts types.TS) (visible bool)
+	IsVisible(txn TxnReader) (visible bool)
+	CheckConflict(txn TxnReader) error
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
 	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
-	IsSameTxn(ts types.TS) bool
+	IsSameTxn(txn TxnReader) bool
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool

@@ -25,7 +25,7 @@ import (
 func TestMemCacheLeak(t *testing.T) {
 	ctx := context.Background()
 
-	fs, err := NewMemoryFS("test")
+	fs, err := NewMemoryFS("test", DisabledCacheConfig, nil)
 	assert.Nil(t, err)
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",

@@ -21,7 +21,6 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -745,10 +744,7 @@ func (c *Compile) constructScopeForExternal(index int, ID2Addr map[int]int) *Sco
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
-	defer func() {
-		span.End()
-		logutil.Infof("wangjian sql2z is", time.Now())
-	}()
+	defer span.End()
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -791,7 +787,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
-	logutil.Infof("wangjian sql2 is", mcpu, time.Now())
 	if n.ObjRef != nil {
 		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
@@ -826,7 +821,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		fileList = []string{param.Filepath}
 	}
 
-	var fileOffset [][][2]int32
+	var fileOffset [][][2]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
@@ -853,7 +848,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileListTmp = fileList[index : index+cnt]
 			index += cnt
 		}
-		offset := make([]int32, 0)
+		offset := make([]int64, 0)
 		for j := 0; j < len(fileOffset); j++ {
 			offset = append(offset, fileOffset[j][i][0])
 			offset = append(offset, fileOffset[j][i][1])
@@ -1951,7 +1946,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	return addr == currentCNAddr
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
 		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)

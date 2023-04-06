@@ -326,7 +326,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					Name2ColIndex: t.Es.Name2ColIndex,
 					CreateSql:     t.Es.CreateSql,
 					FileList:      t.Es.FileList,
-					OriginCols:    t.Es.OriginCols,
 					Extern:        t.Es.Extern,
 				},
 				ExParam: external.ExParam{
@@ -659,7 +658,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []int32) *external.Argument {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []int64) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -676,7 +675,6 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Ctx:           ctx,
 				FileList:      fileList,
 				FileSize:      FileSize,
-				OriginCols:    n.TableDef.OriginCols,
 				ClusterTable:  n.GetClusterTable(),
 			},
 			ExParam: external.ExParam{

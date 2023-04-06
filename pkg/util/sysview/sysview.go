@@ -304,7 +304,7 @@ var (
 			"when relkind = 'v'  then 'VIEW' " +
 			"when relkind = 'e' then 'EXTERNAL TABLE' " +
 			"when relkind = 'r' then 'BASE TABLE' " +
-			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
+			"else 'INTERNAL TABLE' end) AS TABLE_TYPE," +
 			"if(relkind = 'r','Tae',NULL) AS ENGINE," +
 			"if(relkind = 'v',NULL,10) AS VERSION," +
 			"'Compressed' AS ROW_FORMAT," +
@@ -320,7 +320,7 @@ var (
 			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +
 			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION," +
 			"if(relkind = 'v', NULL, 0) AS CHECKSUM," +
-			"if(relkind = 'v', NULL, if(partitioned = '', '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
+			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
 			"cast(rel_comment as text) AS TABLE_COMMENT " +
 			"FROM mo_catalog.mo_tables;",
 
