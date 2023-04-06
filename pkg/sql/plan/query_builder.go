@@ -2156,7 +2156,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			leftCols := make(map[string]any)
 			for _, binding := range leftCtx.bindings {
-				for _, col := range binding.cols {
+				for i, col := range binding.cols {
+					if binding.colIsHidden[i] {
+						continue
+					}
 					leftCols[col] = nil
 				}
 			}

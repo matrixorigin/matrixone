@@ -505,14 +505,11 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	rowIdCol := plan2.MakeRowIdColDef()
-	// if tcc.GetQueryType() != TXN_DEFAULT {
-	// 	rowIdCol.Hidden = false
-	// }
 	cols = append(cols, rowIdCol)
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
 		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 	}
-	if clusterByDef != nil {
+	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
 		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
 	}
 

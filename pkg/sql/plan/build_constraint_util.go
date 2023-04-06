@@ -224,6 +224,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if aliasNames, exist := aliasMap[tblName]; exist {
+		alias = tblName // work in delete statement
 		dbName = aliasNames[0]
 		tblName = aliasNames[1]
 	}
@@ -338,12 +339,15 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	fromTables := &tree.From{
 		Tables: stmt.Tables,
 	}
-	// selectList := make([]tree.SelectExpr, len(tableInfo.tableDefs))
 	var selectList []tree.SelectExpr
 
 	// append  table.* to project list
 	columnsSize := 0
+	var aliasList = make([]string, len(tableInfo.alias))
 	for alias, i := range tableInfo.alias {
+		aliasList[i] = alias
+	}
+	for i, alias := range aliasList {
 		for _, col := range tableInfo.tableDefs[i].Cols {
 			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
 			columnsSize = columnsSize + 1
@@ -351,11 +355,6 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 				Expr: e,
 			})
 		}
-		// e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		// columnsSize += len(tableInfo.tableDefs[i].Cols)
-		// selectList = tree.SelectExpr{
-		// 	Expr: e,
-		// }
 	}
 
 	// append  [update expr] to project list
@@ -742,20 +741,18 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
 
-	getResolveExpr := func(tblName string) {
+	getResolveExpr := func(alias string) {
 		var ret *tree.UnresolvedName
 		if haveConstraint {
-			defIdx := tblInfo.alias[tblName]
+			defIdx := tblInfo.alias[alias]
 			for _, col := range tblInfo.tableDefs[defIdx].Cols {
-				ret, _ = tree.NewUnresolvedName(builder.GetContext(), tblName, col.Name)
+				ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
 			}
-			// ret, _ = tree.NewUnresolvedNameWithStar(builder.GetContext(), tblName)
-			//
 		} else {
-			ret, _ = tree.NewUnresolvedName(builder.GetContext(), tblName, catalog.Row_ID)
+			ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, catalog.Row_ID)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
