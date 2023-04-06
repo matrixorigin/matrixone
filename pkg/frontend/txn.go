@@ -132,7 +132,7 @@ func (th *TxnHandler) NewTxnOperator() error {
 
 	th.txnOperator, err = th.txnClient.New(
 		th.createTxnCtx(),
-		th.ses.lastCommitTS,
+		th.ses.getLastCommitTS(),
 		opts...)
 	if err != nil {
 		return err

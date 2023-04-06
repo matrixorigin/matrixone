@@ -184,6 +184,7 @@ type Session struct {
 	// log of the last transaction has not been pushed to CN, we need to wait until at
 	// least the commit of the last transaction log of the previous transaction arrives.
 	lastCommitTS timestamp.Timestamp
+	upstream     *Session
 }
 
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
@@ -364,8 +365,17 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, aicm *defines.AutoIncrCacheManager) *BackgroundSession {
+func NewBackgroundSession(
+	reqCtx context.Context,
+	upstream *Session,
+	mp *mpool.MPool,
+	PU *config.ParameterUnit,
+	gSysVars *GlobalSystemVariables) *BackgroundSession {
+	connCtx := upstream.GetConnectContext()
+	aicm := upstream.GetAutoIncrCacheManager()
+
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm)
+	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
@@ -553,7 +563,11 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	return NewBackgroundHandler(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCacheManager)
+	return NewBackgroundHandler(
+		ctx,
+		ses,
+		ses.GetMemPool(),
+		ses.GetParameterUnit())
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1063,7 +1077,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionInfo, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCacheManager())
+	rsset, err = executeSQLInBackgroundSession(
+		sysTenantCtx,
+		ses,
+		mp,
+		pu,
+		sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1099,7 +1118,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCacheManager())
+	rsset, err = executeSQLInBackgroundSession(
+		tenantCtx,
+		ses,
+		mp,
+		pu,
+		sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1145,7 +1169,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCacheManager())
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -1160,7 +1189,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCacheManager())
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1178,7 +1212,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(ses.GetConnectContext(), tenantCtx, mp, pu, sql, ses.GetAutoIncrCacheManager())
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1329,8 +1368,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, aicm *defines.AutoIncrCacheManager) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(connCtx, reqCtx, mp, pu, aicm)
+func executeSQLInBackgroundSession(
+	reqCtx context.Context,
+	upstream *Session,
+	mp *mpool.MPool,
+	pu *config.ParameterUnit,
+	sql string) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(reqCtx, upstream, mp, pu)
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
@@ -1338,20 +1382,6 @@ func executeSQLInBackgroundSession(connCtx, reqCtx context.Context, mp *mpool.MP
 	if err != nil {
 		return nil, err
 	}
-
-	//get the result set
-	//TODO: debug further
-	//mrsArray := ses.GetAllMysqlResultSet()
-	//for _, mrs := range mrsArray {
-	//	for i := uint64(0); i < mrs.GetRowCount(); i++ {
-	//		row, err := mrs.GetRow(i)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		logutil.Info(row)
-	//	}
-	//}
-
 	return getResultSet(reqCtx, bh)
 }
 
@@ -1362,10 +1392,14 @@ type BackgroundHandler struct {
 
 // NewBackgroundHandler with first two parameters.
 // connCtx as the parent of the txnCtx
-var NewBackgroundHandler = func(connCtx, reqCtx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) BackgroundExec {
+var NewBackgroundHandler = func(
+	reqCtx context.Context,
+	upstream *Session,
+	mp *mpool.MPool,
+	pu *config.ParameterUnit) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(connCtx, reqCtx, mp, pu, GSysVariables, aicm),
+		ses: NewBackgroundSession(reqCtx, upstream, mp, pu, GSysVariables),
 	}
 	return bh
 }
@@ -1473,4 +1507,18 @@ func (ses *Session) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
 	if lastCommitTS.Greater(ses.lastCommitTS) {
 		ses.lastCommitTS = lastCommitTS
 	}
+	if ses.upstream != nil {
+		ses.upstream.updateLastCommitTS(lastCommitTS)
+	}
+}
+
+func (ses *Session) getLastCommitTS() timestamp.Timestamp {
+	minTS := ses.lastCommitTS
+	if ses.upstream != nil {
+		v := ses.upstream.getLastCommitTS()
+		if v.Greater(minTS) {
+			minTS = v
+		}
+	}
+	return minTS
 }

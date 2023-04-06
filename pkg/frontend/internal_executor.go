@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -179,6 +180,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
+
+	//make sure init tasks can see the prev task's data
+	now, _ := runtime.ProcessLevelRuntime().Clock().Now()
+	sess.lastCommitTS = now
 	return sess
 }
 
