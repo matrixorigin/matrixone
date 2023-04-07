@@ -16,15 +16,16 @@ package plan
 
 import (
 	"context"
+	"math"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"sort"
-	"strings"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -184,13 +185,17 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
-	binding := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
 	}
-	s := sc.GetStatsInfoMap(binding.tableID)
-	return s.NdvMap[binding.cols[col.ColPos]]
+
+	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+		s := sc.GetStatsInfoMap(binding.tableID)
+		return s.NdvMap[binding.cols[col.ColPos]]
+	} else {
+		return -1
+	}
 }
 
 func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {
@@ -303,7 +308,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = math.Min(out1, out2) * 0.8
+				outcnt = out1 * out2 / tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -354,7 +359,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	ndvRate := (distinctValNum / blockNumTotal)
 	if distinctValNum <= 100 || ndvRate < 0.4 {
 		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 2) / coefficient
+		ndv = (distinctValNum + 4) / coefficient
 	} else {
 		// assume ndv is high
 		ndv = tableCnt * ndvRate * coefficient
@@ -742,4 +747,15 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 		}
 	}
 	return nodeID
+}
+
+func compareStats(stats1, stats2 *Stats) bool {
+	// selectivity is first considered to reduce data
+	// when selectivity very close, we first join smaller table
+	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
+		return stats1.Selectivity < stats2.Selectivity
+	} else {
+		// todo we need to calculate ndv of outcnt here
+		return stats1.Outcnt < stats2.Outcnt
+	}
 }
