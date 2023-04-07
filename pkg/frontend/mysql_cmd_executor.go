@@ -362,6 +362,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
+
+	if oq.ep.Outfile {
+		initExportFirst(oq)
+	}
+
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
@@ -369,6 +374,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				return nil
 			default:
 			}
+			continue
 		}
 
 		if bat.Zs[j] <= 0 {
@@ -385,6 +391,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
+	if oq.ep.Outfile {
+		oq.rowIdx = uint64(n)
+		bat2 := preCopyBat(obj, bat)
+		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
+	}
 	err := oq.flush()
 	if err != nil {
 		return err
@@ -2814,6 +2825,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if ep.Outfile {
+				oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
+				if err = exportAllData(oq); err != nil {
+					return err
+				}
 				if err = ep.Writer.Flush(); err != nil {
 					goto handleFailed
 				}

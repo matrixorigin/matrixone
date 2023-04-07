@@ -526,6 +526,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	//prepare output queue
 	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
 	oq.reset()
+	oq.ep.OutTofile = true
 	//prepare export param
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
