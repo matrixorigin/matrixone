@@ -352,7 +352,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
@@ -420,7 +420,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -2760,6 +2760,7 @@ show_stmt:
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
+|   show_roles_stmt
 |   show_collation_stmt
 |   show_function_status_stmt
 |   show_node_list_stmt
@@ -2824,6 +2825,14 @@ show_function_status_stmt:
        $$ = &tree.ShowFunctionStatus{
             Like: $4,
             Where: $5,
+        }
+    }
+
+show_roles_stmt:
+    SHOW ROLES like_opt
+    {
+        $$ = &tree.ShowRolesStmt{
+            Like: $3,
         }
     }
 
@@ -9274,6 +9283,7 @@ non_reserved_keyword:
 |   S3OPTION
 |   EXTENSION
 |   NODE
+|   ROLES
 |   UUID
 |   PARALLEL
 |   INCREMENT
