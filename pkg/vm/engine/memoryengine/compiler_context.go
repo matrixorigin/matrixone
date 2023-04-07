@@ -50,8 +50,6 @@ func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 }
 
 func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
-	//TODO implement me
-	//panic("implement me")
 	return nil
 }
 
