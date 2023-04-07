@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -147,5 +148,33 @@ func (e *IOEntry) setObjectFromData() error {
 	}
 	e.Object = obj
 	e.ObjectSize = size
+	return nil
+}
+
+func (e *IOEntry) ReadFromOSFile(file *os.File) error {
+	r := io.LimitReader(file, e.Size)
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil
+	}
+	if len(data) != int(e.Size) {
+		return io.ErrUnexpectedEOF
+	}
+
+	e.Data = data
+	if e.WriterForRead != nil {
+		if _, err := e.WriterForRead.Write(data); err != nil {
+			return err
+		}
+	}
+	if e.ReadCloserForRead != nil {
+		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(data))
+	}
+	if err := e.setObjectFromData(); err != nil {
+		return err
+	}
+
+	e.done = true
+
 	return nil
 }
