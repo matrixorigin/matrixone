@@ -152,8 +152,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:   t.Typs,
 		}
 	case vm.LoopJoin:
-		t := sourceIns.Arg.(*loopanti.Argument)
-		res.Arg = &loopanti.Argument{
+		t := sourceIns.Arg.(*loopjoin.Argument)
+		res.Arg = &loopjoin.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
 			Typs:   t.Typs,
