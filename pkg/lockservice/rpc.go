@@ -161,7 +161,8 @@ func NewServer(
 		address,
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
-		releaseResponse)
+		releaseResponse,
+		morpc.WithServerDisableAutoCancelContext())
 	if err != nil {
 		return nil, err
 	}
@@ -189,13 +190,11 @@ func (s *server) onMessage(
 	cs morpc.ClientSession) error {
 	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
-
 	req, ok := request.(*pb.Request)
 	if !ok {
 		getLogger().Fatal("received invalid message",
 			zap.Any("message", request))
 	}
-	defer releaseRequest(req)
 
 	if getLogger().Enabled(zap.DebugLevel) {
 		getLogger().Debug("received a request",
@@ -208,6 +207,7 @@ func (s *server) onMessage(
 			getLogger().Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
+		releaseRequest(req)
 		return nil
 	}
 
@@ -223,21 +223,33 @@ func (s *server) onMessage(
 			getLogger().Debug("skip request by timeout",
 				zap.String("request", req.DebugString()))
 		}
+		releaseRequest(req)
 		return nil
 	default:
 	}
 
-	resp := acquireResponse()
-	resp.RequestID = req.RequestID
-	resp.Method = req.Method
-	if err := handler(ctx, req, resp); err != nil {
-		resp.WrapError(err)
+	fn := func(req *pb.Request) error {
+		defer releaseRequest(req)
+		resp := acquireResponse()
+		resp.RequestID = req.RequestID
+		resp.Method = req.Method
+		if err := handler(ctx, req, resp); err != nil {
+			resp.WrapError(err)
+		}
+		if getLogger().Enabled(zap.DebugLevel) {
+			getLogger().Debug("handle request completed",
+				zap.String("response", resp.DebugString()))
+		}
+		return cs.Write(ctx, resp)
 	}
-	if getLogger().Enabled(zap.DebugLevel) {
-		getLogger().Debug("handle request completed",
-			zap.String("response", resp.DebugString()))
+
+	switch req.Method {
+	case pb.Method_Lock:
+		go fn(req)
+		return nil
+	default:
+		return fn(req)
 	}
-	return cs.Write(ctx, resp)
 }
 
 func acquireRequest() *pb.Request {
