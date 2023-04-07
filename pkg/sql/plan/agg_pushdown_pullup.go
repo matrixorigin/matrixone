@@ -150,7 +150,7 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 	return nodeID
 }
 
-func applyAggPullup(filter, join, project, agg *plan.Node, builder *QueryBuilder) {
+func applyAggPullup(join, project, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) {
 	if len(agg.GroupBy) != 1 {
 		return
 	}
@@ -168,31 +168,30 @@ func applyAggPullup(filter, join, project, agg *plan.Node, builder *QueryBuilder
 	if agg.Stats.Outcnt/agg.Stats.Cost < join.Stats.Outcnt/project.Stats.Outcnt {
 		return
 	}
-	filter.Children[0] = project.NodeId
-	tmp := agg.Children[0]
+
+	join.Children[0] = agg.Children[0]
 	agg.Children[0] = join.NodeId
-	join.Children[0] = tmp
 	groupColInJoin.Col.RelPos = groupColInAgg.Col.RelPos
 	groupColInJoin.Col.ColPos = groupColInAgg.Col.ColPos
+	// todo 从根节点递归，把【2,0】替换成【3,1】
 
 	//builder.ctxByNode[project.NodeId] = builder.ctxByNode[join.NodeId]
 }
 
 func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
-	// agg pullup only support filter->inner join->project->agg for now
-	// we can change it to filter->project->agg->inner join
+	// agg pullup only support node->inner join->project->agg for now
+	// we can change it to node->project->agg->inner join
 	node := builder.qry.Nodes[nodeID]
 
-	if node.NodeType != plan.Node_FILTER {
-		if len(node.Children) > 0 {
-			for i, child := range node.Children {
-				node.Children[i] = builder.aggPullup(child)
-			}
+	if len(node.Children) > 0 {
+		for i, child := range node.Children {
+			node.Children[i] = builder.aggPullup(child)
 		}
+	} else {
 		return nodeID
 	}
-	filter := node
-	join := builder.qry.Nodes[filter.Children[0]]
+
+	join := node
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
@@ -204,7 +203,15 @@ func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
 	if agg.NodeType != plan.Node_AGG {
 		return nodeID
 	}
+	leftScan := builder.qry.Nodes[agg.Children[0]]
+	if leftScan.NodeType != plan.Node_TABLE_SCAN {
+		return nodeID
+	}
+	rightScan := builder.qry.Nodes[join.Children[1]]
+	if rightScan.NodeType != plan.Node_TABLE_SCAN {
+		return nodeID
+	}
 
-	applyAggPullup(filter, join, project, agg, builder)
-	return nodeID
+	applyAggPullup(join, project, agg, leftScan, rightScan, builder)
+	return project.NodeId
 }
