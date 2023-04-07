@@ -2044,7 +2044,6 @@ func (c *Compile) generateNodes2(n *plan.Node) (engine.Nodes, error) {
 							Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 						})
 					}
-
 					subNodes[0].Data = append(subNodes[0].Data, ranges[i:i+step]...)
 				} else {
 					subNodes = append(subNodes, engine.Node{
