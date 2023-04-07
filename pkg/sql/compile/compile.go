@@ -1980,8 +1980,42 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		partitionInfo := n.TableDef.Partition
 		partitionNum := int(partitionInfo.PartitionNum)
 		partitionTableNames := partitionInfo.PartitionTableNames
-		blocksList = newBlocksList(partitionNum)
 
+		//blocksList = newBlocksList(partitionNum)
+		blocksList = newBlocksList(partitionNum + 1)
+
+		// This code is used to process the main table data of the partition table to be compatible with the bvt test.
+		// After the future implementation of the partition table DML function, it should be removed
+		//-------------------------------------------------------------------------------
+		rel, err := db.Relation(ctx, n.TableDef.Name)
+		if err != nil {
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			if e != nil {
+				return nil, err
+			}
+
+			// if temporary table, just scan at local cn.
+			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+			if e != nil {
+				return nil, err
+			}
+			c.cnList = engine.Nodes{
+				engine.Node{
+					Addr: c.addr,
+					Rel:  rel,
+					Mcpu: 1,
+				},
+			}
+		}
+
+		ranges, err := rel.Ranges(ctx, expr)
+		if err != nil {
+			return nil, err
+		}
+		blocksList[0].rel = rel
+		blocksList[0].ranges = ranges
+		//-------------------------------------------------------------------------------
 		for i := 0; i < partitionNum; i++ {
 			partTableName := partitionTableNames[i]
 			subrelation, err := db.Relation(ctx, partTableName)
@@ -1992,8 +2026,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			blocksList[i].rel = subrelation
-			blocksList[i].ranges = subranges
+			blocksList[i+1].rel = subrelation
+			blocksList[i+1].ranges = subranges
 		}
 	} else {
 		blocksList = newBlocksList(1)
