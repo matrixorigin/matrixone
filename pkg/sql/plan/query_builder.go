@@ -1973,6 +1973,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	node := builder.qry.Nodes[nodeID]
 
 	var cols []string
+	var colIsHidden []bool
 	var types []*plan.Type
 	var binding *Binding
 	var table string
@@ -1999,8 +2000,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
-		cols = make([]string, len(node.TableDef.Cols))
-		types = make([]*plan.Type, len(node.TableDef.Cols))
+		colLength := len(node.TableDef.Cols)
+		cols = make([]string, colLength)
+		colIsHidden = make([]bool, colLength)
+		types = make([]*plan.Type, colLength)
 
 		tag := node.BindingTags[0]
 
@@ -2010,12 +2013,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col.Name
 			}
+			colIsHidden[i] = col.Hidden
 			types[i] = col.Typ
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -2038,8 +2042,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
-		cols = make([]string, len(headings))
-		types = make([]*plan.Type, len(headings))
+		colLength := len(headings)
+		cols = make([]string, colLength)
+		colIsHidden = make([]bool, colLength)
+		types = make([]*plan.Type, colLength)
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -2048,12 +2054,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = strings.ToLower(col)
 			}
 			types[i] = projects[i].Typ
-
+			colIsHidden[i] = false
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, 0, cols, types, false)
+		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)
@@ -2150,7 +2156,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			leftCols := make(map[string]any)
 			for _, binding := range leftCtx.bindings {
-				for _, col := range binding.cols {
+				for i, col := range binding.cols {
+					if binding.colIsHidden[i] {
+						continue
+					}
 					leftCols[col] = nil
 				}
 			}
