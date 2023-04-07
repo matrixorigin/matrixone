@@ -705,9 +705,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootID := range builder.qry.Steps {
+		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		colRefCnt := make(map[[2]int32]int)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		ReCalcNodeStats(rootID, builder, true, true)
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)

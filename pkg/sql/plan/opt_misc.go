@@ -31,15 +31,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
 	}
 
-	if node.NodeType != plan.Node_JOIN {
-		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
-			node.Children[i] = newChildID
-			for ref, expr := range childProjMap {
-				projMap[ref] = expr
-			}
-		}
-	} else {
+	switch node.NodeType {
+	case plan.Node_JOIN:
 		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
 		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
 
@@ -53,6 +46,24 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		node.Children[1] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
+		}
+
+	case plan.Node_AGG, plan.Node_PROJECT:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
+	default:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
 		}
 	}
 
