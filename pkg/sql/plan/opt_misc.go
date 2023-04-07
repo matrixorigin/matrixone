@@ -17,7 +17,7 @@ package plan
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
-func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
 	projMap := make(map[[2]int32]*plan.Expr)
 	node := builder.qry.Nodes[nodeID]
 
@@ -31,9 +31,26 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
 	}
 
-	for i, childID := range node.Children {
-		newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, colRefCnt)
-		node.Children[i] = newChildID
+	if node.NodeType != plan.Node_JOIN {
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+	} else {
+		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
+		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+
+		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
+		node.Children[0] = newChildID
+		for ref, expr := range childProjMap {
+			projMap[ref] = expr
+		}
+
+		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		node.Children[1] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
 		}
@@ -53,7 +70,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
-			if colRefCnt[[2]int32{tag, int32(i)}] > 1 {
+			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
 				if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
 					if _, ok := proj.Expr.(*plan.Expr_C); !ok {
 						allColRef = false
