@@ -2470,7 +2470,7 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bat.Vecs[3].Update(2, types.Null{})
+	bats[0].Vecs[3].Update(2, types.Null{})
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()
