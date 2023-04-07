@@ -220,17 +220,15 @@ func (vec *vector[T]) tryCoW() {
 }
 
 func (vec *vector[T]) Window(offset, length int) Vector {
-
-	// In DN Vector, we are using SharedReference for Window.
-	// In CN Vector, we are creating a new Clone for Window.
-	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
-	return &vectorWindow[T]{
-		ref: vec,
-		windowBase: &windowBase{
-			offset: offset,
-			length: length,
-		},
+	var err error
+	win := new(vector[T])
+	win.mpool = vec.mpool
+	win.downstreamVector, err = vec.downstreamVector.Window(offset, offset+length)
+	if err != nil {
+		panic(err)
 	}
+
+	return win
 }
 
 func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
