@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sort"
 	"sync"
 	"time"
@@ -101,7 +102,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		metaloc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
 		typ := ET_Global
 		if isIncremental {

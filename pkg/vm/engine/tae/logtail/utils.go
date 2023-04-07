@@ -482,8 +482,8 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	service fileservice.FileService,
-	key string) (err error) {
-	reader, err := blockio.NewCheckPointReader(service, key)
+	key objectio.Location) (err error) {
+	reader, err := blockio.NewObjectReaderNew(service, key)
 	if err != nil {
 		return
 	}
@@ -492,7 +492,7 @@ func (data *CheckpointData) PrefetchFrom(
 		return
 	}
 
-	pref, err := blockio.BuildCkpPrefetch(service, key)
+	pref, err := blockio.BuildPrefetch(service, key)
 	if err != nil {
 		return
 	}

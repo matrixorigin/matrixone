@@ -73,7 +73,7 @@ func (l Location) String() string {
 	if len(l) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%v-%v-%d-%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
+	return fmt.Sprintf("%v_%v_%d_%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
 }
 
 func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
@@ -84,7 +84,7 @@ func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
 }
 
 func (o ObjectName) String() string {
-	return fmt.Sprintf("%v-%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
+	return fmt.Sprintf("%v_%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
 }
 
 func (o ObjectName) Sid() types.Uuid {

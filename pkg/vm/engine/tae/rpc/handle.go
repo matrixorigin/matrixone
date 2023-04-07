@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"os"
 	"sync"
@@ -400,7 +401,11 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	loc, err := blockio.EncodeObjectLocation(req.DeltaLocs[0])
+	if err != nil {
+		return nil
+	}
+	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, loc)
 	if err != nil {
 		return nil
 	}
@@ -768,10 +773,18 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
+			locations := make([]objectio.Location, 0)
+			for _, metLoc := range req.MetaLocs {
+				location, err := blockio.EncodeObjectLocation(metLoc)
+				if err != nil {
+					return err
+				}
+				locations = append(locations, location)
+			}
 			err = tb.AddBlksWithMetaLoc(
 				ctx,
 				nil,
-				req.MetaLocs)
+				locations)
 			return
 		}
 		//check the input batch passed by cn is valid.

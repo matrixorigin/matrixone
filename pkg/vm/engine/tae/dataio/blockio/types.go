@@ -113,6 +113,42 @@ func EncodeLocation(
 	return metaLoc, nil
 }
 
+// EncodeObjectLocation Generate a metaloc from an object file
+func EncodeObjectLocation(info string) (objectio.Location, error) {
+	location := strings.Split(info, "_")
+	num, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	size, err := strconv.ParseUint(location[4], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	osize, err := strconv.ParseUint(location[5], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := strconv.ParseUint(location[6], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	id, err := strconv.ParseUint(location[7], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	uid, err := types.ParseUuid(location[0])
+	if err != nil {
+		return nil, err
+	}
+	name := objectio.BuildObjectName(uid, uint16(num))
+	return objectio.BuildLocation(name, extent, uint32(rows), uint32(id)), nil
+}
+
 // EncodeLocation Generate a metaloc from an object file
 func EncodeLocationNew(
 	name objectio.ObjectName,
