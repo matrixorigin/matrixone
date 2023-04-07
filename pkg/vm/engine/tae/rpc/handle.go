@@ -410,11 +410,12 @@ func (h *Handle) prefetch(ctx context.Context,
 		return nil
 	}
 	for _, key := range req.DeltaLocs {
-		_, id, _, _, err := blockio.DecodeLocation(key)
+		var location objectio.Location
+		location, err = blockio.EncodeObjectLocation(key)
 		if err != nil {
-			return nil
+			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -819,19 +820,25 @@ func (h *Handle) HandleWrite(
 		}
 		columnIdx := 0
 		var reader dataio.Reader
-		reader, err = blockio.NewObjectReader(
-			h.eng.GetTAE(nctx).Fs.Service, req.DeltaLocs[0])
-		if err != nil {
-			return
-		}
+		reader = nil
 		for _, key := range req.DeltaLocs {
-			var id uint32
-			_, id, _, _, err = blockio.DecodeLocation(key)
+			var location objectio.Location
+			location, err = blockio.EncodeObjectLocation(key)
+			if err != nil {
+				return err
+			}
+			if reader == nil {
+				reader, err = blockio.NewObjectReaderNew(
+					h.eng.GetTAE(nctx).Fs.Service, location)
+				if err != nil {
+					return
+				}
+			}
 			var bats []*batch.Batch
 			bats, err = reader.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
-				[]uint32{id},
+				[]uint32{location.ID()},
 				nil,
 			)
 			if err != nil {

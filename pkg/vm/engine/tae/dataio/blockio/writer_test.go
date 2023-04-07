@@ -16,7 +16,8 @@ package blockio
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"path"
 	"testing"
 
@@ -38,9 +39,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
-	id := 1
-	name := fmt.Sprintf("%d.blk", id)
-
+	name := objectio.BuildObjectName(common.NewSegmentid(), 0)
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
@@ -48,7 +47,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
-	writer, _ := NewBlockWriter(service, name)
+	writer, _ := NewBlockWriterNew(service, name)
 
 	schema := catalog.MockSchemaAll(13, 2)
 	bats := catalog.MockBatch(schema, 40000*2).Split(2)
@@ -76,9 +75,9 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.False(t, res)
 
 	mp := mpool.MustNewZero()
-	metaloc, err := EncodeLocation(blocks[0].GetExtent(), 40000, blocks)
+	metaloc := EncodeLocationNew(blocks[0].GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 	require.NoError(t, err)
-	reader, err := NewObjectReader(service, metaloc)
+	reader, err := NewObjectReaderNew(service, metaloc)
 	require.NoError(t, err)
 	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 	require.NoError(t, err)

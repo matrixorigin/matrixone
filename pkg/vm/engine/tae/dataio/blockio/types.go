@@ -116,6 +116,9 @@ func EncodeLocation(
 // EncodeObjectLocation Generate a metaloc from an object file
 func EncodeObjectLocation(info string) (objectio.Location, error) {
 	location := strings.Split(info, "_")
+	if len(location) < 8 {
+		panic(fmt.Sprintf("info: %v", info))
+	}
 	num, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {
 		return nil, err
