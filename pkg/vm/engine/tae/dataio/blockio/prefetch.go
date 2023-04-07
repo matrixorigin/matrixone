@@ -39,22 +39,6 @@ func BuildPrefetch(service fileservice.FileService, key objectio.Location) (pref
 	return buildPrefetch(reader), nil
 }
 
-func BuildPrefetchNew(service fileservice.FileService, key objectio.Location) (prefetch, error) {
-	reader, err := NewObjectReaderNew(service, key)
-	if err != nil {
-		return prefetch{}, err
-	}
-	return buildPrefetch(reader), nil
-}
-
-func BuildCkpPrefetch(service fileservice.FileService, key string) (prefetch, error) {
-	reader, err := NewCheckPointReader(service, key)
-	if err != nil {
-		return prefetch{}, err
-	}
-	return buildPrefetch(reader), nil
-}
-
 func buildPrefetch(reader dataio.Reader) prefetch {
 	ids := make(map[uint32]*objectio.ReadBlockOptions)
 	return prefetch{

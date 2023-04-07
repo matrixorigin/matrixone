@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
@@ -115,22 +114,22 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				p.inserts = p.inserts[1:]
 			}
 			metaLoc := p.blockBatch.read()
-			name := strings.Split(metaLoc, ":")[0]
+			location, err := blockio.EncodeObjectLocation(metaLoc)
+			name := location.Name().String()
 			if name != p.currentFileName {
-				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, metaLoc)
+				p.s3BlockReader, err = blockio.NewObjectReaderNew(p.s3FileService, location)
 				p.extendId2s3File[name] = 0
 				p.currentFileName = name
 				if err != nil {
 					return nil, err
 				}
 			}
-			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
 			for _, name := range colNames {
 				if name == catalog.Row_ID {
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
-			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{extent.Id()}, p.procMPool)
+			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{location.ID()}, p.procMPool)
 			if err != nil {
 				return nil, err
 			}

@@ -51,19 +51,15 @@ func fetchZonemapAndRowsFromBlockInfo(
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
 	m *mpool.MPool) ([][64]byte, uint32, error) {
-	_, _, extent, rows, err := blockio.DecodeLocation(blockInfo.MetaLoc)
-	if err != nil {
-		return nil, 0, err
-	}
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLoc)
+	reader, err := blockio.NewObjectReaderNew(fs, blockInfo.MetaLoc)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{extent.Id()}, m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{blockInfo.MetaLoc.ID()}, m)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -73,7 +69,7 @@ func fetchZonemapAndRowsFromBlockInfo(
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, rows, nil
+	return zonemapList, blockInfo.MetaLoc.Rows(), nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {

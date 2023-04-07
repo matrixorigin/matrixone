@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
 	"time"
 
@@ -618,20 +619,26 @@ func LoadCheckpointEntries(
 	datas := make([]*CheckpointData, len(locations))
 
 	readers := make([]dataio.Reader, len(locations))
+	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
-		reader, err := blockio.NewCheckPointReader(fs, key)
+		location, err := blockio.EncodeObjectLocation(key)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := blockio.NewObjectReaderNew(fs, location)
 		if err != nil {
 			return nil, err
 		}
 		readers[i] = reader
-		err = blockio.PrefetchCkpMeta(fs, key)
+		err = blockio.PrefetchBlocksMeta(fs, location)
 		if err != nil {
 			return nil, err
 		}
+		objectLocations[i] = location
 	}
 
-	for _, key := range locations {
-		pref, err := blockio.BuildCkpPrefetch(fs, key)
+	for i := range locations {
+		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
 		if err != nil {
 			return nil, err
 		}

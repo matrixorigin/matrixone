@@ -70,7 +70,7 @@ func BlockReadInner(
 	if err != nil {
 		return nil, err
 	}
-	if info.DeltaLoc != "" {
+	if !info.DeltaLoc.IsEmpty() {
 		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
 		if err != nil {
 			return nil, err
@@ -136,11 +136,9 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
 	deleteRows := make([]int64, 0)
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	_, id, extent, rows, err := DecodeLocation(info.MetaLoc)
-	if err != nil {
-		return nil, deleteRows, err
-	}
-	reader, err := NewObjectReader(fs, info.MetaLoc)
+	id := info.MetaLoc.ID()
+	extent := info.MetaLoc.Extent()
+	reader, err := NewObjectReaderNew(fs, info.MetaLoc)
 	if err != nil {
 		return nil, deleteRows, err
 	}
@@ -153,7 +151,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
-			rows,
+			info.MetaLoc.Rows(),
 			m,
 		)
 		if err != nil {
@@ -232,17 +230,13 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	return bat, deleteRows, nil
 }
 
-func readBlockDelete(ctx context.Context, deltaloc string, fs fileservice.FileService) (*batch.Batch, error) {
-	_, id, _, _, err := DecodeLocation(deltaloc)
-	if err != nil {
-		return nil, err
-	}
-	reader, err := NewObjectReader(fs, deltaloc)
+func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
+	reader, err := NewObjectReaderNew(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{id}, nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{deltaloc.ID()}, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -3986,7 +3986,6 @@ func TestDirtyWatchRace(t *testing.T) {
 }
 
 func TestBlockRead(t *testing.T) {
-	t.Skip("fsdfsdf")
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4030,8 +4029,8 @@ func TestBlockRead(t *testing.T) {
 		BlockID:    bid,
 		SegmentID:  sid,
 		EntryState: true,
-		//MetaLoc:    metaloc,
-		//DeltaLoc:   deltaloc,
+		MetaLoc:    metaloc,
+		DeltaLoc:   deltaloc,
 	}
 
 	columns := make([]string, 0)

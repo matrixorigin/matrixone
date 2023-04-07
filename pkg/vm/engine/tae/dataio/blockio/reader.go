@@ -49,22 +49,6 @@ type fetch struct {
 	reader objectio.Reader
 }
 
-func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
-	name, _, meta, _, err := DecodeLocation(key)
-	if err != nil {
-		return nil, err
-	}
-	reader, err := objectio.NewObjectReader(name, service)
-	if err != nil {
-		return nil, err
-	}
-	return &BlockReader{
-		reader:  reader,
-		name:    name,
-		meta:    meta,
-		manager: pipeline,
-	}, nil
-}
 func NewObjectReaderNew(service fileservice.FileService, key objectio.Location) (dataio.Reader, error) {
 	reader, err := objectio.NewObjectReaderNew(key.Name(), service)
 	if err != nil {
@@ -98,23 +82,6 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	return &BlockReader{
 		reader: reader,
 		name:   name,
-	}, nil
-}
-
-func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Reader, error) {
-	name, locs, err := DecodeLocationToMetas(key)
-	if err != nil {
-		return nil, err
-	}
-	reader, err := objectio.NewObjectReader(name, service)
-	if err != nil {
-		return nil, err
-	}
-	return &BlockReader{
-		reader:  reader,
-		name:    name,
-		meta:    locs[0],
-		manager: pipeline,
 	}, nil
 }
 
@@ -378,14 +345,6 @@ func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key
 
 func PrefetchBlocksMeta(service fileservice.FileService, key objectio.Location) error {
 	pref, err := BuildPrefetch(service, key)
-	if err != nil {
-		return err
-	}
-	return pipeline.Prefetch(pref)
-}
-
-func PrefetchCkpMeta(service fileservice.FileService, key string) error {
-	pref, err := BuildCkpPrefetch(service, key)
 	if err != nil {
 		return err
 	}
