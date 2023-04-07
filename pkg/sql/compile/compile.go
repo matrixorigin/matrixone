@@ -18,14 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,8 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -43,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -71,6 +70,8 @@ func New(addr, db string, sql string, uid string, ctx context.Context,
 		proc: proc,
 		stmt: stmt,
 		addr: addr,
+
+		stepRegs: make(map[int32][]*process.WaitRegister),
 	}
 }
 
@@ -79,12 +80,13 @@ func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
 	if InitTempEngine {
 		return false
 	}
-	ddl := c.scope.Plan.GetDdl()
-	if ddl != nil {
-		qry := ddl.GetCreateTable()
-		if qry != nil && qry.Temporary {
-			e := c.e.(*engine.EntireEngine).TempEngine
-			if e == nil {
+	for _, s := range c.scope {
+		ddl := s.Plan.GetDdl()
+		if ddl == nil {
+			continue
+		}
+		if qry := ddl.GetCreateTable(); qry != nil && qry.Temporary {
+			if c.e.(*engine.EntireEngine).TempEngine == nil {
 				return true
 			}
 		}
@@ -126,8 +128,10 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	if err != nil {
 		return err
 	}
-	if len(c.scope.NodeInfo.Addr) == 0 {
-		c.scope.NodeInfo.Addr = c.addr
+	for _, s := range c.scope {
+		if len(s.NodeInfo.Addr) == 0 {
+			s.NodeInfo.Addr = c.addr
+		}
 	}
 	return nil
 }
@@ -140,74 +144,69 @@ func (c *Compile) GetAffectedRows() uint64 {
 	return c.affectRows
 }
 
-// Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (err error) {
-	if c.scope == nil {
+func (c *Compile) run(s *Scope) error {
+	if s == nil {
 		return nil
 	}
-	defer func() {
-		// free pipeline
-		c.scope = nil
-	}()
 
-	switch c.scope.Magic {
+	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
-		return c.scope.Run(c)
+		return s.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
-		return c.scope.MergeRun(c)
+		return s.MergeRun(c)
 	case MergeInsert:
 		defer c.fillAnalyzeInfo()
-		err := c.scope.MergeRun(c)
+		err := s.MergeRun(c)
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(c.scope.Instructions[len(c.scope.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
+		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return c.scope.RemoteRun(c)
+		return s.RemoteRun(c)
 	case CreateDatabase:
-		err := c.scope.CreateDatabase(c)
+		err := s.CreateDatabase(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(1)
 		return nil
 	case DropDatabase:
-		err := c.scope.DropDatabase(c)
+		err := s.DropDatabase(c)
 		if err != nil {
 			return err
 		}
 		c.setAffectedRows(1)
 		return nil
 	case CreateTable:
-		qry := c.scope.Plan.GetDdl().GetCreateTable()
+		qry := s.Plan.GetDdl().GetCreateTable()
 		if qry.Temporary {
-			return c.scope.CreateTempTable(c)
+			return s.CreateTempTable(c)
 		} else {
-			return c.scope.CreateTable(c)
+			return s.CreateTable(c)
 		}
 	case AlterView:
-		return c.scope.AlterView(c)
+		return s.AlterView(c)
 	case AlterTable:
-		return c.scope.AlterTable(c)
+		return s.AlterTable(c)
 	case DropTable:
-		return c.scope.DropTable(c)
+		return s.DropTable(c)
 	case DropSequence:
-		return c.scope.DropSequence(c)
+		return s.DropSequence(c)
 	case CreateSequence:
-		return c.scope.CreateSequence(c)
+		return s.CreateSequence(c)
 	case CreateIndex:
-		return c.scope.CreateIndex(c)
+		return s.CreateIndex(c)
 	case DropIndex:
-		return c.scope.DropIndex(c)
+		return s.DropIndex(c)
 	case TruncateTable:
-		return c.scope.TruncateTable(c)
+		return s.TruncateTable(c)
 	case Deletion:
 		defer c.fillAnalyzeInfo()
-		affectedRows, err := c.scope.Delete(c)
+		affectedRows, err := s.Delete(c)
 		if err != nil {
 			return err
 		}
@@ -215,7 +214,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	case Insert:
 		defer c.fillAnalyzeInfo()
-		affectedRows, err := c.scope.Insert(c)
+		affectedRows, err := s.Insert(c)
 		if err != nil {
 			return err
 		}
@@ -223,7 +222,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	case Update:
 		defer c.fillAnalyzeInfo()
-		affectedRows, err := c.scope.Update(c)
+		affectedRows, err := s.Update(c)
 		if err != nil {
 			return err
 		}
@@ -233,116 +232,134 @@ func (c *Compile) Run(_ uint64) (err error) {
 	return nil
 }
 
-func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, error) {
+// Run is an important function of the compute-layer, it executes a single sql according to its scope
+func (c *Compile) Run(_ uint64) error {
+	var wg sync.WaitGroup
+	errC := make(chan error, len(c.scope))
+	for _, s := range c.scope {
+		wg.Add(1)
+		go func(scope *Scope) {
+			errC <- c.run(scope)
+			wg.Done()
+		}(s)
+	}
+	go func() {
+		wg.Wait()
+		c.scope = nil
+		close(errC)
+	}()
+	for e := range errC {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		s, err := c.compileQuery(ctx, qry.Query)
+		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
 		}
-		s.Plan = pn
-		return s, nil
+		for _, s := range scopes {
+			s.Plan = pn
+		}
+		return scopes, nil
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
-			return &Scope{
+			return []*Scope{{
 				Magic: CreateDatabase,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			preScopes := make([]*Scope, 0, 1)
+			var preScopes []*Scope
+			var err error
 			if pn.AttachedPlan != nil {
-				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err := c.compileQuery(ctx, query.Query)
+				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
 				if err != nil {
-					return attachedScope, err
+					return nil, err
 				}
-				attachedScope.Plan = pn.AttachedPlan
-				preScopes = append(preScopes, attachedScope)
 			}
-			return &Scope{
+			return []*Scope{{
 				Magic:     DropDatabase,
 				Plan:      pn,
 				PreScopes: preScopes,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_TABLE:
-			return &Scope{
+			return []*Scope{{
 				Magic: CreateTable,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_ALTER_VIEW:
-			return &Scope{
+			return []*Scope{{
 				Magic: AlterView,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			preScopes := make([]*Scope, 0, 1)
+			var preScopes []*Scope
+			var err error
 			if pn.AttachedPlan != nil {
-				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err := c.compileQuery(ctx, query.Query)
+				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
 				if err != nil {
-					return attachedScope, err
+					return nil, err
 				}
-				attachedScope.Plan = pn.AttachedPlan
-				preScopes = append(preScopes, attachedScope)
 			}
-			return &Scope{
+			return []*Scope{{
 				Magic:     AlterTable,
 				Plan:      pn,
 				PreScopes: preScopes,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			preScopes := make([]*Scope, 0, 1)
+			var preScopes []*Scope
+			var err error
 			if pn.AttachedPlan != nil {
-				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err := c.compileQuery(ctx, query.Query)
+				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
 				if err != nil {
-					return attachedScope, err
+					return nil, err
 				}
-				attachedScope.Plan = pn.AttachedPlan
-				preScopes = append(preScopes, attachedScope)
 			}
-			return &Scope{
+			return []*Scope{{
 				Magic:     DropTable,
 				Plan:      pn,
 				PreScopes: preScopes,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
-			return &Scope{
+			return []*Scope{{
 				Magic: DropSequence,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
-			return &Scope{
+			return []*Scope{{
 				Magic: TruncateTable,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_SEQUENCE:
-			return &Scope{
+			return []*Scope{{
 				Magic: CreateSequence,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_INDEX:
-			return &Scope{
+			return []*Scope{{
 				Magic: CreateIndex,
 				Plan:  pn,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			preScopes := make([]*Scope, 0, 1)
+			var preScopes []*Scope
+			var err error
 			if pn.AttachedPlan != nil {
-				query := pn.AttachedPlan.Plan.(*plan.Plan_Query)
-				attachedScope, err := c.compileQuery(ctx, query.Query)
+				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
 				if err != nil {
-					return attachedScope, err
+					return nil, err
 				}
-				attachedScope.Plan = pn.AttachedPlan
-				preScopes = append(preScopes, attachedScope)
 			}
-			return &Scope{
+			return []*Scope{{
 				Magic:     DropIndex,
 				Plan:      pn,
 				PreScopes: preScopes,
-			}, nil
+			}}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
 			plan.DataDefinition_SHOW_COLUMNS,
@@ -367,10 +384,19 @@ func (c *Compile) cnListStrategy() {
 	}
 }
 
-func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, error) {
-	if len(qry.Steps) != 1 {
-		return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", qry))
+func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.Plan) ([]*Scope, error) {
+	query := attachedPlan.Plan.(*plan.Plan_Query)
+	attachedScope, err := c.compileQuery(ctx, query.Query)
+	if err != nil {
+		return nil, err
 	}
+	for _, s := range attachedScope {
+		s.Plan = attachedPlan
+	}
+	return attachedScope, nil
+}
+
+func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.cnList, err = c.e.Nodes()
 	if err != nil {
@@ -424,11 +450,21 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	}
 
 	c.initAnalyze(qry)
-	ss, err := c.compilePlanScope(ctx, qry.Nodes[qry.Steps[0]], qry.Nodes)
-	if err != nil {
-		return nil, err
+
+	steps := make([]*Scope, 0, len(qry.Steps))
+	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
+		if err != nil {
+			return nil, err
+		}
+		scope, err := c.compileApQuery(qry, scopes)
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, scope)
 	}
-	return c.compileApQuery(qry, ss)
+
+	return steps, err
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
@@ -556,7 +592,8 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	return bat, nil
 }
 
-func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
+func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
@@ -585,7 +622,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_FILTER:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -594,7 +631,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_PROJECT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -603,7 +640,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_AGG:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -618,12 +655,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(ss, int(n.Children[1]))
-		children, err := c.compilePlanScope(ctx, ns[n.Children[1]], ns)
+		children, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -633,7 +670,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -643,12 +680,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(ss, int(n.Children[1]))
-		children, err := c.compilePlanScope(ctx, ns[n.Children[1]], ns)
+		children, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -657,12 +694,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(ss, int(n.Children[1]))
-		children, err := c.compilePlanScope(ctx, ns[n.Children[1]], ns)
+		children, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -671,12 +708,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_UNION_ALL:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(ss, int(n.Children[1]))
-		children, err := c.compilePlanScope(ctx, ns[n.Children[1]], ns)
+		children, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -686,20 +723,19 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if n.DeleteCtx.CanTruncate {
 			return nil, nil
 		}
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		return ss, nil
 	case plan.Node_INSERT:
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		return ss, nil
-		// return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_UPDATE:
-		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -711,7 +747,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		)
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
-		pre, err = c.compilePlanScope(ctx, ns[n.Children[0]], ns)
+		pre, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -721,8 +757,50 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_SINK_SCAN:
+		rs := &Scope{
+			Magic: Merge,
+			NodeInfo: engine.Node{
+				Addr: c.addr,
+				Mcpu: c.NumCPU(),
+			},
+			Proc: process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+		}
+		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
+		return []*Scope{rs}, nil
+	case plan.Node_SINK:
+		receivers, ok := c.getStepRegs(step)
+		if !ok {
+			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
+		}
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		rs := c.newMergeScope(ss)
+		rs.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(true, receivers),
+		})
+
+		return []*Scope{rs}, nil
 	default:
 		return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", n))
+	}
+}
+
+func (c *Compile) appendStepRegs(step int32, reg *process.WaitRegister) {
+	if _, ok := c.stepRegs[step]; !ok {
+		c.stepRegs[step] = make([]*process.WaitRegister, 0, 1)
+	}
+	c.stepRegs[step] = append(c.stepRegs[step], reg)
+}
+
+func (c *Compile) getStepRegs(step int32) ([]*process.WaitRegister, bool) {
+	if channels, ok := c.stepRegs[step]; !ok {
+		return nil, false
+	} else {
+		return channels, true
 	}
 }
 
