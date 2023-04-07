@@ -50,7 +50,7 @@ type RoutineManager struct {
 type AccountRoutineManager struct {
 	ctx               context.Context
 	killQueueMu       sync.RWMutex
-	killIdQueue       map[int64]bool
+	killIdQueue       map[int64]time.Time
 	accountRoutineMu  sync.RWMutex
 	accountId2Routine map[int64]map[*Routine]bool
 }
@@ -95,7 +95,19 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64) {
 	}
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	ar.killIdQueue[tenantID] = true
+	ar.killIdQueue[tenantID] = time.Now()
+
+}
+
+func (ar *AccountRoutineManager) deKillQueue(tenantID int64) {
+	if tenantID == sysAccountID {
+		return
+	}
+	ar.killQueueMu.Lock()
+	defer ar.killQueueMu.Unlock()
+	if _, ok := ar.killIdQueue[tenantID]; ok {
+		delete(ar.killIdQueue, tenantID)
+	}
 
 }
 
@@ -421,7 +433,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	ar.killQueueMu.Lock()
 	if len(ar.killIdQueue) != 0 {
 		for account := range ar.killIdQueue {
-			//kill all routine to this account
+			// kill all routine to this account
 			ar.accountRoutineMu.Lock()
 			if rtMap, ok := ar.accountId2Routine[account]; ok {
 				for rt := range rtMap {
@@ -430,13 +442,18 @@ func (rm *RoutineManager) KillRoutineConnections() {
 						rt.killConnection(false)
 					}
 				}
-				//remove accountRoutineMap  for the account
+				// remove accountRoutineMap  for the account
 				delete(ar.accountId2Routine, account)
 			}
 			ar.accountRoutineMu.Unlock()
 		}
-		//clean kill queue
-		ar.killIdQueue = make(map[int64]bool)
+		// clean kill queue
+		// ar.killIdQueue = make(map[int64]time.Time)
+		for toKillAccount, createAt := range ar.killIdQueue {
+			if int(time.Now().Sub(createAt)) > rm.pu.SV.CleanKillQueueInterval*int(time.Minute) {
+				delete(ar.killIdQueue, toKillAccount)
+			}
+		}
 	}
 	ar.killQueueMu.Unlock()
 }
@@ -446,7 +463,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]bool),
 		accountRoutineMu:  sync.RWMutex{},
-		killIdQueue:       make(map[int64]bool),
+		killIdQueue:       make(map[int64]time.Time),
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
@@ -479,7 +496,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		}()
 	}
 
-	//add kill connect routine
+	// add kill connect routine
 	go func() {
 		for {
 			select {

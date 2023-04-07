@@ -155,6 +155,9 @@ var (
 
 	// defaultKillRountinesInterval default: 1 minutes
 	defaultKillRountinesInterval = 1
+
+	//defaultCleanKillQueueInterval default: 60 minutes
+	defaultCleanKillQueueInterval = 60
 )
 
 // FrontendParameters of the frontend
@@ -299,6 +302,8 @@ type FrontendParameters struct {
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
 	KillRountinesInterval int `toml:"killRountinesInterval"`
+
+	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -428,6 +433,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.KillRountinesInterval == 0 {
 		fp.KillRountinesInterval = defaultKillRountinesInterval
+	}
+
+	if fp.CleanKillQueueInterval == 0 {
+		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
 }
 
