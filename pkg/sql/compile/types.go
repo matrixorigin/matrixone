@@ -183,3 +183,14 @@ type RemoteReceivRegInfo struct {
 	Uuid     uuid.UUID
 	FromAddr string
 }
+
+type Blocks struct {
+	rel    engine.Relation
+	ranges [][]byte
+}
+
+type BlocksList []Blocks
+
+func NewBlocksList(size int) []Blocks {
+	return make([]Blocks, size)
+}
