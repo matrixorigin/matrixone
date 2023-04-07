@@ -145,7 +145,7 @@ type anaylze struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scope *Scope
+	scope []*Scope
 
 	info plan2.ExecInfo
 
@@ -176,6 +176,8 @@ type Compile struct {
 	stmt tree.Statement
 
 	s3CounterSet perfcounter.CounterSet
+
+	stepRegs map[int32][]*process.WaitRegister
 }
 
 type RemoteReceivRegInfo struct {
