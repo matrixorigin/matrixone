@@ -180,16 +180,16 @@ mo_account    created_time
 mo_account    status
 desc views;
 Field    Type    Null    Key    Default    Extra    Comment
-character_set_client    VARCHAR(7)    YES        null
-table_name    VARCHAR(5000)    YES        null
-is_updatable    VARCHAR(3)    YES        null
-definer    VARCHAR(300)    YES        null
-collation_connection    VARCHAR(18)    YES        null
-security_type    VARCHAR(7)    YES        null
-check_option    VARCHAR(4)    YES        null
-view_definition    TEXT(0)    YES        null
-table_schema    VARCHAR(5000)    YES        null
 table_catalog    VARCHAR(3)    YES        null
+table_schema    VARCHAR(5000)    YES        null
+table_name    VARCHAR(5000)    YES        null
+view_definition    TEXT(0)    YES        null
+check_option    VARCHAR(4)    YES        null
+is_updatable    VARCHAR(3)    YES        null
+definer    VARCHAR(65535)    YES        null
+security_type    VARCHAR(7)    YES        null
+character_set_client    VARCHAR(7)    YES        null
+collation_connection    VARCHAR(18)    YES        null
 select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
 table_schema    table_name    definer
 system    error_info    root@localhost

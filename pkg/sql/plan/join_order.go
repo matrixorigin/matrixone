@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -205,19 +204,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool {
-		if subTrees[j].Stats == nil {
-			return false
-		}
-		if subTrees[i].Stats == nil {
-			return true
-		}
-		if math.Abs(subTrees[i].Stats.Selectivity-subTrees[j].Stats.Selectivity) > 0.01 {
-			return subTrees[i].Stats.Selectivity < subTrees[j].Stats.Selectivity
-		} else {
-			return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
-		}
-	})
+	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
 
 	leafByTag := make(map[int32]int32)
 
@@ -355,6 +342,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 			vertices[i].pks = pks
 			tag2Vert[node.BindingTags[0]] = int32(i)
+		} else if len(node.BindingTags) > 0 {
+			for _, tag := range node.BindingTags {
+				tag2Vert[tag] = int32(i)
+			}
 		}
 	}
 
@@ -382,9 +373,6 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
 				continue
 			}
-			if vertices[leftId].parent != -1 && vertices[rightId].parent != -1 {
-				continue
-			}
 
 			if leftId > rightId {
 				leftId, rightId = rightId, leftId
@@ -399,7 +387,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			edge.rightCols = append(edge.rightCols, rightCol.ColPos)
 			edgeMap[[2]int32{leftId, rightId}] = edge
 
-			if vertices[leftId].parent == -1 {
+			leftParent := vertices[leftId].parent
+			if leftParent == -1 || compareStats(vertices[rightId].node.Stats, vertices[leftParent].node.Stats) {
 				if containsAllPKs(edge.leftCols, vertices[leftId].pks) || containsHighNDVCol(edge.leftCols, vertices[leftId].highNDVCols) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
@@ -407,7 +396,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 					}
 				}
 			}
-			if vertices[rightId].parent == -1 {
+			rightParent := vertices[rightId].parent
+			if rightParent == -1 || compareStats(vertices[leftId].node.Stats, vertices[rightParent].node.Stats) {
 				if containsAllPKs(edge.rightCols, vertices[rightId].pks) || containsHighNDVCol(edge.rightCols, vertices[rightId].highNDVCols) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
@@ -438,13 +428,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool {
-		if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
-			return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
-		} else {
-			return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
-		}
-	})
+	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
 
 	for _, child := range dimensions {
 
