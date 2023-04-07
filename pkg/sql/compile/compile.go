@@ -2062,9 +2062,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		blocksList[0].ranges = ranges
 	}
 
-	for i, _ := range blocksList {
+	for _, blocks := range blocksList {
 		var subNodes engine.Nodes
-		blocks := blocksList[i]
 		tableId := blocks.rel.GetTableID(ctx)
 		ranges := blocks.ranges
 		rel := blocks.rel
