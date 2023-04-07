@@ -143,3 +143,6 @@ SELECT LPAD(1234, 7, 123);
 SELECT LPAD("123", 4, 123.242);
 SELECT LPAD("123", 3.422, 123.242);
 SELECT LPAD(0.341, 3.422, 123.242);
+
+select rpad(binary('a'), 4, 'b');
+select lpad(binary('a'), 4, 'b');
