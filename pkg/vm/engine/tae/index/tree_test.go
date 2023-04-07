@@ -133,3 +133,21 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
 	require.ErrorIs(t, err, ErrNotFound)
 }
+
+func BenchmarkArt(b *testing.B) {
+	tr := NewSimpleARTMap(types.T_char.ToType())
+	b.Run("tree-insert", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			j := uint32(i)
+			tr.Insert(types.EncodeUint32(&j), uint32(i))
+		}
+	})
+	buf := []byte("hello")
+	b.Run("tree-search", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tr.Search(buf)
+		}
+	})
+}

@@ -44,13 +44,10 @@ func newRelation(h handle.Relation) *txnRelation {
 }
 
 func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	allNullables := schema.AllNullables()
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
-		//v := MOToVector(vec, allNullables[i])
+		v := containers.NewVectorWithSharedMemory(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return rel.handle.Append(taeBatch)
@@ -69,7 +66,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
-	tvec := containers.NewVectorWithSharedMemory(keys, false)
+	tvec := containers.NewVectorWithSharedMemory(keys)
 	defer tvec.Close()
 	return rel.handle.DeleteByPhyAddrKeys(tvec)
 }
@@ -78,12 +75,11 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	data := bat.Vecs[0]
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
-	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
 	if data.GetType().Oid == types.T_any {
 		data.SetType(schema.ColDefs[idx].Type)
 	}
-	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
+	vec := containers.NewVectorWithSharedMemory(data)
 	defer vec.Close()
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)

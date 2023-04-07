@@ -315,9 +315,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			FilterList: conds,
 		}, nil)
 	}
-
-	ReCalcNodeStats(nodeID, builder, true)
-
 	return nodeID
 }
 

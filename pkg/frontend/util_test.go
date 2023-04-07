@@ -511,5 +511,7 @@ func TestRemovePrefixComment(t *testing.T) {
 }
 
 func TestHideAccessKey(t *testing.T) {
+	require.Equal(t, "alter account nihao admin_name 'admin' identified with '******'", hideAccessKey("alter account nihao admin_name 'admin' identified with '123'"))
+	require.Equal(t, "alter account nihao admin_name 'admin' identified by '******'", hideAccessKey("alter account nihao admin_name 'admin' identified by '123'"))
 	require.Equal(t, "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}", hideAccessKey("create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}"))
 }

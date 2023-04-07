@@ -1467,7 +1467,7 @@ func TestLogIndex1(t *testing.T) {
 		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
 		assert.Equal(t, len(txns), len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-1, len(indexes))
 		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
@@ -4731,7 +4731,7 @@ func TestAppendBat(t *testing.T) {
 
 	run := func() {
 		defer wg.Done()
-		b := containers.BuildBatch(schema.Attrs(), schema.Types(), schema.Nullables(), containers.Options{
+		b := containers.BuildBatch(schema.Attrs(), schema.Types(), containers.Options{
 			Allocator: common.DefaultAllocator})
 		defer b.Close()
 		for i := 0; i < bat.Length(); i++ {
@@ -5801,4 +5801,45 @@ func TestSnapshotLag1(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = txn2.Commit()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+}
+
+func TestMarshalPartioned(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 20)
+	defer data.Close()
+
+	bats := data.Split(4)
+	tae.createRelAndAppend(bats[0], true)
+
+	_, rel := tae.getRelation()
+	partioned := rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
+
+	tae.restart()
+
+	_, rel = tae.getRelation()
+	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
+
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
+
+	tae.restart()
+
+	_, rel = tae.getRelation()
+	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
 }

@@ -29,7 +29,9 @@ func TestCacheWithRCExample(t *testing.T) {
 	fs, err := NewLocalFS(
 		"rc",
 		dir,
-		32<<20,
+		CacheConfig{
+			MemoryCapacity: 32 << 20,
+		},
 		nil,
 	)
 	assert.Nil(t, err)
@@ -79,7 +81,9 @@ func TestCacheWithReleasableExample(t *testing.T) {
 	fs, err := NewLocalFS(
 		"rc",
 		dir,
-		32<<20,
+		CacheConfig{
+			MemoryCapacity: 32 << 20,
+		},
 		nil,
 	)
 	assert.Nil(t, err)

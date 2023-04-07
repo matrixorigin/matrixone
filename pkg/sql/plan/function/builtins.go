@@ -456,6 +456,18 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_uint32,
 				Fn:        binary.ExtractFromDate,
 			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_varchar, types.T_time},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ExtractFromTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ExtractFromVarchar,
+			},
 		},
 	},
 	LENGTH: {

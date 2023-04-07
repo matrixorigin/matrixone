@@ -121,6 +121,7 @@ type TxnEngine interface {
 	engine.Engine
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
+	StartTxnWithNow(info []byte) (txn Txn, err error)
 	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
 	GetTxnByID(id []byte) (txn Txn, err error)
 	Close() error
