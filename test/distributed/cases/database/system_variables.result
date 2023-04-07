@@ -20,10 +20,10 @@ Variable_name    Value
 auto_increment_increment    6
 show variables like 'init%';
 Variable_name    Value
-init_connect    
+init_connect
 show variables like 'init_connect';
 Variable_name    Value
-init_connect    
+init_connect
 show variables like 'interactive%';
 Variable_name    Value
 interactive_timeout    30100
@@ -66,7 +66,7 @@ net_write_timeout    60
 show variables where variable_name like 'system%' and variable_name != 'system_time_zone';
 Variable_name    Value
 select @@system_time_zone != '';
-@@system_time_zone != 
+@@system_time_zone !=
 true
 show variables like 'trans%';
 Variable_name    Value
@@ -226,7 +226,7 @@ id    BIGINT UNSIGNED(64)    NO        '0'
 info    TEXT(0)    YES        null
 state    VARCHAR(64)    YES        null
 time    INT(32)    NO        '0'
-user    VARCHAR(32)    NO        ''        
+user    VARCHAR(32)    NO        ''
 select * from `PROCESSLIST` limit 2;
 id    user    host    db    command    time    state    info
 desc user_privileges;
@@ -234,7 +234,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(512)    NO        ''
 grantee    VARCHAR(292)    NO        ''
 is_grantable    VARCHAR(3)    NO        ''
-privilege_type    VARCHAR(64)    NO        ''        
+privilege_type    VARCHAR(64)    NO        ''
 select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
@@ -280,9 +280,9 @@ database_collation    VARCHAR(64)    YES        null
 event_object_schema    VARCHAR(64)    YES        null
 action_timing    VARCHAR(10)    YES        null
 action_reference_new_row    VARCHAR(3)    YES        null
-event_object_catalog    VARCHAR(64)    YES        null        
+event_object_catalog    VARCHAR(64)    YES        null
 select trigger_name, action_order from triggers limit 3;
-trigger_name    action_order      
+trigger_name    action_order
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -336,7 +336,7 @@ repl_slave_priv    VARCHAR(10)    NO        'N'
 alter_priv    VARCHAR(10)    NO        'N'
 create_view_priv    VARCHAR(10)    NO        'N'
 create_tablespace_priv    VARCHAR(10)    NO        'N'
-super_priv    VARCHAR(10)    NO        'N'        
+super_priv    VARCHAR(10)    NO        'N'
 select host, user from user limit 2;
 host    user
 desc db;
@@ -344,25 +344,25 @@ Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO    PRI    ''
 db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
+select_priv    VARCHAR(10)    NO        'N'
+insert_priv    VARCHAR(10)    NO        'N'
+update_priv    VARCHAR(10)    NO        'N'
+delete_priv    VARCHAR(10)    NO        'N'
+create_priv    VARCHAR(10)    NO        'N'
+drop_priv    VARCHAR(10)    NO        'N'
+grant_priv    VARCHAR(10)    NO        'N'
+references_priv    VARCHAR(10)    NO        'N'
+index_priv    VARCHAR(10)    NO        'N'
+alter_priv    VARCHAR(10)    NO        'N'
+create_tmp_table_priv    VARCHAR(10)    NO        'N'
+lock_tables_priv    VARCHAR(10)    NO        'N'
+create_view_priv    VARCHAR(10)    NO        'N'
+show_view_priv    VARCHAR(10)    NO        'N'
+create_routine_priv    VARCHAR(10)    NO        'N'
+alter_routine_priv    VARCHAR(10)    NO        'N'
+execute_priv    VARCHAR(10)    NO        'N'
+event_priv    VARCHAR(10)    NO        'N'
+trigger_priv    VARCHAR(10)    NO        'N'
 select db, user from db limit 5;
 db    user
 desc procs_priv;
@@ -374,7 +374,7 @@ proc_priv    VARCHAR(10)    NO        ''
 timestamp    TIMESTAMP(0)    NO        current_timestamp()
 user    CHAR(32)    NO    PRI    ''
 routine_type    VARCHAR(10)    NO    PRI    null
-routine_name    CHAR(64)    NO    PRI    ''        
+routine_name    CHAR(64)    NO    PRI    ''
 select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
@@ -385,7 +385,7 @@ timestamp    TIMESTAMP(0)    NO        current_timestamp()
 user    CHAR(32)    NO    PRI    ''
 table_name    CHAR(64)    NO    PRI    ''
 column_name    CHAR(64)    NO    PRI    ''
-column_priv    VARCHAR(10)    NO        ''        
+column_priv    VARCHAR(10)    NO        ''
 select table_name, column_name from columns_priv limit 5;
 table_name    column_name
 desc tables_priv;
@@ -397,7 +397,7 @@ grantor    VARCHAR(288)    NO        ''
 host    CHAR(255)    NO    PRI    ''
 timestamp    TIMESTAMP(0)    NO        current_timestamp()
 user    CHAR(32)    NO    PRI    ''
-column_priv    VARCHAR(10)    NO        ''        
+column_priv    VARCHAR(10)    NO        ''
 select host, table_name from tables_priv limit 5;
 host    table_name
 show variables like 'sql_select_limit';
@@ -509,6 +509,7 @@ select version();
 version()
 8.0.30-MatrixOne-v0.7.0
 drop database test;
+drop account if exists abc;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop database if exists test;
 drop database if exists test1;
