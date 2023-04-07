@@ -95,7 +95,7 @@ func filterTag(expr *Expr, tag int32) *Expr {
 	return nil
 }
 
-func createNewAggNode(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
+func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 	leftChildTag := leftChild.BindingTags[0]
 	newAggList := DeepCopyExprList(agg.AggList)
 	//newGroupBy := DeepCopyExprList(agg.GroupBy)
@@ -138,8 +138,6 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
-	//make sure left child is bigger and  agg pushdown to left child
-	builder.applySwapRuleByStats(join.NodeId, false)
 
 	leftChild := builder.qry.Nodes[join.Children[0]]
 	rightChild := builder.qry.Nodes[join.Children[1]]
@@ -148,6 +146,65 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 		return nodeID
 	}
 
-	createNewAggNode(node, join, leftChild, builder)
+	applyAggPushdown(node, join, leftChild, builder)
+	return nodeID
+}
+
+func applyAggPullup(filter, join, project, agg *plan.Node, builder *QueryBuilder) {
+	if len(agg.GroupBy) != 1 {
+		return
+	}
+	groupColInAgg, ok := agg.GroupBy[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		return
+	}
+	if !IsEquiJoin(join.OnList) || len(join.OnList) != 1 {
+		return
+	}
+	groupColInJoin, ok := filterTag(join.OnList[0], project.BindingTags[0]).Expr.(*plan.Expr_Col)
+	if !ok {
+		return
+	}
+	if agg.Stats.Outcnt/agg.Stats.Cost < join.Stats.Outcnt/project.Stats.Outcnt {
+		return
+	}
+	filter.Children[0] = project.NodeId
+	tmp := agg.Children[0]
+	agg.Children[0] = join.NodeId
+	join.Children[0] = tmp
+	groupColInJoin.Col.RelPos = groupColInAgg.Col.RelPos
+	groupColInJoin.Col.ColPos = groupColInAgg.Col.ColPos
+
+	//builder.ctxByNode[project.NodeId] = builder.ctxByNode[join.NodeId]
+}
+
+func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
+	// agg pullup only support filter->inner join->project->agg for now
+	// we can change it to filter->project->agg->inner join
+	node := builder.qry.Nodes[nodeID]
+
+	if node.NodeType != plan.Node_FILTER {
+		if len(node.Children) > 0 {
+			for i, child := range node.Children {
+				node.Children[i] = builder.aggPullup(child)
+			}
+		}
+		return nodeID
+	}
+	filter := node
+	join := builder.qry.Nodes[filter.Children[0]]
+	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
+		return nodeID
+	}
+	project := builder.qry.Nodes[join.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return nodeID
+	}
+	agg := builder.qry.Nodes[project.Children[0]]
+	if agg.NodeType != plan.Node_AGG {
+		return nodeID
+	}
+
+	applyAggPullup(filter, join, project, agg, builder)
 	return nodeID
 }
