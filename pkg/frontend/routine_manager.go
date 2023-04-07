@@ -63,14 +63,12 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) err
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	if _, ok := ar.killIdQueue[tenantID]; ok {
-		ar.killQueueMu.Lock()
 		return moerr.NewInternalError(ar.ctx, "account is being suspened or droped")
 	}
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
-	_, ok := ar.accountId2Routine[tenantID]
-	if !ok || ar.accountId2Routine[tenantID] == nil {
+	if _, ok := ar.accountId2Routine[tenantID]; !ok {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]bool)
 	}
 	ar.accountId2Routine[tenantID][rt] = true
