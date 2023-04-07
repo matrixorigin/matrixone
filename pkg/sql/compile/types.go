@@ -186,13 +186,8 @@ type RemoteReceivRegInfo struct {
 	FromAddr string
 }
 
-type Blocks struct {
+// Blocks represent the data block information of an atomic table
+type blocks struct {
 	rel    engine.Relation
 	ranges [][]byte
-}
-
-type BlocksList []Blocks
-
-func NewBlocksList(size int) []Blocks {
-	return make([]Blocks, size)
 }
