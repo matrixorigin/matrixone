@@ -17,15 +17,53 @@ package plan
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
-func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType) (int32, map[[2]int32]*plan.Expr) {
+func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
 	projMap := make(map[[2]int32]*plan.Expr)
 	node := builder.qry.Nodes[nodeID]
 
-	for i, childID := range node.Children {
-		newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType)
-		node.Children[i] = newChildID
+	increaseRefCntForExprList(node.ProjectList, colRefCnt)
+	increaseRefCntForExprList(node.OnList, colRefCnt)
+	increaseRefCntForExprList(node.FilterList, colRefCnt)
+	increaseRefCntForExprList(node.GroupBy, colRefCnt)
+	increaseRefCntForExprList(node.GroupingSet, colRefCnt)
+	increaseRefCntForExprList(node.AggList, colRefCnt)
+	for i := range node.OrderBy {
+		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
+	}
+
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
+		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+
+		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
+		node.Children[0] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
+		}
+
+		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		node.Children[1] = newChildID
+		for ref, expr := range childProjMap {
+			projMap[ref] = expr
+		}
+
+	case plan.Node_AGG, plan.Node_PROJECT:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
+	default:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
 		}
 	}
 
@@ -35,18 +73,20 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	removeProjectionsForExprList(node.GroupBy, projMap)
 	removeProjectionsForExprList(node.GroupingSet, projMap)
 	removeProjectionsForExprList(node.AggList, projMap)
-
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = removeProjectionsForExpr(node.OrderBy[i].Expr, projMap)
 	}
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
-		for _, proj := range node.ProjectList {
-			if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
-				if _, ok := proj.Expr.(*plan.Expr_C); !ok {
-					allColRef = false
-					break
+		tag := node.BindingTags[0]
+		for i, proj := range node.ProjectList {
+			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
+				if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
+					if _, ok := proj.Expr.(*plan.Expr_C); !ok {
+						allColRef = false
+						break
+					}
 				}
 			}
 		}
@@ -62,6 +102,12 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	return nodeID, projMap
+}
+
+func increaseRefCntForExprList(exprs []*plan.Expr, colRefCnt map[[2]int32]int) {
+	for _, expr := range exprs {
+		increaseRefCnt(expr, colRefCnt)
+	}
 }
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
