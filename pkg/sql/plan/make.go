@@ -18,6 +18,7 @@ import (
 	"context"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -320,4 +321,37 @@ var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	oid := types.T(expr.Typ.Id)
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
+}
+
+// used for Compound primary key column name && clusterby column name
+func MakeHiddenColDefByName(name string) *ColDef {
+	return &ColDef{
+		Name:   name,
+		Hidden: true,
+		Typ: &Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		},
+		Default: &plan.Default{
+			NullAbility:  false,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
+}
+
+func MakeRowIdColDef() *ColDef {
+	return &ColDef{
+		Name:   catalog.Row_ID,
+		Hidden: true,
+		Typ: &Type{
+			Id: int32(types.T_Rowid),
+		},
+		Primary: true,
+		Default: &plan.Default{
+			NullAbility:  false,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
 }
