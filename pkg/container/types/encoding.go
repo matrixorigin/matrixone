@@ -110,6 +110,7 @@ func EncodeType(v *Type) ([]byte, int32) {
 	return dat, n
 }
 
+//go:nocheckptr
 func DecodeType(v []byte) Type {
 	basedata := v[:TSize]
 	start := TSize - SSize
