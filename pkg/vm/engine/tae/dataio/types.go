@@ -74,6 +74,7 @@ type Reader interface {
 		size int64, m *mpool.MPool) ([]*batch.Batch, error)
 
 	GetObjectName() objectio.ObjectName
+	GetName() string
 	GetObjectExtent() objectio.Extent
 	GetObjectReader() objectio.Reader
 }

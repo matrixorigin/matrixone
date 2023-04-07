@@ -133,9 +133,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		metaLoc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 
-		err = blockio.PrefetchCkpMeta(r.fs.Service, metaLoc)
+		err = blockio.PrefetchBlocksMeta(r.fs.Service, metaLoc)
 		if err != nil {
 			return
 		}

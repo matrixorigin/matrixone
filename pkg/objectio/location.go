@@ -73,6 +73,9 @@ func (l Location) String() string {
 	if len(l) == 0 {
 		return ""
 	}
+	if len(l) != LocationLen {
+		return string(l)
+	}
 	return fmt.Sprintf("%v_%v_%d_%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
 }
 

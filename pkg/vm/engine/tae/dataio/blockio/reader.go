@@ -294,6 +294,11 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 func (r *BlockReader) GetObjectName() objectio.ObjectName {
 	return r.key.Name()
 }
+
+func (r *BlockReader) GetName() string {
+	return r.name
+}
+
 func (r *BlockReader) GetObjectExtent() objectio.Extent {
 	return r.meta
 }
@@ -396,7 +401,7 @@ func PrefetchFile(service fileservice.FileService, size int64, name string) erro
 	if err != nil {
 		return err
 	}
-	pref := buildPrefetch(reader)
+	pref := buildPrefetchNew(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {

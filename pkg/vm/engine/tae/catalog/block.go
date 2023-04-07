@@ -286,7 +286,7 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 }
 
 func (entry *BlockEntry) HasPersistedData() bool {
-	return entry.GetMetaLoc() != nil
+	return !entry.GetMetaLoc().IsEmpty()
 }
 func (entry *BlockEntry) GetMetaLoc() objectio.Location {
 	entry.RLock()

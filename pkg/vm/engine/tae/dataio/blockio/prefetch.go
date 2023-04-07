@@ -65,6 +65,15 @@ func buildPrefetch(reader dataio.Reader) prefetch {
 		reader:  reader.GetObjectReader(),
 	}
 }
+func buildPrefetchNew(reader dataio.Reader) prefetch {
+	ids := make(map[uint32]*objectio.ReadBlockOptions)
+	return prefetch{
+		nameStr: reader.GetName(),
+		meta:    reader.GetObjectExtent(),
+		ids:     ids,
+		reader:  reader.GetObjectReader(),
+	}
+}
 
 func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
 	blocks := make(map[uint32]*objectio.ReadBlockOptions)
