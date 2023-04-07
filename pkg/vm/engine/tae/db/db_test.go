@@ -5802,3 +5802,44 @@ func TestSnapshotLag1(t *testing.T) {
 	err = txn2.Commit()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }
+
+func TestMarshalPartioned(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 20)
+	defer data.Close()
+
+	bats := data.Split(4)
+	tae.createRelAndAppend(bats[0], true)
+
+	_, rel := tae.getRelation()
+	partioned := rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
+
+	tae.restart()
+
+	_, rel = tae.getRelation()
+	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
+
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
+
+	tae.restart()
+
+	_, rel = tae.getRelation()
+	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	assert.Equal(t, int8(1), partioned)
+}

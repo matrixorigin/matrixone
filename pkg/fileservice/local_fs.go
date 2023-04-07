@@ -134,22 +134,25 @@ func (l *LocalFS) initCaches(config CacheConfig) error {
 		)
 	}
 
-	//if diskCacheCapacity > DisableCacheCapacity && diskCachePath != "" {
-	//	var err error
-	//	l.diskCache, err = NewDiskCache(
-	//		diskCachePath,
-	//		diskCacheCapacity,
-	//		l.perfCounterSets,
-	//	)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	logutil.Info("fileservice: disk cache initialized",
-	//		zap.Any("fs-name", l.name),
-	//		zap.Any("capacity", diskCacheCapacity),
-	//		zap.Any("path", diskCachePath),
-	//	)
-	//}
+	if config.enableDiskCacheForLocalFS {
+		if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+			var err error
+			l.diskCache, err = NewDiskCache(
+				config.DiskPath,
+				int64(config.DiskCapacity),
+				config.DiskMinEvictInterval.Duration,
+				config.DiskEvictTarget,
+				l.perfCounterSets,
+			)
+			if err != nil {
+				return err
+			}
+			logutil.Info("fileservice: disk cache initialized",
+				zap.Any("fs-name", l.name),
+				zap.Any("config", config),
+			)
+		}
+	}
 
 	return nil
 }

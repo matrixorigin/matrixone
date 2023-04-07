@@ -28,6 +28,8 @@ type CacheConfig struct {
 	DiskCapacity         toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      float64       `toml:"disk-evict-target"`
+
+	enableDiskCacheForLocalFS bool // for testing only
 }
 
 func (c *CacheConfig) SetDefaults() {

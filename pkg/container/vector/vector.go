@@ -1496,6 +1496,27 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 	return fmt.Sprintf("%v-%s", col, v.nsp)
 }
 
+// Window returns a "window" into the Vec.
+// It selects a half-open range (i.e.[start, end)).
+// The returned object is NOT allowed to be modified (
+// TODO: Nulls are deep copied.
+func (v *Vector) Window(start, end int) (*Vector, error) {
+	w := NewVec(v.typ)
+	if start == end {
+		return w, nil
+	}
+	w.nsp = nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
+	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
+	w.length = end - start
+	w.setupColFromData()
+	if v.typ.IsString() {
+		w.area = v.area
+	}
+	w.cantFreeData = true
+	w.cantFreeArea = true
+	return w, nil
+}
+
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	w := NewVec(v.typ)
