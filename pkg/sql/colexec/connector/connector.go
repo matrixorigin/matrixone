@@ -16,6 +16,8 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,6 +41,8 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 		return false, nil
 	}
 
+	logutil.Info(testutil.OperatorReceiveBatch("connector receive", bat))
+
 	// do not send the source batch to remote node.
 	for i := range bat.Vecs {
 		if bat.Vecs[i].NeedDup() {
@@ -51,6 +55,8 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 		}
 	}
 
+	logutil.Info(testutil.OperatorReceiveBatch("connector send", bat))
+	
 	select {
 	case <-reg.Ctx.Done():
 		bat.Clean(proc.Mp())

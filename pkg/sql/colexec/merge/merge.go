@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"reflect"
 	"time"
 
@@ -74,6 +75,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if bat.Length() == 0 {
 			continue
 		}
+
+		logutil.Info(testutil.OperatorReceiveBatch("merge", bat))
+		
 		anal.Input(bat, isFirst)
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)

@@ -128,6 +128,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	if err != nil {
 		return err
 	}
+
+	logutil.Infof("sql is %s, scope is %s", c.sql, DebugShowScopes(c.scope))
+	
 	for _, s := range c.scope {
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
