@@ -5,8 +5,10 @@ import (
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 const (
@@ -22,17 +24,28 @@ const (
 //	                              type
 type ZM []byte
 
-func NewZM(t types.T, v []byte) ZM {
+func NewZM(t types.T) ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
-	if types.IsString(t) {
+	return zm
+}
+
+func BuildZM(t types.T, v []byte) ZM {
+	zm := ZM(make([]byte, ZMSize))
+	zm.SetType(t)
+	zm.doInit(v)
+	return zm
+}
+
+func (zm ZM) doInit(v []byte) {
+	if zm.IsString() {
 		zm.updateMinString(v)
 		zm.updateMaxString(v)
 	} else {
 		zm.updateMinFixed(v)
 		zm.updateMaxFixed(v)
 	}
-	return zm
+	zm.setInited()
 }
 
 func (zm ZM) String() string {
@@ -92,17 +105,60 @@ func (zm ZM) Marshal() ([]byte, error) {
 	return buf, nil
 }
 
+func (zm ZM) ContainsAny(keys containers.Vector) (ok bool) {
+	var op containers.ItOpT[[]byte]
+	if zm.IsString() {
+		op = func(key []byte, isNull bool, _ int) (err error) {
+			if zm.ContainsString(key) {
+				err = moerr.GetOkExpectedEOB()
+				ok = true
+			}
+			return
+		}
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+	} else {
+		op = func(key []byte, isNull bool, _ int) (err error) {
+			if zm.ContainsFixed(key) {
+				err = moerr.GetOkExpectedEOB()
+				ok = true
+			}
+			return
+		}
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+	}
+	return
+}
+
+// Optimize me later
+func (zm ZM) ContainsFixed(k []byte) bool {
+	t := types.T(zm[63])
+	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
+		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
+}
+
+func (zm ZM) ContainsString(k []byte) bool {
+	if zm.MaxTruncated() {
+		return true
+	}
+	return compute.CompareBytes(k, zm.GetMinBuf()) >= 0 &&
+		compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
+}
+
 func (zm ZM) Contains(k []byte) bool {
 	t := types.T(zm[63])
 	if types.IsString(t) {
-		if zm.MaxTruncated() {
-			return true
-		}
-		return compute.CompareBytes(k, zm.GetMinBuf()) >= 0 &&
-			compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
+		return zm.ContainsString(k)
 	}
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
+}
+
+func (zm ZM) IsInited() bool {
+	return zm[62]&0x80 != 0
+}
+
+func (zm ZM) setInited() {
+	zm[62] |= 0x80
 }
 
 func (zm ZM) setMaxTruncated() {
@@ -224,7 +280,22 @@ func adjustBytes(bs []byte) {
 	}
 }
 
+func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
+	op := func(v []byte, isNull bool, _ int) (err error) {
+		if isNull {
+			return
+		}
+		UpdateZM(zm, v)
+		return
+	}
+	containers.ForeachWindowBytes(vs, 0, vs.Length(), op)
+	return
+}
+
 func UpdateZM(zm *ZM, v []byte) {
+	if !zm.IsInited() {
+		zm.doInit(v)
+	}
 	t := zm.Type()
 	if types.IsString(t) {
 		if compute.CompareBytes(v, zm.GetMinBuf()) < 0 {

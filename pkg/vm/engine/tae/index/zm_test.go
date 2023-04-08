@@ -10,7 +10,7 @@ import (
 
 func TestZM(t *testing.T) {
 	int64v := int64(100)
-	zm1 := NewZM(types.T_int64, types.EncodeInt64(&int64v))
+	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
 	require.Equal(t, int64v, zm1.GetMin())
 	require.Equal(t, int64v, zm1.GetMax())
 
@@ -39,7 +39,7 @@ func TestZM(t *testing.T) {
 	v2 := bytes.Repeat([]byte{0x00}, 29)
 	v3 := bytes.Repeat([]byte{0x00}, 30)
 
-	zm2 := NewZM(types.T_varchar, minv)
+	zm2 := BuildZM(types.T_varchar, minv)
 	require.False(t, zm2.Contains([]byte("")))
 	require.False(t, zm2.Contains(v2))
 	require.True(t, zm2.Contains(v3))
