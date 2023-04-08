@@ -152,7 +152,7 @@ func (bat *Batch) AntiShrink(sels []int64) {
 	for _, sel := range sels {
 		selsMp[sel] = true
 	}
-	newSels := make([]int64, bat.Length()-len(sels))
+	newSels := make([]int64, 0, bat.Length()-len(sels))
 	for i := 0; i < bat.Length(); i++ {
 		if ok, _ := selsMp[int64(i)]; !ok {
 			newSels = append(newSels, int64(i))

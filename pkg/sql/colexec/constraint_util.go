@@ -16,9 +16,7 @@ package colexec
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,13 +39,6 @@ type TableInfo struct {
 	clusterBy          string
 	Attrs              []string
 	IdxList            []int32
-}
-
-var prefix []byte
-
-func init() {
-	prefix = make([]byte, 8, 8)
-	binary.BigEndian.PutUint64(prefix, math.MaxUint64)
 }
 
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
