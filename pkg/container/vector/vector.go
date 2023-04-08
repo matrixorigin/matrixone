@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -276,6 +277,7 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	logutil.Infof("free vec %p", v)
 	if !v.cantFreeData {
 		mp.Free(v.data)
 	}
@@ -291,6 +293,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
+}
+
+func (v *Vector) DebugCmsGetData() []byte {
+	return v.data
+}
+
+func (v *Vector) DebugCmsGetArea() []byte {
+	return v.area
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {

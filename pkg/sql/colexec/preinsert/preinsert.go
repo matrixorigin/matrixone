@@ -16,6 +16,8 @@ package preinsert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -42,6 +44,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
+	logutil.Info(testutil.OperatorReceiveBatch("pre-insert", bat))
+
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}

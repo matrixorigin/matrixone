@@ -11,10 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package mergeblock
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -39,6 +41,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat == nil {
 		return true, nil
 	}
+	testutil.OperatorReceiveBatch("merge-block", bat)
 
 	if len(bat.Zs) == 0 {
 		return false, nil
