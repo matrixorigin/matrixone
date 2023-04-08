@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"runtime/debug"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -277,6 +278,9 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	if v.NeedDup() {
+		logutil.Infof("vec %p should dup, and stack is %s", string(debug.Stack()))
+	}
 	logutil.Infof("free vec %p", v)
 	if !v.cantFreeData {
 		mp.Free(v.data)
