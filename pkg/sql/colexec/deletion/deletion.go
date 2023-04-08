@@ -18,7 +18,12 @@ import (
 	"bytes"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,7 +32,19 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("delete rows")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(_ *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	if ap.DeleteType == RemoteDelete {
+		ap.ctr = new(container)
+		ap.ctr.mp = pipeline.ArrayMap{
+			Mp: make(map[string]*pipeline.Array),
+		}
+		attrs := []string{catalog.BlockMeta_ID, catalog.BlockMeta_Offsets}
+		blkDeleteBat := batch.New(true, attrs)
+		blkDeleteBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		blkDeleteBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+		ap.ctr.blkDeleteBat = blkDeleteBat
+	}
 	return nil
 }
 
@@ -38,6 +55,13 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// last batch of block
 	if bat == nil {
+		if p.DeleteType == LocalDelete {
+			attrs := []string{catalog.LocalDeleteRows}
+			localDeleteBat := batch.New(true, attrs)
+			localDeleteBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			vector.AppendFixed(localDeleteBat.GetVector(0), p.AffectedRows, false, proc.GetMPool())
+			proc.SetInputBatch(localDeleteBat)
+		}
 		return true, nil
 	}
 
@@ -47,6 +71,33 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	defer bat.Clean(proc.Mp())
+	if p.DeleteType == RemoteDelete {
+		// the logic will be used for next version's delete for cn bloc delete.
+		//  for now it's not useful
+
+		// // in the previous instruction, the
+		// // group will block all batch until
+		// // it gets all batches, so we will
+		// // get a batch which may contain multi
+		// // blocks' rowId.
+		// // just support single table detele for now.
+		// deleteVec := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+		// p.ctr.blkDeleteBat.Clean(proc.GetMPool())
+		// for _, rowId := range deleteVec {
+		// 	blkid := rowId.GetBlockid()
+		// 	p.ctr.PutDeteteOffset((&blkid).String(), int32(rowId.GetRowOffset()))
+		// }
+		// proc.SetInputBatch(p.ctr.blkDeleteBat)
+		ibat := batch.New(true, bat.Attrs)
+		for j := range bat.Vecs {
+			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := ibat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+			return false, err
+		}
+		proc.SetInputBatch(ibat)
+		return false, nil
+	}
 	var affectedRows uint64
 	var err error
 	delCtx := p.DeleteCtx

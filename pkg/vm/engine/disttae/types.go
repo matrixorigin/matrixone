@@ -101,9 +101,7 @@ type Transaction struct {
 	// local timestamp for workspace operations
 	meta txn.TxnMeta
 	op   client.TxnOperator
-	// fileMaps used to store the mapping relationship between s3 filenames
-	// and blockId
-	fileMap map[string]uint64
+
 	// writes cache stores any writes done by txn
 	writes []Entry
 	// txn workspace size
@@ -115,7 +113,7 @@ type Transaction struct {
 	idGen IDGenerator
 
 	// interim incremental rowid
-	rowId [2]uint64
+	rowId [3]uint64
 
 	// use to cache table
 	tableMap *sync.Map
@@ -123,6 +121,9 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
+
+	// deleteOffsets is used to reuse memory
+	deleteOffsets []int64
 }
 
 // Entry represents a delete/insert

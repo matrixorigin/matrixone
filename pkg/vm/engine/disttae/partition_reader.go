@@ -16,12 +16,13 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+)
+
+const (
+	IdMask0 = 0xFF
+	IdMask1 = 0xFF00
+	IdMask2 = 0xFF0000
+	IdMask3 = 0xFF000000
 )
 
 type PartitionReader struct {
@@ -50,8 +58,15 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
+
+	// blockId and offsetId for CN block RowId
+	blockId  [2]byte
+	offsetId [4]byte
 }
 
+// BlockBatch is used to record the metaLoc info
+// for the s3 block written by current txn, it's
+// stored in the txn writes
 type BlockBatch struct {
 	metas  []string
 	idx    int
@@ -86,12 +101,16 @@ func (p *PartitionReader) Close() error {
 
 func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 	for _, str := range colNames {
+		if str == catalog.Row_ID {
+			continue
+		}
 		v, ok := p.colIdxMp[str]
 		if !ok {
 			panic("not existed col in partitionReader")
 		}
 		res = append(res, uint16(v))
 	}
+	fmt.Println("res: ", res)
 	return
 }
 
@@ -125,11 +144,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
-			for _, name := range colNames {
-				if name == catalog.Row_ID {
-					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
-				}
-			}
+
 			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{extent.Id()}, p.procMPool)
 			if err != nil {
 				return nil, err
@@ -144,6 +159,32 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
+			var hasRowId bool
+			// note: if there is rowId colName, it must be the last one
+			if colNames[len(colNames)-1] == catalog.Row_ID {
+				hasRowId = true
+			}
+			if hasRowId {
+				// add rowId col for rbat
+				len := rbat.Length()
+				vec := vector.NewVec(types.T_Rowid.ToType())
+				p.blockId[0] = byte(p.blockBatch.idx & IdMask0)
+				p.blockId[1] = byte(p.blockBatch.idx & IdMask1 >> 8)
+				for i := 0; i < len; i++ {
+					p.offsetId[0] = byte(i & IdMask0)
+					p.offsetId[1] = byte(i & IdMask1 >> 8)
+					p.offsetId[2] = byte(i & IdMask2 >> 16)
+					p.offsetId[3] = byte(i & IdMask3 >> 24)
+					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(p.currentFileName, p.blockId, p.offsetId), false,
+						p.procMPool); err != nil {
+						return rbat, err
+					}
+				}
+				rbat.Vecs = append(rbat.Vecs, vec)
+				blkid := vector.GetFixedAt[types.Rowid](vec, 0).GetBlockid()
+				deletes := colexec.Srv.GetCnBlockDeletes((&blkid).String())
+				rbat.AntiShrink(deletes)
+			}
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)

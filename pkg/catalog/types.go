@@ -135,6 +135,9 @@ const (
 	BlockMeta_SegmentID       = "segment_id"
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 
+	BlockMeta_Offsets = "%!%mo__meta_delete"
+	LocalDeleteRows   = "%!%mo__local_delete"
+
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"

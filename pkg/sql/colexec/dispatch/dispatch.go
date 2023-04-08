@@ -79,7 +79,6 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
-
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}

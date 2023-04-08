@@ -1,0 +1,94 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+package mergedelete
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/stretchr/testify/require"
+)
+
+type mockRelation struct {
+	engine.Relation
+	result *batch.Batch
+}
+
+func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrName string) error {
+	e.result = b
+	return nil
+}
+
+func TestMergeBlock(t *testing.T) {
+	proc := testutil.NewProc()
+	proc.Ctx = context.TODO()
+	Uuid := common.MustUuid1()
+	blkId := common.NewBlockid(&Uuid, 0, 0)
+	batch1 := &batch.Batch{
+		Attrs: []string{catalog.Row_ID},
+		Vecs: []*vector.Vector{
+			testutil.MakeRowIdVector([]types.Rowid{
+				common.NewRowid(&blkId, 0),
+				common.NewRowid(&blkId, 1),
+				common.NewRowid(&blkId, 2),
+			}, nil),
+		},
+		Zs: []int64{1, 1, 1},
+	}
+	batch2 := &batch.Batch{
+		Attrs: []string{catalog.LocalDeleteRows},
+		Vecs: []*vector.Vector{
+			testutil.MakeUint64Vector([]uint64{12}, nil),
+		},
+		Zs: []int64{1},
+	}
+	argument1 := Argument{
+		DelSource:    &mockRelation{},
+		AffectedRows: 0,
+	}
+
+	Prepare(proc, &argument1)
+	proc.Reg.InputBatch = batch1
+	_, err := Call(0, proc, &argument1, false, false)
+	require.NoError(t, err)
+	proc.Reg.InputBatch = batch2
+	_, err = Call(0, proc, &argument1, false, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(15), argument1.AffectedRows)
+	// Check DelSource
+	{
+		result := argument1.DelSource.(*mockRelation).result
+		// check attr names
+		require.True(t, reflect.DeepEqual(
+			[]string{catalog.Row_ID},
+			result.Attrs,
+		))
+		// check vector
+		require.Equal(t, 1, len(result.Vecs))
+		for i, vec := range result.Vecs {
+			require.Equal(t, 3, vec.Length(), fmt.Sprintf("column number: %d", i))
+		}
+	}
+	argument1.Free(proc, false)
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}

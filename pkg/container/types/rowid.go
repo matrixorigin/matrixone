@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -69,6 +70,10 @@ func (r Rowid) Equal(to Rowid) bool {
 func (r Rowid) GetBlockid() Blockid {
 	return *(*Blockid)(r[:BlockidSize])
 	// return (Blockid)(r[:BlockidSize])
+}
+
+func (r Rowid) GetRowOffset() uint32 {
+	return binary.BigEndian.Uint32(r[BlockidSize:])
 }
 
 func (r Rowid) GetSegid() Uuid {

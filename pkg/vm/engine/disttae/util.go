@@ -16,6 +16,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"math"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -780,4 +782,26 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
+}
+
+/*
+	RowId:
+
+| segmentId | blockId | offsetId |
+
+	18 bytes   2 bytes   4 bytes
+*/
+// SegmentId = Uuid + fileId
+func generateRowIdForCNBlock(segmentName string, blockId [2]byte, offsetId [4]byte) types.Rowid {
+	strs := strings.Split(segmentName, ",")
+	uuidStr := strs[0]
+	Uuid, err := types.ParseUuid(uuidStr)
+	if err != nil {
+		panic("Uuid Parse Error!!!")
+	}
+	fileOffset := binary.BigEndian.Uint16([]byte(strs[1]))
+	blkOffset := binary.BigEndian.Uint16(blockId[:])
+	blkid := common.NewBlockid(&Uuid, fileOffset, blkOffset)
+	offset := binary.BigEndian.Uint32(offsetId[:])
+	return common.NewRowid(&blkid, offset)
 }

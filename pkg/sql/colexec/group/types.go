@@ -75,6 +75,12 @@ type Argument struct {
 	Types     []types.Type
 	Aggs      []agg.Aggregate         // aggregations
 	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
+
+	// for delete filter below
+	// mp[segmentName] = 1 => txnWorkSpace,mp[segmentName] = 2 => CN Block
+	SegmentMap map[string]int32
+	// it can be deletion.RemotDelete or deletion.LocalDelete
+	DeleteType int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

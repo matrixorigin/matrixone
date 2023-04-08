@@ -15,25 +15,56 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const (
+	RemoteDelete = 1
+	LocalDelete  = 2
+	DeleteRows   = 2000
+)
+
+type container struct {
+	// BlockId => offsets
+	mp           pipeline.ArrayMap
+	blkDeleteBat *batch.Batch
+}
+
+// assume that one blk will delete 2000 row in genernal
+func (ctr *container) PutDeteteOffset(blkId string, offset int32) {
+	if _, ok := ctr.mp.Mp[blkId]; !ok {
+		ctr.mp.Mp[blkId] = &pipeline.Array{
+			Array: make([]int32, DeleteRows),
+		}
+	}
+	ctr.mp.Mp[blkId].Array = append(ctr.mp.Mp[blkId].Array, offset)
+}
+
+func (ctr *container) GetDeleteBatch(proc *process.Process) (*batch.Batch, error) {
+	for blkId, offsets := range ctr.mp.Mp {
+		vector.AppendBytes(ctr.blkDeleteBat.GetVector(0), []byte(blkId), false, proc.GetMPool())
+		bytes, err := offsets.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		vector.AppendBytes(ctr.blkDeleteBat.GetVector(1), bytes, false, proc.GetMPool())
+	}
+	return ctr.blkDeleteBat, nil
+}
 
 type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
 	Engine       engine.Engine
-	// when detele data in a remote CN,
-	// IsRemote is true, and we need IBucket
-	// and NBucket to know those data in batch
-	// that we need to delete in this CN, because
-	// we need to make sure one Block will be processed
-	// by only one CN, this is useful for our compaction
-	IsRemote bool
-	IBucket  uint64
-	NBucket  uint64
+
+	DeleteType int
+	ctr        *container
 }
 
 type DeleteCtx struct {
@@ -58,5 +89,9 @@ type DeleteCtx struct {
 	OnSetUpdateCol    []map[string]int32
 }
 
+// delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.ctr != nil {
+		arg.ctr.blkDeleteBat.Clean(proc.GetMPool())
+	}
 }

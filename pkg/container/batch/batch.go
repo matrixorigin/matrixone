@@ -147,6 +147,32 @@ func (bat *Batch) ExpandNulls() {
 	}
 }
 
+func (bat *Batch) AntiShrink(sels []int64) {
+	selsMp := make(map[int64]bool)
+	for _, sel := range sels {
+		selsMp[sel] = true
+	}
+	newSels := make([]int64, bat.Length()-len(sels))
+	for i := 0; i < bat.Length(); i++ {
+		if ok, _ := selsMp[int64(i)]; !ok {
+			newSels = append(newSels, int64(i))
+		}
+	}
+	mp := make(map[*vector.Vector]uint8)
+	for _, vec := range bat.Vecs {
+		if _, ok := mp[vec]; ok {
+			continue
+		}
+		mp[vec]++
+		vec.Shrink(newSels, false)
+	}
+	vs := bat.Zs
+	for i, sel := range newSels {
+		vs[i] = vs[sel]
+	}
+	bat.Zs = bat.Zs[:len(newSels)]
+}
+
 // I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
 	mp := make(map[*vector.Vector]uint8)

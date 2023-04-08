@@ -15,28 +15,31 @@
 package colexec
 
 import (
-	"context"
-	"encoding/binary"
-	"fmt"
 	"math"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var Srv *Server
+
+const (
+	TxnWorkSpaceIdType = 1
+	CnBlockIdType      = 2
+)
 
 func NewServer(client logservice.CNHAKeeperClient) *Server {
 	if Srv != nil {
 		return Srv
 	}
 	Srv = &Server{
-		mp:       make(map[uint64]*process.WaitRegister),
-		hakeeper: client,
-
-		uuidCsChanMap: UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
+		mp:                make(map[uint64]*process.WaitRegister),
+		hakeeper:          client,
+		uuidCsChanMap:     UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
+		cnSegmentMap:      CnSegmentMap{mp: make(map[string]int32)},
+		cnBlockDetetesMap: CnBlockDeletsMap{mp: make(map[string][]int64)},
 	}
 	return Srv
 }
@@ -73,51 +76,69 @@ func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) e
 	return nil
 }
 
+func (srv *Server) PutCnSegment(segmentName string, segmentType int32) {
+	srv.cnSegmentMap.Lock()
+	defer srv.cnSegmentMap.Unlock()
+	srv.cnSegmentMap.mp[segmentName] = segmentType
+}
+
+func (srv *Server) GetCnSegmentMap() map[string]int32 {
+	srv.cnSegmentMap.Lock()
+	defer srv.cnSegmentMap.Unlock()
+	return srv.cnSegmentMap.mp
+}
+
+func (srv *Server) GetCnSegmentType(segmentName string) int32 {
+	srv.cnSegmentMap.Lock()
+	defer srv.cnSegmentMap.Unlock()
+	return srv.cnSegmentMap.mp[segmentName]
+}
+
+func (srv *Server) PutCnBlockDeletes(blockId string, offsets []int64) {
+	srv.cnBlockDetetesMap.Lock()
+	defer srv.cnBlockDetetesMap.Unlock()
+	srv.cnBlockDetetesMap.mp[blockId] = append(srv.cnBlockDetetesMap.mp[blockId], offsets...)
+}
+
+func (srv *Server) GetCBlockDeletesMap() map[string][]int64 {
+	srv.cnBlockDetetesMap.Lock()
+	defer srv.cnBlockDetetesMap.Unlock()
+	return srv.cnBlockDetetesMap.mp
+}
+
+func (srv *Server) GetCnBlockDeletes(blockId string) []int64 {
+	srv.cnBlockDetetesMap.Lock()
+	defer srv.cnBlockDetetesMap.Unlock()
+	res := srv.cnBlockDetetesMap.mp[blockId]
+	offsets := make([]int64, len(res), len(res))
+	copy(offsets, res)
+	return offsets
+}
+
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
-func (srv *Server) GenerateSegment() (string, error) {
+func (srv *Server) GenerateSegment() string {
 	srv.Lock()
 	defer srv.Unlock()
 	if srv.InitSegmentId {
-		if err := srv.incrementSegmentId(); err != nil {
-			return "", err
-		}
+		srv.incrementSegmentId()
 	} else {
-		if err := srv.getNewSegmentId(); err != nil {
-			return "", err
-		}
+		srv.getNewSegmentId()
+		srv.currentFileOffset = 0
 		srv.InitSegmentId = true
 	}
-	return fmt.Sprintf("%x.seg", (srv.CNSegmentId)[:]), nil
+	return common.NewObjectName(&srv.CNSegmentId, srv.currentFileOffset)
 }
 
-func (srv *Server) incrementSegmentId() error {
-	// increment SegmentId
-	b := binary.BigEndian.Uint32(srv.CNSegmentId[0:4])
-	// can't rise up to math.MaxUint32, we need to distinct the memory
-	// data in disttae, the batch's rowId's prefix is MaxUint64
-	if b < math.MaxUint32-1 {
-		b++
-		binary.BigEndian.PutUint32(srv.CNSegmentId[0:4], b)
+func (srv *Server) incrementSegmentId() {
+	if srv.currentFileOffset < math.MaxUint16 {
+		srv.currentFileOffset++
 	} else {
-		if err := srv.getNewSegmentId(); err != nil {
-			return err
-		}
+		srv.getNewSegmentId()
+		srv.currentFileOffset = 0
 	}
-	return nil
 }
 
-// getNewSegmentId returns Id given from hakeeper
-func (srv *Server) getNewSegmentId() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	Id, err := srv.hakeeper.AllocateID(ctx)
-	if err != nil {
-		return err
-	}
-	srv.CNSegmentId[0] = 0x80
-	for i := 1; i < 4; i++ {
-		srv.CNSegmentId[i] = 0
-	}
-	binary.BigEndian.PutUint64(srv.CNSegmentId[4:12], Id)
-	return nil
+// for now, rowId is common between CN and DN.
+func (srv *Server) getNewSegmentId() {
+	srv.CNSegmentId = common.NewSegmentid()
 }

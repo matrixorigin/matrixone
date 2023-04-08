@@ -45,6 +45,7 @@ var (
 	blobType       = types.T_blob.ToType()
 	textType       = types.T_text.ToType()
 	uuidType       = types.T_uuid.ToType()
+	rowIdType      = types.T_Rowid.ToType()
 )
 
 func MakeDecimal64Type(width, scalar int32) types.Type {
