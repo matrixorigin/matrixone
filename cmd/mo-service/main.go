@@ -309,7 +309,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.EnableSqlWriter)
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {

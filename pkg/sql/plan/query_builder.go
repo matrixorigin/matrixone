@@ -1914,6 +1914,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						return 0, err
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
 					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)

@@ -549,7 +549,7 @@ type ObservabilityParameters struct {
 	MergedExtension string `toml:"mergedExtension"`
 
 	// If disabled, the logs will be written to files stored in s3
-	EnableSqlWriter bool `toml:"enableSqlWriter"`
+	DisableSqlWriter bool `toml:"disableSqlWriter"`
 
 	OBCollectorConfig
 }

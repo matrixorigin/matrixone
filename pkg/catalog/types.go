@@ -67,6 +67,11 @@ const (
 )
 
 const (
+	// Metrics and Trace related
+
+	MO_SYSTEM    = "system"
+	MO_STATEMENT = "statement_info"
+
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
