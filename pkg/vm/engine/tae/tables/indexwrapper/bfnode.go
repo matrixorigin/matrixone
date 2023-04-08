@@ -40,7 +40,7 @@ func NewBfReader(
 	metaLoc objectio.Location,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := blockio.NewObjectReaderNew(fs.Service, metaLoc)
+	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
 		idx:    id.Idx,

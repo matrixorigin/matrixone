@@ -199,7 +199,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeLocationNew(
+		metaLocABlk := blockio.EncodeLocation(
 			ablockTask.blocks[0].GetName(),
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
@@ -212,7 +212,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		}
 		if deletes != nil {
 			var deltaLoc objectio.Location
-			deltaLoc = blockio.EncodeLocationNew(
+			deltaLoc = blockio.EncodeLocation(
 				ablockTask.blocks[1].GetName(),
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
@@ -290,7 +290,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
-	metaLoc := blockio.EncodeLocationNew(
+	metaLoc := blockio.EncodeLocation(
 		ioTask.blocks[0].GetName(),
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
@@ -304,7 +304,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	}
 	if deletes != nil {
 		var deltaLoc objectio.Location
-		deltaLoc = blockio.EncodeLocationNew(
+		deltaLoc = blockio.EncodeLocation(
 			ioTask.blocks[1].GetName(),
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),

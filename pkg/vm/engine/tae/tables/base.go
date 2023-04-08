@@ -170,7 +170,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	reader, err := blockio.NewObjectReaderNew(blk.fs.Service, location)
+	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
 	if err != nil {
 		return
 	}

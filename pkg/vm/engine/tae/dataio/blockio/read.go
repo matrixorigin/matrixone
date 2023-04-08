@@ -138,7 +138,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
 	id := info.MetaLoc.ID()
 	extent := info.MetaLoc.Extent()
-	reader, err := NewObjectReaderNew(fs, info.MetaLoc)
+	reader, err := NewObjectReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, deleteRows, err
 	}
@@ -231,7 +231,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	reader, err := NewObjectReaderNew(fs, deltaloc)
+	reader, err := NewObjectReader(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}

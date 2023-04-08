@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -47,12 +45,6 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 
 func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
-}
-
-// EncodeObjectName Generate uuid as the file name of the block&segment
-func EncodeObjectName() (name string) {
-	name = uuid.NewString()
-	return name
 }
 
 func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
@@ -89,8 +81,8 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	return objectSize, nil
 }
 
-// EncodeObjectLocation Generate a metaloc from an object file
-func EncodeObjectLocation(info string) (objectio.Location, error) {
+// EncodeLocationFromString Generate a metaloc from an info string
+func EncodeLocationFromString(info string) (objectio.Location, error) {
 	location := strings.Split(info, "_")
 	if len(location) < 8 {
 		panic(fmt.Sprintf("info: %v", info))
@@ -128,8 +120,8 @@ func EncodeObjectLocation(info string) (objectio.Location, error) {
 	return objectio.BuildLocation(name, extent, uint32(rows), uint32(id)), nil
 }
 
-// EncodeLocation Generate a metaloc from an object file
-func EncodeLocationNew(
+// EncodeLocation Generate a metaloc
+func EncodeLocation(
 	name objectio.ObjectName,
 	extent objectio.Extent,
 	rows uint32,

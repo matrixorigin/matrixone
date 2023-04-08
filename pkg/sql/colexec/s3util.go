@@ -534,7 +534,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process, idx int) error {
 		return err
 	}
 	for j := range blocks {
-		metaLoc := blockio.EncodeLocationNew(
+		metaLoc := blockio.EncodeLocation(
 			blocks[j].GetName(),
 			blocks[j].GetExtent(),
 			uint32(w.lengths[j]),

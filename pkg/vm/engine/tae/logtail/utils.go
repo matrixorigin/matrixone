@@ -483,7 +483,7 @@ func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
-	reader, err := blockio.NewObjectReaderNew(service, key)
+	reader, err := blockio.NewObjectReader(service, key)
 	if err != nil {
 		return
 	}

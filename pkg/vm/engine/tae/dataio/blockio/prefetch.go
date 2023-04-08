@@ -32,7 +32,7 @@ type prefetch struct {
 }
 
 func BuildPrefetch(service fileservice.FileService, key objectio.Location) (prefetch, error) {
-	reader, err := NewObjectReaderNew(service, key)
+	reader, err := NewObjectReader(service, key)
 	if err != nil {
 		return prefetch{}, err
 	}

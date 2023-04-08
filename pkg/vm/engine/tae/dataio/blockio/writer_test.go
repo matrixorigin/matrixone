@@ -75,9 +75,9 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.False(t, res)
 
 	mp := mpool.MustNewZero()
-	metaloc := EncodeLocationNew(blocks[0].GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
+	metaloc := EncodeLocation(blocks[0].GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 	require.NoError(t, err)
-	reader, err := NewObjectReaderNew(service, metaloc)
+	reader, err := NewObjectReader(service, metaloc)
 	require.NoError(t, err)
 	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 	require.NoError(t, err)

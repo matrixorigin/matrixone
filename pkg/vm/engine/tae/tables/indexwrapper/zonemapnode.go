@@ -30,7 +30,7 @@ type ZmReader struct {
 }
 
 func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *ZmReader {
-	reader, _ := blockio.NewObjectReaderNew(fs.Service, metaLoc)
+	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 	return &ZmReader{
 		metaKey: metaLoc,
 		idx:     idx,

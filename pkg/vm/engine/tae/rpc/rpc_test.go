@@ -114,7 +114,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 50, len(blocks))
 		for _, blk := range blocks {
-			metaLoc := blockio.EncodeLocationNew(
+			metaLoc := blockio.EncodeLocation(
 				blk.GetName(),
 				blk.GetExtent(),
 				uint32(taeBats[0].Vecs[0].Length()),
@@ -282,14 +282,14 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	metaLoc1 := blockio.EncodeLocationNew(
+	metaLoc1 := blockio.EncodeLocation(
 		blocks[0].GetName(),
 		blocks[0].GetExtent(),
 		uint32(taeBats[0].Vecs[0].Length()),
 		blocks[0].GetID(),
 	).String()
 	assert.Nil(t, err)
-	metaLoc2 := blockio.EncodeLocationNew(
+	metaLoc2 := blockio.EncodeLocation(
 		blocks[1].GetName(),
 		blocks[1].GetExtent(),
 		uint32(taeBats[1].Vecs[0].Length()),
@@ -307,7 +307,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, err)
-	metaLoc3 := blockio.EncodeLocationNew(
+	metaLoc3 := blockio.EncodeLocation(
 		blocks[0].GetName(),
 		blocks[0].GetExtent(),
 		uint32(taeBats[3].Vecs[0].Length()),
@@ -474,28 +474,28 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, len(hideBats), len(blocks))
-	delLoc1 := blockio.EncodeLocationNew(
+	delLoc1 := blockio.EncodeLocation(
 		blocks[0].GetName(),
 		blocks[0].GetExtent(),
 		uint32(hideBats[0].Vecs[0].Length()),
 		blocks[0].GetID(),
 	).String()
 	assert.Nil(t, err)
-	delLoc2 := blockio.EncodeLocationNew(
+	delLoc2 := blockio.EncodeLocation(
 		blocks[1].GetName(),
 		blocks[1].GetExtent(),
 		uint32(hideBats[1].Vecs[0].Length()),
 		blocks[1].GetID(),
 	).String()
 	assert.Nil(t, err)
-	delLoc3 := blockio.EncodeLocationNew(
+	delLoc3 := blockio.EncodeLocation(
 		blocks[2].GetName(),
 		blocks[2].GetExtent(),
 		uint32(hideBats[2].Vecs[0].Length()),
 		blocks[2].GetID(),
 	).String()
 	assert.Nil(t, err)
-	delLoc4 := blockio.EncodeLocationNew(
+	delLoc4 := blockio.EncodeLocation(
 		blocks[3].GetName(),
 		blocks[3].GetExtent(),
 		uint32(hideBats[3].Vecs[0].Length()),

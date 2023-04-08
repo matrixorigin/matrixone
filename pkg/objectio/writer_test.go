@@ -106,7 +106,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 2, len(blocks))
 	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
 
-	objectReader, _ := NewObjectReader(name, service)
+	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 2)
 	for i, blk := range blocks {
 		extents[i] = NewExtent(blk.GetID(), blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
@@ -146,7 +146,7 @@ func TestNewObjectWriter(t *testing.T) {
 	dirs, err := fs.ListDir("")
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(dirs))
-	objectReader, err = NewObjectReader(name, service)
+	objectReader, err = NewObjectReaderWithStr(name, service)
 	assert.Nil(t, err)
 	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
 	assert.Nil(t, err)

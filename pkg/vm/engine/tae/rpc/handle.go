@@ -401,7 +401,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	loc, err := blockio.EncodeObjectLocation(req.DeltaLocs[0])
+	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
 	if err != nil {
 		return nil
 	}
@@ -411,7 +411,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	}
 	for _, key := range req.DeltaLocs {
 		var location objectio.Location
-		location, err = blockio.EncodeObjectLocation(key)
+		location, err = blockio.EncodeLocationFromString(key)
 		if err != nil {
 			return err
 		}
@@ -776,7 +776,7 @@ func (h *Handle) HandleWrite(
 		if req.FileName != "" {
 			locations := make([]objectio.Location, 0)
 			for _, metLoc := range req.MetaLocs {
-				location, err := blockio.EncodeObjectLocation(metLoc)
+				location, err := blockio.EncodeLocationFromString(metLoc)
 				if err != nil {
 					return err
 				}
@@ -823,12 +823,12 @@ func (h *Handle) HandleWrite(
 		reader = nil
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
-			location, err = blockio.EncodeObjectLocation(key)
+			location, err = blockio.EncodeLocationFromString(key)
 			if err != nil {
 				return err
 			}
 			if reader == nil {
-				reader, err = blockio.NewObjectReaderNew(
+				reader, err = blockio.NewObjectReader(
 					h.eng.GetTAE(nctx).Fs.Service, location)
 				if err != nil {
 					return

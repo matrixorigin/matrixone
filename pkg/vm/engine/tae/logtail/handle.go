@@ -621,16 +621,16 @@ func LoadCheckpointEntries(
 	readers := make([]dataio.Reader, len(locations))
 	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
-		location, err := blockio.EncodeObjectLocation(key)
+		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
 			return nil, err
 		}
-		reader, err := blockio.NewObjectReaderNew(fs, location)
+		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, err
 		}
 		readers[i] = reader
-		err = blockio.PrefetchBlocksMeta(fs, location)
+		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
 			return nil, err
 		}
