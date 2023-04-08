@@ -66,6 +66,8 @@ const (
 	// MergeBlock is used to recieve S3 block metLoc Info, and write
 	// them to S3
 	MergeBlock
+	// MergeDelete is used to recieve S3 Blcok Delete Info from remote Cn
+	MergeDelete
 	Right
 	OnDuplicateKey
 	PreInsert

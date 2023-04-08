@@ -235,6 +235,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		bat:          bat,
 		dnStore:      dnStore,
 	})
+	colexec.Srv.PutCnSegment(fileName, colexec.CnBlockIdType)
 	return nil
 }
 
@@ -243,6 +244,17 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+
+	// it's CN Block
+	if colexec.Srv.GetCnSegmentType(rowids[0].GetObjectString()) == colexec.CnBlockIdType {
+		txn.deleteOffsets = txn.deleteOffsets[:0]
+		for _, rowId := range rowids {
+			txn.deleteOffsets = append(txn.deleteOffsets, int64(rowId.GetRowOffset()))
+		}
+		blockId := rowids[0].GetBlockid()
+		colexec.Srv.PutCnBlockDeletes(blockId.String(), txn.deleteOffsets)
+		return bat
+	}
 	min1 := uint32(math.MaxUint32)
 	max1 := uint32(0)
 	for _, rowid := range rowids {
@@ -261,6 +273,9 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	sels := txn.proc.Mp().GetSels()
 	txn.Lock()
 	for _, e := range txn.writes {
+		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			continue
+		}
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
 			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))

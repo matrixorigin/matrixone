@@ -24,13 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -65,7 +63,7 @@ type S3Writer struct {
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 64 * mpool.MB
+	WriteS3Threshold uint64 = 1 * mpool.MB
 
 	TagS3Size uint64 = 10 * mpool.MB
 )
@@ -243,6 +241,9 @@ func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int)
 	return
 }
 
+// 1. 64M, 10M
+// cn scope [insert connector]    merge
+// cn scope [insert connector]
 func getStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
 	cols = make([][]string, 0, len(bats))
 	for i := range bats {
@@ -266,6 +267,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 		for j := 0; j < len(lastBatch.Vecs); j++ {
 			unionOneFuncs = append(unionOneFuncs, vector.GetUnionOneFunction(*lastBatch.Vecs[j].GetType(), proc.GetMPool()))
 		}
+
 		for i := 0; i < len(lastBatch.Zs); i++ {
 			for j := 0; j < len(lastBatch.Vecs); j++ {
 				unionOneFuncs[j](w.buffer.Vecs[j], lastBatch.Vecs[j], int64(i))
@@ -466,13 +468,12 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 func (w *S3Writer) generateWriter(proc *process.Process) error {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	id := common.NewSegmentid()
+	segId := Srv.GenerateSegment()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}
-	name := objectio.BuildObjectName(id, 0)
-	w.writer, err = blockio.NewBlockWriterNew(s3, name)
+	w.writer, err = blockio.NewBlockWriterNew(s3, segId)
 	if err != nil {
 		return err
 	}

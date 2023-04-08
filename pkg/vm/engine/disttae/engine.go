@@ -30,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -333,14 +335,18 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	id := common.NewSegmentid()
 	bytes := types.EncodeUuid(&id)
-
 	txn := &Transaction{
-		op:       op,
-		proc:     proc,
-		engine:   e,
-		readOnly: true,
-		meta:     op.Txn(),
-		idGen:    e.idGen,
+		op:            op,
+		proc:          proc,
+		engine:        e,
+		readOnly:      true,
+		meta:          op.Txn(),
+		idGen:         e.idGen,
+		dnStores:      e.getDNServices(),
+		tableMap:      new(sync.Map),
+		databaseMap:   new(sync.Map),
+		createMap:     new(sync.Map),
+		deleteOffsets: make([]int64, options.DefaultBlockMaxRows),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -349,13 +355,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId:       id,
-		dnStores:    e.getDNServices(),
-		fileMap:     make(map[string]uint64),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		segId: id,
 	}
+	// TxnWorkSpace SegmentName
+	colexec.Srv.PutCnSegment(common.NewObjectName(&id, 0), colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
