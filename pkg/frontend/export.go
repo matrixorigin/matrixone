@@ -24,14 +24,16 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -54,12 +56,28 @@ type ExportParam struct {
 
 	//file service & buffer for the line
 	UseFileService bool
-	FileService    fileservice.FileService
-	LineBuffer     *bytes.Buffer
-	Ctx            context.Context
-	AsyncReader    *io.PipeReader
-	AsyncWriter    *io.PipeWriter
-	AsyncGroup     *errgroup.Group
+	writeParam
+	FileService fileservice.FileService
+	LineBuffer  *bytes.Buffer
+	Ctx         context.Context
+	AsyncReader *io.PipeReader
+	AsyncWriter *io.PipeWriter
+	AsyncGroup  *errgroup.Group
+}
+
+type writeParam struct {
+	First      bool
+	OutTofile  bool
+	Index      int32
+	WriteIndex int32
+	ByteChan   chan *BatchByte
+	BatchMap   map[int32]([]byte)
+}
+
+type BatchByte struct {
+	index     int32
+	writeByte []byte
+	err       error
 }
 
 var OpenFile = os.OpenFile
@@ -292,14 +310,10 @@ var EndOfLine = func(ep *ExportParam) (int, error) {
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
 	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
-		if oq.ep.Rows == 0 {
-			return moerr.NewInternalError(oq.ctx, "the OneLine size is over the maxFileSize")
-		}
-
 		if err := Flush(oq.ep); err != nil {
 			return err
 		}
-		if oq.ep.LineSize != 0 {
+		if oq.ep.LineSize != 0 && oq.ep.OutTofile {
 			if _, err := Seek(oq.ep); err != nil {
 				return err
 			}
@@ -341,6 +355,159 @@ var writeDataToCSVFile = func(ep *ExportParam, output []byte) error {
 	return nil
 }
 
+func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte {
+	if flag {
+		writeByte = append(writeByte, enclosed)
+	}
+	writeByte = append(writeByte, tmp...)
+	if flag {
+		writeByte = append(writeByte, enclosed)
+	}
+	writeByte = append(writeByte, symbol...)
+	return writeByte
+}
+
+func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
+	ses := obj.(*Session)
+	bat2 := &batch.Batch{}
+	for _, vec := range bat.Vecs {
+		tmp, _ := vec.Dup(ses.GetMemPool())
+		bat2.Vecs = append(bat2.Vecs, tmp)
+	}
+	bat2.Zs = make([]int64, bat.Vecs[0].Length())
+	for k := 0; k < bat.Vecs[0].Length(); k++ {
+		bat2.Zs[k] = 1
+	}
+	return bat2
+}
+
+func initExportFirst(oq *outputQueue) {
+	if !oq.ep.First {
+		oq.ep.First = true
+		oq.ep.ByteChan = make(chan *BatchByte, 10)
+		oq.ep.BatchMap = make(map[int32][]byte)
+		oq.ep.Index = 0
+		oq.ep.WriteIndex = 0
+	}
+	oq.ep.Index++
+}
+
+func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
+	ses := obj.(*Session)
+	symbol := oq.ep.Symbol
+	closeby := oq.ep.Fields.EnclosedBy
+	flag := oq.ep.ColumnFlag
+	writeByte := make([]byte, 0)
+	for i := 0; i < bat.Length(); i++ {
+		for j, vec := range bat.Vecs {
+			if vec.GetNulls().Contains(uint64(i)) {
+				writeByte = appendBytes(writeByte, []byte("\\N"), symbol[j], closeby, flag[j])
+				continue
+			}
+			switch vec.GetType().Oid { //get col
+			case types.T_json:
+				val := types.DecodeJson(vec.GetBytesAt(i))
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			case types.T_bool:
+				val := vector.GetFixedAt[bool](vec, i)
+				if val {
+					writeByte = appendBytes(writeByte, []byte("true"), symbol[j], closeby, flag[j])
+				} else {
+					writeByte = appendBytes(writeByte, []byte("false"), symbol[j], closeby, flag[j])
+				}
+			case types.T_int8:
+				val := vector.GetFixedAt[int8](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_int16:
+				val := vector.GetFixedAt[int16](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_int32:
+				val := vector.GetFixedAt[int32](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_int64:
+				val := vector.GetFixedAt[int64](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_uint8:
+				val := vector.GetFixedAt[uint8](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_uint16:
+				val := vector.GetFixedAt[uint16](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_uint32:
+				val := vector.GetFixedAt[uint32](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_uint64:
+				val := vector.GetFixedAt[uint64](vec, i)
+				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+			case types.T_float32:
+				val := vector.GetFixedAt[float32](vec, i)
+				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j])
+				} else {
+					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
+				}
+			case types.T_float64:
+				val := vector.GetFixedAt[float64](vec, i)
+				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j])
+				} else {
+					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
+				}
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+				value := addEscapeToString(vec.GetBytesAt(i))
+				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+			case types.T_date:
+				val := vector.GetFixedAt[types.Date](vec, i)
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			case types.T_datetime:
+				scale := vec.GetType().Scale
+				val := vector.GetFixedAt[types.Datetime](vec, i).String2(scale)
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_time:
+				scale := vec.GetType().Scale
+				val := vector.GetFixedAt[types.Time](vec, i).String2(scale)
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_timestamp:
+				scale := vec.GetType().Scale
+				timeZone := ses.GetTimeZone()
+				val := vector.GetFixedAt[types.Timestamp](vec, i).String2(timeZone, scale)
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_decimal64:
+				scale := vec.GetType().Scale
+				val := vector.GetFixedAt[types.Decimal64](vec, i).Format(scale)
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_decimal128:
+				scale := vec.GetType().Scale
+				val := vector.GetFixedAt[types.Decimal128](vec, i).Format(scale)
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_uuid:
+				val := vector.GetFixedAt[types.Uuid](vec, i).ToString()
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+			case types.T_Rowid:
+				val := vector.GetFixedAt[types.Rowid](vec, i)
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			case types.T_Blockid:
+				val := vector.GetFixedAt[types.Blockid](vec, i)
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			default:
+				logErrorf(ses.GetDebugString(), "constructByte : unsupported type %d", vec.GetType().Oid)
+				ByteChan <- &BatchByte{
+					err: moerr.NewInternalError(ses.requestCtx, "constructByte : unsupported type %d", vec.GetType().Oid),
+				}
+				bat.Clean(ses.GetMemPool())
+				return
+			}
+		}
+	}
+
+	ByteChan <- &BatchByte{
+		index:     index,
+		writeByte: writeByte,
+		err:       nil,
+	}
+	bat.Clean(ses.GetMemPool())
+}
+
 func addEscapeToString(s []byte) []byte {
 	pos := make([]int, 0)
 	for i := 0; i < len(s); i++ {
@@ -363,6 +530,9 @@ func addEscapeToString(s []byte) []byte {
 }
 
 func exportDataToCSVFile(oq *outputQueue) error {
+	if !oq.ep.OutTofile {
+		return exportDataToCSVFile2(oq)
+	}
 	oq.ep.LineSize = 0
 
 	symbol := oq.ep.Symbol
@@ -526,4 +696,66 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.Rows++
 	_, err := EndOfLine(oq.ep)
 	return err
+}
+
+func exportDataToCSVFile2(oq *outputQueue) error {
+	var tmp *BatchByte
+	select {
+	case tmp = <-oq.ep.ByteChan:
+	default:
+	}
+	if tmp != nil {
+		if tmp.err != nil {
+			return tmp.err
+		}
+		oq.ep.BatchMap[tmp.index] = tmp.writeByte
+	}
+
+	value, ok := oq.ep.BatchMap[oq.ep.WriteIndex+1]
+	if !ok {
+		return nil
+	}
+
+	if err := writeToCSVFile(oq, value); err != nil {
+		return err
+	}
+	oq.ep.WriteIndex++
+	oq.ep.BatchMap[oq.ep.WriteIndex] = nil
+	_, err := EndOfLine(oq.ep)
+	return err
+}
+
+func exportAllData(oq *outputQueue) error {
+	var tmp *BatchByte
+	for {
+		tmp = nil
+		if oq.ep.WriteIndex == oq.ep.Index {
+			break
+		}
+		select {
+		case tmp = <-oq.ep.ByteChan:
+		default:
+		}
+		if tmp != nil {
+			if tmp.err != nil {
+				return tmp.err
+			}
+			oq.ep.BatchMap[tmp.index] = tmp.writeByte
+		}
+
+		value, ok := oq.ep.BatchMap[oq.ep.WriteIndex+1]
+		if !ok {
+			continue
+		}
+		if err := writeToCSVFile(oq, value); err != nil {
+			return err
+		}
+		oq.ep.WriteIndex++
+		oq.ep.BatchMap[oq.ep.WriteIndex] = nil
+	}
+	oq.ep.First = false
+	oq.ep.FileCnt = 0
+	oq.ep.ByteChan = nil
+	oq.ep.BatchMap = nil
+	return nil
 }
