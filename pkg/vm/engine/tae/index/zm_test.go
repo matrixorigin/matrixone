@@ -16,21 +16,21 @@ func TestZM(t *testing.T) {
 
 	i64l := int64v - 200
 	i64h := int64v + 100
-	require.True(t, zm1.Contains(types.EncodeInt64(&int64v)))
-	require.False(t, zm1.Contains(types.EncodeInt64(&i64l)))
-	require.False(t, zm1.Contains(types.EncodeInt64(&i64h)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
+	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
+	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
 	UpdateZMAny(&zm1, i64l, types.T_int64.ToType())
 	t.Log(zm1.String())
-	require.True(t, zm1.Contains(types.EncodeInt64(&int64v)))
-	require.True(t, zm1.Contains(types.EncodeInt64(&i64l)))
-	require.False(t, zm1.Contains(types.EncodeInt64(&i64h)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
+	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
 	UpdateZMAny(&zm1, i64h, types.T_int64.ToType())
 	t.Log(zm1.String())
-	require.True(t, zm1.Contains(types.EncodeInt64(&int64v)))
-	require.True(t, zm1.Contains(types.EncodeInt64(&i64l)))
-	require.True(t, zm1.Contains(types.EncodeInt64(&i64h)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
+	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
 	minv := bytes.Repeat([]byte{0x00}, 31)
 	maxv := bytes.Repeat([]byte{0xff}, 31)
@@ -40,14 +40,14 @@ func TestZM(t *testing.T) {
 	v3 := bytes.Repeat([]byte{0x00}, 30)
 
 	zm2 := BuildZM(types.T_varchar, minv)
-	require.False(t, zm2.Contains([]byte("")))
-	require.False(t, zm2.Contains(v2))
-	require.True(t, zm2.Contains(v3))
+	require.False(t, zm2.ContainsKey([]byte("")))
+	require.False(t, zm2.ContainsKey(v2))
+	require.True(t, zm2.ContainsKey(v3))
 
 	UpdateZM(&zm2, maxv)
 	require.False(t, zm2.MaxTruncated())
 	t.Log(zm2.String())
-	require.True(t, zm2.Contains(maxv))
+	require.True(t, zm2.ContainsKey(maxv))
 
 	maxv[3] = 0xff
 	UpdateZM(&zm2, maxv)
@@ -55,7 +55,7 @@ func TestZM(t *testing.T) {
 	require.True(t, zm2.MaxTruncated())
 
 	v4 := bytes.Repeat([]byte{0xff}, 100)
-	require.True(t, zm2.Contains(v4))
+	require.True(t, zm2.ContainsKey(v4))
 
 	buf, _ := zm2.Marshal()
 	zm3 := DecodeZM(buf)

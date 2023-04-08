@@ -89,7 +89,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		err = zoneMapWriter.Finalize()
 		// update zonemap
-		w.objMetaBuilder.UpdateZm(i, zoneMapWriter.zonemap)
+		w.objMetaBuilder.UpdateZm(i, zoneMapWriter.zonemap, *vec.GetType())
 		if err != nil {
 			return nil, err
 		}

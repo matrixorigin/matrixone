@@ -296,12 +296,8 @@ func (r *BlockReader) GetObjectReader() objectio.Reader {
 }
 
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
-	zm := index.NewZoneMap(typ)
-	err := zm.Unmarshal(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	return zm, err
+	zm := index.DecodeZM(buf)
+	return &zm, nil
 }
 
 func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {

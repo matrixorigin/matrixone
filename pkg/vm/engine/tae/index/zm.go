@@ -25,10 +25,10 @@ const (
 //	                              type
 type ZM []byte
 
-func NewZM(t types.T) ZM {
+func NewZM(t types.T) *ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
-	return zm
+	return &zm
 }
 
 func BuildZM(t types.T, v []byte) ZM {
@@ -52,19 +52,19 @@ func (zm ZM) doInit(v []byte) {
 func (zm ZM) String() string {
 	var b strings.Builder
 	_, _ = b.WriteString(fmt.Sprintf("ZM(%s)[%v,%v]",
-		zm.Type().String(), zm.GetMin(), zm.GetMax()))
+		zm.GetType().String(), zm.GetMin(), zm.GetMax()))
 	if zm.MaxTruncated() {
 		_ = b.WriteByte('+')
 	}
 	return b.String()
 }
 
-func (zm ZM) Type() types.T {
+func (zm ZM) GetType() types.T {
 	return types.T(zm[63])
 }
 
 func (zm ZM) IsString() bool {
-	return types.IsString(zm.Type())
+	return types.IsString(zm.GetType())
 }
 
 func (zm ZM) SetType(t types.T) {
@@ -112,6 +112,9 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 }
 
 func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
+	if !zm.IsInited() {
+		return
+	}
 	visibility = roaring.New()
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
@@ -136,6 +139,9 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 }
 
 func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
+	if !zm.IsInited() {
+		return false
+	}
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, _ int) (err error) {
@@ -174,7 +180,24 @@ func (zm ZM) ContainsString(k []byte) bool {
 		compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
 }
 
-func (zm ZM) Contains(k []byte) bool {
+// TODO: remove me later
+func (zm ZM) Contains(k any) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	t := types.T(zm[63])
+	if types.IsString(t) {
+		return zm.ContainsString(k.([]byte))
+	}
+
+	v := types.EncodeValue(k, t.ToType())
+	return zm.ContainsFixed(v)
+}
+
+func (zm ZM) ContainsKey(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
 	t := types.T(zm[63])
 	if types.IsString(t) {
 		return zm.ContainsString(k)
@@ -220,9 +243,9 @@ func (zm ZM) getValue(min bool) any {
 	case types.T_uint64:
 		return types.DecodeFixed[uint64](zm[offset : offset+8])
 	case types.T_float32:
-		return types.DecodeFixed[bool](zm[offset : offset+4])
+		return types.DecodeFixed[float32](zm[offset : offset+4])
 	case types.T_float64:
-		return types.DecodeFixed[bool](zm[offset : offset+8])
+		return types.DecodeFixed[float64](zm[offset : offset+8])
 	case types.T_date:
 		return types.DecodeFixed[types.Date](zm[offset : offset+types.DateSize])
 	case types.T_time:
@@ -248,7 +271,7 @@ func (zm ZM) getValue(min bool) any {
 		length := int(zm[offset+30] & 0x01f)
 		return []byte(zm)[offset : offset+length]
 	default:
-		panic(fmt.Sprintf("unsupported type: %v", zm.Type()))
+		panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 	}
 }
 
@@ -326,7 +349,7 @@ func UpdateZM(zm *ZM, v []byte) {
 	if !zm.IsInited() {
 		zm.doInit(v)
 	}
-	t := zm.Type()
+	t := zm.GetType()
 	if types.IsString(t) {
 		if compute.CompareBytes(v, zm.GetMinBuf()) < 0 {
 			zm.updateMinString(v)
