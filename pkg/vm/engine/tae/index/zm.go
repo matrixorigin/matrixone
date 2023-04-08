@@ -1,0 +1,255 @@
+package index
+
+import (
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+)
+
+const (
+	ZMSize = 64
+)
+
+// [0,...29, 30, 31,...60, 61, 62, 63]
+//
+//	-------  --  --------  --  --  --
+//	  min     |     max    |    |   |
+//	       len(min)    len(max) |   |
+//	                       reserved |
+//	                              type
+type ZM []byte
+
+func NewZM(t types.T, v []byte) ZM {
+	zm := ZM(make([]byte, ZMSize))
+	zm.SetType(t)
+	if types.IsString(t) {
+		zm.updateMinString(v)
+		zm.updateMaxString(v)
+	} else {
+		zm.updateMinFixed(v)
+		zm.updateMaxFixed(v)
+	}
+	return zm
+}
+
+func (zm ZM) String() string {
+	var b strings.Builder
+	_, _ = b.WriteString(fmt.Sprintf("ZM(%s)[%v,%v]",
+		zm.Type().String(), zm.GetMin(), zm.GetMax()))
+	if zm.MaxTruncated() {
+		_ = b.WriteByte('+')
+	}
+	return b.String()
+}
+
+func (zm ZM) Type() types.T {
+	return types.T(zm[63])
+}
+
+func (zm ZM) IsString() bool {
+	return types.IsString(zm.Type())
+}
+
+func (zm ZM) SetType(t types.T) {
+	zm[63] &= 0x00
+	zm[63] |= byte(t)
+}
+
+func (zm ZM) GetMin() any {
+	return zm.getValue(true)
+}
+
+func (zm ZM) GetMax() any {
+	return zm.getValue(false)
+}
+
+func (zm ZM) GetMinBuf() []byte {
+	return zm[0 : zm[30]&0x1f]
+}
+
+func (zm ZM) GetMaxBuf() []byte {
+	return zm[31 : 31+zm[61]&0x1f]
+}
+
+func (zm ZM) GetBuf() []byte {
+	return zm
+}
+
+func (zm ZM) MaxTruncated() bool {
+	return zm[61]&0x80 != 0
+}
+
+func (zm ZM) Encode() []byte {
+	return zm[:]
+}
+
+func (zm ZM) Marshal() ([]byte, error) {
+	buf := make([]byte, ZMSize)
+	copy(buf, zm[:])
+	return buf, nil
+}
+
+func (zm ZM) Contains(k []byte) bool {
+	t := types.T(zm[63])
+	if types.IsString(t) {
+		if zm.MaxTruncated() {
+			return true
+		}
+		return compute.CompareBytes(k, zm.GetMinBuf()) >= 0 &&
+			compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
+	}
+	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
+		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
+}
+
+func (zm ZM) setMaxTruncated() {
+	zm[61] |= 0x80
+}
+
+func (zm ZM) getValue(min bool) any {
+	offset := 0
+	if !min {
+		offset = 31
+	}
+	switch types.T(zm[63]) {
+	case types.T_bool:
+		return types.DecodeFixed[bool](zm[offset : offset+1])
+	case types.T_int8:
+		return types.DecodeFixed[int8](zm[offset : offset+1])
+	case types.T_int16:
+		return types.DecodeFixed[int16](zm[offset : offset+2])
+	case types.T_int32:
+		return types.DecodeFixed[int32](zm[offset : offset+4])
+	case types.T_int64:
+		return types.DecodeFixed[int64](zm[offset : offset+8])
+	case types.T_uint8:
+		return types.DecodeFixed[uint8](zm[offset : offset+1])
+	case types.T_uint16:
+		return types.DecodeFixed[uint16](zm[offset : offset+2])
+	case types.T_uint32:
+		return types.DecodeFixed[uint32](zm[offset : offset+4])
+	case types.T_uint64:
+		return types.DecodeFixed[uint64](zm[offset : offset+8])
+	case types.T_float32:
+		return types.DecodeFixed[bool](zm[offset : offset+4])
+	case types.T_float64:
+		return types.DecodeFixed[bool](zm[offset : offset+8])
+	case types.T_date:
+		return types.DecodeFixed[types.Date](zm[offset : offset+types.DateSize])
+	case types.T_time:
+		return types.DecodeFixed[types.Time](zm[offset : offset+types.TimeSize])
+	case types.T_datetime:
+		return types.DecodeFixed[types.Datetime](zm[offset : offset+types.DatetimeSize])
+	case types.T_timestamp:
+		return types.DecodeFixed[types.Timestamp](zm[offset : offset+types.TimestampSize])
+	case types.T_decimal64:
+		return types.DecodeFixed[types.Decimal64](zm[offset : offset+types.Decimal64Size])
+	case types.T_decimal128:
+		return types.DecodeFixed[types.Decimal128](zm[offset : offset+types.Decimal128Size])
+	case types.T_uuid:
+		return types.DecodeFixed[types.Decimal256](zm[offset : offset+types.UuidSize])
+	case types.T_TS:
+		return types.DecodeFixed[types.TS](zm[offset : offset+types.TxnTsSize])
+	case types.T_Rowid:
+		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.RowidSize])
+	case types.T_Blockid:
+		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.BlockidSize])
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		length := int(zm[offset+30] & 0x01f)
+		return []byte(zm)[offset : offset+length]
+	default:
+		panic(fmt.Sprintf("unsupported type: %v", zm.Type()))
+	}
+}
+
+func (zm ZM) updateMinString(v []byte) {
+	size := len(v)
+	if size > 30 {
+		size = 30
+	}
+	copy(zm[:], v[:size])
+	zm[30] = byte(size)
+}
+
+func (zm ZM) updateMaxString(v []byte) {
+	size := len(v)
+	var flag byte
+	if size > 30 {
+		size = 30
+		copy(zm[31:], v[:size])
+		if hasMaxPrefix(v) {
+			flag |= 0x80
+		} else {
+			adjustBytes(zm[31:61])
+		}
+	} else {
+		copy(zm[31:], v[:size])
+	}
+	flag |= byte(size)
+	zm[61] = flag
+}
+
+func (zm ZM) updateMinFixed(v []byte) {
+	copy(zm[:], v)
+	zm[30] = byte(len(v))
+}
+
+func (zm ZM) updateMaxFixed(v []byte) {
+	copy(zm[31:], v)
+	zm[61] = byte(len(v))
+}
+
+func hasMaxPrefix(bs []byte) bool {
+	for i := 0; i < 3; i++ {
+		if types.DecodeFixed[uint64](bs[i*8:(i+1)*8]) != math.MaxUint64 {
+			return false
+		}
+	}
+	if types.DecodeFixed[uint32](bs[24:28]) != math.MaxUint32 {
+		return false
+	}
+	return types.DecodeFixed[uint16](bs[28:30]) == math.MaxUint16
+}
+
+func adjustBytes(bs []byte) {
+	for i := len(bs) - 1; i >= 0; i-- {
+		bs[i] += 1
+		if bs[i] != 0 {
+			break
+		}
+	}
+}
+
+func UpdateZM(zm *ZM, v []byte) {
+	t := zm.Type()
+	if types.IsString(t) {
+		if compute.CompareBytes(v, zm.GetMinBuf()) < 0 {
+			zm.updateMinString(v)
+		} else if compute.CompareBytes(v, zm.GetMaxBuf()) > 0 {
+			zm.updateMaxString(v)
+		}
+		return
+	}
+	if compute.Compare(v, zm.GetMinBuf(), t) < 0 {
+		zm.updateMinFixed(v)
+	} else if compute.Compare(v, zm.GetMaxBuf(), t) > 0 {
+		zm.updateMaxFixed(v)
+	}
+}
+
+func UpdateZMAny(zm *ZM, v any, typ types.Type) {
+	vv := types.EncodeValue(v, typ)
+	UpdateZM(zm, vv)
+}
+
+func EncodeZM(zm *ZM) []byte {
+	return *zm
+}
+
+func DecodeZM(buf []byte) ZM {
+	return buf[:ZMSize]
+}
