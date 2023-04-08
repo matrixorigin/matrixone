@@ -2139,6 +2139,14 @@ var (
 			output: "show table size from mo_role from mo_catalog",
 		},
 		{
+			input:  "show roles",
+			output: "show roles",
+		},
+		{
+			input:  "show roles like '%dafgda_'",
+			output: "show roles like %dafgda_",
+		},
+		{
 			input:  "create procedure test1 (in param1 int) 'test test'",
 			output: "create procedure test1 (in param1 int) 'test test'",
 		},
