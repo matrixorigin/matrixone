@@ -17,8 +17,8 @@ package pipeline
 import (
 	"bytes"
 
-    "github.com/matrixorigin/matrixone/pkg/testutil"
-    "github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -91,7 +91,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.Alloc(int64(bat.Size()))
 		}
 
-        logutil.Info(testutil.OperatorReceiveBatch("scan", bat))
+		logutil.Info(testutil.OperatorReceiveBatch("scan", bat))
 
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
