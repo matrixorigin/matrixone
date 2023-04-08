@@ -16,6 +16,8 @@ package projection
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -51,6 +53,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat.Length() == 0 {
 		return false, nil
 	}
+
+	logutil.Info(testutil.OperatorReceiveBatch("projection receive", bat))
+
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
@@ -80,6 +85,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)
+
+	logutil.Info(testutil.OperatorReceiveBatch("projection send", rbat))
+	
 	proc.SetInputBatch(rbat)
 	return false, nil
 }
