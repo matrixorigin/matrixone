@@ -293,6 +293,11 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 			}
 		}
 		if stopIdx != -1 {
+			if stopIdx+1 > len(w.sels) {
+				for i := len(w.sels); i < stopIdx+1; i++ {
+					w.sels = append(w.sels, int64(i))
+				}
+			}
 			w.buffer.SetZs(stopIdx+1, proc.GetMPool())
 			w.buffer.Shrink(w.sels[:stopIdx+1])
 		}
@@ -426,6 +431,11 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 		}
 	} else {
 		lastBatch := w.Bats[length-1]
+		if lastBatch.Length() > len(w.sels) {
+			for i := len(w.sels); i < lastBatch.Length(); i++ {
+				w.sels = append(w.sels, int64(i))
+			}
+		}
 		lastBatch.Shrink(w.sels[stopIdx+1 : lastBatch.Length()])
 		w.Bats = w.Bats[:0]
 		w.Bats = append(w.Bats, lastBatch)
