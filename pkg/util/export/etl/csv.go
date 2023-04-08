@@ -33,15 +33,15 @@ type CSVWriter struct {
 	ctx       context.Context
 	buf       *bytes.Buffer
 	writer    io.StringWriter
-	sqlWriter sqlWriter.BaseSqlWriter
+	sqlWriter sqlWriter.SqlWriter
 }
 
-func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter, sqlWriter *sqlWriter.BaseSqlWriter) *CSVWriter {
+func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter, sqlWriter sqlWriter.SqlWriter) *CSVWriter {
 	w := &CSVWriter{
 		ctx:       ctx,
 		buf:       buf,
 		writer:    writer,
-		sqlWriter: *sqlWriter,
+		sqlWriter: sqlWriter,
 	}
 	return w
 }
@@ -61,6 +61,16 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
+	// if sql writer is not setup, skip the sql writer
+	if w.sqlWriter == nil {
+		m, err := w.writer.WriteString(w.buf.String())
+		if err != nil {
+			return 0, err
+		}
+		w.writer = nil
+		w.buf = nil
+		return m, nil
+	}
 	// First write rows to sqlWriter, if not working, write to csv file
 	if n, err := w.sqlWriter.WriteRows(w.GetContent()); err != nil {
 		m, err := w.writer.WriteString(w.buf.String())

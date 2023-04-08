@@ -26,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
-
-	var extension = table.GetExtension(ext)
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) (factory table.WriterFactory) {
+	//Todo : Retire the TAEWriter and old configuration
+	var extension = table.CsvExtension
 	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
@@ -37,7 +37,13 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...), sqlWriter.NewSqlWriter(tbl, ctx))
+			if enableSqlWriter {
+				sw := sqlWriter.NewSqlWriter(tbl, ctx)
+				return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...), sw)
+			} else {
+				return etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...), nil)
+			}
+
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)

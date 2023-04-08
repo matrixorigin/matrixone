@@ -136,10 +136,10 @@ var (
 	defaultSessionTimeout = 24 * time.Hour
 
 	// defaultLogsExtension default: tae. Support val in [csv, tae]
-	defaultLogsExtension = "tae"
+	defaultLogsExtension = "csv"
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "tae"
+	defaultMergedExtension = "csv"
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
@@ -547,6 +547,9 @@ type ObservabilityParameters struct {
 
 	// MergedExtension default: tae. Support val in [csv, tae]
 	MergedExtension string `toml:"mergedExtension"`
+
+	// If disabled, the logs will be written to files stored in s3
+	EnableSqlWriter bool `toml:"enableSqlWriter"`
 
 	OBCollectorConfig
 }
