@@ -33,13 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
-const (
-	IdMask0 = 0xFF
-	IdMask1 = 0xFF00
-	IdMask2 = 0xFF0000
-	IdMask3 = 0xFF000000
-)
-
 type PartitionReader struct {
 	typsMap              map[string]types.Type
 	inserts              []*batch.Batch
@@ -58,10 +51,6 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-
-	// blockId and offsetId for CN block RowId
-	blockId  [2]byte
-	offsetId [4]byte
 }
 
 // BlockBatch is used to record the metaLoc info
@@ -166,23 +155,19 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			if hasRowId {
 				// add rowId col for rbat
-				len := rbat.Length()
+				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
-				p.blockId[0] = byte(p.blockBatch.idx & IdMask0)
-				p.blockId[1] = byte(p.blockBatch.idx & IdMask1 >> 8)
-				for i := 0; i < len; i++ {
-					p.offsetId[0] = byte(i & IdMask0)
-					p.offsetId[1] = byte(i & IdMask1 >> 8)
-					p.offsetId[2] = byte(i & IdMask2 >> 16)
-					p.offsetId[3] = byte(i & IdMask3 >> 24)
-					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(p.currentFileName, p.blockId, p.offsetId), false,
+				for i := 0; i < lens; i++ {
+					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(p.currentFileName, uint16(p.blockBatch.idx), uint32(i)), false,
 						p.procMPool); err != nil {
 						return rbat, err
 					}
 				}
 				rbat.Vecs = append(rbat.Vecs, vec)
-				blkid := vector.GetFixedAt[types.Rowid](vec, 0).GetBlockid()
-				deletes := colexec.Srv.GetCnBlockDeletes((&blkid).String())
+			}
+			blkid := generateBlkId(p.currentFileName, uint16(p.blockBatch.idx))
+			deletes := colexec.Srv.GetCnBlockDeletes((&blkid).String())
+			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
 			return rbat, nil
