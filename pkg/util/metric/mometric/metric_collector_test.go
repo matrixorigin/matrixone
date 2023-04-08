@@ -23,6 +23,7 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -169,7 +170,8 @@ func (w *dummyStringWriter) GetContent() string { return "" }
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
 	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
-		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w, nil)
+		sw := sqlWriter.NewSqlWriter(tbl, context.TODO())
+		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w, sw, false)
 		return w
 	})
 }

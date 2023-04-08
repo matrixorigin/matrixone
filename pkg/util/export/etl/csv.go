@@ -30,18 +30,20 @@ import (
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
-	ctx       context.Context
-	buf       *bytes.Buffer
-	writer    io.StringWriter
-	sqlWriter sqlWriter.SqlWriter
+	ctx             context.Context
+	buf             *bytes.Buffer
+	writer          io.StringWriter
+	sqlWriter       sqlWriter.SqlWriter
+	enableSqlWriter bool
 }
 
-func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter, sqlWriter sqlWriter.SqlWriter) *CSVWriter {
+func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter, sqlWriter sqlWriter.SqlWriter, enableSqlWriter bool) *CSVWriter {
 	w := &CSVWriter{
-		ctx:       ctx,
-		buf:       buf,
-		writer:    writer,
-		sqlWriter: sqlWriter,
+		ctx:             ctx,
+		buf:             buf,
+		writer:          writer,
+		sqlWriter:       sqlWriter,
+		enableSqlWriter: enableSqlWriter,
 	}
 	return w
 }
@@ -62,29 +64,29 @@ func (w *CSVWriter) GetContent() string {
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
 	// if sql writer is not setup, skip the sql writer
-	if w.sqlWriter == nil {
-		m, err := w.writer.WriteString(w.buf.String())
+	if w.enableSqlWriter {
+		n, err := w.sqlWriter.WriteRows(w.GetContent())
 		if err != nil {
-			return 0, err
+			m, err := w.writer.WriteString(w.buf.String())
+			if err != nil {
+				return 0, err
+			}
+			w.writer = nil
+			w.buf = nil
+			return m, nil
+		} else {
+			w.writer = nil
+			w.buf = nil
+			return n, nil
 		}
-		w.writer = nil
-		w.buf = nil
-		return m, nil
-	}
-	// First write rows to sqlWriter, if not working, write to csv file
-	if n, err := w.sqlWriter.WriteRows(w.GetContent()); err != nil {
-		m, err := w.writer.WriteString(w.buf.String())
-		if err != nil {
-			return 0, err
-		}
-		w.writer = nil
-		w.buf = nil
-		return m, nil
-
 	} else {
+		m, err := w.writer.WriteString(w.buf.String())
+		if err != nil {
+			return 0, err
+		}
 		w.writer = nil
 		w.buf = nil
-		return n, nil
+		return m, nil
 	}
 }
 
@@ -156,9 +158,9 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 }
 
 func WithFilePath(filepath string) FSWriterOption {
-	return FSWriterOption(func(w *FSWriter) {
+	return func(w *FSWriter) {
 		w.filepath = filepath
-	})
+	}
 }
 
 // Write implement io.Writer, Please execute in series

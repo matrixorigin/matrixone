@@ -292,7 +292,7 @@ var genFactory = func() table.WriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		buf := bytes.NewBuffer(nil)
 		sw := sqlWriter.NewSqlWriter(tbl, context.TODO())
-		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{}, sw)
+		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{}, sw, false)
 	}
 }
 
