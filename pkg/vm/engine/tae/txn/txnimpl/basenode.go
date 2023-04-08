@@ -15,9 +15,9 @@
 package txnimpl
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,12 +74,20 @@ type appendInfo struct {
 	seq              uint32
 	srcOff, srcLen   uint32
 	dbid             uint64
-	dest             *common.ID
+	dest             common.ID
 	destOff, destLen uint32
 }
 
+const (
+	AppendInfoSize int64 = int64(unsafe.Sizeof(appendInfo{}))
+)
+
+func EncodeAppendInfo(info *appendInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), AppendInfoSize)
+}
+
 func (info *appendInfo) GetDest() *common.ID {
-	return info.dest
+	return &info.dest
 }
 func (info *appendInfo) GetDBID() uint64 {
 	return info.dbid
@@ -105,66 +113,13 @@ func (info *appendInfo) String() string {
 	return s
 }
 func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, info.seq); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.srcOff); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.srcLen); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.dbid); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.dest.TableID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.dest.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.dest.BlockID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.destOff); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, info.destLen); err != nil {
-		return
-	}
-	n = 4 + 4 + 4 + 8 + 8 + 8 + 4 + 4
+	_, err = w.Write(EncodeAppendInfo(info))
+	n = AppendInfoSize
 	return
 }
 func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &info.seq); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.srcOff); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.srcLen); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.dbid); err != nil {
-		return
-	}
-	info.dest = &common.ID{}
-	if err = binary.Read(r, binary.BigEndian, &info.dest.TableID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.dest.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.dest.BlockID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.destOff); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &info.destLen); err != nil {
-		return
-	}
-	n = 4 + 4 + 4 + 8 + 8 + 8 + 4 + 4
+	_, err = r.Read(EncodeAppendInfo(info))
+	n = AppendInfoSize
 	return
 }
 
