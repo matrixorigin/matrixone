@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -105,11 +106,40 @@ func (zm ZM) Marshal() ([]byte, error) {
 	return buf, nil
 }
 
-func (zm ZM) ContainsAny(keys containers.Vector) (ok bool) {
+func (zm ZM) Unmarshal(buf []byte) (err error) {
+	copy(zm[:], buf[:ZMSize])
+	return
+}
+
+func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
+	visibility = roaring.New()
+	var op containers.ItOpT[[]byte]
+	if zm.IsString() {
+		op = func(key []byte, isNull bool, row int) (err error) {
+			if isNull || zm.ContainsString(key) {
+				visibility.AddInt(row)
+			}
+			return
+		}
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+	} else {
+		op = func(key []byte, isNull bool, row int) (err error) {
+			if isNull || zm.ContainsFixed(key) {
+				visibility.AddInt(row)
+			}
+			return
+		}
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+	}
+	ok = !visibility.IsEmpty()
+	return
+}
+
+func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if zm.ContainsString(key) {
+			if isNull || zm.ContainsString(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
@@ -118,7 +148,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (ok bool) {
 		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if zm.ContainsFixed(key) {
+			if isNull || zm.ContainsFixed(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
