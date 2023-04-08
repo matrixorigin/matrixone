@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -134,6 +136,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if err != nil {
 				return nil, err
 			}
+
+			logutil.Info(testutil.OperatorReceiveBatch("eng.reader.PartitionReader", bat))
+
 			rbat := bats[0]
 			for i, vec := range rbat.Vecs {
 				rbat.Vecs[i], err = vec.Dup(p.procMPool)
@@ -172,6 +177,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
+
+			logutil.Info(testutil.OperatorReceiveBatch("eng.reader.PartitionReader", bat))
+
 			return b, nil
 		}
 	}

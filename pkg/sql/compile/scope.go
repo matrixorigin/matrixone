@@ -195,6 +195,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
+	//FIXME::s.DataSource is nil if s is a "Merge" scope?
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
@@ -267,6 +268,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
+	//newScope.magic is "Merge".
 	newScope := newParallelScope(c, s, ss)
 	return newScope.MergeRun(c)
 }

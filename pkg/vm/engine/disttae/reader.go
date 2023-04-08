@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -85,6 +87,8 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 		return nil, err
 	}
 
+	logutil.Info(testutil.OperatorReceiveBatch("eng.reader.BlockReader", bat))
+
 	// if it's not sorted, just return
 	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
@@ -150,6 +154,9 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 	if err != nil {
 		return nil, err
 	}
+
+	logutil.Info(testutil.OperatorReceiveBatch("eng.reader.BlockMergeReader", bat))
+
 	r.sels = r.sels[:0]
 	deletes := make([]int, len(r.blks[0].deletes))
 	copy(deletes, r.blks[0].deletes)

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -228,6 +229,9 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if err != nil {
 			return err
 		}
+
+		logutil.Info(testutil.OperatorReceiveBatch("network.ReceiveResponse", bat))
+
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
 		// XXX maybe we can use dataBuffer = dataBuffer[:0] to do memory reuse.

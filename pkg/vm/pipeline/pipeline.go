@@ -91,7 +91,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a.Alloc(int64(bat.Size()))
 		}
 
-		logutil.Info(testutil.OperatorReceiveBatch("scan", bat))
+		logutil.Info(testutil.OperatorReceiveBatch("eng.reader", bat))
 
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
