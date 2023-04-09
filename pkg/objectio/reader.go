@@ -110,6 +110,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 				block := &Block{
 					id:     uint32(i),
 					extent: extent,
+					object: r.object,
 					name:   r.name,
 				}
 				cache := blkMeta[size:]
@@ -175,12 +176,12 @@ func (r *ObjectReader) Read(ctx context.Context,
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {
-			col := meta.BlkMetas[id].(*Block).columns[idx]
+			col := meta.BlkMetas[id].(*Block).meta.ColumnMeta(idx)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.GetMeta().Location().Offset()),
-				Size:   int64(col.GetMeta().Location().Length()),
+				Offset: int64(col.Location().Offset()),
+				Size:   int64(col.Location().Length()),
 
-				ToObject: readFunc(int64(col.GetMeta().Location().OriginSize())),
+				ToObject: readFunc(int64(col.Location().OriginSize())),
 			})
 		}
 	}
@@ -207,12 +208,12 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	}
 	for _, block := range ids {
 		for idx := range block.Idxes {
-			col := blocks[block.Id].(*Block).columns[idx]
+			col := blocks[block.Id].(*Block).meta.ColumnMeta(idx)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.GetMeta().Location().Offset()),
-				Size:   int64(col.GetMeta().Location().Length()),
+				Offset: int64(col.Location().Offset()),
+				Size:   int64(col.Location().Length()),
 
-				ToObject: readFunc(int64(col.GetMeta().Location().OriginSize())),
+				ToObject: readFunc(int64(col.Location().OriginSize())),
 			})
 		}
 	}

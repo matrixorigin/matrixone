@@ -25,9 +25,6 @@ type Block struct {
 	// id is the serial number of the block in the object
 	id uint32
 
-	// columns is the vector in the batch
-	columns []*ColumnBlock
-
 	// extent is the location of the block's metadata on the fileservice
 	extent Extent
 
@@ -63,11 +60,11 @@ func (b *Block) GetName() ObjectName {
 }
 
 func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
-	if idx >= uint16(len(b.columns)) {
+	if idx >= b.meta.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %v, column count: %d",
 			idx, b.name,
-			len(b.columns))
+			b.meta.BlockHeader().ColumnCount())
 	}
 	return NewColumnBlock(b.meta.ColumnMeta(idx), b.object), nil
 }
@@ -85,7 +82,7 @@ func (b *Block) GetID() uint32 {
 }
 
 func (b *Block) GetColumnCount() uint16 {
-	return b.meta.BlockHeaderNew().ColumnCount()
+	return b.meta.BlockHeader().ColumnCount()
 }
 
 func (b *Block) MarshalMeta() []byte {

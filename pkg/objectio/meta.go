@@ -129,7 +129,7 @@ func GetBlockMeta(id uint32, data []byte) BlockMeta {
 	return data[metaOff : metaOff+headerLen+uint32(columnCount)*colMetaLen]
 }
 
-func (bm BlockMeta) BlockHeaderNew() BlockHeader {
+func (bm BlockMeta) BlockHeader() BlockHeader {
 	return BlockHeader(bm[:headerLen])
 }
 
@@ -144,6 +144,13 @@ func (bm BlockMeta) ColumnMeta(idx uint16) ColumnMeta {
 func (bm BlockMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + idx*colMetaLen
 	copy(bm[offset:offset+colMetaLen], col)
+}
+
+func (bm BlockMeta) IsEmpty() bool {
+	if len(bm) == 0 {
+		return true
+	}
+	return false
 }
 
 type BlockHeader []byte
@@ -183,6 +190,13 @@ func (bh BlockHeader) ColumnCount() uint16 {
 
 func (bh BlockHeader) SetColumnCount(count uint16) {
 	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
+}
+
+func (bh BlockHeader) IsEmpty() bool {
+	if len(bh) == 0 {
+		return true
+	}
+	return false
 }
 
 // +---------------------------------------------------------------------------------------------------------------+
@@ -294,6 +308,13 @@ func (cm ColumnMeta) setBloomFilter(location Extent) {
 
 func (cm ColumnMeta) Checksum() uint32 {
 	return types.DecodeUint32(cm[colMetaChecksumOff : colMetaChecksumOff+colMetaChecksumLen])
+}
+
+func (cm ColumnMeta) IsEmpty() bool {
+	if len(cm) == 0 {
+		return true
+	}
+	return false
 }
 
 type Header struct {

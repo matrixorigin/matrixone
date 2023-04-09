@@ -52,7 +52,7 @@ func (z *ZoneMap) GetIdx() uint16 {
 }
 
 func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) error {
-	block.columns[idx].meta.setZoneMap(*z)
+	block.meta.ColumnMeta(idx).setZoneMap(*z)
 	return nil
 }
 
@@ -97,6 +97,6 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block, idx uint16) erro
 		length:     uint32(length),
 		originSize: uint32(dataLen),
 	}
-	block.columns[idx].meta.setBloomFilter(extent)
+	block.meta.ColumnMeta(idx).setBloomFilter(extent)
 	return err
 }

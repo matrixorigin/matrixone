@@ -66,7 +66,7 @@ func (writer *ZMWriter) Finalize() error {
 	if err != nil {
 		return err
 	}
-	err = appender.WriteIndex(writer.block, zonemap)
+	err = appender.WriteIndex(writer.block, zonemap, writer.colIdx)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (writer *BFWriter) Finalize() error {
 	}
 	bf := objectio.NewBloomFilter(uint8(writer.cType), iBuf)
 
-	err = appender.WriteIndex(writer.block, bf)
+	err = appender.WriteIndex(writer.block, bf, writer.colIdx)
 	if err != nil {
 		return err
 	}

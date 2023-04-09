@@ -82,16 +82,16 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
 		buf := fmt.Sprintf("test index %d", i)
-		index := NewBloomFilter(uint16(i), 0, []byte(buf))
-		err = objectWriter.WriteIndex(fd, index)
+		index := NewBloomFilter(0, []byte(buf))
+		err = objectWriter.WriteIndex(fd, index, uint16(i))
 		assert.Nil(t, err)
 
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		index, err = NewZoneMap(uint16(i), zbuf)
+		index, err = NewZoneMap(zbuf)
 		assert.Nil(t, err)
-		err = objectWriter.WriteIndex(fd, index)
+		err = objectWriter.WriteIndex(fd, index, uint16(i))
 		assert.Nil(t, err)
 	}
 	_, err = objectWriter.Write(bat)
@@ -134,7 +134,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	index, err := blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
 	assert.Nil(t, err)
-	buf := index.(*ZoneMap).data.([]byte)
+	buf := index.(*ZoneMap).data
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
@@ -170,7 +170,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	index, err = blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
 	assert.Nil(t, err)
-	buf = index.(*ZoneMap).data.([]byte)
+	buf = index.(*ZoneMap).data
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
@@ -203,16 +203,16 @@ func TestNewObjectReader(t *testing.T) {
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
 		buf := fmt.Sprintf("test index %d", i)
-		index := NewBloomFilter(uint16(i), 0, []byte(buf))
-		err = objectWriter.WriteIndex(fd, index)
+		index := NewBloomFilter(0, []byte(buf))
+		err = objectWriter.WriteIndex(fd, index, uint16(i))
 		assert.Nil(t, err)
 
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		index, err = NewZoneMap(uint16(i), zbuf)
+		index, err = NewZoneMap(zbuf)
 		assert.Nil(t, err)
-		err = objectWriter.WriteIndex(fd, index)
+		err = objectWriter.WriteIndex(fd, index, uint16(i))
 		assert.Nil(t, err)
 	}
 	_, err = objectWriter.Write(bat)

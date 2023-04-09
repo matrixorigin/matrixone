@@ -50,7 +50,7 @@ type Writer interface {
 	// block is the handle of the block
 	// idx is the column to which the index is written
 	// buf is the data to write to the index
-	WriteIndex(block BlockObject, index IndexData) error
+	WriteIndex(fd BlockObject, index IndexData, idx uint16) error
 
 	// Write metadata for every column of all blocks
 	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)

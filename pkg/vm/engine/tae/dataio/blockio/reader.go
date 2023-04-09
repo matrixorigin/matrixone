@@ -226,7 +226,7 @@ func (r *BlockReader) LoadZoneMap(
 		}
 		data := zm.(*objectio.ZoneMap).GetData()
 
-		zoneMapList[i] = data.(dataio.Index)
+		zoneMapList[i] = index.DecodeZM(data.([]byte))
 	}
 
 	return zoneMapList, nil

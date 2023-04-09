@@ -114,14 +114,14 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
-func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
+func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData, idx uint16) error {
 	var err error
 
 	block := w.GetBlock(fd.GetID())
-	if block == nil || block.columns[index.GetIdx()] == nil {
+	if block == nil || block.meta.ColumnMeta(idx).IsEmpty() {
 		return moerr.NewInternalErrorNoCtx("object io: not found")
 	}
-	err = index.Write(w, block, 0)
+	err = index.Write(w, block, idx)
 	return err
 }
 

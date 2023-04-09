@@ -68,7 +68,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	objectSize := uint32(0)
 	for _, block := range blocks {
 		meta := block.GetMeta()
-		count := meta.BlockHeaderNew().ColumnCount()
+		count := meta.BlockHeader().ColumnCount()
 		for i := 0; i < int(count); i++ {
 			col, err := block.GetColumn(uint16(i))
 			if err != nil {
