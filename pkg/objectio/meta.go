@@ -17,55 +17,83 @@ package objectio
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"io"
 )
 
-const HeaderSize = 64
 const ExtentSize = 16
 
 const ObjectColumnMetaSize = 72
 const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
 
-type ObjectMeta struct {
-	Rows     uint32             // total rows
-	ColMetas []ObjectColumnMeta // meta for every column of all blocks
-	BlkMetas []BlockObject      // meta for every block
+type ObjectMeta []byte
+
+func BuildObjectMeta(count uint16) ObjectMeta {
+	length := headerLen + uint32(count)*objectColumnMetaLen
+	buf := make([]byte, length)
+	return buf[:]
 }
 
-// 4 + 4 + 64 = 72 bytes
-type ObjectColumnMeta struct {
-	Ndv     uint32
-	NullCnt uint32
-	Zonemap ZoneMap
+func (o ObjectMeta) BlockHeader() BlockHeader {
+	return BlockHeader(o[:headerLen])
 }
 
-func (meta *ObjectColumnMeta) Write(w io.Writer) (err error) {
-	if _, err = w.Write(types.EncodeUint32(&meta.Ndv)); err != nil {
-		return
-	}
-	if _, err = w.Write(types.EncodeUint32(&meta.NullCnt)); err != nil {
-		return
-	}
-
-	var zm []byte
-	if meta.Zonemap == nil {
-		var buf [ZoneMapSize]byte
-		zm = buf[:]
-	} else {
-		zm = meta.Zonemap
-	}
-	if _, err = w.Write(zm); err != nil {
-		return
-	}
-	return
+func (o ObjectMeta) ObjectColumnMeta(idx uint16) ObjectColumnMeta {
+	return GetObjectColumnMeta(idx, o)
 }
 
-func (meta *ObjectColumnMeta) Read(bs []byte) (err error) {
-	meta.Ndv = types.DecodeUint32(bs)
-	meta.NullCnt = types.DecodeUint32(bs[4:])
-	bs = bs[8:]
-	meta.Zonemap = bs[:64]
-	return
+func (o ObjectMeta) Length() uint32 {
+	return headerLen + uint32(o.BlockHeader().ColumnCount())*objectColumnMetaLen
+}
+
+func (o ObjectMeta) ObjectNext() []byte {
+	return o[o.Length():]
+}
+
+const (
+	blockCountLen = 4
+)
+
+type ObjectHeader []byte
+
+func (oh ObjectHeader) BlockCount() uint32 {
+	return types.DecodeUint32(oh[:blockCountLen])
+}
+
+func (oh ObjectHeader) Length() uint32 {
+	return blockCountLen
+}
+
+const (
+	ndvLen              = 4
+	nullCntOff          = ndvLen
+	nullCntLen          = 4
+	oZoneMapOff         = nullCntOff + nullCntLen
+	oZoneMapLen         = 64
+	objectColumnMetaLen = oZoneMapOff + oZoneMapLen
+)
+
+// ObjectColumnMeta len 4 + 4 + 64 = 72 bytes
+type ObjectColumnMeta []byte
+
+func GetObjectColumnMeta(idx uint16, data []byte) ObjectColumnMeta {
+	offset := RowsLen + uint32(idx)*objectColumnMetaLen
+	return data[offset : offset+objectColumnMetaLen]
+}
+
+func BuildObjectColumnMeta() ObjectColumnMeta {
+	var buf [objectColumnMetaLen]byte
+	return buf[:]
+}
+
+func (om ObjectColumnMeta) Ndv() uint32 {
+	return types.DecodeUint32(om[:ndvLen])
+}
+
+func (om ObjectColumnMeta) NullCnt() uint32 {
+	return types.DecodeUint32(om[nullCntOff : nullCntOff+nullCntLen])
+}
+
+func (om ObjectColumnMeta) ZoneMap() ZoneMap {
+	return ZoneMap(om[oZoneMapOff : oZoneMapOff+oZoneMapLen])
 }
 
 // +---------------------------------------------------------------------------------------------+
@@ -95,7 +123,9 @@ const (
 	segmentIDLen      = 8
 	blockIDOff        = segmentIDOff + segmentIDLen
 	blockIDLen        = 8
-	columnCountOff    = blockIDOff + blockIDLen
+	rowsOff           = blockIDOff + blockIDLen
+	rowsLen           = 4
+	columnCountOff    = rowsOff + rowsLen
 	columnCountLen    = 2
 	headerDummyOff    = columnCountOff + columnCountLen
 	headerDummyLen    = 34
@@ -182,6 +212,14 @@ func (bh BlockHeader) BlockID() uint64 {
 
 func (bh BlockHeader) SetBlockID(id uint64) {
 	copy(bh[blockIDOff:blockIDOff+blockIDLen], types.EncodeUint64(&id))
+}
+
+func (bh BlockHeader) Rows() uint32 {
+	return types.DecodeUint32(bh[rowsOff : rowsOff+rowsLen])
+}
+
+func (bh BlockHeader) SetRows(rows uint32) {
+	copy(bh[rowsOff:rowsOff+rowsLen], types.EncodeUint32(&rows))
 }
 
 func (bh BlockHeader) ColumnCount() uint16 {

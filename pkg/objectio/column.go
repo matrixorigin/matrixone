@@ -20,70 +20,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-// ColumnBlock is the organizational structure of a vector in objectio
-// One batch can be written at a time, and a batch can contain multiple vectors.
-// It is a child of the block
-type ColumnBlock struct {
-	// meta is the metadata of the ColumnBlock,
-	// such as index, data location, compression algorithm...
-	meta ColumnMeta
-
-	// object is the block.object
-	object *Object
-}
-
-func NewColumnBlock(meta ColumnMeta, object *Object) *ColumnBlock {
-	col := &ColumnBlock{
-		object: object,
-		meta:   meta,
-	}
-	return col
-}
-
-func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error) {
-	var err error
+func (cb ColumnMeta) GetIndex(ctx context.Context, object *Object, readFunc ReadObjectFunc, m *mpool.MPool) (*BloomFilter, error) {
 	data := &fileservice.IOVector{
-		FilePath: cb.object.name,
+		FilePath: object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	data.Entries[0] = fileservice.IOEntry{
-		Offset: int64(cb.meta.Location().Offset()),
-		Size:   int64(cb.meta.Location().Length()),
-	}
-	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.Location().OriginSize()))
-	err = cb.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (*BloomFilter, error) {
-	data := &fileservice.IOVector{
-		FilePath: cb.object.name,
-		Entries:  make([]fileservice.IOEntry, 1),
-	}
-	data.Entries[0] = fileservice.IOEntry{
-		Offset: int64(cb.meta.BloomFilter().Offset()),
-		Size:   int64(cb.meta.BloomFilter().Length()),
+		Offset: int64(cb.BloomFilter().Offset()),
+		Size:   int64(cb.BloomFilter().Length()),
 	}
 	var err error
-	data.Entries[0].ToObject = readFunc(int64(cb.meta.BloomFilter().OriginSize()))
-	err = cb.object.fs.Read(ctx, data)
+	data.Entries[0].ToObject = readFunc(int64(cb.BloomFilter().OriginSize()))
+	err = object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
 	}
 	return NewBloomFilter(0, data.Entries[0].Object), nil
 }
 
-func (cb *ColumnBlock) GetMeta() ColumnMeta {
-	return cb.meta
+func (cb ColumnMeta) GetMeta() ColumnMeta {
+	return cb
 }
 
-func (cb *ColumnBlock) MarshalMeta() []byte {
-	return cb.meta
+func (cb ColumnMeta) MarshalMeta() []byte {
+	return cb
 }
 
-func (cb *ColumnBlock) UnmarshalMate(data []byte) error {
+func (cb ColumnMeta) UnmarshalMate(data []byte) error {
 	return nil
 }

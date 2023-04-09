@@ -18,22 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// Block is the organizational structure of a batch in objectio
-// Write one batch at a time, and batch and block correspond one-to-one
-type Block struct {
-	meta BlockMeta
-	// id is the serial number of the block in the object
-	id uint32
-
-	// extent is the location of the block's metadata on the fileservice
-	extent Extent
-
-	object *Object
-	// name is the file name or object name of the block
-	name ObjectName
-}
-
-func NewBlock(colCnt uint16, object *Object, name ObjectName) BlockObject {
+func NewBlock(colCnt uint16) BlockMeta {
 	header := BuildBlockHeader()
 	header.SetColumnCount(colCnt)
 	blockMeta := BuildBlockMeta(colCnt)
@@ -43,56 +28,51 @@ func NewBlock(colCnt uint16, object *Object, name ObjectName) BlockObject {
 		col.setIdx(i)
 		blockMeta.AddColumnMeta(i, col)
 	}
-	block := &Block{
-		meta:   blockMeta,
-		object: object,
-		name:   name,
-	}
-	return block
+	return blockMeta
 }
 
-func (b *Block) GetExtent() Extent {
-	return b.extent
+func (bm BlockMeta) GetExtent() Extent {
+	return Extent{}
 }
 
-func (b *Block) GetName() ObjectName {
-	return b.name
+func (bm BlockMeta) GetName() ObjectName {
+	return ObjectName{}
 }
 
-func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
-	if idx >= b.meta.BlockHeader().ColumnCount() {
+func (bm BlockMeta) GetColumn(idx uint16) (ColumnMeta, error) {
+	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %v, column count: %d",
-			idx, b.name,
-			b.meta.BlockHeader().ColumnCount())
+			idx, bm.GetName().String(),
+			bm.BlockHeader().ColumnCount())
 	}
-	return NewColumnBlock(b.meta.ColumnMeta(idx), b.object), nil
+	return bm.ColumnMeta(idx), nil
 }
 
-func (b *Block) GetRows() (uint32, error) {
+func (bm BlockMeta) GetRows() (uint32, error) {
 	panic(any("implement me"))
 }
 
-func (b *Block) GetMeta() BlockMeta {
-	return b.meta
+func (bm BlockMeta) GetMeta() BlockMeta {
+	return bm
 }
 
-func (b *Block) GetID() uint32 {
-	return b.id
+func (bm BlockMeta) GetID() uint32 {
+	return uint32(bm.BlockHeader().BlockID())
 }
 
-func (b *Block) GetColumnCount() uint16 {
-	return b.meta.BlockHeader().ColumnCount()
+func (bm BlockMeta) GetColumnCount() uint16 {
+	return bm.BlockHeader().ColumnCount()
 }
 
-func (b *Block) MarshalMeta() []byte {
-	return b.meta
+func (bm BlockMeta) MarshalMeta() []byte {
+	return bm
 }
 
-func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
+func (bm BlockMeta) UnmarshalMeta(data []byte) (uint32, error) {
 	var err error
 	header := BlockHeader(data[:headerLen])
 	metaLen := headerLen + header.ColumnCount()*colMetaLen
-	b.meta = data[:metaLen]
+	bm = data[:metaLen]
 	return uint32(metaLen), err
 }

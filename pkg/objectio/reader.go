@@ -18,9 +18,6 @@ import (
 	"context"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 
@@ -59,7 +56,7 @@ func NewObjectReader(name ObjectName, fs fileservice.FileService, opts ...Reader
 }
 
 func (r *ObjectReader) ReadMeta(ctx context.Context,
-	extents []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (*ObjectMeta, error) {
+	extents []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error) {
 	l := len(extents)
 	if l == 0 {
 		return nil, nil
@@ -83,8 +80,9 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 					return nil, 0, err
 				}
 			}
-
-			meta := &ObjectMeta{}
+			/*meta := ObjectMeta(data)
+			data = data[meta.Length():]
+			header := ObjectHeader(data)
 
 			meta.Rows = types.DecodeUint32(data[:4])
 			blkMetaSize := types.DecodeUint32(data[4:8])
@@ -140,9 +138,9 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 				cols = append(cols, col)
 			}
 
-			meta.ColMetas = cols
+			meta.ColMetas = cols*/
 
-			return meta, int64(len(data)), nil
+			return data, int64(len(data)), nil
 		},
 	}
 
@@ -151,7 +149,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 		return nil, err
 	}
 
-	meta := metas.Entries[0].Object.(*ObjectMeta)
+	meta := metas.Entries[0].Object.(ObjectMeta)
 	return meta, err
 }
 
@@ -163,8 +161,11 @@ func (r *ObjectReader) Read(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	metadata := meta.ObjectNext()
+	header := ObjectHeader(metadata)
+	metadata = metadata[header.Length():]
 	if len(ids) == 0 {
-		ids = make([]uint32, len(meta.BlkMetas))
+		ids = make([]uint32, header.BlockCount())
 		for i := range ids {
 			ids[i] = uint32(i)
 		}
@@ -176,7 +177,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {
-			col := meta.BlkMetas[id].(*Block).meta.ColumnMeta(idx)
+			col := GetBlockMeta(id, metadata).ColumnMeta(idx)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -198,17 +199,19 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	zoneMapFunc ZoneMapUnmarshalFunc,
 	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
 	meta, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
-	blocks := meta.BlkMetas
 	if err != nil {
 		return nil, err
 	}
+	metadata := meta.ObjectNext()
+	header := ObjectHeader(metadata)
+	metadata = metadata[header.Length():]
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, block := range ids {
 		for idx := range block.Idxes {
-			col := blocks[block.Id].(*Block).meta.ColumnMeta(idx)
+			col := GetBlockMeta(block.Id, metadata).ColumnMeta(idx)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -226,7 +229,7 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 }
 
 func (r *ObjectReader) ReadAllMeta(ctx context.Context,
-	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (*ObjectMeta, error) {
+	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error) {
 	footer, err := r.readFooter(ctx, fileSize, m)
 	if err != nil {
 		return nil, err

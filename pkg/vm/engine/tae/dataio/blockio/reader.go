@@ -121,22 +121,25 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	blocks := meta.BlkMetas
-	if blocks[0].GetExtent().End() == 0 {
+	metadata := meta.ObjectNext()
+	header := objectio.ObjectHeader(metadata)
+	metadata = metadata[header.Length():]
+	block := objectio.GetBlockMeta(0, metadata)
+	if block.GetExtent().End() == 0 {
 		return nil, nil
 	}
 	if len(idxs) == 0 {
-		idxs = make([]uint16, blocks[0].GetColumnCount())
+		idxs = make([]uint16, block.GetColumnCount())
 		for i := range idxs {
 			idxs[i] = uint16(i)
 		}
 	}
 	bats := make([]*batch.Batch, 0)
-	ioVectors, err := r.reader.Read(ctx, blocks[0].GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
+	ioVectors, err := r.reader.Read(ctx, block.GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
-	for y := range blocks {
+	for y := 0; y < int(header.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
 			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
