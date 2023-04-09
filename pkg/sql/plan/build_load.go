@@ -39,7 +39,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -67,12 +67,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.Children = []int32{1}
 
 	for i := 0; i < len(tableDef.Cols); i++ {
-		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+		idx := int32(i)
+		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
 		tmp := &plan.Expr{
 			Typ: tableDef.Cols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					ColPos: int32(i),
+					ColPos: idx,
 					Name:   tblName + "." + tableDef.Cols[i].Name,
 				},
 			},
@@ -80,7 +81,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		node1.ProjectList = append(node1.ProjectList, tmp)
 		// node3.ProjectList = append(node3.ProjectList, tmp)
 	}
-	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
+	if err := getProjectNode(stmt, ctx, node2, tableDef); err != nil {
 		return nil, err
 	}
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -153,16 +154,8 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) error {
 	return nil
 }
 
-func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32) error {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) error {
 	tblName := string(stmt.Table.ObjectName)
-	dbName := string(stmt.Table.SchemaName)
-	_, tableDef := ctx.Resolve(dbName, tblName)
-	if tableDef == nil {
-		return moerr.NewInternalError(ctx.GetContext(), "invalid table name: %s", string(stmt.Table.ObjectName))
-	}
-	if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
-		return moerr.NewInternalError(ctx.GetContext(), "the load data column list is larger than table column")
-	}
 	colToIndex := make(map[int32]string, 0)
 	if len(stmt.Param.Tail.ColumnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -172,7 +165,7 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 		for i, col := range stmt.Param.Tail.ColumnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
-				if _, ok := Name2ColIndex[realCol.Parts[0]]; !ok {
+				if _, ok := tableDef.Name2ColIndex[realCol.Parts[0]]; !ok {
 					return moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
@@ -199,7 +192,7 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	}
 	for i := 0; i < len(tableDef.Cols); i++ {
 		if v, ok := colToIndex[int32(i)]; ok {
-			node.ProjectList[Name2ColIndex[v]] = projectVec[i]
+			node.ProjectList[tableDef.Name2ColIndex[v]] = projectVec[i]
 		}
 	}
 	var tmp *plan.Expr

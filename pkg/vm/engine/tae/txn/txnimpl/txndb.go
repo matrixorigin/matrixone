@@ -577,3 +577,9 @@ func (db *txnDB) PrepareRollback() error {
 
 	return err
 }
+
+func (db *txnDB) CleanUp() {
+	for _, tbl := range db.tables {
+		tbl.CleanUp()
+	}
+}
