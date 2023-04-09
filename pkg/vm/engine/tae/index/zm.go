@@ -92,11 +92,13 @@ func (zm ZM) SetType(t types.T) {
 }
 
 func (zm ZM) GetMin() any {
-	return zm.getValue(true)
+	buf := zm.GetMinBuf()
+	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMax() any {
-	return zm.getValue(false)
+	buf := zm.GetMaxBuf()
+	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMinBuf() []byte {
@@ -239,61 +241,55 @@ func (zm ZM) setInited() {
 	zm[62] |= 0x80
 }
 
-func (zm ZM) getValue(min bool) any {
-	offset := 0
-	if !min {
-		offset = 31
-	}
+func (zm ZM) getValue(buf []byte) any {
 	switch types.T(zm[63]) {
 	case types.T_bool:
-		return types.DecodeFixed[bool](zm[offset : offset+1])
+		return types.DecodeFixed[bool](buf)
 	case types.T_int8:
-		return types.DecodeFixed[int8](zm[offset : offset+1])
+		return types.DecodeFixed[int8](buf)
 	case types.T_int16:
-		return types.DecodeFixed[int16](zm[offset : offset+2])
+		return types.DecodeFixed[int16](buf)
 	case types.T_int32:
-		return types.DecodeFixed[int32](zm[offset : offset+4])
+		return types.DecodeFixed[int32](buf)
 	case types.T_int64:
-		return types.DecodeFixed[int64](zm[offset : offset+8])
+		return types.DecodeFixed[int64](buf)
 	case types.T_uint8:
-		return types.DecodeFixed[uint8](zm[offset : offset+1])
+		return types.DecodeFixed[uint8](buf)
 	case types.T_uint16:
-		return types.DecodeFixed[uint16](zm[offset : offset+2])
+		return types.DecodeFixed[uint16](buf)
 	case types.T_uint32:
-		return types.DecodeFixed[uint32](zm[offset : offset+4])
+		return types.DecodeFixed[uint32](buf)
 	case types.T_uint64:
-		return types.DecodeFixed[uint64](zm[offset : offset+8])
+		return types.DecodeFixed[uint64](buf)
 	case types.T_float32:
-		return types.DecodeFixed[float32](zm[offset : offset+4])
+		return types.DecodeFixed[float32](buf)
 	case types.T_float64:
-		return types.DecodeFixed[float64](zm[offset : offset+8])
+		return types.DecodeFixed[float64](buf)
 	case types.T_date:
-		return types.DecodeFixed[types.Date](zm[offset : offset+types.DateSize])
+		return types.DecodeFixed[types.Date](buf)
 	case types.T_time:
-		return types.DecodeFixed[types.Time](zm[offset : offset+types.TimeSize])
+		return types.DecodeFixed[types.Time](buf)
 	case types.T_datetime:
-		return types.DecodeFixed[types.Datetime](zm[offset : offset+types.DatetimeSize])
+		return types.DecodeFixed[types.Datetime](buf)
 	case types.T_timestamp:
-		return types.DecodeFixed[types.Timestamp](zm[offset : offset+types.TimestampSize])
+		return types.DecodeFixed[types.Timestamp](buf)
 	case types.T_decimal64:
-		return types.DecodeFixed[types.Decimal64](zm[offset : offset+types.Decimal64Size])
+		return types.DecodeFixed[types.Decimal64](buf)
 	case types.T_decimal128:
-		return types.DecodeFixed[types.Decimal128](zm[offset : offset+types.Decimal128Size])
+		return types.DecodeFixed[types.Decimal128](buf)
 	case types.T_uuid:
-		return types.DecodeFixed[types.Uuid](zm[offset : offset+types.UuidSize])
+		return types.DecodeFixed[types.Uuid](buf)
 	case types.T_TS:
-		return types.DecodeFixed[types.TS](zm[offset : offset+types.TxnTsSize])
+		return types.DecodeFixed[types.TS](buf)
 	case types.T_Rowid:
-		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.RowidSize])
+		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_Blockid:
-		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.BlockidSize])
+		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		length := int(zm[offset+30] & 0x01f)
-		return []byte(zm)[offset : offset+length]
-	default:
-		panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
+		return buf
 	}
+	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
 
 func (zm ZM) updateMinString(v []byte) {

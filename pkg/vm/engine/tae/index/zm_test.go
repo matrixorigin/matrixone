@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,4 +78,49 @@ func TestZM(t *testing.T) {
 	require.Equal(t, zm2.GetMinBuf(), zm3.GetMinBuf())
 	require.Equal(t, zm2.GetMaxBuf(), zm3.GetMaxBuf())
 	require.True(t, zm3.MaxTruncated())
+}
+
+func BenchmarkZM(b *testing.B) {
+	vec := containers.MockVector(types.T_char.ToType(), 10000, true, nil)
+	defer vec.Close()
+	var bs [][]byte
+	for i := 0; i < vec.Length(); i++ {
+		bs = append(bs, vec.Get(i).([]byte))
+	}
+
+	zm := NewZM(vec.GetType().Oid)
+	b.Run("build-bytes-zm", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			UpdateZM(zm, bs[i%vec.Length()])
+		}
+	})
+	b.Run("get-bytes-zm", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			zm.GetMin()
+		}
+	})
+
+	vec = containers.MockVector(types.T_float64.ToType(), 10000, true, nil)
+	defer vec.Close()
+	var vs []float64
+	for i := 0; i < vec.Length(); i++ {
+		vs = append(vs, vec.Get(i).(float64))
+	}
+
+	zm = NewZM(vec.GetType().Oid)
+	b.Run("build-f64-zm", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			k := types.EncodeFloat64(&vs[i%vec.Length()])
+			UpdateZM(zm, k)
+		}
+	})
+	b.Run("get-f64-zm", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			zm.GetMax()
+		}
+	})
 }
