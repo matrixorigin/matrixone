@@ -173,6 +173,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
 		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+		//FIXME::s.magic maybe equal "Remote",while s.IsRemote maybe equal false.
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
