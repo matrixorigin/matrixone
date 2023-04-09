@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -144,6 +146,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
+
+			logutil.Info(testutil.OperatorReceiveBatch("partition_reader_1", rbat))
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
@@ -172,6 +176,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
+
+			logutil.Info(testutil.OperatorReceiveBatch("partition_reader_2", b))
 			return b, nil
 		}
 	}
@@ -230,5 +236,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if rows == 0 {
 		return nil, nil
 	}
+	logutil.Info(testutil.OperatorReceiveBatch("partition_reader_3", b))
 	return b, nil
 }

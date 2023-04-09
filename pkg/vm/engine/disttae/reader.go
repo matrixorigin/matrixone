@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -103,6 +105,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 			bat.Shrink([]int64{int64(row)})
 		}
 	}
+
+	logutil.Info(testutil.OperatorReceiveBatch("block_reader", bat))
+
 	return bat, nil
 }
 
@@ -162,6 +167,8 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 		r.sels = append(r.sels, int64(i))
 	}
 	bat.Shrink(r.sels)
+
+	logutil.Info(testutil.OperatorReceiveBatch("block_merge_reader", bat))
 	return bat, nil
 }
 
@@ -177,7 +184,10 @@ func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, 
 		bat, err := r.rds[0].Read(ctx, cols, expr, m)
 		if err != nil {
 			for _, rd := range r.rds {
-				rd.Close()
+				err = rd.Close()
+				if err != nil {
+					return nil, err
+				}
 			}
 			return nil, err
 		}
@@ -185,6 +195,7 @@ func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, 
 			r.rds = r.rds[1:]
 		}
 		if bat != nil {
+			logutil.Info(testutil.OperatorReceiveBatch("merge_reader", bat))
 			return bat, nil
 		}
 	}
