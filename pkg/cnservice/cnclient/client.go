@@ -45,6 +45,10 @@ func AcquireMessage() *pipeline.Message {
 	return client.acquireMessage().(*pipeline.Message)
 }
 
+func GetRPCClient() morpc.RPCClient {
+	return client.client
+}
+
 func IsCNClientReady() bool {
 	return client != nil && client.ready
 }
