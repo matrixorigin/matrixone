@@ -105,18 +105,18 @@ func (be *MVCCSlice[T]) SearchNode(o T) (node T) {
 	return
 }
 
-func (be *MVCCSlice[T]) GetVisibleNode(ts types.TS) (node T) {
-	length := len(be.MVCC)
-	for i := length - 1; i >= 0; i-- {
-		un := be.MVCC[i]
-		var visible bool
-		if visible = un.IsVisible(ts); visible {
-			node = un
-			break
-		}
-	}
-	return
-}
+// func (be *MVCCSlice[T]) GetVisibleNode(ts types.TS) (node T) {
+// 	length := len(be.MVCC)
+// 	for i := length - 1; i >= 0; i-- {
+// 		un := be.MVCC[i]
+// 		var visible bool
+// 		if visible = un.IsVisible(ts); visible {
+// 			node = un
+// 			break
+// 		}
+// 	}
+// 	return
+// }
 
 func (be *MVCCSlice[T]) GetLastNonAbortedNode() (node T) {
 	length := len(be.MVCC)

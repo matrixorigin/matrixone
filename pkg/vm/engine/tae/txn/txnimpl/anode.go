@@ -53,7 +53,7 @@ func (n *anode) GetAppends() []*appendInfo {
 func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.storage.mnode.appends)
 	info := &appendInfo{
-		dest:    dest,
+		dest:    *dest,
 		destOff: destOff,
 		destLen: destLen,
 		dbid:    dbid,
@@ -198,7 +198,7 @@ func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewBlockView(n.table.store.txn.GetStartTS())
+		view = model.NewBlockView()
 		err = n.FillBlockView(view, colIdxes)
 		return
 	}
@@ -207,9 +207,13 @@ func (n *anode) GetColumnDataByIds(
 
 func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
 	if !n.IsPersisted() {
-		view = model.NewColumnView(n.table.store.txn.GetStartTS(), colIdx)
+		view = model.NewColumnView(colIdx)
 		err = n.FillColumnView(view)
 		return
 	}
 	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
+}
+
+func (n *anode) Prefetch(idxes []uint16) error {
+	return nil
 }

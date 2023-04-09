@@ -278,7 +278,10 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 // CloseAppends un-reference the appendable blocks
 func (seg *localSegment) CloseAppends() {
 	for _, ctx := range seg.appends {
-		ctx.driver.Close()
+		if ctx.driver != nil {
+			ctx.driver.Close()
+			ctx.driver = nil
+		}
 	}
 }
 
@@ -490,6 +493,12 @@ func (seg *localSegment) GetColumnDataById(
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
 	return n.GetColumnDataById(colIdx)
+}
+
+func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
+	_, pos := blk.ID.Offsets()
+	n := seg.nodes[int(pos)]
+	return n.Prefetch(idxes)
 }
 
 func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {

@@ -297,13 +297,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:    node.NotCacheable,
+		CurrentStep:     node.CurrentStep,
 		SourceStep:      node.SourceStep,
-		TargetSteps:     make([]int32, len(node.TargetSteps)),
 	}
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
-	copy(newNode.TargetSteps, node.TargetSteps)
 
 	for idx, expr := range node.ProjectList {
 		newNode.ProjectList[idx] = DeepCopyExpr(expr)
@@ -493,7 +492,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
-		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
 		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
 	}
@@ -504,10 +502,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 	for idx, fkey := range table.Fkeys {
 		newTable.Fkeys[idx] = DeepCopyFkey(fkey)
-	}
-
-	for idx, col := range table.OriginCols {
-		newTable.OriginCols[idx] = DeepCopyColDef(col)
 	}
 
 	if table.TblFunc != nil {

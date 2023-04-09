@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -452,16 +453,13 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, block objectio.BlockObject, reader dataio.Reader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint32, reader dataio.Reader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
-	if block.GetExtent().End() == 0 {
-		return bat, nil
-	}
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, []uint32{block.GetID()}, nil)
+	ioResult, err := reader.LoadColumns(cxt, idxs, []uint32{id}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -483,14 +481,21 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
-	reader dataio.Reader,
-	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
+	service fileservice.FileService,
+	key string) (err error) {
+	reader, err := blockio.NewCheckPointReader(service, key)
+	if err != nil {
+		return
+	}
+	metas, err := reader.LoadBlocksMeta(ctx, common.DefaultAllocator)
 	if err != nil {
 		return
 	}
 
-	pref := blockio.BuildPrefetch(reader, m)
+	pref, err := blockio.BuildCkpPrefetch(service, key)
+	if err != nil {
+		return
+	}
 	for idx, item := range checkpointDataRefer {
 		idxes := make([]uint16, len(item.attrs))
 		for i := range item.attrs {
@@ -514,7 +519,7 @@ func (data *CheckpointData) ReadFrom(
 
 	for idx, item := range checkpointDataRefer {
 		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, metas[idx], reader)
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, metas[idx].GetID(), reader)
 		if err != nil {
 			return
 		}
@@ -601,7 +606,9 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
-				entry, DelSchema,
+				entry,
+				node,
+				DelSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
 				dbNode.GetEnd(),
@@ -611,6 +618,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		} else {
 			catalogEntry2Batch(collector.data.bats[DBInsertIDX],
 				entry,
+				node,
 				catalog.SystemDBSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
@@ -668,6 +676,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			catalogEntry2Batch(
 				collector.data.bats[TBLInsertIDX],
 				entry,
+				node,
 				catalog.SystemTableSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
@@ -693,7 +702,9 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 			catalogEntry2Batch(
 				collector.data.bats[TBLDeleteIDX],
-				entry, DelSchema,
+				entry,
+				node,
+				DelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),

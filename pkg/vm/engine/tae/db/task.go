@@ -46,7 +46,7 @@ func (task *ScheduledTxnTask) Scope() *common.ID {
 }
 
 func (task *ScheduledTxnTask) Execute() (err error) {
-	txn, err := task.db.StartTxn(nil)
+	txn, err := task.db.TxnMgr.StartTxnWithNow(nil)
 	if err != nil {
 		return
 	}

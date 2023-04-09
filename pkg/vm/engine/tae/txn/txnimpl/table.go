@@ -344,7 +344,7 @@ func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	}
 	var ok bool
 	meta.RLock()
-	ok, err = meta.IsVisible(tbl.store.txn.GetStartTS(), meta.RWMutex)
+	ok, err = meta.IsVisible(tbl.store.txn, meta.RWMutex)
 	meta.RUnlock()
 	if err != nil {
 		return
@@ -1235,4 +1235,10 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 		csn++
 	}
 	return
+}
+
+func (tbl *txnTable) CleanUp() {
+	if tbl.localSegment != nil {
+		tbl.localSegment.CloseAppends()
+	}
 }

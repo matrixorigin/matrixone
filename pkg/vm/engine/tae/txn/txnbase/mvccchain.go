@@ -147,11 +147,27 @@ func (be *MVCCChain[T]) GetLatestCommittedNode() (node T) {
 // GetVisibleNode gets mvcc node according to the timestamp.
 // It returns the mvcc node in the same txn as the read txn
 // or returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain[T]) GetVisibleNode(ts types.TS) (node T) {
+func (be *MVCCChain[T]) GetVisibleNode(txn txnif.TxnReader) (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
 		un := n.GetPayload()
 		var visible bool
-		if visible = un.IsVisible(ts); visible {
+		if visible = un.IsVisible(txn); visible {
+			node = un
+		}
+		goNext = !visible
+		return
+	}, false)
+	return
+}
+
+// GetVisibleNode gets mvcc node according to the timestamp.
+// It returns the mvcc node in the same txn as the read txn
+// or returns the latest mvcc node with commitTS less than the timestamp.
+func (be *MVCCChain[T]) GetVisibleNodeByTS(ts types.TS) (node T) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
+		un := n.GetPayload()
+		var visible bool
+		if visible = un.IsVisibleByTS(ts); visible {
 			node = un
 		}
 		goNext = !visible
@@ -230,7 +246,7 @@ func (be *MVCCChain[T]) IsCreatingOrAborted() bool {
 
 func (be *MVCCChain[T]) CheckConflict(txn txnif.TxnReader) (err error) {
 	node := be.GetLatestNodeLocked()
-	err = node.CheckConflict(txn.GetStartTS())
+	err = node.CheckConflict(txn)
 	return
 }
 

@@ -15,7 +15,6 @@
 package txnbase
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -27,7 +26,7 @@ import (
 
 func IDToIDCtx(id uint64) []byte {
 	ctx := make([]byte, 8)
-	binary.BigEndian.PutUint64(ctx, id)
+	copy(ctx, types.EncodeUint64(&id))
 	return ctx
 }
 
@@ -112,7 +111,7 @@ func (ctx *TxnCtx) Repr() string {
 	)
 }
 
-func (ctx *TxnCtx) SameTxn(startTs types.TS) bool { return ctx.StartTS.Equal(startTs) }
+func (ctx *TxnCtx) SameTxn(txn txnif.TxnReader) bool { return ctx.ID == txn.GetID() }
 func (ctx *TxnCtx) CommitBefore(startTs types.TS) bool {
 	return ctx.GetCommitTS().Less(startTs)
 }

@@ -309,6 +309,7 @@ type Binding struct {
 	table          string
 	tableID        uint64
 	cols           []string
+	colIsHidden    []bool
 	types          []*plan.Type
 	refCnts        []uint
 	colIdByName    map[string]int32

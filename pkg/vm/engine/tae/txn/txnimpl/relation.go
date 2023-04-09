@@ -85,7 +85,7 @@ func (it *txnRelationIt) Next() {
 			entry.RUnlock()
 			continue
 		}
-		valid, err = entry.IsVisible(it.txnDB.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -268,11 +268,13 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = keys.ForeachShallow(func(key any, _ bool, _ int) (err error) {
-		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
-		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
-		return
-	}, nil)
+	err = containers.ForeachVectorWindow(
+		keys, 0, keys.Length(),
+		func(rid types.Rowid, _ bool, _ int) (err error) {
+			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
+			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
+			return
+		})
 	return
 }
 

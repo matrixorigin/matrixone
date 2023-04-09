@@ -90,6 +90,10 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }
 
+func (db *DB) StartTxnWithNow(info []byte) (txnif.AsyncTxn, error) {
+	return db.TxnMgr.StartTxnWithNow(info)
+}
+
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }

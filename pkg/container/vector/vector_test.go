@@ -1042,3 +1042,66 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
+
+func TestWindowWith(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec1 := NewVec(types.T_int32.ToType())
+	AppendFixed(vec1, int32(1), false, mp)
+	AppendFixed(vec1, int32(2), true, mp)
+	AppendFixed(vec1, int32(3), false, mp)
+	require.False(t, vec1.NeedDup())
+
+	vec2, err := vec1.Window(0, vec1.Length())
+	require.NoError(t, err)
+
+	t.Log(vec2.String())
+	require.True(t, vec2.NeedDup())
+	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
+	require.True(t, vec2.GetNulls().Contains(uint64(1)))
+	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
+	vec2.Free(mp)
+
+	vec6, err := vec1.Window(1, vec1.Length())
+	require.NoError(t, err)
+
+	t.Log(vec6.String())
+	require.True(t, vec6.NeedDup())
+	require.True(t, vec6.GetNulls().Contains(uint64(0)))
+	require.Equal(t, int32(3), GetFixedAt[int32](vec6, 1))
+	vec6.Free(mp)
+
+	require.False(t, vec1.NeedDup())
+	require.Equal(t, int32(1), GetFixedAt[int32](vec1, 0))
+	require.True(t, vec1.GetNulls().Contains(uint64(1)))
+	require.Equal(t, int32(3), GetFixedAt[int32](vec1, 2))
+	vec1.Free(mp)
+
+	vec3 := NewVec(types.T_char.ToType())
+	AppendBytes(vec3, []byte("h"), false, mp)
+	AppendBytes(vec3, []byte("xx"), true, mp)
+	AppendBytes(vec3, []byte("uuu"), false, mp)
+	require.False(t, vec3.NeedDup())
+
+	vec4, err := vec3.Window(0, vec3.Length())
+	require.NoError(t, err)
+
+	require.True(t, vec4.NeedDup())
+	require.Equal(t, "h", string(vec4.GetBytesAt(0)))
+	require.Equal(t, "uuu", string(vec4.GetBytesAt(2)))
+	require.True(t, vec4.GetNulls().Contains(uint64(1)))
+	vec4.Free(mp)
+
+	vec5, err := vec3.Window(1, vec3.Length())
+	require.NoError(t, err)
+
+	require.True(t, vec5.NeedDup())
+	require.Equal(t, "uuu", string(vec5.GetBytesAt(1)))
+	require.True(t, vec5.GetNulls().Contains(uint64(0)))
+	vec5.Free(mp)
+
+	require.False(t, vec3.NeedDup())
+	require.Equal(t, "h", string(vec3.GetBytesAt(0)))
+	require.Equal(t, "uuu", string(vec3.GetBytesAt(2)))
+	require.True(t, vec3.GetNulls().Contains(uint64(1)))
+	vec3.Free(mp)
+}
