@@ -194,12 +194,11 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM, typ types.Type) {
 	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
 	// min and max can be nil if the input vector is null vector
-	if min := zm.GetMin(); min != nil {
-		index.UpdateZMAny(b.zms[idx], min, typ)
+	if !zm.IsInited() {
+		return
 	}
-	if max := zm.GetMax(); max != nil {
-		index.UpdateZMAny(b.zms[idx], max, typ)
-	}
+	index.UpdateZM(b.zms[idx], zm.GetMinBuf())
+	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
 }
 
 func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta) {
