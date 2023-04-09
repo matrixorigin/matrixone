@@ -71,7 +71,7 @@ type ZoneMap struct {
 	isInf bool
 }
 
-func NewZoneMap(typ types.Type) *ZoneMap {
+func BuildZonemap(typ types.Type) *ZoneMap {
 	zm := &ZoneMap{typ: typ}
 	return zm
 }

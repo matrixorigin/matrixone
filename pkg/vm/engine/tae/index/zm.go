@@ -25,6 +25,11 @@ const (
 //	                              type
 type ZM []byte
 
+// TODO: remove me later
+func NewZoneMap(typ types.Type) *ZM {
+	return NewZM(typ.Oid)
+}
+
 func NewZM(t types.T) *ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
@@ -64,7 +69,7 @@ func (zm ZM) GetType() types.T {
 }
 
 func (zm ZM) IsString() bool {
-	return types.IsString(zm.GetType())
+	return zm.GetType().FixedLength() < 0
 }
 
 func (zm ZM) SetType(t types.T) {
@@ -185,11 +190,11 @@ func (zm ZM) Contains(k any) bool {
 	if !zm.IsInited() {
 		return false
 	}
-	t := types.T(zm[63])
-	if types.IsString(t) {
+	if zm.IsString() {
 		return zm.ContainsString(k.([]byte))
 	}
 
+	t := types.T(zm[63])
 	v := types.EncodeValue(k, t.ToType())
 	return zm.ContainsFixed(v)
 }
@@ -198,10 +203,10 @@ func (zm ZM) ContainsKey(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
-	t := types.T(zm[63])
-	if types.IsString(t) {
+	if zm.IsString() {
 		return zm.ContainsString(k)
 	}
+	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
 }
@@ -259,7 +264,7 @@ func (zm ZM) getValue(min bool) any {
 	case types.T_decimal128:
 		return types.DecodeFixed[types.Decimal128](zm[offset : offset+types.Decimal128Size])
 	case types.T_uuid:
-		return types.DecodeFixed[types.Decimal256](zm[offset : offset+types.UuidSize])
+		return types.DecodeFixed[types.Uuid](zm[offset : offset+types.UuidSize])
 	case types.T_TS:
 		return types.DecodeFixed[types.TS](zm[offset : offset+types.TxnTsSize])
 	case types.T_Rowid:
@@ -349,8 +354,7 @@ func UpdateZM(zm *ZM, v []byte) {
 	if !zm.IsInited() {
 		zm.doInit(v)
 	}
-	t := zm.GetType()
-	if types.IsString(t) {
+	if zm.IsString() {
 		if compute.CompareBytes(v, zm.GetMinBuf()) < 0 {
 			zm.updateMinString(v)
 		} else if compute.CompareBytes(v, zm.GetMaxBuf()) > 0 {
@@ -358,6 +362,7 @@ func UpdateZM(zm *ZM, v []byte) {
 		}
 		return
 	}
+	t := zm.GetType()
 	if compute.Compare(v, zm.GetMinBuf(), t) < 0 {
 		zm.updateMinFixed(v)
 	} else if compute.Compare(v, zm.GetMaxBuf(), t) > 0 {

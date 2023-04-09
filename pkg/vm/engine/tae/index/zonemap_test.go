@@ -29,7 +29,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_int32.ToType()
-	zm := NewZoneMap(typ)
+	zm := BuildZonemap(typ)
 	var yes bool
 	var err error
 	var visibility *roaring.Bitmap
@@ -90,7 +90,7 @@ func TestZoneMapNumeric(t *testing.T) {
 
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
-	zm1 := NewZoneMap(typ)
+	zm1 := BuildZonemap(typ)
 	err = zm1.Unmarshal(buf)
 	require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestZoneMapString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_char.ToType()
-	zm := NewZoneMap(typ)
+	zm := BuildZonemap(typ)
 	var yes bool
 	var err error
 	yes = zm.Contains([]byte(strconv.Itoa(0)))
@@ -171,7 +171,7 @@ func TestZoneMapString(t *testing.T) {
 
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
-	zm1 := NewZoneMap(typ)
+	zm1 := BuildZonemap(typ)
 	err = zm1.Unmarshal(buf)
 	require.NoError(t, err)
 
@@ -188,14 +188,14 @@ func TestZoneMapString(t *testing.T) {
 func TestZMEmptyString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	typ := types.T_varchar.ToType()
-	zm := NewZoneMap(typ)
+	zm := BuildZonemap(typ)
 	require.Equal(t, typ.Oid, zm.GetType().Oid)
 	// check not inited
 	require.False(t, zm.Contains(nil))
 	_, existed := zm.ContainsAny(nil)
 	require.False(t, existed)
 
-	zmNoInit := NewZoneMap(typ)
+	zmNoInit := BuildZonemap(typ)
 	data, _ := zm.Marshal()
 	_ = zmNoInit.Unmarshal(data)
 	require.False(t, zm.Contains(nil))
@@ -212,7 +212,7 @@ func TestZMEmptyString(t *testing.T) {
 	require.False(t, zm.Contains([]byte{0, 0, 0, 0}))
 
 	data, _ = zm.Marshal()
-	zm1 := NewZoneMap(typ)
+	zm1 := BuildZonemap(typ)
 	_ = zm1.Unmarshal(data)
 
 	require.True(t, zm1.Contains([]byte("")))
@@ -232,7 +232,7 @@ func TestZMTruncatedString(t *testing.T) {
 	}
 
 	typ := types.T_varchar.ToType()
-	zm := NewZoneMap(typ)
+	zm := BuildZonemap(typ)
 
 	minv := mockBytes(0x00, 33)
 	maxv := mockBytes(0xff, 33)
@@ -253,7 +253,7 @@ func TestZMTruncatedString(t *testing.T) {
 	require.False(t, zm.Contains(edgeMax))
 
 	data, _ := zm.Marshal()
-	zm1 := NewZoneMap(typ)
+	zm1 := BuildZonemap(typ)
 	_ = zm1.Unmarshal(data)
 
 	require.True(t, zm1.Contains(edgeMin))
@@ -261,7 +261,7 @@ func TestZMTruncatedString(t *testing.T) {
 
 	zm.SetMax(mockBytes(0xff, 33)) // isInf is true
 	data, _ = zm.Marshal()
-	zm2 := NewZoneMap(typ)
+	zm2 := BuildZonemap(typ)
 	zm2.Unmarshal(data)
 	require.True(t, zm2.isInf)
 	require.True(t, zm2.Contains(mockBytes(0xff, 100)))
