@@ -27,62 +27,46 @@ const (
 	BloomFilterType
 )
 
-const ZoneMapMinSize = 32
-const ZoneMapMaxSize = 32
+const ZoneMapSize = 64
 
 type IndexData interface {
-	Write(writer *ObjectWriter, block *Block) error
+	Write(writer *ObjectWriter, block *Block, idx uint16) error
 	GetIdx() uint16
 }
 
 type ZoneMapUnmarshalFunc = func(buf []byte, t types.Type) (any, error)
 
 type ZoneMap struct {
-	idx           uint16
-	data          any
-	unmarshalFunc ZoneMapUnmarshalFunc
+	data []byte
 }
 
-func NewZoneMap(idx uint16, data any) (IndexData, error) {
+func NewZoneMap(zm []byte) (IndexData, error) {
 	zoneMap := &ZoneMap{
-		idx:  idx,
-		data: data,
+		data: zm,
 	}
 	return zoneMap, nil
 }
 
 func (z *ZoneMap) GetIdx() uint16 {
-	return z.idx
+	return 0
 }
 
-func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
-	var err error
-	block.columns[z.idx].meta.zoneMap = *z
-	return err
+func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) error {
+	block.columns[idx].meta.zoneMap = *z
+	return nil
 }
 
 func (z *ZoneMap) GetData() any {
 	return z.data
 }
 
-func (z *ZoneMap) Unmarshal(buf []byte, t types.Type) (err error) {
-	if z.unmarshalFunc == nil {
-		z.data = buf
-		return err
-	}
-	z.data, err = z.unmarshalFunc(buf, t)
-	return err
-}
-
 type BloomFilter struct {
-	idx  uint16
 	alg  uint8
 	data any
 }
 
 func NewBloomFilter(idx uint16, alg uint8, data any) IndexData {
 	bloomFilter := &BloomFilter{
-		idx:  idx,
 		alg:  alg,
 		data: data,
 	}
@@ -90,14 +74,14 @@ func NewBloomFilter(idx uint16, alg uint8, data any) IndexData {
 }
 
 func (b *BloomFilter) GetIdx() uint16 {
-	return b.idx
+	return 0
 }
 
 func (b *BloomFilter) GetData() any {
 	return b.data
 }
 
-func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
+func (b *BloomFilter) Write(writer *ObjectWriter, block *Block, idx uint16) error {
 	var err error
 	dataLen := len(b.data.([]byte))
 	data := make([]byte, lz4.CompressBlockBound(dataLen))
@@ -108,8 +92,8 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
 	if err != nil {
 		return err
 	}
-	block.columns[b.idx].meta.bloomFilter.offset = uint32(offset)
-	block.columns[b.idx].meta.bloomFilter.length = uint32(length)
-	block.columns[b.idx].meta.bloomFilter.originSize = uint32(dataLen)
+	block.columns[idx].meta.bloomFilter.offset = uint32(offset)
+	block.columns[idx].meta.bloomFilter.length = uint32(length)
+	block.columns[idx].meta.bloomFilter.originSize = uint32(dataLen)
 	return err
 }

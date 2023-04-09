@@ -22,6 +22,7 @@ import (
 // Block is the organizational structure of a batch in objectio
 // Write one batch at a time, and batch and block correspond one-to-one
 type Block struct {
+	meta []byte
 	// id is the serial number of the block in the object
 	id uint32
 
@@ -118,10 +119,7 @@ func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc)
 	b.columns = make([]*ColumnBlock, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
-		b.columns[i].meta.zoneMap = ZoneMap{
-			idx:           uint16(i),
-			unmarshalFunc: ZMUnmarshalFunc,
-		}
+		b.columns[i].meta.zoneMap = ZoneMap{}
 		err = b.columns[i].UnmarshalMate(data)
 		if err != nil {
 			return 0, err

@@ -50,14 +50,14 @@ func (meta *ObjectColumnMeta) Write(w io.Writer) (err error) {
 		return
 	}
 
-	var zmbuf []byte
+	var zm []byte
 	if meta.Zonemap.data == nil {
-		var buf [ZoneMapMinSize + ZoneMapMaxSize]byte
-		zmbuf = buf[:]
+		var buf [ZoneMapSize]byte
+		zm = buf[:]
 	} else {
-		zmbuf = meta.Zonemap.data.([]byte)
+		zm = meta.Zonemap.data
 	}
-	if _, err = w.Write(zmbuf); err != nil {
+	if _, err = w.Write(zm); err != nil {
 		return
 	}
 	return
@@ -102,6 +102,62 @@ func (bm *BlockMeta) GetName() string {
 
 func (bm *BlockMeta) GetHeader() BlockHeader {
 	return bm.header
+}
+
+const (
+	tableIDLen        = 8
+	segmentIDOff      = tableIDLen
+	segmentIDLen      = 8
+	blockIDOff        = segmentIDOff + segmentIDLen
+	blockIDLen        = 8
+	columnCountOff    = blockIDOff + blockIDLen
+	columnCountLen    = 2
+	headerDummyOff    = columnCountOff + columnCountLen
+	headerDummyLen    = 34
+	headerCheckSumOff = headerDummyOff + headerDummyLen
+	headerCheckSumLen = 4
+	headerLen         = headerCheckSumOff + headerCheckSumLen
+)
+
+type BlockMetaNew []byte
+
+func GetBlockMeta(id uint32, data []byte) BlockMetaNew {
+	metaOff := uint32(0)
+	idOff := uint32(0)
+	columnCount := uint16(0)
+	for {
+		header := BlockHeaderNew(data[metaOff : metaOff+headerLen])
+		columnCount = header.ColumnCount()
+		metaLen := headerLen + uint32(columnCount)*colMetaLen
+		metaOff += metaLen
+		if id == idOff {
+			break
+		}
+		idOff++
+	}
+	return data[metaOff : metaOff+headerLen+uint32(columnCount)*colMetaLen]
+}
+
+type BlockHeaderNew []byte
+
+func BuildBlockHeader(meta *BlockHeader) BlockHeaderNew {
+	return meta.Marshal()
+}
+
+func (bh BlockHeaderNew) TableID() uint64 {
+	return types.DecodeUint64(bh[:tableIDLen])
+}
+
+func (bh BlockHeaderNew) SegmentID() uint64 {
+	return types.DecodeUint64(bh[segmentIDOff : segmentIDOff+segmentIDLen])
+}
+
+func (bh BlockHeaderNew) BlockID() uint64 {
+	return types.DecodeUint64(bh[blockIDOff : blockIDOff+blockIDLen])
+}
+
+func (bh BlockHeaderNew) ColumnCount() uint16 {
+	return types.DecodeUint16(bh[columnCountOff : columnCountOff+columnCountLen])
 }
 
 type BlockHeader struct {
@@ -161,6 +217,67 @@ func (bh *BlockHeader) Unmarshal(data []byte) {
 // BFoSize = Bloomfilter original data size
 // Chksum = Data checksum
 // Reserved = 32 bytes reserved space
+
+const (
+	typeLen            = 1
+	idxOff             = typeLen
+	idxLen             = 2
+	algOff             = idxOff + idxLen
+	algLen             = 1
+	locationOff        = algOff + algLen
+	locationLen        = 16
+	zoneMapOff         = locationOff + locationLen
+	zoneMapLen         = 64
+	bloomFilterOff     = zoneMapOff + zoneMapLen
+	bloomFilterLen     = 16
+	colMetaDummyOff    = bloomFilterOff + bloomFilterLen
+	colMetaDummyLen    = 32
+	colMetaChecksumOff = colMetaDummyOff + colMetaDummyOff
+	colMetaChecksumLen = 4
+	colMetaLen         = colMetaChecksumOff + colMetaChecksumLen
+)
+
+func GetColumnMeta(idx uint16, data []byte) ColumnMetaNew {
+	offset := headerLen + uint32(idx)*colMetaLen
+	return data[offset : offset+colMetaLen]
+}
+
+type ColumnMetaNew []byte
+
+func BuildColumnMeta(meta *ColumnMeta) ColumnMetaNew {
+	return meta.Marshal()
+}
+
+func (cm ColumnMetaNew) Type() uint8 {
+	return types.DecodeUint8(cm[:typeLen])
+}
+
+func (cm ColumnMetaNew) Idx() uint16 {
+	return types.DecodeUint16(cm[idxOff : idxOff+idxLen])
+}
+
+func (cm ColumnMetaNew) Alg() uint8 {
+	return types.DecodeUint8(cm[algOff : algOff+algLen])
+}
+func (cm ColumnMetaNew) Location() Extent {
+	extent := Extent{}
+	extent.Unmarshal(cm[locationOff : locationOff+locationLen])
+	return extent
+}
+func (cm ColumnMetaNew) ZoneMap() ZoneMap {
+	return ZoneMap{
+		data: cm[zoneMapOff : zoneMapOff+zoneMapLen],
+	}
+}
+func (cm ColumnMetaNew) BloomFilter() Extent {
+	extent := Extent{}
+	extent.Unmarshal(cm[bloomFilterOff : bloomFilterOff+bloomFilterLen])
+	return extent
+}
+func (cm ColumnMetaNew) Checksum() uint32 {
+	return types.DecodeUint32(cm[colMetaChecksumOff : colMetaChecksumOff+colMetaChecksumLen])
+}
+
 type ColumnMeta struct {
 	typ         uint8
 	idx         uint16
@@ -202,12 +319,12 @@ func (cm *ColumnMeta) Marshal() []byte {
 	buffer.Write(types.EncodeFixed(cm.alg))
 	buffer.Write(types.EncodeFixed(cm.idx))
 	buffer.Write(cm.location.Marshal())
-	var buf []byte
+	var buf [ZoneMapSize]byte
 	if cm.zoneMap.data == nil {
-		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
-		cm.zoneMap.data = buf
+		zm := buf[:]
+		cm.zoneMap.data = zm
 	}
-	buffer.Write(cm.zoneMap.data.([]byte))
+	buffer.Write(cm.zoneMap.data)
 	buffer.Write(cm.bloomFilter.Marshal())
 	dummy := make([]byte, 32)
 	buffer.Write(dummy)
@@ -224,11 +341,7 @@ func (cm *ColumnMeta) Unmarshal(data []byte) error {
 	data = data[2:]
 	cm.location.Unmarshal(data)
 	data = data[ExtentSize:]
-	cm.zoneMap.idx = cm.idx
-	t := types.T(cm.typ).ToType()
-	if err := cm.zoneMap.Unmarshal(data[:64], t); err != nil {
-		return err
-	}
+	cm.zoneMap.data = data[:64]
 	data = data[64:]
 	cm.bloomFilter.Unmarshal(data)
 	// 32 skip dummy

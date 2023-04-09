@@ -120,7 +120,7 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 	if block == nil || block.columns[index.GetIdx()] == nil {
 		return moerr.NewInternalErrorNoCtx("object io: not found")
 	}
-	err = index.Write(w, block)
+	err = index.Write(w, block, 0)
 	return err
 }
 
