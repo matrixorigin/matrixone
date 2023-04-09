@@ -19,6 +19,7 @@ import (
 
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -29,13 +30,15 @@ type ZMWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
 	block       objectio.BlockObject
-	zonemap     *index.ZoneMap
+	zonemap     index.ZM
 	colIdx      uint16
 	internalIdx uint16
 }
 
-func NewZMWriter() *ZMWriter {
-	return &ZMWriter{}
+func NewZMWriter(t types.T) *ZMWriter {
+	return &ZMWriter{
+		zonemap: *index.NewZM(t),
+	}
 }
 
 func (writer *ZMWriter) String() string {
@@ -52,9 +55,6 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 }
 
 func (writer *ZMWriter) Finalize() error {
-	if writer.zonemap == nil {
-		panic(any("unexpected error"))
-	}
 	appender := writer.writer
 
 	//var startOffset uint32
@@ -76,19 +76,11 @@ func (writer *ZMWriter) Finalize() error {
 
 func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 	typ := values.GetType()
-	if writer.zonemap == nil {
-		writer.zonemap = index.NewZoneMap(typ)
-	} else {
-		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalErrorNoCtx("wrong type")
-			return
-		}
+	if writer.zonemap.GetType() != typ.Oid {
+		err = moerr.NewInternalErrorNoCtx("wrong type")
+		return
 	}
-	ctx := new(index.KeysCtx)
-	ctx.Keys = values
-	ctx.Count = values.Length()
-	err = writer.zonemap.BatchUpdate(ctx)
-	return
+	return index.BatchUpdateZM(&writer.zonemap, values)
 }
 
 type BFWriter struct {
@@ -159,14 +151,14 @@ type ObjectColumnMetasBuilder struct {
 	totalRow uint32
 	metas    []objectio.ObjectColumnMeta
 	sks      []*hll.Sketch
-	zms      []*index.ZoneMap
+	zms      []*index.ZM
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
 	return &ObjectColumnMetasBuilder{
 		metas: make([]objectio.ObjectColumnMeta, colIdx),
 		sks:   make([]*hll.Sketch, colIdx),
-		zms:   make([]*index.ZoneMap, colIdx),
+		zms:   make([]*index.ZM, colIdx),
 	}
 }
 
@@ -180,7 +172,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	}
 
 	if b.zms[idx] == nil {
-		b.zms[idx] = index.NewZoneMap(vec.GetType())
+		b.zms[idx] = index.NewZM(vec.GetType().Oid)
 	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()
@@ -194,15 +186,14 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	})
 }
 
-func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZoneMap) {
+func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
 	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
 	// min and max can be nil if the input vector is null vector
-	if min := zm.GetMin(); min != nil {
-		b.zms[idx].Update(min)
+	if !zm.IsInited() {
+		return
 	}
-	if max := zm.GetMax(); max != nil {
-		b.zms[idx].Update(max)
-	}
+	index.UpdateZM(b.zms[idx], zm.GetMinBuf())
+	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
 }
 
 func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta) {

@@ -16,13 +16,13 @@ package logservicedriver
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -76,30 +76,31 @@ func (m *meta) GetMaxLsn() uint64 {
 	return max
 }
 func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, m.metaType); err != nil {
+	metaType := uint8(m.metaType)
+	if _, err = w.Write(types.EncodeUint8(&metaType)); err != nil {
 		return
 	}
 	n += 1
-	if err = binary.Write(w, binary.BigEndian, m.appended); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&m.appended)); err != nil {
 		return
 	}
 	n += 8
 	length := uint16(len(m.addr))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	n += 2
 	for lsn, offset := range m.addr {
-		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&lsn)); err != nil {
 			return
 		}
 		n += 8
-		if err = binary.Write(w, binary.BigEndian, offset); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&offset)); err != nil {
 			return
 		}
 		n += 8
 	}
-	if err = binary.Write(w, binary.BigEndian, m.payloadSize); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&m.payloadSize)); err != nil {
 		return
 	}
 	n += 8
@@ -107,34 +108,36 @@ func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (m *meta) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &m.metaType); err != nil {
+	metaType := uint8(0)
+	if _, err = r.Read(types.EncodeUint8(&metaType)); err != nil {
 		return
 	}
+	m.metaType = MetaType(metaType)
 	n += 1
-	if err = binary.Read(r, binary.BigEndian, &m.appended); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&m.appended)); err != nil {
 		return
 	}
 	n += 8
 	length := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	n += 2
 	m.addr = make(map[uint64]uint64)
 	for i := 0; i < int(length); i++ {
 		lsn := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
 			return
 		}
 		n += 8
 		offset := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &offset); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&offset)); err != nil {
 			return
 		}
 		n += 8
 		m.addr[lsn] = offset
 	}
-	if err = binary.Read(r, binary.BigEndian, &m.payloadSize); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&m.payloadSize)); err != nil {
 		return
 	}
 	n += 8

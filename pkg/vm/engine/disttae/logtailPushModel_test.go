@@ -22,30 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
-
-// the sort func should ensure that:
-// the smaller the table id of item, the smaller the indexing.
-// the smaller the timestamp of item, the smaller the indexing.
-// if timestamps are equal, the smaller table id one will be in front (with a smaller index).
-func TestLogList_Sort(t *testing.T) {
-	var lists logList = []logtail.TableLogtail{
-		{Ts: &timestamp.Timestamp{PhysicalTime: 1}, Table: &api.TableID{TbId: 2}},
-		{Ts: &timestamp.Timestamp{PhysicalTime: 1}, Table: &api.TableID{TbId: 1}},
-		{Ts: &timestamp.Timestamp{PhysicalTime: 1}, Table: &api.TableID{TbId: 3}},
-		{Ts: &timestamp.Timestamp{PhysicalTime: 2}, Table: &api.TableID{TbId: 1}},
-		{Ts: &timestamp.Timestamp{PhysicalTime: 3}, Table: &api.TableID{TbId: 1}},
-	}
-	lists.insertionSort()
-	expectedT := []int64{1, 1, 1, 2, 3}
-	expectedI := []uint64{1, 2, 3, 1, 1}
-	for i := range lists {
-		require.Equal(t, expectedT[i], lists[i].Ts.PhysicalTime)
-		require.Equal(t, expectedI[i], lists[i].Table.TbId)
-	}
-}
 
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {

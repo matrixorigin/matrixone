@@ -16,7 +16,6 @@ package common
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -272,7 +271,7 @@ func (tree *Tree) Merge(ot *Tree) {
 
 func (tree *Tree) WriteTo(w io.Writer) (n int64, err error) {
 	cnt := uint32(len(tree.Tables))
-	if err = binary.Write(w, binary.BigEndian, cnt); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 4
@@ -288,7 +287,7 @@ func (tree *Tree) WriteTo(w io.Writer) (n int64, err error) {
 
 func (tree *Tree) ReadFrom(r io.Reader) (n int64, err error) {
 	var cnt uint32
-	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 4
@@ -359,14 +358,14 @@ func (ttree *TableTree) Merge(ot *TableTree) {
 }
 
 func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, ttree.DbID); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&ttree.DbID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, ttree.ID); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
 	}
 	cnt := uint32(len(ttree.Segs))
-	if err = binary.Write(w, binary.BigEndian, cnt); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 8 + 8 + 4
@@ -381,14 +380,14 @@ func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &ttree.DbID); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&ttree.DbID)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &ttree.ID); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
 	}
 	var cnt uint32
-	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 8 + 8 + 4
@@ -474,8 +473,8 @@ func (stree *SegmentTree) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(types.UuidSize)
-	cnt := len(stree.Blks)
-	if err = binary.Write(w, binary.BigEndian, uint32(cnt)); err != nil {
+	cnt := uint32(len(stree.Blks))
+	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 4
@@ -507,7 +506,7 @@ func (stree *SegmentTree) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(types.UuidSize)
 	var cnt uint32
-	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 4
