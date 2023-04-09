@@ -130,6 +130,12 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 	return
 }
 
+// TODO: remove me later
+func (zm ZM) Update(v any) (err error) {
+	UpdateZMAny(&zm, v, zm.GetType().ToType())
+	return
+}
+
 func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
 	if !zm.IsInited() {
 		return
