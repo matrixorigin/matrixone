@@ -30,13 +30,15 @@ type ZMWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
 	block       objectio.BlockObject
-	zonemap     *index.ZM
+	zonemap     index.ZM
 	colIdx      uint16
 	internalIdx uint16
 }
 
-func NewZMWriter() *ZMWriter {
-	return &ZMWriter{}
+func NewZMWriter(t types.T) *ZMWriter {
+	return &ZMWriter{
+		zonemap: *index.NewZM(t),
+	}
 }
 
 func (writer *ZMWriter) String() string {
@@ -53,9 +55,6 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 }
 
 func (writer *ZMWriter) Finalize() error {
-	if writer.zonemap == nil {
-		panic(any("unexpected error"))
-	}
 	appender := writer.writer
 
 	//var startOffset uint32
@@ -77,15 +76,11 @@ func (writer *ZMWriter) Finalize() error {
 
 func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 	typ := values.GetType()
-	if writer.zonemap == nil {
-		writer.zonemap = index.NewZM(typ.Oid)
-	} else {
-		if writer.zonemap.GetType() != typ.Oid {
-			err = moerr.NewInternalErrorNoCtx("wrong type")
-			return
-		}
+	if writer.zonemap.GetType() != typ.Oid {
+		err = moerr.NewInternalErrorNoCtx("wrong type")
+		return
 	}
-	return index.BatchUpdateZM(writer.zonemap, values)
+	return index.BatchUpdateZM(&writer.zonemap, values)
 }
 
 type BFWriter struct {
@@ -191,7 +186,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	})
 }
 
-func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM, typ types.Type) {
+func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
 	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
 	// min and max can be nil if the input vector is null vector
 	if !zm.IsInited() {
