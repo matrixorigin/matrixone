@@ -16,15 +16,16 @@ package plan
 
 import (
 	"context"
+	"math"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"sort"
-	"strings"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -184,13 +185,17 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
-	binding := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
 	}
-	s := sc.GetStatsInfoMap(binding.tableID)
-	return s.NdvMap[binding.cols[col.ColPos]]
+
+	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+		s := sc.GetStatsInfoMap(binding.tableID)
+		return s.NdvMap[binding.cols[col.ColPos]]
+	} else {
+		return -1
+	}
 }
 
 func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {
@@ -303,7 +308,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = math.Min(out1, out2) * 0.8
+				outcnt = out1 * out2 / tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -354,7 +359,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	ndvRate := (distinctValNum / blockNumTotal)
 	if distinctValNum <= 100 || ndvRate < 0.4 {
 		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 2) / coefficient
+		ndv = (distinctValNum + 4) / coefficient
 	} else {
 		// assume ndv is high
 		ndv = tableCnt * ndvRate * coefficient
@@ -467,12 +472,12 @@ func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	}
 }
 
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				ReCalcNodeStats(child, builder, recursive)
+				ReCalcNodeStats(child, builder, recursive, leafNode)
 			}
 		}
 	}
@@ -636,7 +641,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		}
 
 	case plan.Node_TABLE_SCAN:
-		if node.ObjRef != nil {
+		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
+		if node.ObjRef != nil && leafNode {
 			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
 			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
 
@@ -645,6 +651,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				node.Stats.Selectivity *= 0.15
 				node.Stats.Outcnt *= 0.15
 			}
+		}
+
+	case plan.Node_FILTER:
+		//filters which can not push down to scan nodes. hard to estimate selectivity
+		node.Stats = &plan.Stats{
+			Outcnt:      childStats.Outcnt * 0.05,
+			Cost:        childStats.Cost,
+			Selectivity: 0.05,
 		}
 
 	default:
@@ -683,4 +697,65 @@ func DefaultStats() *plan.Stats {
 	stats.Selectivity = 1
 	stats.BlockNum = 1
 	return stats
+}
+
+func shouldSwapByStats(leftStats, rightStats *Stats) bool {
+	//left deep tree is preferred for pipeline
+	//if scan compare with join, scan should be 5% bigger than join, then we can swap
+	left := leftStats.Outcnt
+	if leftStats.TableCnt == 0 {
+		left *= 1.05
+	}
+	right := rightStats.Outcnt
+	if rightStats.TableCnt == 0 {
+		right *= 1.05
+	}
+	return left < right
+}
+
+func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if recursive && len(node.Children) > 0 {
+		for i, child := range node.Children {
+			node.Children[i] = builder.applySwapRuleByStats(child, recursive)
+		}
+	}
+	if node.NodeType != plan.Node_JOIN {
+		return nodeID
+	}
+
+	leftChild := builder.qry.Nodes[node.Children[0]]
+	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if node.JoinType == plan.Node_LEFT {
+		//right join does not support non equal join for now
+		if IsEquiJoin(node.OnList) && shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_RIGHT
+		}
+		return nodeID
+	}
+	if node.JoinType == plan.Node_RIGHT {
+		//right join does not support non equal join for now
+		if !IsEquiJoin(node.OnList) || shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_LEFT
+		}
+		return nodeID
+	}
+	if node.JoinType == plan.Node_INNER {
+		if shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+			node.Children = []int32{node.Children[1], node.Children[0]}
+		}
+	}
+	return nodeID
+}
+
+func compareStats(stats1, stats2 *Stats) bool {
+	// selectivity is first considered to reduce data
+	// when selectivity very close, we first join smaller table
+	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
+		return stats1.Selectivity < stats2.Selectivity
+	} else {
+		// todo we need to calculate ndv of outcnt here
+		return stats1.Outcnt < stats2.Outcnt
+	}
 }

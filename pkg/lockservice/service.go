@@ -170,6 +170,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
 	if txn == nil {
 		return
 	}
+	logAbortDeadLock(s.cfg.ServiceID, wait, txn)
 	txn.abort(s.cfg.ServiceID, wait.TxnID)
 }
 
@@ -223,6 +224,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,
+			s.fsp,
 			s.deadlockDetector,
 			s.clock)
 	} else {
@@ -370,4 +372,8 @@ type remote struct {
 
 func unsafeByteSliceToString(key []byte) string {
 	return *(*string)(unsafe.Pointer(&key))
+}
+
+func unsafeStringToByteSlice(key string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&key))
 }

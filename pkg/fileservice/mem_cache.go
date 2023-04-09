@@ -99,6 +99,11 @@ func (m *MemCache) Read(
 		}, m.counterSets...)
 	}()
 
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	for i, entry := range vector.Entries {
 		if entry.done {
 			continue
@@ -107,7 +112,7 @@ func (m *MemCache) Read(
 			continue
 		}
 		key := IOVectorCacheKey{
-			Path:   vector.FilePath,
+			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
@@ -137,12 +142,18 @@ func (m *MemCache) Update(
 	if vector.NoCache {
 		return nil
 	}
+
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
 			continue
 		}
 		key := IOVectorCacheKey{
-			Path:   vector.FilePath,
+			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}

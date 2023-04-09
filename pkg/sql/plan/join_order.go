@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -31,12 +30,9 @@ type joinVertex struct {
 	node        *plan.Node
 	highNDVCols []int32
 	pks         []int32
-	pkSelRate   float64
-
-	children map[int32]any
-	parent   int32
-
-	joined bool
+	children    map[int32]any
+	parent      int32
+	joined      bool
 }
 
 func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
@@ -105,7 +101,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		}
 	}
 
-	if targetNode != nil {
+	if targetNode != nil && compareStats(builder.qry.Nodes[node.Children[1]].Stats, builder.qry.Nodes[targetNode.Children[1-targetSide]].Stats) {
 		nodeID = node.Children[0]
 		node.Children[0] = targetNode.Children[targetSide]
 		targetNode.Children[targetSide] = node.NodeId
@@ -175,53 +171,6 @@ func HasColExpr(expr *plan.Expr, pos int32) int32 {
 	}
 }
 
-func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
-
-	if joinType != plan.Node_INNER && joinType != plan.Node_LEFT && joinType != plan.Node_RIGHT {
-		//do not swap
-		return children, joinType
-	}
-	//for left and right join, only swap equal join
-	if !IsEquiJoin(onList) {
-		switch joinType {
-		case plan.Node_LEFT:
-			return children, joinType
-		case plan.Node_RIGHT:
-			return []int32{children[1], children[0]}, plan.Node_LEFT
-		default:
-		}
-	}
-
-	//left deep tree is preferred for pipeline
-	//if scan compare with join, scan should be 5% bigger than join, then we can swap
-	left := builder.qry.Nodes[children[0]].Stats.Outcnt
-	if builder.qry.Nodes[children[0]].Stats.TableCnt == 0 {
-		left *= 1.05
-	}
-	right := builder.qry.Nodes[children[1]].Stats.Outcnt
-	if builder.qry.Nodes[children[1]].Stats.TableCnt == 0 {
-		right *= 1.05
-	}
-	if left < right {
-		if joinType == plan.Node_LEFT {
-			joinType = plan.Node_RIGHT
-		} else if joinType == plan.Node_RIGHT {
-			joinType = plan.Node_LEFT
-		}
-		return []int32{children[1], children[0]}, joinType
-	} else {
-		return children, joinType
-	}
-}
-
-func (builder *QueryBuilder) swapJoinOrderByStatsUsedForInner(children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
-	return builder.swapJoinOrderByStats([]*plan.Expr{}, children, joinType)
-}
-
-func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
-	return builder.swapJoinOrderByStats(onList, children, joinType)
-}
-
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
@@ -233,7 +182,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 		if node.NodeType == plan.Node_JOIN {
 			//swap join order for left & right join, inner join is not here
-			node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
+			builder.applySwapRuleByStats(node.NodeId, false)
 		}
 		return nodeID
 	}
@@ -255,19 +204,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool {
-		if subTrees[j].Stats == nil {
-			return false
-		}
-		if subTrees[i].Stats == nil {
-			return true
-		}
-		if math.Abs(subTrees[i].Stats.Selectivity-subTrees[j].Stats.Selectivity) > 0.01 {
-			return subTrees[i].Stats.Selectivity < subTrees[j].Stats.Selectivity
-		} else {
-			return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
-		}
-	})
+	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
 
 	leafByTag := make(map[int32]int32)
 
@@ -321,12 +258,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			visited[nextSibling] = true
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
-			children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
+			builder.applySwapRuleByStats(nodeID, false)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
@@ -348,12 +285,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
-			children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
+			builder.applySwapRuleByStats(nodeID, false)
 		}
 	}
 
@@ -365,9 +302,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			FilterList: conds,
 		}, nil)
 	}
-
-	ReCalcNodeStats(nodeID, builder, true)
-
 	return nodeID
 }
 
@@ -393,10 +327,9 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
-			node:      node,
-			pkSelRate: 1.0,
-			children:  make(map[int32]any),
-			parent:    -1,
+			node:     node,
+			children: make(map[int32]any),
+			parent:   -1,
 		}
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
@@ -409,11 +342,9 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 			vertices[i].pks = pks
 			tag2Vert[node.BindingTags[0]] = int32(i)
-		}
-
-		for _, filter := range node.FilterList {
-			if builder.filterOnPK(filter, vertices[i].pks) {
-				vertices[i].pkSelRate *= 0.1
+		} else if len(node.BindingTags) > 0 {
+			for _, tag := range node.BindingTags {
+				tag2Vert[tag] = int32(i)
 			}
 		}
 	}
@@ -442,9 +373,6 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
 				continue
 			}
-			if vertices[leftId].parent != -1 && vertices[rightId].parent != -1 {
-				continue
-			}
 
 			if leftId > rightId {
 				leftId, rightId = rightId, leftId
@@ -459,7 +387,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			edge.rightCols = append(edge.rightCols, rightCol.ColPos)
 			edgeMap[[2]int32{leftId, rightId}] = edge
 
-			if vertices[leftId].parent == -1 {
+			leftParent := vertices[leftId].parent
+			if leftParent == -1 || compareStats(vertices[rightId].node.Stats, vertices[leftParent].node.Stats) {
 				if containsAllPKs(edge.leftCols, vertices[leftId].pks) || containsHighNDVCol(edge.leftCols, vertices[leftId].highNDVCols) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
@@ -467,7 +396,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 					}
 				}
 			}
-			if vertices[rightId].parent == -1 {
+			rightParent := vertices[rightId].parent
+			if rightParent == -1 || compareStats(vertices[leftId].node.Stats, vertices[rightParent].node.Stats) {
 				if containsAllPKs(edge.rightCols, vertices[rightId].pks) || containsHighNDVCol(edge.rightCols, vertices[rightId].highNDVCols) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
@@ -498,33 +428,19 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool {
-		if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
-			return true
-		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
-			return false
-		} else {
-			if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
-				return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
-			} else {
-				return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
-			}
-		}
-	})
+	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
 
 	for _, child := range dimensions {
 
 		children := []int32{vertex.node.NodeId, child.node.NodeId}
-		children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
-		nodeId := builder.appendNode(&plan.Node{
+		nodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: children,
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		vertex.pkSelRate *= child.pkSelRate
-		vertex.node = builder.qry.Nodes[nodeId]
-		ReCalcNodeStats(nodeId, builder, false)
+		vertex.node = builder.qry.Nodes[nodeID]
+		builder.applySwapRuleByStats(nodeID, false)
 	}
 }
 
@@ -559,11 +475,6 @@ func containsAllPKs(cols, pks []int32) bool {
 	}
 
 	return true
-}
-
-func (builder *QueryBuilder) filterOnPK(filter *plan.Expr, pks []int32) bool {
-	// FIXME better handle expressions
-	return len(pks) > 0
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {

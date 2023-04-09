@@ -222,6 +222,10 @@ func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
 	return e.impl.StartTxn(info)
 }
 
+func (e *txnEngine) StartTxnWithNow(info []byte) (txn Txn, err error) {
+	return e.impl.StartTxnWithNow(info)
+}
+
 func (e *txnEngine) GetTxnByID(id []byte) (txn Txn, err error) {
 	return e.impl.GetTxn(string(id))
 }

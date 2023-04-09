@@ -336,26 +336,28 @@ drop sequence seq_15;
 no such sequence create_sequence.seq_15
 drop sequence seq_non;
 no such sequence create_sequence.seq_non
+create sequence seq_15;
 create sequence seq_16 increment 10 start with 20 no cycle;
 truncate table seq_table_01;
 prepare stmt1 from 'insert into seq_table_01 values(?)';
-set @a_var = nextval('seq15');
+set @a_var = nextval('seq_15');
 execute stmt1 using @a_var;
 select * from seq_table_01;
 col1
-null
+1
 execute stmt1 using @a_var;
 select * from seq_table_01;
 col1
-null
-null
+1
+1
 execute stmt1 using @a_var;
 select * from seq_table_01;
 col1
-null
-null
-null
+1
+1
+1
 drop sequence seq_16;
+drop sequence seq_15;
 create sequence seq_17 increment 10 start with 20 no cycle;
 select lastval();
 lastval()

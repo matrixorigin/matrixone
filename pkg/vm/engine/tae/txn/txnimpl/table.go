@@ -140,7 +140,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry.MetaBaseEntry, ts); err == nil {
+	if err = readWriteConfilictCheck(entry.BaseEntryImpl, ts); err == nil {
 		return
 	}
 	err = nil
@@ -344,7 +344,7 @@ func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	}
 	var ok bool
 	meta.RLock()
-	ok, err = meta.IsVisible(tbl.store.txn.GetStartTS(), meta.RWMutex)
+	ok, err = meta.IsVisible(tbl.store.txn, meta.RWMutex)
 	meta.RUnlock()
 	if err != nil {
 		return
@@ -607,7 +607,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -927,7 +927,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
+				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
@@ -1235,4 +1235,10 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 		csn++
 	}
 	return
+}
+
+func (tbl *txnTable) CleanUp() {
+	if tbl.localSegment != nil {
+		tbl.localSegment.CloseAppends()
+	}
 }

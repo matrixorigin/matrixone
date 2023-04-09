@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"math"
 	"math/bits"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -725,6 +726,7 @@ var (
 		"mo_role_grant":              0,
 		"mo_role_privs":              0,
 		"mo_user_defined_function":   0,
+		"mo_stored_procedure":        0,
 		"mo_mysql_compatbility_mode": 0,
 		catalog.AutoIncrTableName:    0,
 		"mo_indexes":                 0,
@@ -809,6 +811,7 @@ var (
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
 				name     varchar(100),
+				creator  int unsigned,
 				args     text,
 				retType  varchar(20),
 				body     text,
@@ -845,6 +848,23 @@ var (
     		creator int unsigned,
     		comment text
     		);`,
+		`create table mo_stored_procedure(
+				proc_id int auto_increment,
+				name     varchar(100),
+				args     text,
+				body     text,
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10), 
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
+				primary key(proc_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -855,6 +875,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
+		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
 	}
 	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
@@ -870,6 +891,7 @@ var (
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
+			creator,
 			args,
 			retType,
 			body,
@@ -883,7 +905,22 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+
+	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
+		name,
+		args,
+		body,
+		db,
+		definer,
+		modified_time,
+		created_time,
+		type,
+		security_type,
+		comment,
+		character_set_client,
+		collation_connection,
+		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1180,6 +1217,10 @@ const (
 
 	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
 
+	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+
+	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
 
@@ -1196,6 +1237,9 @@ const (
 
 	// delete user defined function from mo_user_defined_function
 	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+
+	// delete stored procedure from mo_user_defined_function
+	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
 	// delete a tuple from mo_mysql_compatbility_mode when drop a database
 	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
@@ -3567,6 +3611,84 @@ handleFailed:
 	return err
 }
 
+func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) error {
+	var err error
+	var sql string
+	var checkDatabase string
+	var dbName string
+	var procId int64
+	var erArray []ExecResult
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	if dp.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(dp.Name.Name.SchemaName)
+	}
+
+	// validate database name and signature (name + args)
+	bh.ClearExecResultSet()
+	checkDatabase = fmt.Sprintf(checkStoredProcedureArgs, string(dp.Name.Name.ObjectName), dbName)
+	err = bh.Exec(ctx, checkDatabase)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
+		procId, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+		goto handleArgMatch
+	} else {
+		// no such procedure
+		if dp.IfExists {
+			return nil
+		}
+		return moerr.NewNoUDFNoCtx(string(dp.Name.Name.ObjectName))
+	}
+
+handleArgMatch:
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
 	var err error
@@ -4587,6 +4709,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.CreateProcedure:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+	case *tree.CallStmt: // TODO: redesign privilege for calling a procedure
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -4609,6 +4739,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			dbName = string(st.Names[0].SchemaName)
 		}
 	case *tree.DropFunction:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+	case *tree.DropProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
@@ -6044,7 +6178,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) error {
+func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -6069,7 +6203,7 @@ func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) e
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	bh := NewBackgroundHandler(ctx, ctx, mp, pu, autoincrcaches)
+	bh := NewBackgroundHandler(ctx, ctx, mp, pu, aicm)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -7006,7 +7140,6 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
-	logutil.Debug("Exist: " + checkExistence)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		goto handleFailed
@@ -7028,6 +7161,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
 		string(cf.Name.Name.ObjectName),
+		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		retTypeStr, cf.Body, cf.Language, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
@@ -7042,6 +7176,83 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) error {
+	var err error
+	var initMoProcedure string
+	var dbName string
+	var checkExistence string
+	var argsJson []byte
+	// var fmtctx *tree.FmtCtx
+	var argList []tree.ProcedureArgDecl
+	var erArray []ExecResult
+
+	// a database must be selected or specified as qualifier when create a function
+	if cp.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(cp.Name.Name.SchemaName)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// build argmap and marshal as json
+	argList = make([]tree.ProcedureArgDecl, len(cp.Args))
+	argsJson, err = json.Marshal(argList)
+	if err != nil {
+		goto handleFailed
+	}
+
+	// validate duplicate procedure declaration
+	bh.ClearExecResultSet()
+	checkExistence = fmt.Sprintf(checkProcedureExistence, string(cp.Name.Name.ObjectName), dbName)
+	err = bh.Exec(ctx, checkExistence)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
+		string(cp.Name.Name.ObjectName),
+		string(argsJson),
+		cp.Body, dbName,
+		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	err = bh.Exec(ctx, initMoProcedure)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -7343,4 +7554,11 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 		}
 	}
 	return defaultConfig, err
+}
+
+func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) error {
+	// 1. fetch sql query of the procedure
+	// 2. plsql.run(args, sql body)
+	// 3. catch any error and return
+	return nil
 }

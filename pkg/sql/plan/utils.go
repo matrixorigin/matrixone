@@ -578,6 +578,14 @@ func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 	return false, nil, nil
 }
 
+func splitPlanConjunctions(exprList []*plan.Expr) []*plan.Expr {
+	var exprs []*plan.Expr
+	for _, expr := range exprList {
+		exprs = append(exprs, splitPlanConjunction(expr)...)
+	}
+	return exprs
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {

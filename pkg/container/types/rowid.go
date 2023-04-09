@@ -16,7 +16,6 @@ package types
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -35,6 +34,29 @@ import (
 const ObjectBytesSize = 18
 
 type ObjectBytes = [ObjectBytesSize]byte
+
+// BuildTestRowid used only in unit test.
+func BuildTestRowid(a, b int64) (ret Rowid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[8:16], EncodeInt64(&b))
+	copy(ret[20:], EncodeInt64(&b))
+	return
+}
+
+// BuildTestBlockid used only in unit test
+func BuildTestBlockid(a, b int64) (ret Blockid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[8:16], EncodeInt64(&b))
+	return
+}
+
+func CompareRowidRowidAligned(a, b Rowid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
+
+func CompareBlockidBlockidAligned(a, b Blockid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
 
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
@@ -56,7 +78,7 @@ func (r Rowid) GetSegid() Uuid {
 
 func (r Rowid) Decode() (Blockid, uint32) {
 	b := *(*Blockid)(r[:BlockidSize])
-	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	s := DecodeUint32(r[BlockidSize:])
 	return b, s
 }
 
@@ -70,13 +92,13 @@ func (r Rowid) GetObject() ObjectBytes {
 
 func (r Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
-	s := binary.BigEndian.Uint16(r[UuidSize:ObjectBytesSize])
+	s := DecodeUint16(r[UuidSize:ObjectBytesSize])
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
 }
 
 func (r *Rowid) String() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
-	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.String(), s)
 }
 
@@ -112,8 +134,8 @@ func (b *Blockid) ShortString() string {
 }
 
 func (b *Blockid) Offsets() (uint16, uint16) {
-	filen := binary.BigEndian.Uint16(b[UuidSize:ObjectBytesSize])
-	blkn := binary.BigEndian.Uint16(b[ObjectBytesSize:BlockidSize])
+	filen := DecodeUint16(b[UuidSize:ObjectBytesSize])
+	blkn := DecodeUint16(b[ObjectBytesSize:BlockidSize])
 	return filen, blkn
 }
 

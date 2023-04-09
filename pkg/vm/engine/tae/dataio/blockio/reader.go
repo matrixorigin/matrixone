@@ -18,6 +18,8 @@ import (
 	"context"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -137,10 +139,11 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 
 func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
+	blocks := meta.BlkMetas
 	if blocks[0].GetExtent().End() == 0 {
 		return nil, nil
 	}
@@ -167,13 +170,13 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
-	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
 	blocksZoneMap := make([][]dataio.Index, len(ids))
 	for i, id := range ids {
-		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, meta.BlkMetas[id], m)
 		if err != nil {
 			return nil, err
 		}
@@ -181,19 +184,51 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	return blocksZoneMap, nil
 }
 
+func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
+	objmeta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	meta := &dataio.ObjectMeta{}
+	meta.Rows = objmeta.Rows
+	for _, colmeta := range objmeta.ColMetas {
+		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(dataio.Index)})
+	}
+	var idxs []uint16
+	for _, blkmeta := range objmeta.BlkMetas {
+		if idxs == nil {
+			idxs = make([]uint16, blkmeta.GetColumnCount())
+			for i := 0; i < len(idxs); i++ {
+				idxs[i] = uint16(i)
+			}
+		}
+		zm, err := r.LoadZoneMap(ctx, idxs, blkmeta, m)
+		meta.Zms = append(meta.Zms, zm)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return meta, nil
+}
+
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
 	_, locs, err := DecodeLocationToMetas(r.key)
 	if err != nil {
 		return nil, err
 	}
-	return r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
-}
-
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
+	return meta.BlkMetas, nil
+}
+
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	blocks := meta.BlkMetas
 	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
@@ -217,7 +252,7 @@ func (r *BlockReader) LoadZoneMap(
 		}
 		data := zm.(*objectio.ZoneMap).GetData()
 
-		zoneMapList[i] = data.(*BlockIndex)
+		zoneMapList[i] = data.(dataio.Index)
 	}
 
 	return zoneMapList, nil
@@ -225,13 +260,13 @@ func (r *BlockReader) LoadZoneMap(
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
-	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
 	blocksBloomFilters := make([]index.StaticFilter, len(ids))
 	for i, id := range ids {
-		column, err := blocks[id].GetColumn(idx)
+		column, err := meta.BlkMetas[id].GetColumn(idx)
 		if err != nil {
 			return nil, err
 		}
@@ -261,12 +296,8 @@ func (r *BlockReader) GetObjectReader() objectio.Reader {
 }
 
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
-	zm := NewZoneMap(typ)
-	err := zm.Unmarshal(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	return zm, err
+	zm := index.DecodeZM(buf)
+	return &zm, nil
 }
 
 func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
@@ -284,7 +315,7 @@ func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		bf, err := index.NewBinaryFuseFilterFromSource(decompressed)
+		bf, err := index.DecodeBloomFilter(decompressed)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -320,21 +351,48 @@ func PrefetchWithMerged(pref prefetch) error {
 	return pipeline.Prefetch(pref)
 }
 
-func Prefetch(idxes []uint16, reader dataio.Reader,
-	ids []uint32, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
-	}
+func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key string) error {
 
-	pref := BuildPrefetch(reader, m)
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
+	}
 	pref.AddBlock(idxes, ids)
 	return pipeline.Prefetch(pref)
 }
 
-func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
+func PrefetchBlocksMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
 	}
-	pref := BuildPrefetch(reader, m)
 	return pipeline.Prefetch(pref)
+}
+
+func PrefetchCkpMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildCkpPrefetch(service, key)
+	if err != nil {
+		return err
+	}
+	return pipeline.Prefetch(pref)
+}
+
+func PrefetchFile(service fileservice.FileService, size int64, name string) error {
+	reader, err := NewFileReader(service, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(context.Background(), size, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	pref := buildPrefetch(reader)
+	for i := range bs {
+		idxes := make([]uint16, bs[i].GetColumnCount())
+		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
+			idxes[a] = a
+		}
+		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+	}
+	return PrefetchWithMerged(pref)
 }

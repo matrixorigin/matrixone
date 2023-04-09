@@ -362,6 +362,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
+
+	if oq.ep.Outfile {
+		initExportFirst(oq)
+	}
+
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
@@ -369,6 +374,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				return nil
 			default:
 			}
+			continue
 		}
 
 		if bat.Zs[j] <= 0 {
@@ -385,6 +391,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
+	if oq.ep.Outfile {
+		oq.rowIdx = uint64(n)
+		bat2 := preCopyBat(obj, bat)
+		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
+	}
 	err := oq.flush()
 	if err != nil {
 		return err
@@ -1160,6 +1171,21 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 
 func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
 	return doDropFunction(ctx, mce.GetSession(), df)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	return InitProcedure(ctx, ses, tenant, cp)
+}
+
+func (mce *MysqlCmdExecutor) handleDropProcedure(ctx context.Context, dp *tree.DropProcedure) error {
+	return doDropProcedure(ctx, mce.GetSession(), dp)
+}
+
+func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt) error {
+	return doInterpretCall(ctx, mce.GetSession(), call)
 }
 
 // handleGrantRole grants the role
@@ -2125,7 +2151,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewFileNotFound(ctx, param.Filepath)
+			err = moerr.NewInvalidInput(ctx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
 		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		return
@@ -2226,24 +2252,23 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:              ses.GetUserName(),
-		Host:              pu.SV.Host,
-		ConnectionID:      uint64(proto.ConnectionID()),
-		Database:          ses.GetDatabaseName(),
-		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:          ses.GetTimeZone(),
-		StorageEngine:     pu.StorageEngine,
-		LastInsertID:      ses.GetLastInsertID(),
-		AutoIncrCaches:    ses.GetAutoIncrCaches(),
-		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
-		SqlHelper:         ses.GetSqlHelper(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+		LastInsertID:  ses.GetLastInsertID(),
+		SqlHelper:     ses.GetSqlHelper(),
 	}
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2625,6 +2650,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropFunction(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateProcedure:
+			selfHandle = true
+			if err = mce.handleCreateProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.DropProcedure:
+			selfHandle = true
+			if err = mce.handleDropProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CallStmt:
+			selfHandle = true
+			if err = mce.handleCallProcedure(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -2785,6 +2825,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if ep.Outfile {
+				oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
+				if err = exportAllData(oq); err != nil {
+					return err
+				}
 				if err = ep.Writer.Flush(); err != nil {
 					goto handleFailed
 				}
@@ -2984,6 +3028,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
+			*tree.CreateProcedure, *tree.DropProcedure, *tree.CallStmt,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3144,21 +3189,20 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:              ses.GetUserName(),
-		Host:              pu.SV.Host,
-		ConnectionID:      uint64(proto.ConnectionID()),
-		Database:          ses.GetDatabaseName(),
-		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:          ses.GetTimeZone(),
-		StorageEngine:     pu.StorageEngine,
-		AutoIncrCaches:    ses.GetAutoIncrCaches(),
-		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
 	}
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.

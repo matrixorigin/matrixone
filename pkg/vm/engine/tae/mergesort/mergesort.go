@@ -112,6 +112,8 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		Sort(cols[pk], tsLess, sortedIdx)
 	case types.T_Rowid:
 		Sort(cols[pk], rowidLess, sortedIdx)
+	case types.T_Blockid:
+		Sort(cols[pk], blockidLess, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		Sort(cols[pk], bytesLess, sortedIdx)
@@ -217,6 +219,8 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = Merge(column, sortedIdx, tsLess, fromLayout, toLayout)
 	case types.T_Rowid:
 		ret, mapping = Merge(column, sortedIdx, rowidLess, fromLayout, toLayout)
+	case types.T_Blockid:
+		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout)

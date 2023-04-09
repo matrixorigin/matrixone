@@ -650,7 +650,6 @@ func runLockServiceTestsWithLevel(
 	lockTableBindTimeout time.Duration,
 	fn func(*lockTableAllocator, []*service),
 	adjustConfig func(*Config)) {
-	defaultRPCTimeout = time.Second
 	defer leaktest.AfterTest(t.(testing.TB))()
 	RunLockServicesForTest(
 		level,
@@ -665,6 +664,11 @@ func runLockServiceTestsWithLevel(
 		},
 		adjustConfig,
 	)
+}
+
+func TestUnsafeStringToByteSlice(t *testing.T) {
+	v := "abc"
+	assert.Equal(t, []byte(v), unsafeStringToByteSlice(v))
 }
 
 func waitWaiters(

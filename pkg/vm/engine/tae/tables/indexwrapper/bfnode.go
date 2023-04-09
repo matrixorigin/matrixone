@@ -16,6 +16,7 @@ package indexwrapper
 
 import (
 	"context"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -64,15 +65,16 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 	if err != nil {
 		return
 	}
-	return bf.MayContainsKey(key)
+	v := types.EncodeValue(key, r.typ)
+	return bf.MayContainsKey(v)
 }
 
-func (r *BfReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (b bool, m *roaring.Bitmap, err error) {
+func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roaring.Bitmap, err error) {
 	bf, err := r.getBloomFilter()
 	if err != nil {
 		return
 	}
-	return bf.MayContainsAnyKeys(keys, visibility)
+	return bf.MayContainsAnyKeys(keys)
 }
 
 func (r *BfReader) Destroy() error { return nil }

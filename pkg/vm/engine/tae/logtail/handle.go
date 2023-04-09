@@ -70,10 +70,10 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,7 +83,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -119,8 +118,12 @@ func HandleSyncLogTailReq(
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
 	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
+		if elapsed := time.Since(now); elapsed > 5*time.Second {
+			logutil.Infof("[Logtail] long pull cost %v, %v: %+v, %v ", elapsed, canRetry, req, err)
+		}
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
@@ -245,12 +248,12 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		dbNode := node.(*catalog.DBMVCCNode)
+		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -269,7 +272,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		tblNode := node.(*catalog.TableMVCCNode)
+		tblNode := node
 		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
 			if !tblNode.HasDropCommitted() {
@@ -293,9 +296,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			}
 		}
 	}
@@ -359,17 +362,20 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 }
 
 // this is used to collect ONE ROW of db or table change
-func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
+func catalogEntry2Batch[
+	T *catalog.DBEntry | *catalog.TableEntry,
+	N *catalog.MVCCNode[*catalog.EmptyMVCCNode] | *catalog.MVCCNode[*catalog.TableMVCCNode]](
 	dstBatch *containers.Batch,
 	e T,
+	node N,
 	schema *catalog.Schema,
-	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
+	fillDataRow func(e T, node N, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
 	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
+		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
@@ -438,7 +444,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestPrepareTs := newest.CloneAll().(*catalog.MetadataMVCCNode).GetPrepare()
+		latestPrepareTs := newest.CloneAll().GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -447,21 +453,21 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	e.RUnlock()
 
 	for _, node := range mvccNodes {
-		metaNode := node.(*catalog.MetadataMVCCNode)
-		if metaNode.MetaLoc != "" && !metaNode.IsAborted() {
+		metaNode := node
+		if metaNode.BaseNode.MetaLoc != "" && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
 
 	if n := len(mvccNodes); n > 0 {
-		newest := mvccNodes[n-1].(*catalog.MetadataMVCCNode)
+		newest := mvccNodes[n-1]
 		if e.IsAppendable() {
-			if newest.MetaLoc != "" {
+			if newest.BaseNode.MetaLoc != "" {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if newest.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
+			if newest.BaseNode.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}
@@ -472,14 +478,14 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 // appendBlkMeta add block metadata into api entry according to logtail protocol
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata
-func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
+func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MVCCNode[*catalog.MetadataMVCCNode]) {
 	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted(), metaNode.End, metaNode.CreatedAt, metaNode.DeletedAt)
 }
 
-func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
+func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
 	logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
-		createts.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
+		createts.ToString(), node.DeletedAt.ToString(), node.BaseNode.MetaLoc, node.BaseNode.DeltaLoc)
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
@@ -487,8 +493,8 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.DeltaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc))
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
@@ -600,9 +606,9 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) (entries []*api.Entry, err error) {
+	fs fileservice.FileService) ([]*api.Entry, error) {
 	if metLoc == "" {
-		return
+		return nil, nil
 	}
 	now := time.Now()
 	defer func() {
@@ -612,33 +618,33 @@ func LoadCheckpointEntries(
 	datas := make([]*CheckpointData, len(locations))
 
 	readers := make([]dataio.Reader, len(locations))
-	readerMetas := make([][]objectio.BlockObject, len(locations))
 	for i, key := range locations {
-		readers[i], err = blockio.NewCheckPointReader(fs, key)
-
-		err = blockio.PrefetchBlocksMeta(readers[i], nil)
+		reader, err := blockio.NewCheckPointReader(fs, key)
 		if err != nil {
-			return
+			return nil, err
+		}
+		readers[i] = reader
+		err = blockio.PrefetchCkpMeta(fs, key)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	for i := range locations {
-		readerMetas[i], err = readers[i].LoadBlocksMeta(ctx, common.DefaultAllocator)
+	for _, key := range locations {
+		pref, err := blockio.BuildCkpPrefetch(fs, key)
 		if err != nil {
-			return
+			return nil, err
 		}
-
-		pref := blockio.BuildPrefetch(readers[i], common.DefaultAllocator)
 		for idx, item := range checkpointDataRefer {
 			idxes := make([]uint16, len(item.attrs))
 			for col := range item.attrs {
 				idxes[col] = uint16(col)
 			}
-			pref.AddBlock(idxes, []uint32{readerMetas[i][idx].GetID()})
+			pref.AddBlock(idxes, []uint32{uint32(idx)})
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
-			return
+			return nil, err
 		}
 
 	}
@@ -647,16 +653,16 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, item.nullables, readerMetas[i][idx], readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
 			if err != nil {
-				return
+				return nil, err
 			}
 			data.bats[idx] = bat
 		}
 		datas[i] = data
 	}
 
-	entries = make([]*api.Entry, 0)
+	entries := make([]*api.Entry, 0)
 	for i := range locations {
 		data := datas[i]
 		ins, del, cnIns, err := data.GetTableData(tableID)
@@ -702,5 +708,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return
+	return entries, nil
 }

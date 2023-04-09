@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select rank() over(partition by a order by b desc) from t1",
-		output: "select rank() over (partition by a order by b desc) from t1",
+		input:  "select 1",
+		output: "select 1",
 	}
 )
 
@@ -115,14 +115,15 @@ var (
 		output: "select count(*) as low_stock from (select s_w_id, s_i_id, s_quantity from bmsql_stock where s_w_id = 1 and s_quantity < 1000 and s_i_id in (select ol_i_id from bmsql_district inner join bmsql_order_line on ol_w_id = d_w_id and ol_d_id = d_id and ol_o_id >= d_next_o_id - 20 and ol_o_id < d_next_o_id where d_w_id = 1 and d_id = 1))",
 	}, {
 		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
-		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+		output: "create account abc@124 admin_name 'abc@124' identified by '******'",
 	}, {
 		input:  "create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';",
-		output: "create account account admin_name 'root' identified by '123456'",
+		output: "create account account admin_name 'root' identified by '******'",
 	}, {
 		input: "drop table if exists history",
 	}, {
-		input: "create user daisy@192.168.1.10 identified by '123456'",
+		input:  "create user daisy@192.168.1.10 identified by '123456'",
+		output: "create user daisy@192.168.1.10 identified by '******'",
 	}, {
 		input: "create table t0 (a float(255, 3))",
 	}, {
@@ -1503,37 +1504,51 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 		}, {
-			input: "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "create account if not exists nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "create account if not exists nihao admin_name 'admin' identified with '123'",
+			input:  "create account if not exists nihao admin_name 'admin' identified with '123'",
+			output: "create account if not exists nihao admin_name 'admin' identified with '******'",
 		}, {
-			input: "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "create account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "create account nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "create account nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "create account nihao admin_name 'admin' identified with '123'",
+			input:  "create account nihao admin_name 'admin' identified with '123'",
+			output: "create account nihao admin_name 'admin' identified with '******'",
 		}, {
 			input: "drop account if exists abc",
 		}, {
-			input: "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "alter account if exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "alter account if exists nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "alter account if exists nihao admin_name 'admin' identified with '123'",
+			input:  "alter account if exists nihao admin_name 'admin' identified with '123'",
+			output: "alter account if exists nihao admin_name 'admin' identified with '******'",
 		}, {
-			input: "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			input:  "alter account nihao admin_name 'admin' identified by '123' open comment 'new account'",
+			output: "alter account nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
 			input: "alter account nihao admin_name 'admin' identified by random password",
 		}, {
-			input: "alter account nihao admin_name 'admin' identified with '123'",
+			input:  "alter account nihao admin_name 'admin' identified with '123'",
+			output: "alter account nihao admin_name 'admin' identified with '******'",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role def_role " +
 				"password expire " +
 				"comment 'new comment'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' default role def_role " +
+				"password expire " +
+				"comment 'new comment'",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role de_role " +
+				"lock " +
+				"attribute 'new attribute'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' default role de_role " +
 				"lock " +
 				"attribute 'new attribute'",
 		}, {
@@ -1542,27 +1557,46 @@ var (
 				"abc5 identified with '345' " +
 				"default role de_role " +
 				"attribute 'new attribute'",
+			output: "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******', " +
+				"abc4 identified by random password, " +
+				"abc5 identified with '******' " +
+				"default role de_role " +
+				"attribute 'new attribute'",
 		}, {
 			input: "create user if not exists abc1 identified by '111' " +
+				"default role de_role " +
+				"comment 'new comment'",
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role " +
 				"comment 'new comment'",
 		}, {
 			input: "create user if not exists abc1 identified by '111' " +
 				"default role de_role",
-		}, {
-			input: "create user if not exists abc1 identified by '123' " +
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role",
 		}, {
 			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+			output: "create user if not exists abc1 identified by '******' " +
+				"default role de_role",
+		}, {
+			input: "create user if not exists abc1 identified by '123' " +
+				"default role de_role",
+			output: "create user if not exists abc1 identified by '******' " +
 				"default role de_role",
 		}, {
 			input: "create user abc1 identified by '123' " +
 				"default role de_role",
+			output: "create user abc1 identified by '******' " +
+				"default role de_role",
 		}, {
 			input: "create user abc1 identified by '111' " +
 				"default role de_role",
+			output: "create user abc1 identified by '******' " +
+				"default role de_role",
 		}, {
-			input: "create user abc1 identified by 'a111'",
+			input:  "create user abc1 identified by 'a111'",
+			output: "create user abc1 identified by '******'",
 		}, {
 			input: "drop user if exists abc1, abc2, abc3",
 		}, {
@@ -1574,8 +1608,16 @@ var (
 				"default role de_role " +
 				"lock " +
 				"comment 'new comment'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"default role de_role " +
+				"lock " +
+				"comment 'new comment'",
 		}, {
 			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
+				"default role de_role " +
+				"unlock " +
+				"comment 'new comment'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
 				"default role de_role " +
 				"unlock " +
 				"comment 'new comment'",
@@ -1584,19 +1626,30 @@ var (
 				"default role de_role " +
 				"password expire " +
 				"attribute 'new attribute'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"default role de_role " +
+				"password expire " +
+				"attribute 'new attribute'",
 		}, {
 			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
 				"attribute 'new attribute'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******' " +
+				"attribute 'new attribute'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+			input:  "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
+			output: "alter user if exists abc1 identified by '******', abc2 identified with '******', abc3 identified with '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123'",
+			output: "alter user if exists abc1 identified by '******'",
 		}, {
-			input: "alter user if exists abc1 identified by '123'",
+			input:  "alter user if exists abc1 identified by '123'",
+			output: "alter user if exists abc1 identified by '******'",
 		}, {
-			input: "alter user abc1 identified by '123'",
+			input:  "alter user abc1 identified by '123'",
+			output: "alter user abc1 identified by '******'",
 		}, {
 			input: "create role if not exists role1, role2, role2",
 		}, {
@@ -1784,7 +1837,8 @@ var (
 			input: "alter account if exists abc",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+			output: "alter account if exists abc admin_name 'root' identified by '******' open comment 'str'",
 		},
 		{
 			input: "alter account if exists abc open comment 'str'",
@@ -1796,10 +1850,12 @@ var (
 			input: "alter account if exists abc open",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' open",
+			output: "alter account if exists abc admin_name 'root' identified by '******' open",
 		},
 		{
-			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+			input:  "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+			output: "alter account if exists abc admin_name 'root' identified by '******' comment 'str'",
 		},
 		{
 			input: `create cluster table a (a int)`,
@@ -1969,7 +2025,14 @@ var (
 			input: "alter table tbl1 drop column col1",
 		},
 		{
+			input: "alter table tbl1 drop column col1, drop column col2",
+		},
+		{
 			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input:  "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = 'aa'",
+			output: "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = aa",
 		},
 		{
 			input: "alter table tbl1 drop key idx_name",
@@ -1986,6 +2049,14 @@ var (
 		{
 			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
 			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
+		{
+			input:  "alter table t1 alter index c visible",
+			output: "alter table t1 alter index c visible",
+		},
+		{
+			input:  "alter table t1 alter index c invisible",
+			output: "alter table t1 alter index c invisible",
 		},
 		{
 			input: "create publication pub1 database db1",
@@ -2067,6 +2138,42 @@ var (
 			input:  "show table_size from mo_role from mo_catalog",
 			output: "show table size from mo_role from mo_catalog",
 		},
+		{
+			input:  "show roles",
+			output: "show roles",
+		},
+		{
+			input:  "show roles like '%dafgda_'",
+			output: "show roles like %dafgda_",
+		},
+		{
+			input:  "create procedure test1 (in param1 int) 'test test'",
+			output: "create procedure test1 (in param1 int) 'test test'",
+		},
+		{
+			input:  "create procedure test2 (param1 int, inout param2 char(5)) 'test test'",
+			output: "create procedure test2 (in param1 int, inout param2 char(5)) 'test test'",
+		},
+		{
+			input:  "drop procedure test1",
+			output: "drop procedure test1",
+		},
+		{
+			input:  "call test1()",
+			output: "call test1()",
+		},
+		{
+			input:  "call test1(@session, @increment)",
+			output: "call test1(@session, @increment)",
+		},
+		{
+			input:  "select cast(123 as binary)",
+			output: "select cast(123 as binary)",
+		},
+		{
+			input:  "select BINARY 124",
+			output: "select binary(124)",
+		},
 	}
 )
 
@@ -2099,6 +2206,79 @@ var (
 		input: "use db1; select * from t",
 	}, {
 		input: "use db1; select * from t; use db2; select * from t2",
+	}, {
+		input: `BEGIN
+					DECLARE x,y VARCHAR(10);
+					DECLARE z INT;
+					DECLARE fl FLOAT DEFAULT 1.0;
+				END`,
+		output: `begin declare x y varchar(10) default null; declare z int default null; declare fl float default 1.0; end`,
+	}, {
+		input: `BEGIN
+					CASE v
+						WHEN 2 THEN SELECT v;
+						WHEN 3 THEN SELECT 0;
+					ELSE
+						BEGIN
+							CASE v
+								WHEN 4 THEN SELECT v;
+								WHEN 5 THEN SELECT 0;
+							ELSE
+								BEGIN
+								END
+							END CASE;
+						END
+					END CASE; 
+				END`,
+		output: "begin case v when 2 then select v; when 3 then select 0; else begin case v when 4 then select v; when 5 then select 0; else begin end; end case; end; end case; end",
+	}, {
+		input: `BEGIN
+					IF n > m THEN SET s = '>';
+					ELSEIF n = m THEN SET s = '=';
+					ELSE SET s = '<';
+					END IF;
+				END`,
+		output: "begin if n > m then set s = >; elseif n = m then set s = =; else set s = <; end if; end",
+	}, {
+		input: `BEGIN					
+					IF n = m THEN SET s = 'equals';
+					ELSE
+						IF n > m THEN SET s = 'greater';
+						ELSE SET s = 'less';
+						END IF;
+						SET s = CONCAT('is ', s, ' than');
+					END IF;
+					SET s = CONCAT(n, ' ', s, ' ', m, '.');
+				END`,
+		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = concat(is , s,  than); end if; set s = concat(n,  , s,  , m, .); end",
+	}, {
+		input: `BEGIN					
+					label1: LOOP
+						SET p1 = p1 + 1;
+						IF p1 < 10 THEN
+							ITERATE label1;
+						END IF;
+						LEAVE label1;
+					END LOOP label1;
+					SET @x = p1;
+				END`,
+		output: "begin label1: loop set p1 = p1 + 1; if p1 < 10 then iterate label1; end if; leave label1; end loop label1; set x = p1; end",
+	}, {
+		input: `BEGIN
+					SET @x = 0;
+					REPEAT
+						SET @x = @x + 1;
+					UNTIL @x > p1 END REPEAT;
+				END`,
+		output: "begin set x = 0; repeat set x = @x + 1; until @x > p1 end repeat; end",
+	}, {
+		input: `BEGIN
+					DECLARE v1 INT DEFAULT 5;
+					WHILE v1 > 0 DO
+						SET v1 = v1 - 1;
+					END WHILE;
+				END`,
+		output: "begin declare v1 int default 5; while v1 > 0 do set v1 = v1 - 1; end while; end",
 	}}
 )
 
