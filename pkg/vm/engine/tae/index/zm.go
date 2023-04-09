@@ -239,10 +239,6 @@ func (zm ZM) setInited() {
 	zm[62] |= 0x80
 }
 
-func (zm ZM) setMaxTruncated() {
-	zm[61] |= 0x80
-}
-
 func (zm ZM) getValue(min bool) any {
 	offset := 0
 	if !min {
