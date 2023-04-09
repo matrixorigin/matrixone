@@ -170,7 +170,8 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 	meta := &dataio.ObjectMeta{}
 	meta.Rows = objmeta.Rows
 	for _, colmeta := range objmeta.ColMetas {
-		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(dataio.Index)})
+		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{
+			NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: index.DecodeZM(colmeta.Zonemap)})
 	}
 	var idxs []uint16
 	for _, blkmeta := range objmeta.BlkMetas {
@@ -220,13 +221,7 @@ func (r *BlockReader) LoadZoneMap(
 		if err != nil {
 			return nil, err
 		}
-		zm, err := column.GetIndex(ctx, objectio.ZoneMapType, nil, m)
-		if err != nil {
-			return nil, err
-		}
-		data := zm.(*objectio.ZoneMap).GetData()
-
-		zoneMapList[i] = index.DecodeZM(data.([]byte))
+		zoneMapList[i] = index.DecodeZM(column.GetMeta().ZoneMap())
 	}
 
 	return zoneMapList, nil
@@ -248,7 +243,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 		if err != nil {
 			return nil, err
 		}
-		blocksBloomFilters[i] = bf.(*objectio.BloomFilter).GetData().(index.StaticFilter)
+		blocksBloomFilters[i] = bf.GetData().(index.StaticFilter)
 	}
 	return blocksBloomFilters, nil
 }

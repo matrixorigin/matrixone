@@ -36,28 +36,10 @@ type IndexData interface {
 
 type ZoneMapUnmarshalFunc = func(buf []byte, t types.Type) (any, error)
 
-type ZoneMap struct {
-	data []byte
-}
+type ZoneMap []byte
 
-func NewZoneMap(zm []byte) (IndexData, error) {
-	zoneMap := &ZoneMap{
-		data: zm,
-	}
-	return zoneMap, nil
-}
-
-func (z *ZoneMap) GetIdx() uint16 {
-	return 0
-}
-
-func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) error {
+func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) {
 	block.meta.ColumnMeta(idx).setZoneMap(*z)
-	return nil
-}
-
-func (z *ZoneMap) GetData() any {
-	return z.data
 }
 
 type BloomFilter struct {
@@ -65,7 +47,7 @@ type BloomFilter struct {
 	data any
 }
 
-func NewBloomFilter(alg uint8, data any) IndexData {
+func NewBloomFilter(alg uint8, data any) *BloomFilter {
 	bloomFilter := &BloomFilter{
 		alg:  alg,
 		data: data,

@@ -48,11 +48,11 @@ func (meta *ObjectColumnMeta) Write(w io.Writer) (err error) {
 	}
 
 	var zm []byte
-	if meta.Zonemap.data == nil {
+	if meta.Zonemap == nil {
 		var buf [ZoneMapSize]byte
 		zm = buf[:]
 	} else {
-		zm = meta.Zonemap.data
+		zm = meta.Zonemap
 	}
 	if _, err = w.Write(zm); err != nil {
 		return
@@ -64,7 +64,7 @@ func (meta *ObjectColumnMeta) Read(bs []byte) (err error) {
 	meta.Ndv = types.DecodeUint32(bs)
 	meta.NullCnt = types.DecodeUint32(bs[4:])
 	bs = bs[8:]
-	meta.Zonemap.data = bs[:64]
+	meta.Zonemap = bs[:64]
 	return
 }
 
@@ -287,13 +287,11 @@ func (cm ColumnMeta) setLocation(location Extent) {
 }
 
 func (cm ColumnMeta) ZoneMap() ZoneMap {
-	return ZoneMap{
-		data: cm[zoneMapOff : zoneMapOff+zoneMapLen],
-	}
+	return ZoneMap(cm[zoneMapOff : zoneMapOff+zoneMapLen])
 }
 
 func (cm ColumnMeta) setZoneMap(zm ZoneMap) {
-	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm.data)
+	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm)
 }
 
 func (cm ColumnMeta) BloomFilter() Extent {

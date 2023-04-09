@@ -58,27 +58,22 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 	return data, nil
 }
 
-func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
-	if dataType == ZoneMapType {
-		return NewZoneMap(cb.meta.ZoneMap().data)
-	} else if dataType == BloomFilterType {
-		data := &fileservice.IOVector{
-			FilePath: cb.object.name,
-			Entries:  make([]fileservice.IOEntry, 1),
-		}
-		data.Entries[0] = fileservice.IOEntry{
-			Offset: int64(cb.meta.BloomFilter().Offset()),
-			Size:   int64(cb.meta.BloomFilter().Length()),
-		}
-		var err error
-		data.Entries[0].ToObject = readFunc(int64(cb.meta.BloomFilter().OriginSize()))
-		err = cb.object.fs.Read(ctx, data)
-		if err != nil {
-			return nil, err
-		}
-		return NewBloomFilter(0, data.Entries[0].Object), nil
+func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (*BloomFilter, error) {
+	data := &fileservice.IOVector{
+		FilePath: cb.object.name,
+		Entries:  make([]fileservice.IOEntry, 1),
 	}
-	return nil, nil
+	data.Entries[0] = fileservice.IOEntry{
+		Offset: int64(cb.meta.BloomFilter().Offset()),
+		Size:   int64(cb.meta.BloomFilter().Length()),
+	}
+	var err error
+	data.Entries[0].ToObject = readFunc(int64(cb.meta.BloomFilter().OriginSize()))
+	err = cb.object.fs.Read(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	return NewBloomFilter(0, data.Entries[0].Object), nil
 }
 
 func (cb *ColumnBlock) GetMeta() ColumnMeta {

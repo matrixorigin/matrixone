@@ -55,21 +55,14 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 }
 
 func (writer *ZMWriter) Finalize() error {
-	appender := writer.writer
 
 	//var startOffset uint32
 	iBuf, err := writer.zonemap.Marshal()
 	if err != nil {
 		return err
 	}
-	zonemap, err := objectio.NewZoneMap(iBuf)
-	if err != nil {
-		return err
-	}
-	err = appender.WriteIndex(writer.block, zonemap, writer.colIdx)
-	if err != nil {
-		return err
-	}
+	zonemap := objectio.ZoneMap(iBuf)
+	zonemap.Write(nil, writer.block.(*objectio.Block), writer.colIdx)
 	//meta.SetStartOffset(startOffset)
 	return nil
 }
@@ -203,8 +196,7 @@ func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta)
 		}
 		if b.zms[i] != nil {
 			zmbuf, _ := b.zms[i].Marshal()
-			objzm, _ := objectio.NewZoneMap(zmbuf)
-			b.metas[i].Zonemap = *objzm.(*objectio.ZoneMap)
+			b.metas[i].Zonemap = zmbuf
 		}
 	}
 	ret := b.metas
