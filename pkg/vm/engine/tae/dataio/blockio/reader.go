@@ -155,9 +155,14 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
+	metadata := meta.ObjectNext()
+	header := objectio.ObjectHeader(metadata)
+	metadata = metadata[header.Length():]
+
 	blocksZoneMap := make([][]dataio.Index, len(ids))
 	for i, id := range ids {
-		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, meta.BlkMetas[id], m)
+		block := objectio.GetBlockMeta(id, metadata)
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, block, m)
 		if err != nil {
 			return nil, err
 		}
@@ -166,25 +171,29 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
-	objmeta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	objectMeta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
 	meta := &dataio.ObjectMeta{}
-	meta.Rows = objmeta.Rows
-	for _, colmeta := range objmeta.ColMetas {
+	meta.Rows = objectMeta.BlockHeader().Rows()
+
+	for i := uint16(0); i < objectMeta.BlockHeader().ColumnCount(); i++ {
+		colMeta := objectMeta.ObjectColumnMeta(i)
 		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{
-			NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: index.DecodeZM(colmeta.Zonemap)})
+			NullCnt: colMeta.NullCnt(), Ndv: colMeta.Ndv(), Zm: index.DecodeZM(colMeta.ZoneMap())})
 	}
+	header, metadata := decodeObjectMeta(objectMeta)
 	var idxs []uint16
-	for _, blkmeta := range objmeta.BlkMetas {
+	for i := uint32(0); i < header.BlockCount(); i++ {
+		block := objectio.GetBlockMeta(i, metadata)
 		if idxs == nil {
-			idxs = make([]uint16, blkmeta.GetColumnCount())
+			idxs = make([]uint16, block.GetColumnCount())
 			for i := 0; i < len(idxs); i++ {
 				idxs[i] = uint16(i)
 			}
 		}
-		zm, err := r.LoadZoneMap(ctx, idxs, blkmeta, m)
+		zm, err := r.LoadZoneMap(ctx, idxs, block, m)
 		meta.Zms = append(meta.Zms, zm)
 		if err != nil {
 			return nil, err
@@ -216,7 +225,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
 	idxs []uint16,
-	block objectio.BlockObject,
+	block objectio.BlockMeta,
 	m *mpool.MPool) ([]dataio.Index, error) {
 	zoneMapList := make([]dataio.Index, len(idxs))
 	for i, idx := range idxs {
@@ -364,4 +373,11 @@ func PrefetchFile(service fileservice.FileService, size int64, name string) erro
 		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
 	}
 	return PrefetchWithMerged(pref)
+}
+
+func decodeObjectMeta(meta objectio.ObjectMeta) (objectio.ObjectHeader, []byte) {
+	metadata := meta.ObjectNext()
+	header := objectio.ObjectHeader(metadata)
+	data := metadata[header.Length():]
+	return header, data
 }
