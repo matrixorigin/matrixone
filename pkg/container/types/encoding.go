@@ -350,8 +350,8 @@ func DecodeValue(val []byte, typ Type) any {
 	}
 }
 
-func EncodeValue(val any, typ Type) []byte {
-	switch typ.Oid {
+func EncodeValue(val any, t T) []byte {
+	switch t {
 	case T_bool:
 		return EncodeFixed(val.(bool))
 	case T_int8:
@@ -395,7 +395,7 @@ func EncodeValue(val any, typ Type) []byte {
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val.([]byte)
 	default:
-		panic(fmt.Sprintf("unsupported type %v", typ))
+		panic(fmt.Sprintf("unsupported type %v", t))
 	}
 }
 

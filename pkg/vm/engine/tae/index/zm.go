@@ -134,7 +134,7 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 
 // TODO: remove me later
 func (zm ZM) Update(v any) (err error) {
-	UpdateZMAny(&zm, v, zm.GetType().ToType())
+	UpdateZMAny(&zm, v)
 	return
 }
 
@@ -217,7 +217,7 @@ func (zm ZM) Contains(k any) bool {
 	}
 
 	t := types.T(zm[63])
-	v := types.EncodeValue(k, t.ToType())
+	v := types.EncodeValue(k, t)
 	return zm.ContainsFixed(v)
 }
 
@@ -382,8 +382,8 @@ func UpdateZM(zm *ZM, v []byte) {
 	}
 }
 
-func UpdateZMAny(zm *ZM, v any, typ types.Type) {
-	vv := types.EncodeValue(v, typ)
+func UpdateZMAny(zm *ZM, v any) {
+	vv := types.EncodeValue(v, zm.GetType())
 	UpdateZM(zm, vv)
 }
 

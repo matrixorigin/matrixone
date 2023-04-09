@@ -35,13 +35,13 @@ func TestZM(t *testing.T) {
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
-	UpdateZMAny(&zm1, i64l, types.T_int64.ToType())
+	UpdateZMAny(&zm1, i64l)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
-	UpdateZMAny(&zm1, i64h, types.T_int64.ToType())
+	UpdateZMAny(&zm1, i64h)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
