@@ -565,14 +565,14 @@ func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
-	if store.cmdMgr.GetCSN() == 0 {
-		return
-	}
-	for _, db := range store.dbs {
-		if err = db.ApplyRollback(); err != nil {
-			break
+	if store.cmdMgr.GetCSN() != 0 {
+		for _, db := range store.dbs {
+			if err = db.ApplyRollback(); err != nil {
+				break
+			}
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -598,6 +598,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 			break
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -692,3 +693,9 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
+
+func (store *txnStore) CleanUp() {
+	for _, db := range store.dbs {
+		db.CleanUp()
+	}
+}

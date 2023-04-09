@@ -279,7 +279,10 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 // CloseAppends un-reference the appendable blocks
 func (seg *localSegment) CloseAppends() {
 	for _, ctx := range seg.appends {
-		ctx.driver.Close()
+		if ctx.driver != nil {
+			ctx.driver.Close()
+			ctx.driver = nil
+		}
 	}
 }
 

@@ -1229,3 +1229,9 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 	}
 	return
 }
+
+func (tbl *txnTable) CleanUp() {
+	if tbl.localSegment != nil {
+		tbl.localSegment.CloseAppends()
+	}
+}
