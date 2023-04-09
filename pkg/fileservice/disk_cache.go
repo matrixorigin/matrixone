@@ -15,13 +15,11 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"io/fs"
 	"math"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,13 +97,14 @@ func (d *DiskCache) Read(
 		return nil
 	}
 
-	var numHit, numRead, numOpen int64
+	var numHit, numRead, numOpen, numError int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Disk.Read.Add(numRead)
 			c.FileService.Cache.Disk.Hit.Add(numHit)
+			c.FileService.Cache.Disk.Error.Add(numError)
 			c.FileService.Cache.Disk.OpenFile.Add(numOpen)
 		}, d.perfCounterSets...)
 	}()
@@ -121,6 +120,7 @@ func (d *DiskCache) Read(
 	if err == nil {
 		numOpen++
 		contentOK = true
+		defer contentFile.Close()
 	} else {
 		err = nil // ignore
 	}
@@ -139,14 +139,16 @@ func (d *DiskCache) Read(
 		var file *os.File
 		if contentOK {
 			// use content file
-			file = contentFile
-		} else {
-			// open link file
-			linkPath := d.entryLinkPath(path.File, entry)
-			linkFile, err := os.Open(linkPath)
+			_, err = contentFile.Seek(entry.Offset, io.SeekStart)
 			if err == nil {
-				file = linkFile
-				defer linkFile.Close()
+				file = contentFile
+			}
+		} else {
+			// open entry file
+			entryFile, err := os.Open(d.entryDataFilePath(path.File, entry))
+			if err == nil {
+				file = entryFile
+				defer entryFile.Close()
 				numOpen++
 			}
 		}
@@ -155,30 +157,11 @@ func (d *DiskCache) Read(
 			continue
 		}
 
-		if _, err := file.Seek(entry.Offset, 0); err != nil {
+		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
+			numError++
 			continue
 		}
-		data := make([]byte, entry.Size)
-		if _, err := io.ReadFull(file, data); err != nil {
-			// ignore error
-			continue
-		}
-
-		entry.Data = data
-		if entry.WriterForRead != nil {
-			if _, err := entry.WriterForRead.Write(data); err != nil {
-				return err
-			}
-		}
-		if entry.ReadCloserForRead != nil {
-			*entry.ReadCloserForRead = io.NopCloser(bytes.NewReader(data))
-		}
-		if err := entry.setObjectFromData(); err != nil {
-			return err
-		}
-
-		entry.done = true
 
 		vector.Entries[i] = entry
 		numHit++
@@ -217,16 +200,17 @@ func (d *DiskCache) Update(
 		return err
 	}
 
-	contentOK := false
 	contentPath := d.fullDataFilePath(path.File)
 	if _, ok := d.fileExists.Load(contentPath); ok {
-		contentOK = true
+		// full data ok, return
+		return nil
 	} else {
+		// full data file exists, return
 		_, err := os.Stat(contentPath)
 		if err == nil {
 			numStat++
-			contentOK = true
 			d.fileExists.Store(contentPath, true)
+			return nil
 		}
 	}
 
@@ -240,66 +224,51 @@ func (d *DiskCache) Update(
 			continue
 		}
 
-		linkPath := d.entryLinkPath(path.File, entry)
-		if _, ok := d.fileExists.Load(linkPath); ok {
+		entryFilePath := d.entryDataFilePath(path.File, entry)
+		if _, ok := d.fileExists.Load(entryFilePath); ok {
 			// already exists
 			continue
 		}
-		_, err := os.Stat(linkPath)
+		_, err := os.Stat(entryFilePath)
 		if err == nil {
 			// file exists
-			d.fileExists.Store(linkPath, true)
+			d.fileExists.Store(entryFilePath, true)
 			numStat++
 			continue
 		}
 
-		var linkTarget string
-
-		if contentOK {
-			linkTarget = contentPath
-
-		} else {
-			// write data
-			dataPath := d.dataFilePath(path.File)
-			err = os.MkdirAll(filepath.Dir(dataPath), 0755)
-			if err != nil {
-				numError++
-				continue // ignore error
-			}
-			file, err := os.OpenFile(dataPath, os.O_RDWR|os.O_CREATE, 0644)
-			if err != nil {
-				numError++
-				continue // ignore error
-			}
-			numOpen++
-			n, err := file.WriteAt(entry.Data, entry.Offset)
-			if err != nil {
-				numError++
-				continue // ignore error
-			}
-			if err := file.Close(); err != nil {
-				numError++
-				continue // ignore error
-			}
-			if int64(n) != entry.Size {
-				numError++
-				continue // ignore error
-			}
-			d.triggerEvict(ctx, int64(n))
-			linkTarget = dataPath
+		// write data
+		dir := filepath.Dir(entryFilePath)
+		err = os.MkdirAll(dir, 0755)
+		if err != nil {
+			numError++
+			continue // ignore error
+		}
+		f, err := os.CreateTemp(dir, "*")
+		if err != nil {
+			numError++
+			continue // ignore error
+		}
+		numOpen++
+		n, err := f.Write(entry.Data)
+		if err != nil {
+			f.Close()
+			os.Remove(f.Name())
+			numError++
+			continue // ignore error
+		}
+		if err := f.Close(); err != nil {
+			numError++
+			continue // ignore error
+		}
+		if err := os.Rename(f.Name(), entryFilePath); err != nil {
+			numError++
+			continue // ignore error
 		}
 
-		// link
-		if err := os.Symlink(filepath.Base(linkTarget), linkPath); err != nil {
-			if os.IsExist(err) {
-				// ok
-			} else {
-				numError++
-				continue // ignore error
-			}
-		}
+		d.triggerEvict(ctx, int64(n))
 
-		d.fileExists.Store(linkPath, true)
+		d.fileExists.Store(entryFilePath, true)
 	}
 
 	return nil
@@ -375,7 +344,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 		if entry.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(entry.Name(), ".mofscache") {
+		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -502,12 +471,12 @@ func (d *DiskCache) SetFileContent(
 
 func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done func(context.Context) error, closeFunc func() error, err error) {
 	contentPath := d.fullDataFilePath(filePath)
-	tmpPath := contentPath + fmt.Sprintf(".%d.tmp", rand.Int63())
-	err = os.MkdirAll(filepath.Dir(tmpPath), 0755)
+	dir := filepath.Dir(contentPath)
+	err = os.MkdirAll(dir, 0755)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	f, err := os.Create(tmpPath)
+	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -519,10 +488,11 @@ func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done fun
 			if err != nil {
 				return
 			}
+			name := f.Name()
 			if err = f.Close(); err != nil {
 				return
 			}
-			if err = os.Rename(tmpPath, contentPath); err != nil {
+			if err = os.Rename(name, contentPath); err != nil {
 				return
 			}
 			d.triggerEvict(ctx, info.Size())
@@ -531,22 +501,16 @@ func (d *DiskCache) newFileContentWriter(filePath string) (w io.Writer, done fun
 	}, f.Close, nil
 }
 
-func (d *DiskCache) entryLinkPath(path string, entry IOEntry) string {
+const cacheFileSuffix = ".mofscache"
+
+func (d *DiskCache) entryDataFilePath(path string, entry IOEntry) string {
 	if entry.Size < 0 {
 		panic("should not cache size -1 entry")
 	}
 	return filepath.Join(
 		d.path,
 		toOSPath(path),
-		fmt.Sprintf("%d-%d", entry.Offset, entry.Size),
-	)
-}
-
-func (d *DiskCache) dataFilePath(path string) string {
-	return filepath.Join(
-		d.path,
-		toOSPath(path),
-		"data.mofscache",
+		fmt.Sprintf("%d-%d%s", entry.Offset, entry.Size, cacheFileSuffix),
 	)
 }
 
@@ -554,6 +518,6 @@ func (d *DiskCache) fullDataFilePath(path string) string {
 	return filepath.Join(
 		d.path,
 		toOSPath(path),
-		"full-data.mofscache",
+		"full-data"+cacheFileSuffix,
 	)
 }

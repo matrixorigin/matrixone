@@ -116,5 +116,5 @@ type Index interface {
 	Marshal() (buf []byte, err error)
 	Unmarshal(buf []byte) error
 	String() string
-	GetType() types.Type
+	GetType() types.T
 }
