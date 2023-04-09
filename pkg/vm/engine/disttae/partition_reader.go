@@ -238,5 +238,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if rows == 0 {
 		return nil, nil
 	}
+
+	logutil.Info(testutil.OperatorReceiveBatch("eng.reader.PartitionReader", b))
+
 	return b, nil
 }
