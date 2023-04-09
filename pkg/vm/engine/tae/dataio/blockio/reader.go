@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -191,7 +192,7 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 	meta := &dataio.ObjectMeta{}
 	meta.Rows = objmeta.Rows
 	for _, colmeta := range objmeta.ColMetas {
-		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(*BlockIndex)})
+		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(dataio.Index)})
 	}
 	var idxs []uint16
 	for _, blkmeta := range objmeta.BlkMetas {
@@ -251,7 +252,7 @@ func (r *BlockReader) LoadZoneMap(
 		}
 		data := zm.(*objectio.ZoneMap).GetData()
 
-		zoneMapList[i] = data.(*BlockIndex)
+		zoneMapList[i] = data.(dataio.Index)
 	}
 
 	return zoneMapList, nil
@@ -295,12 +296,8 @@ func (r *BlockReader) GetObjectReader() objectio.Reader {
 }
 
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
-	zm := NewZoneMap(typ)
-	err := zm.Unmarshal(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	return zm, err
+	zm := index.DecodeZM(buf)
+	return &zm, nil
 }
 
 func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
