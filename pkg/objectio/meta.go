@@ -121,6 +121,12 @@ const (
 
 type BlockMetaNew []byte
 
+func BuildBlockMeta(count uint16) BlockMetaNew {
+	length := headerLen + uint32(count)*colMetaLen
+	buf := make([]byte, length)
+	return buf[:]
+}
+
 func GetBlockMeta(id uint32, data []byte) BlockMetaNew {
 	metaOff := uint32(0)
 	idOff := uint32(0)
@@ -138,26 +144,60 @@ func GetBlockMeta(id uint32, data []byte) BlockMetaNew {
 	return data[metaOff : metaOff+headerLen+uint32(columnCount)*colMetaLen]
 }
 
+func (bm BlockMetaNew) BlockHeaderNew() BlockHeaderNew {
+	return BlockHeaderNew(bm[:headerLen])
+}
+
+func (bm BlockMetaNew) SetBlockMetaHeader(header BlockHeaderNew) {
+	copy(bm[:headerLen], header)
+}
+
+func (bm BlockMetaNew) ColumnMeta(idx uint16) ColumnMetaNew {
+	return GetColumnMeta(idx, bm)
+}
+
+func (bm BlockMetaNew) AddColumnMeta(idx uint16, col ColumnMetaNew) {
+	offset := headerLen + idx*colMetaLen
+	copy(bm[offset:offset+colMetaLen], col)
+}
+
 type BlockHeaderNew []byte
 
-func BuildBlockHeader(meta *BlockHeader) BlockHeaderNew {
-	return meta.Marshal()
+func BuildBlockHeader() BlockHeaderNew {
+	var buf [headerLen]byte
+	return buf[:]
 }
 
 func (bh BlockHeaderNew) TableID() uint64 {
 	return types.DecodeUint64(bh[:tableIDLen])
 }
 
+func (bh BlockHeaderNew) SetTableID(id uint64) {
+	copy(bh[:tableIDLen], types.EncodeUint64(&id))
+}
+
 func (bh BlockHeaderNew) SegmentID() uint64 {
 	return types.DecodeUint64(bh[segmentIDOff : segmentIDOff+segmentIDLen])
+}
+
+func (bh BlockHeaderNew) SetSegmentID(id uint64) {
+	copy(bh[segmentIDOff:segmentIDOff+segmentIDLen], types.EncodeUint64(&id))
 }
 
 func (bh BlockHeaderNew) BlockID() uint64 {
 	return types.DecodeUint64(bh[blockIDOff : blockIDOff+blockIDLen])
 }
 
+func (bh BlockHeaderNew) SetBlockID(id uint64) {
+	copy(bh[blockIDOff:blockIDOff+blockIDLen], types.EncodeUint64(&id))
+}
+
 func (bh BlockHeaderNew) ColumnCount() uint16 {
 	return types.DecodeUint16(bh[columnCountOff : columnCountOff+columnCountLen])
+}
+
+func (bh BlockHeaderNew) SetColumnCount(count uint16) {
+	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
 }
 
 type BlockHeader struct {
@@ -244,36 +284,65 @@ func GetColumnMeta(idx uint16, data []byte) ColumnMetaNew {
 
 type ColumnMetaNew []byte
 
-func BuildColumnMeta(meta *ColumnMeta) ColumnMetaNew {
-	return meta.Marshal()
+func BuildColumnMeta() ColumnMetaNew {
+	var buf [colMetaLen]byte
+	return buf[:]
 }
 
 func (cm ColumnMetaNew) Type() uint8 {
 	return types.DecodeUint8(cm[:typeLen])
 }
 
+func (cm ColumnMetaNew) setType(t uint8) {
+	copy(cm[:typeLen], types.EncodeUint8(&t))
+}
+
 func (cm ColumnMetaNew) Idx() uint16 {
 	return types.DecodeUint16(cm[idxOff : idxOff+idxLen])
+}
+
+func (cm ColumnMetaNew) setIdx(idx uint16) {
+	copy(cm[idxOff:idxOff+idxLen], types.EncodeUint16(&idx))
 }
 
 func (cm ColumnMetaNew) Alg() uint8 {
 	return types.DecodeUint8(cm[algOff : algOff+algLen])
 }
+
+func (cm ColumnMetaNew) setAlg(alg uint8) {
+	copy(cm[algOff:algOff+algLen], types.EncodeUint8(&alg))
+}
+
 func (cm ColumnMetaNew) Location() Extent {
 	extent := Extent{}
 	extent.Unmarshal(cm[locationOff : locationOff+locationLen])
 	return extent
 }
+
+func (cm ColumnMetaNew) setLocation(location Extent) {
+	copy(cm[locationOff:locationOff+locationLen], location.Marshal())
+}
+
 func (cm ColumnMetaNew) ZoneMap() ZoneMap {
 	return ZoneMap{
 		data: cm[zoneMapOff : zoneMapOff+zoneMapLen],
 	}
 }
+
+func (cm ColumnMetaNew) setZoneMap(zm ZoneMap) {
+	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm.data)
+}
+
 func (cm ColumnMetaNew) BloomFilter() Extent {
 	extent := Extent{}
 	extent.Unmarshal(cm[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 	return extent
 }
+
+func (cm ColumnMetaNew) setBloomFilter(location Extent) {
+	copy(cm[bloomFilterOff:bloomFilterOff+bloomFilterLen], location.Marshal())
+}
+
 func (cm ColumnMetaNew) Checksum() uint32 {
 	return types.DecodeUint32(cm[colMetaChecksumOff : colMetaChecksumOff+colMetaChecksumLen])
 }

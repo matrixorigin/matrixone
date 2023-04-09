@@ -109,7 +109,6 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 				}
 				block := &Block{
 					id:     uint32(i),
-					object: r.object,
 					extent: extent,
 					name:   r.name,
 				}
@@ -133,16 +132,6 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 			for len(colMeta) != 0 {
 				col := ObjectColumnMeta{}
 				if err := col.Read(colMeta); err != nil {
-					return nil, 0, err
-				}
-				// zonemap to object
-				col.Zonemap.idx = uint16(i)
-				col.Zonemap.unmarshalFunc = ZMUnmarshalFunc
-				coldef, err := blocks[0].GetColumn(uint16(i))
-				if err != nil {
-					return nil, 0, err
-				}
-				if err = col.Zonemap.Unmarshal(col.Zonemap.data.([]byte), types.T(coldef.GetMeta().typ).ToType()); err != nil {
 					return nil, 0, err
 				}
 				i++

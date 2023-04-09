@@ -90,13 +90,13 @@ type Reader interface {
 // BlockObject is a batch written to fileservice
 type BlockObject interface {
 	// GetColumn gets a ColumnObject with idx
-	GetColumn(idx uint16) (*ColumnBlock, error)
+	GetColumn(idx uint16) (ColumnObject, error)
 
 	// GetRows gets the rows of the BlockObject
 	GetRows() (uint32, error)
 
 	// GetMeta gets the meta of the BlockObject
-	GetMeta() BlockMeta
+	GetMeta() BlockMetaNew
 
 	// GetExtent gets the metadata location of BlockObject in fileservice
 	GetExtent() Extent

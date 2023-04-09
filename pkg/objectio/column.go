@@ -26,21 +26,17 @@ import (
 type ColumnBlock struct {
 	// meta is the metadata of the ColumnBlock,
 	// such as index, data location, compression algorithm...
-	meta *ColumnMeta
+	meta    *ColumnMeta
+	metaNew ColumnMetaNew
 
 	// object is the block.object
 	object *Object
 }
 
-func NewColumnBlock(idx uint16, object *Object) *ColumnBlock {
-	meta := &ColumnMeta{
-		idx:         idx,
-		zoneMap:     ZoneMap{},
-		bloomFilter: Extent{},
-	}
+func NewColumnBlock(meta ColumnMetaNew, object *Object) *ColumnBlock {
 	col := &ColumnBlock{
-		object: object,
-		meta:   meta,
+		object:  object,
+		metaNew: meta,
 	}
 	return col
 }

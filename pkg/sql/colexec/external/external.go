@@ -617,8 +617,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
-	header := meta.GetHeader()
-	colCnt := header.GetColumnCount()
+	colCnt := meta.BlockHeaderNew().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if param.Extern.SysTable && idxs[i] >= colCnt {

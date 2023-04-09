@@ -62,7 +62,7 @@ func (writer *ZMWriter) Finalize() error {
 	if err != nil {
 		return err
 	}
-	zonemap, err := objectio.NewZoneMap(writer.colIdx, iBuf)
+	zonemap, err := objectio.NewZoneMap(iBuf)
 	if err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta)
 		}
 		if b.zms[i] != nil {
 			zmbuf, _ := b.zms[i].Marshal()
-			objzm, _ := objectio.NewZoneMap(uint16(i), zmbuf)
+			objzm, _ := objectio.NewZoneMap(zmbuf)
 			b.metas[i].Zonemap = *objzm.(*objectio.ZoneMap)
 		}
 	}
