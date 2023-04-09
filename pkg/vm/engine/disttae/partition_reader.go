@@ -136,10 +136,10 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if err != nil {
 				return nil, err
 			}
-
-			logutil.Info(testutil.OperatorReceiveBatch("eng.reader.PartitionReader", bat))
-
 			rbat := bats[0]
+
+			logutil.Info(testutil.OperatorReceiveBatch("eng.reader.PartitionReader", rbat))
+
 			for i, vec := range rbat.Vecs {
 				rbat.Vecs[i], err = vec.Dup(p.procMPool)
 				if err != nil {
