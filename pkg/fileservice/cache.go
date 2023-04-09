@@ -16,25 +16,40 @@ package fileservice
 
 import (
 	"context"
+	"io"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-//TODO in-memory bytes cache
-
-type CacheKey struct {
-	Path   string
-	Offset int64
-	Size   int64
-}
-
 type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-	DiskPath       string        `toml:"disk-path"`
-	DiskCapacity   toml.ByteSize `toml:"disk-capacity"`
+	MemoryCapacity       toml.ByteSize `toml:"memory-capacity"`
+	DiskPath             string        `toml:"disk-path"`
+	DiskCapacity         toml.ByteSize `toml:"disk-capacity"`
+	DiskMinEvictInterval toml.Duration `toml:"disk-min-evict-interval"`
+	DiskEvictTarget      float64       `toml:"disk-evict-target"`
+
+	enableDiskCacheForLocalFS bool // for testing only
 }
 
-type Cache interface {
+func (c *CacheConfig) SetDefaults() {
+	if c.DiskMinEvictInterval.Duration == 0 {
+		c.DiskMinEvictInterval.Duration = time.Minute * 7
+	}
+	if c.DiskEvictTarget == 0 {
+		c.DiskEvictTarget = 0.8
+	}
+}
+
+const DisableCacheCapacity = 1
+
+var DisabledCacheConfig = CacheConfig{
+	MemoryCapacity: DisableCacheCapacity,
+	DiskCapacity:   DisableCacheCapacity,
+}
+
+// VectorCache caches IOVector
+type IOVectorCache interface {
 	Read(
 		ctx context.Context,
 		vector *IOVector,
@@ -47,9 +62,36 @@ type Cache interface {
 	Flush()
 }
 
+type IOVectorCacheKey struct {
+	Path   string
+	Offset int64
+	Size   int64
+}
+
+// ObjectCache caches IOEntry.Object
 type ObjectCache interface {
 	Set(key any, value any, size int64, preloading bool)
 	Get(key any, preloading bool) (value any, size int64, ok bool)
 	Flush()
 	Size() int64
+}
+
+// FileContentCache caches contents of files
+type FileContentCache interface {
+	GetFileContent(
+		ctx context.Context,
+		path string,
+		offset int64,
+	) (
+		r io.ReadCloser,
+		err error,
+	)
+
+	SetFileContent(
+		ctx context.Context,
+		path string,
+		readFunc func(ctx context.Context, vec *IOVector) error,
+	) (
+		err error,
+	)
 }

@@ -21,6 +21,9 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
@@ -83,11 +86,14 @@ import (
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 func CnServerMessageHandler(
 	ctx context.Context,
+	cnAddr string,
 	message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
+	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
 
 	msg, ok := message.(*pipeline.Message)
@@ -96,8 +102,8 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 
-	receiver := newMessageReceiverOnServer(ctx, msg,
-		cs, messageAcquirer, storeEngine, fileService, cli)
+	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
@@ -162,12 +168,12 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		}
 		defer func() {
 			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil
@@ -253,7 +259,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, c.addr)
+	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
@@ -457,7 +463,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId, s.NodeInfo); err != nil {
 			return ctxId, err
 		}
 	}
@@ -580,7 +586,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline)
 }
 
 // convert vm.Instruction to pipeline.Instruction
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
 	var err error
 
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
@@ -626,7 +632,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
 				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
-				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
 					return ctxId, nil, err
 				}
 			}
@@ -648,12 +654,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    convertToPlanTypes(t.Types),
-			Aggs:     convertToPipelineAggregates(t.Aggs),
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToPlanTypes(t.Types),
+			Aggs:      convertToPipelineAggregates(t.Aggs),
+			MultiAggs: convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -810,7 +817,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
 			id := colexec.Srv.RegistConnector(t.Reg)
-			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
 				return ctxId, nil, err
 			}
 		}
@@ -938,12 +945,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			NeedEval: t.NeedEval,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Exprs:    t.Exprs,
-			Types:    convertToTypes(t.Types),
-			Aggs:     convertToAggregates(t.Aggs),
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToTypes(t.Types),
+			Aggs:      convertToAggregates(t.Aggs),
+			MultiAggs: convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()
@@ -1149,7 +1157,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 					CreateSql:     t.CreateSql,
 					Name2ColIndex: name2ColIndex,
 					FileList:      t.FileList,
-					OriginCols:    t.OriginCols,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1229,6 +1236,35 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 			Op:   int(a.Op),
 			Dist: a.Dist,
 			E:    a.Expr,
+		}
+	}
+	return result
+}
+
+// for now, it's group_concat
+func convertPipelineMultiAggs(multiAggs []group_concat.Argument) []*pipeline.MultiArguemnt {
+	result := make([]*pipeline.MultiArguemnt, len(multiAggs))
+	for i, a := range multiAggs {
+		result[i] = &pipeline.MultiArguemnt{
+			Dist:        a.Dist,
+			GroupExpr:   a.GroupExpr,
+			OrderByExpr: a.OrderByExpr,
+			Separator:   a.Separator,
+			OrderId:     a.OrderId,
+		}
+	}
+	return result
+}
+
+func convertToMultiAggs(multiAggs []*pipeline.MultiArguemnt) []group_concat.Argument {
+	result := make([]group_concat.Argument, len(multiAggs))
+	for i, a := range multiAggs {
+		result[i] = group_concat.Argument{
+			Dist:        a.Dist,
+			GroupExpr:   a.GroupExpr,
+			OrderByExpr: a.OrderByExpr,
+			Separator:   a.Separator,
+			OrderId:     a.OrderId,
 		}
 	}
 	return result
@@ -1380,12 +1416,12 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 	return -1, nil
 }
 
-func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int32, error) {
+func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeInfo engine.Node) (int32, error) {
 	ds := &Scope{Magic: Pushdown}
 	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
 	ds.DataSource = &Source{
 		PushdownId:   id,
-		PushdownAddr: colexec.CnAddr,
+		PushdownAddr: nodeInfo.Addr,
 	}
 	ds.appendInstruction(vm.Instruction{
 		Op: vm.Connector,
@@ -1400,7 +1436,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
-		PushdownAddr: colexec.CnAddr,
+		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
 		Op: vm.Connector,

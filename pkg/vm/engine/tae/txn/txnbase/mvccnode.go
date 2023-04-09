@@ -15,7 +15,6 @@
 package txnbase
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -74,11 +73,11 @@ func (un *TxnMVCCNode) Set1PC() {
 }
 
 // Check w-w confilct
-func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
+func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	// If node is held by a active txn
 	if !un.IsCommitted() {
 		// No conflict if it is the same txn
-		if un.IsSameTxn(ts) {
+		if un.IsSameTxn(txn) {
 			return nil
 		}
 		return txnif.ErrTxnWWConflict
@@ -87,7 +86,7 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 	// For a committed node, it is w-w conflict if ts is lt the node commit ts
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
-	if un.End.Greater(ts) {
+	if un.End.Greater(txn.GetStartTS()) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
@@ -95,12 +94,30 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 
 // Check whether is mvcc node is visible to ts
 // Make sure all the relevant prepared txns should be committed|rollbacked
-func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
+func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 	// Node is always visible to its born txn
-	if un.IsSameTxn(ts) {
+	if un.IsSameTxn(txn) {
 		return true
 	}
 
+	// The born txn of this node has not been commited|rollbacked
+	if un.IsActive() || un.IsCommitting() {
+		return false
+	}
+
+	// Node is visible if the commit ts is le ts
+	if un.End.LessEq(txn.GetStartTS()) && !un.Aborted {
+		return true
+	}
+
+	// Node is not invisible if the commit ts is gt ts
+	return false
+
+}
+
+// Check whether is mvcc node is visible to ts
+// Make sure all the relevant prepared txns should be committed|rollbacked
+func (un *TxnMVCCNode) IsVisibleByTS(ts types.TS) (visible bool) {
 	// The born txn of this node has not been commited|rollbacked
 	if un.IsActive() || un.IsCommitting() {
 		return false
@@ -227,11 +244,15 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	return true, un.Txn
 }
 
-func (un *TxnMVCCNode) IsSameTxn(ts types.TS) bool {
+func (un *TxnMVCCNode) IsSameTxn(txn txnif.TxnReader) bool {
 	if un.Txn == nil {
 		return false
 	}
-	return un.Txn.GetStartTS().Equal(ts)
+	// for appendnode test
+	if txn == nil {
+		return false
+	}
+	return un.Txn.GetID() == txn.GetID()
 }
 
 func (un *TxnMVCCNode) IsActive() bool {
@@ -322,18 +343,19 @@ func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (ts types.TS, err error) 
 }
 
 func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
+	var sn1 int
+	if sn1, err = w.Write(un.Start[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Write(w, binary.BigEndian, un.Prepare); err != nil {
+	n += int64(sn1)
+	if sn1, err = w.Write(un.Prepare[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Write(w, binary.BigEndian, un.End); err != nil {
+	n += int64(sn1)
+	if sn1, err = w.Write(un.End[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
+	n += int64(sn1)
 	var sn int64
 	logIndex := un.LogIndex
 	if logIndex == nil {
@@ -344,47 +366,40 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	is1PC := uint8(0)
-	if un.is1PC {
-		is1PC = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, is1PC); err != nil {
+	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
-	n += 1
+	n += int64(sn1)
 	return
 }
 
 func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
+	var sn int
+	if sn, err = r.Read(un.Start[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Read(r, binary.BigEndian, &un.Prepare); err != nil {
+	n += int64(sn)
+	if sn, err = r.Read(un.Prepare[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
-	if err = binary.Read(r, binary.BigEndian, &un.End); err != nil {
+	n += int64(sn)
+	if sn, err = r.Read(un.End[:]); err != nil {
 		return
 	}
-	n += types.TxnTsSize
+	n += int64(sn)
 
-	var sn int64
+	var sn2 int64
 	un.LogIndex = &store.Index{}
-	sn, err = un.LogIndex.ReadFrom(r)
+	sn2, err = un.LogIndex.ReadFrom(r)
 	if err != nil {
 		return
 	}
-	n += sn
+	n += sn2
 
-	is1PC := uint8(0)
-	if err = binary.Read(r, binary.BigEndian, &is1PC); err != nil {
+	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
-	n += 1
-	if is1PC == 1 {
-		un.is1PC = true
-	}
+	n += int64(sn)
 	return
 }
 

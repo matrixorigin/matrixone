@@ -17,12 +17,12 @@ package logservicedriver
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 )
@@ -208,16 +208,16 @@ func NewEmptyReplayCmd() *ReplayCmd {
 
 func (c *ReplayCmd) WriteTo(w io.Writer) (n int64, err error) {
 	length := uint16(len(c.skipLsns))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	n += 2
 	for drlsn, logserviceLsn := range c.skipLsns {
-		if err = binary.Write(w, binary.BigEndian, drlsn); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&drlsn)); err != nil {
 			return
 		}
 		n += 8
-		if err = binary.Write(w, binary.BigEndian, logserviceLsn); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&logserviceLsn)); err != nil {
 			return
 		}
 		n += 8
@@ -227,18 +227,18 @@ func (c *ReplayCmd) WriteTo(w io.Writer) (n int64, err error) {
 
 func (c *ReplayCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	length := uint16(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint16(&length)); err != nil {
 		return
 	}
 	n += 2
 	for i := 0; i < int(length); i++ {
 		drlsn := uint64(0)
 		lsn := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &drlsn); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&drlsn)); err != nil {
 			return
 		}
 		n += 8
-		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
 			return
 		}
 		n += 8

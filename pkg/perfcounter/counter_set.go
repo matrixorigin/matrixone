@@ -15,10 +15,19 @@
 package perfcounter
 
 import (
+	"fmt"
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 type CounterSet struct {
+	FileService       FileServiceCounterSet
+	FileServiceByName map[string]*CounterSet
+	DistTAE           DistTAECounterSet
+}
+
+type FileServiceCounterSet struct {
 	S3 struct {
 		List        stats.Counter
 		Head        stats.Counter
@@ -29,27 +38,95 @@ type CounterSet struct {
 	}
 
 	Cache struct {
-		Read     stats.Counter
-		Hit      stats.Counter
-		MemRead  stats.Counter
-		MemHit   stats.Counter
-		DiskRead stats.Counter
-		DiskHit  stats.Counter
-	}
-
-	FileServices map[string]*CounterSet
-
-	DistTAE struct {
-		Logtail struct {
-			Entries               stats.Counter
-			InsertEntries         stats.Counter
-			MetadataInsertEntries stats.Counter
-			DeleteEntries         stats.Counter
-			MetadataDeleteEntries stats.Counter
-
-			InsertRows   stats.Counter
-			ActiveRows   stats.Counter
-			InsertBlocks stats.Counter
+		Read   stats.Counter
+		Hit    stats.Counter
+		Memory struct {
+			Read stats.Counter
+			Hit  stats.Counter
+		}
+		Disk struct {
+			Read             stats.Counter
+			Hit              stats.Counter
+			GetFileContent   stats.Counter
+			SetFileContent   stats.Counter
+			OpenFile         stats.Counter
+			StatFile         stats.Counter
+			Error            stats.Counter
+			Evict            stats.Counter
+			EvictPending     stats.Counter
+			EvictImmediately stats.Counter
 		}
 	}
+
+	FileWithChecksum struct {
+		Read            stats.Counter
+		Write           stats.Counter
+		UnderlyingRead  stats.Counter
+		UnderlyingWrite stats.Counter
+	}
+}
+
+type DistTAECounterSet struct {
+	Logtail struct {
+		Entries               stats.Counter
+		InsertEntries         stats.Counter
+		MetadataInsertEntries stats.Counter
+		DeleteEntries         stats.Counter
+		MetadataDeleteEntries stats.Counter
+
+		InsertRows   stats.Counter
+		ActiveRows   stats.Counter
+		InsertBlocks stats.Counter
+	}
+}
+
+var statsCounterType = reflect.TypeOf((*stats.Counter)(nil)).Elem()
+
+type IterFieldsFunc func(path []string, counter *stats.Counter) error
+
+func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
+	return iterFields(
+		reflect.ValueOf(c),
+		[]string{},
+		fn,
+	)
+}
+
+func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
+
+	if v.Type() == statsCounterType {
+		return fn(path, v.Addr().Interface().(*stats.Counter))
+	}
+
+	t := v.Type()
+
+	switch t.Kind() {
+
+	case reflect.Pointer:
+		iterFields(v.Elem(), path, fn)
+
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if err := iterFields(v.Field(i), append(path, field.Name), fn); err != nil {
+				return err
+			}
+		}
+
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			panic(fmt.Sprintf("unknown type: %v", v.Type()))
+		}
+		iter := v.MapRange()
+		for iter.Next() {
+			if err := iterFields(iter.Value(), append(path, iter.Key().String()), fn); err != nil {
+				return err
+			}
+		}
+
+	default:
+		panic(fmt.Sprintf("unknown type: %v", v.Type()))
+	}
+
+	return nil
 }

@@ -15,10 +15,12 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -49,6 +52,8 @@ type txnStore struct {
 	warChecker    *warChecker
 	dataFactory   *tables.DataFactory
 	writeOps      atomic.Uint32
+
+	wg sync.WaitGroup
 }
 
 var TxnStoreFactory = func(
@@ -77,6 +82,7 @@ func newStore(
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
 		nodesMgr:      txnBufMgr,
+		wg:            sync.WaitGroup{},
 	}
 }
 
@@ -126,16 +132,6 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 	}
 	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
 	return
-}
-
-func (store *txnStore) LogSegmentID(dbId, tid, sid uint64) {
-	db, _ := store.getOrSetDB(dbId)
-	db.LogSegmentID(tid, sid)
-}
-
-func (store *txnStore) LogBlockID(dbId, tid, bid uint64) {
-	db, _ := store.getOrSetDB(dbId)
-	db.LogBlockID(tid, bid)
 }
 
 func (store *txnStore) Close() error {
@@ -304,8 +300,8 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 	return
 }
 
-func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntry(name, createSql, store.txn)
+func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntry(name, createSql, datTyp, store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -320,8 +316,8 @@ func (store *txnStore) CreateDatabase(name, createSql string) (h handle.Database
 	return
 }
 
-func (store *txnStore) CreateDatabaseWithID(name, createSql string, id uint64) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, id, store.txn)
+func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +350,58 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
+func (store *txnStore) ObserveTxn(
+	visitDatabase func(db any),
+	visitTable func(tbl any),
+	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	visitMetadata func(block any),
+	visitAppend func(bat any),
+	visitDelete func(deletes []uint32, prefix []byte)) {
+	for _, db := range store.dbs {
+		if db.createEntry != nil || db.dropEntry != nil {
+			visitDatabase(db.entry)
+		}
+		dbName := db.entry.GetName()
+		dbid := db.entry.ID
+		for _, tbl := range db.tables {
+			tblName := tbl.entry.GetSchema().Name
+			tid := tbl.entry.ID
+			rotateTable(dbName, tblName, dbid, tid)
+			if tbl.createEntry != nil || tbl.dropEntry != nil {
+				visitTable(tbl.entry)
+			}
+			for _, iTxnEntry := range tbl.txnEntries.entries {
+				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.BlockEntry:
+					visitMetadata(txnEntry)
+				case *updates.DeleteNode:
+					deletes := txnEntry.DeletedRows()
+					prefix := txnEntry.GetPrefix()
+					visitDelete(deletes, prefix)
+				case *catalog.TableEntry:
+					if tbl.createEntry != nil || tbl.dropEntry != nil {
+						continue
+					}
+					visitTable(txnEntry)
+				}
+			}
+			if tbl.localSegment != nil {
+				for _, node := range tbl.localSegment.nodes {
+					anode, ok := node.(*anode)
+					if ok {
+						visitAppend(anode.storage.mnode.data)
+					}
+				}
+			}
+		}
+	}
+}
+func (store *txnStore) AddWaitEvent(cnt int) {
+	store.wg.Add(cnt)
+}
+func (store *txnStore) DoneWaitEvent(cnt int) {
+	store.wg.Add(-cnt)
+}
 func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {
 	hasNewEntry, meta, err := store.catalog.DropDBEntryByID(id, store.txn)
 	if err != nil {
@@ -475,24 +523,12 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableBlock(id)
-}
-
-func (store *txnStore) CreateNonAppendableBlockWithMeta(
-	dbId uint64,
-	id *common.ID,
-	metaLoc string,
-	deltaLoc string) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
-		return
-	}
-	return db.CreateNonAppendableBlockWithMeta(id, metaLoc, deltaLoc)
+	return db.CreateNonAppendableBlock(id, opts)
 }
 
 func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
@@ -503,7 +539,7 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -528,14 +564,14 @@ func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
-	if store.cmdMgr.GetCSN() == 0 {
-		return
-	}
-	for _, db := range store.dbs {
-		if err = db.ApplyRollback(); err != nil {
-			break
+	if store.cmdMgr.GetCSN() != 0 {
+		for _, db := range store.dbs {
+			if err = db.ApplyRollback(); err != nil {
+				break
+			}
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -551,6 +587,7 @@ func (store *txnStore) WaitPrepared() (err error) {
 		}
 		e.Free()
 	}
+	store.wg.Wait()
 	return
 }
 
@@ -560,6 +597,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 			break
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -654,3 +692,9 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
+
+func (store *txnStore) CleanUp() {
+	for _, db := range store.dbs {
+		db.CleanUp()
+	}
+}

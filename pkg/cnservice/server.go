@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -99,10 +100,15 @@ func NewService(
 		engine.Nodes{engine.Node{
 			Addr: cfg.ServiceAddress,
 		}})
+
 	cfg.Frontend.SetDefaultValues()
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
-	if err = srv.initMOServer(ctx, pu); err != nil {
+
+	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
+	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
+
+	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 	srv.pu = pu
@@ -130,11 +136,14 @@ func NewService(
 	srv._txnClient = pu.TxnClient
 
 	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,
 		engine engine.Engine,
 		fService fileservice.FileService,
+		lockService lockservice.LockService,
 		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
 		return nil
 	}
@@ -171,6 +180,8 @@ func (s *service) Close() error {
 	if err := s.stopRPCs(); err != nil {
 		return err
 	}
+	// stop I/O pipeline
+	blockio.Stop()
 	return s.server.Close()
 }
 
@@ -241,22 +252,26 @@ func (s *service) handleRequest(
 		}
 	}
 	go s.requestHandler(ctx,
+		s.cfg.ServiceAddress,
 		req,
 		cs,
 		s.storeEngine,
 		s.fileService,
+		s.lockService,
 		s._txnClient,
+		s.aicm,
 		s.acquireMessage)
 	return nil
 }
 
-func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
+func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
 	s.cancelMoServerFunc = cancelMoServerFunc
 
 	pu.FileService = s.fileService
+	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
@@ -264,7 +279,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu)
+	s.createMOServer(cancelMoServerCtx, pu, aicm)
 
 	return nil
 }
@@ -274,7 +289,6 @@ func (s *service) initEngine(
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
@@ -305,10 +319,10 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm)
 }
 
 func (s *service) runMoServer() error {
@@ -395,7 +409,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
 				}
 			case txn.TxnMethod_Commit:
-				err = storage.Commit(ctx, req.Txn)
+				_, err = storage.Commit(ctx, req.Txn)
 				if err == nil {
 					resp.Txn.Status = txn.TxnStatus_Committed
 				}
@@ -428,12 +442,21 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
+		rt := runtime.ProcessLevelRuntime()
+		client.SetupRuntimeTxnOptions(
+			rt,
+			txn.GetTxnMode(s.cfg.Txn.Mode),
+			txn.GetTxnIsolation(s.cfg.Txn.Isolation),
+		)
 		var sender rpc.TxnSender
 		sender, err = s.getTxnSender()
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(runtime.ProcessLevelRuntime(), sender)
+		c = client.NewTxnClient(
+			rt,
+			sender,
+			client.WithLockService(s.lockService))
 		s._txnClient = c
 	})
 	c = s._txnClient

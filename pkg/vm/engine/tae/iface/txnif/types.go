@@ -68,7 +68,7 @@ type TxnReader interface {
 	GetLSN() uint64
 	GetMemo() *TxnMemo
 
-	SameTxn(startTs types.TS) bool
+	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
 }
@@ -77,8 +77,8 @@ type TxnHandle interface {
 	BindAccessInfo(tenantID, userID, roleID uint32)
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
@@ -158,19 +158,31 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
-type MVCCNode interface {
-	String() string
+type BaseNode[T any] interface {
+	Update(o T)
+	CloneData() T
+	CloneAll() T
+}
 
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
+type MVCCNode[T any] interface {
+	BaseMVCCNode
+	BaseNode[T]
+}
+
+type BaseMVCCNode interface {
+	String() string
+	IsNil() bool
+
+	IsVisibleByTS(ts types.TS) (visible bool)
+	IsVisible(txn TxnReader) (visible bool)
+	CheckConflict(txn TxnReader) error
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
 	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
-	IsSameTxn(ts types.TS) bool
+	IsSameTxn(txn TxnReader) bool
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool
@@ -192,18 +204,16 @@ type MVCCNode interface {
 
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
 }
 type AppendNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -224,8 +234,6 @@ type TxnStore interface {
 	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
-	LogSegmentID(dbId, tid, sid uint64)
-	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
@@ -242,8 +250,8 @@ type TxnStore interface {
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 	GetRelationByID(dbId uint64, tid uint64) (handle.Relation, error)
 
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
@@ -253,10 +261,9 @@ type TxnStore interface {
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
+	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlockWithMeta(dbId uint64, id *common.ID, metaLoc string, deltaLoc string) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
 	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
@@ -266,10 +273,27 @@ type TxnStore interface {
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
+	DoneWaitEvent(cnt int)
+	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+	ObserveTxn(
+		visitDatabase func(db any),
+		visitTable func(tbl any),
+		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		visitMetadata func(block any),
+		visitAppend func(bat any),
+		visitDelete func(deletes []uint32, prefix []byte))
+	GetTransactionType() TxnType
 }
+
+type TxnType int8
+
+const (
+	TxnType_Normal = iota
+	TxnType_Heartbeat
+)
 
 type TxnEntryType int16
 

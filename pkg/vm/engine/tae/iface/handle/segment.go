@@ -17,6 +17,8 @@ package handle
 import (
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -27,7 +29,7 @@ type SegmentIt interface {
 
 type SegmentReader interface {
 	io.Closer
-	GetID() uint64
+	GetID() types.Uuid
 	IsUncommitted() bool
 	IsAppendable() bool
 	MakeBlockIt() BlockIt
@@ -35,7 +37,7 @@ type SegmentReader interface {
 	String() string
 	GetMeta() any
 
-	GetBlock(id uint64) (Block, error)
+	GetBlock(id types.Blockid) (Block, error)
 	GetRelation() Relation
 
 	BatchDedup(pks containers.Vector) error
@@ -50,11 +52,14 @@ type SegmentWriter interface {
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
 
+	// create a appendable block, its id will be <segid>-<nextObjectid>-0
 	CreateBlock(bool) (Block, error)
-	CreateNonAppendableBlock() (Block, error)
-	CreateNonAppendableBlockWithMeta(string, string) (Block, error)
+	// create a non-appendable block, instructed by CreateBlockOpt.
+	// CreateBlockOpt can be nil, and the created block's id
+	// will be <segid>-<nextObjectid>-0
+	CreateNonAppendableBlock(*common.CreateBlockOpt) (Block, error)
 
-	SoftDeleteBlock(id uint64) (err error)
+	SoftDeleteBlock(id types.Blockid) (err error)
 }
 
 type Segment interface {

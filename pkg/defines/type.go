@@ -177,9 +177,21 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
 
-type AutoIncrCaches struct {
+// Determine if now is a bg sql.
+type BgKey struct{}
+
+// PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
+type PkCheckByDN struct{}
+
+/*
+The autoIncrCacheManager is initialized with a starting CN.
+The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.
+The logic to manipulate the cache is in auto_incr.go
+*/
+type AutoIncrCacheManager struct {
 	Mu             *sync.Mutex
 	AutoIncrCaches map[string]AutoIncrCache
+	MaxSize        uint64
 }
 
 type AutoIncrCache struct {

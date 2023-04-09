@@ -15,50 +15,34 @@
 package model
 
 import (
-	"encoding/binary"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // EncodeBlockKeyPrefix [48 Bit (BlockID) + 48 Bit (SegmentID)]
 func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 	buf := make([]byte, 12)
-	tempBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(tempBuf, segmentId)
+	tempBuf := types.EncodeUint64(&segmentId)
 	copy(buf[0:], tempBuf[2:])
-	binary.BigEndian.PutUint64(tempBuf, blockId)
+	tempBuf = types.EncodeUint64(&blockId)
 	copy(buf[6:], tempBuf[2:])
 	return buf
 }
 
-func DecodeBlockKeyPrefix(rowid types.Rowid) (segmentId, blockId uint64) {
-	tempBuf := make([]byte, 8)
-	copy(tempBuf[2:], rowid[0:6])
-	segmentId = binary.BigEndian.Uint64(tempBuf)
-	copy(tempBuf[2:], rowid[6:12])
-	blockId = binary.BigEndian.Uint64(tempBuf)
-	return
-}
-
-func EncodePhyAddrKey(segmentId, blockId uint64, offset uint32) types.Rowid {
-	prefix := EncodeBlockKeyPrefix(segmentId, blockId)
-	return EncodePhyAddrKeyWithPrefix(prefix, offset)
-}
-
 func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
 	var rowid types.Rowid
-	copy(rowid[:12], prefix)
-	binary.BigEndian.PutUint32(rowid[12:16], offset)
+	copy(rowid[:], prefix)
+	copy(rowid[types.BlockidSize:], types.EncodeUint32(&offset))
 	return rowid
 }
 
-func DecodePhyAddrKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKeyFromValue(v any) (segmentId types.Uuid, blockId types.Blockid, offset uint32) {
 	rowid := v.(types.Rowid)
 	return DecodePhyAddrKey(rowid)
 }
 
-func DecodePhyAddrKey(src types.Rowid) (segmentId, blockId uint64, offset uint32) {
-	segmentId, blockId = DecodeBlockKeyPrefix(src)
-	offset = binary.BigEndian.Uint32(src[12:])
+func DecodePhyAddrKey(src types.Rowid) (segmentId types.Uuid, blockId types.Blockid, offset uint32) {
+	segmentId = src.GetSegid()
+	blockId = src.GetBlockid()
+	offset = types.DecodeUint32(src[types.BlockidSize:])
 	return
 }

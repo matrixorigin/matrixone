@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ import (
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
+	OnEndPreApplyCommit(txnif.AsyncTxn)
 }
 
 type NoopCommitListener struct{}
@@ -64,6 +66,11 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 		l.OnEndPrePrepare(txn)
 	}
 }
+func (bl *batchTxnCommitListener) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
+	for _, l := range bl.listeners {
+		l.OnEndPreApplyCommit(txn)
+	}
+}
 
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
@@ -75,10 +82,14 @@ type TxnManager struct {
 	IDMap           map[string]txnif.AsyncTxn
 	IdAlloc         *common.TxnIDAllocator
 	TsAlloc         *types.TsAlloctor
+	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -93,12 +104,20 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
+		wg:              sync.WaitGroup{},
 	}
+	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
 
+	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
+}
+
+func (mgr *TxnManager) initMaxCommittedTS() {
+	now := mgr.Now()
+	mgr.MaxCommittedTS.Store(&now)
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -134,6 +153,25 @@ func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
 
 // StartTxn starts a local transaction initiated by DN
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txnId := mgr.IdAlloc.Alloc()
+	startTs := *mgr.MaxCommittedTS.Load()
+
+	store := mgr.TxnStoreFactory()
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
+	store.BindTxn(txn)
+	mgr.IDMap[string(txnId)] = txn
+	return
+}
+
+// StartTxn starts a local transaction initiated by DN
+func (mgr *TxnManager) StartTxnWithNow(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
@@ -201,6 +239,44 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	return
 }
 
+func (mgr *TxnManager) heartbeat() {
+	defer mgr.wg.Done()
+	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
+	for {
+		select {
+		case <-mgr.ctx.Done():
+			return
+		case <-heartbeatTicker.C:
+			op := mgr.newHeartbeatOpTxn()
+			op.Txn.(*Txn).Add(1)
+			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
+func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err := exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return nil
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txnId := mgr.IdAlloc.Alloc()
+	startTs := mgr.TsAlloc.Alloc()
+
+	store := &heartbeatStore{}
+	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
+	store.BindTxn(txn)
+	return &OpTxn{
+		Txn: txn,
+		Op:  OpCommit,
+	}
+}
+
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	_, err = mgr.PreparingSM.EnqueueRecevied(op)
 	return
@@ -225,6 +301,7 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	defer mgr.CommitListener.OnEndPreApplyCommit(txn)
 	if err := txn.PreApplyCommit(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
@@ -323,11 +400,15 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
+	mgr.OnCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
 }
-
+func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
+	commitTS := txn.GetCommitTS()
+	mgr.MaxCommittedTS.Store(&commitTS)
+}
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
 	var isAbort bool
@@ -442,9 +523,13 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 
 func (mgr *TxnManager) Start() {
 	mgr.PreparingSM.Start()
+	mgr.wg.Add(1)
+	go mgr.heartbeat()
 }
 
 func (mgr *TxnManager) Stop() {
+	mgr.cancel()
+	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
 	mgr.OnException(common.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))

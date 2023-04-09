@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -71,7 +72,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	//1000 segs, one seg contains 100 blocks, one block contains 10 rows.
+	//100 segs, one seg contains 50 blocks, one block contains 10 rows.
 	taeBat := catalog.MockBatch(schema, 100*50*10)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(100 * 50)
@@ -99,7 +100,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	var blkMetas []string
 	offset := 0
 	for i := 0; i < 100; i++ {
-		objNames = append(objNames, fmt.Sprintf("%d.seg", i))
+		name := common.NewSegmentid().ToString() + "-0"
+		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriter(fs, objNames[i])
 		assert.Nil(t, err)
 		for i := 0; i < 50; i++ {
@@ -179,12 +181,11 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	//add 100 * 50 blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	offset = 0
 	for _, obj := range objNames {
-		metaLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]))
 		}
@@ -200,9 +201,9 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
 		new(api.SyncLogTailResp),
@@ -210,7 +211,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	assert.Nil(t, err)
 	//t.FailNow()
 	start := time.Now()
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	t.Logf("Commit 10w blocks spend: %d", time.Since(start).Microseconds())
 }
@@ -266,8 +267,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[3] = containers.CopyToMoBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
-	id := 1
-	objName1 := fmt.Sprintf("%d.seg", id)
+	objName1 := common.NewSegmentid().ToString() + "-0"
 	writer, err := blockio.NewBlockWriter(fs, objName1)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -295,8 +295,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write taeBats[3] into file service
-	id += 1
-	objName2 := fmt.Sprintf("%d.seg", id)
+	objName2 := common.NewSegmentid().ToString() + "-0"
 	writer, err = blockio.NewBlockWriter(fs, objName2)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -374,10 +373,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add two non-appendable blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
-	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1))
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2))
 	metaLocMoBat1 := containers.CopyToMoBatch(metaLocBat1)
@@ -391,7 +389,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, addS3BlkEntry1)
 
 	//add one non-appendable block from S3 into "tbtest" table
-	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3))
 	metaLocMoBat2 := containers.CopyToMoBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
@@ -403,16 +401,16 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
 	//t.FailNow()
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	//check rows of "tbtest" which should has three blocks.
 	txnR, err := txnEngine.StartTxn(nil)
@@ -460,8 +458,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
-	id += 1
-	objName3 := fmt.Sprintf("%d.del", id)
+	objName3 := fmt.Sprintf("%d.del", 42)
 	writer, err = blockio.NewBlockWriter(fs, objName3)
 	assert.Nil(t, err)
 	for _, bat := range hideBats {
@@ -501,10 +498,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//prepare delete locations.
 	attrs = []string{catalog2.BlockMeta_DeltaLoc}
 	vecTypes = []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
-	nullable = []bool{false}
+
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0
-	delLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	delLocBat.Vecs[0].Append([]byte(delLoc1))
 	delLocBat.Vecs[0].Append([]byte(delLoc2))
 	delLocBat.Vecs[0].Append([]byte(delLoc3))
@@ -522,15 +519,15 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		context.TODO(),
 		txn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: delApiEntries,
 		},
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), txn)
+	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
 	//Now, the "tbtest" table has 20 rows left.
 	txnR, err = txnEngine.StartTxn(nil)
@@ -589,15 +586,15 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		createDbTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: createDbEntries,
 		},
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), createDbTxn)
+	_, err = handle.HandleCommit(context.TODO(), createDbTxn)
 	assert.Nil(t, err)
 
 	//start txn ,read "dbtest"'s ID
@@ -664,14 +661,14 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		createTbTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: createTbEntries,
 		},
 		new(api.SyncLogTailResp))
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), createTbTxn)
+	_, err = handle.HandleCommit(context.TODO(), createTbTxn)
 	assert.Nil(t, err)
 	//start txn ,read table ID
 	txn, err = txnEngine.StartTxn(nil)
@@ -705,9 +702,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		insertTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: []*api.Entry{insertEntry},
 		},
 		new(api.SyncLogTailResp),
@@ -715,7 +712,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 	// TODO:: Dml delete
 	//bat := batch.NewWithSize(1)
-	err = handle.HandleCommit(context.TODO(), insertTxn)
+	_, err = handle.HandleCommit(context.TODO(), insertTxn)
 	assert.NoError(t, err)
 	//TODO::DML:delete by primary key.
 	// physcial addr + primary key
@@ -762,15 +759,15 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		context.TODO(),
 		deleteTxn,
 		api.PrecommitWriteCmd{
-			UserId:    ac.userId,
-			AccountId: ac.accountId,
-			RoleId:    ac.roleId,
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
 			EntryList: append([]*api.Entry{}, deleteEntry),
 		},
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(context.TODO(), deleteTxn)
+	_, err = handle.HandleCommit(context.TODO(), deleteTxn)
 	assert.Nil(t, err)
 	//read, there should be 80 rows left.
 	txn, err = txnEngine.StartTxn(nil)
@@ -821,9 +818,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 		{typ: CmdPrepare},
@@ -893,9 +890,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -937,9 +934,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -964,9 +961,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1018,9 +1015,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1047,9 +1044,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1108,9 +1105,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1179,9 +1176,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1222,9 +1219,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1248,9 +1245,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1272,9 +1269,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdRollback},
@@ -1325,9 +1322,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1355,9 +1352,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1416,9 +1413,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createDbEntries},
 		},
 	}
@@ -1453,7 +1450,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	go func() {
 		//start 1pc txn ,read "dbtest"'s ID
 		ctx := context.TODO()
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		//reader should wait until the writer committed.
 		dbNames, _ = txnEngine.DatabaseNames(ctx, txn)
@@ -1524,9 +1521,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
 		{typ: CmdPrepare},
@@ -1540,7 +1537,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1pc txn ,read table ID
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.Nil(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1582,9 +1579,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1597,7 +1594,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1PC txn , read table
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
@@ -1664,9 +1661,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				UserId:    ac.userId,
-				AccountId: ac.accountId,
-				RoleId:    ac.roleId,
+				//UserId:    ac.userId,
+				//AccountId: ac.accountId,
+				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1678,7 +1675,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//read, there should be 80 rows left.
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxnWithNow(nil)
 		assert.NoError(t, err)
 		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)

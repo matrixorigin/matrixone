@@ -77,7 +77,7 @@ func defaultMemCacheOptions() memCacheOptions {
 	return memCacheOptions{}
 }
 
-var _ Cache = new(MemCache)
+var _ IOVectorCache = new(MemCache)
 
 func (m *MemCache) Read(
 	ctx context.Context,
@@ -92,12 +92,17 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.Cache.Read.Add(numRead)
-			c.Cache.Hit.Add(numHit)
-			c.Cache.MemRead.Add(numRead)
-			c.Cache.MemHit.Add(numHit)
+			c.FileService.Cache.Read.Add(numRead)
+			c.FileService.Cache.Hit.Add(numHit)
+			c.FileService.Cache.Memory.Read.Add(numRead)
+			c.FileService.Cache.Memory.Hit.Add(numHit)
 		}, m.counterSets...)
 	}()
+
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
 
 	for i, entry := range vector.Entries {
 		if entry.done {
@@ -106,8 +111,8 @@ func (m *MemCache) Read(
 		if entry.ToObject == nil {
 			continue
 		}
-		key := CacheKey{
-			Path:   vector.FilePath,
+		key := IOVectorCacheKey{
+			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
@@ -137,12 +142,18 @@ func (m *MemCache) Update(
 	if vector.NoCache {
 		return nil
 	}
+
+	path, err := ParsePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
 			continue
 		}
-		key := CacheKey{
-			Path:   vector.FilePath,
+		key := IOVectorCacheKey{
+			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}

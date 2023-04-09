@@ -10,6 +10,7 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -209,6 +210,20 @@ func (mr *MockTxnOperatorMockRecorder) Txn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockTxnOperator)(nil).Txn))
 }
 
+// UpdateSnapshot mocks base method.
+func (m *MockTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateSnapshot indicates an expected call of UpdateSnapshot.
+func (mr *MockTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockTxnOperator)(nil).UpdateSnapshot), ts)
+}
+
 // Write mocks base method.
 func (m *MockTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -375,6 +390,20 @@ func (m *MockDebugableTxnOperator) Txn() txn.TxnMeta {
 func (mr *MockDebugableTxnOperatorMockRecorder) Txn() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Txn))
+}
+
+// UpdateSnapshot mocks base method.
+func (m *MockDebugableTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateSnapshot indicates an expected call of UpdateSnapshot.
+func (mr *MockDebugableTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).UpdateSnapshot), ts)
 }
 
 // Write mocks base method.

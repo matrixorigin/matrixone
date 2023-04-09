@@ -13,11 +13,13 @@ relname    relkind
 mo_account    r
 mo_columns    r
 mo_database    r
+mo_indexes    r
 mo_mysql_compatbility_mode    r
 mo_pubs    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r
+mo_stored_procedure    r
 mo_tables    r
 mo_user    r
 mo_user_defined_function    r

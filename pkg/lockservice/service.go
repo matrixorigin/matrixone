@@ -48,7 +48,7 @@ type service struct {
 
 // NewLockService create a lock service instance
 func NewLockService(cfg Config) LockService {
-	cfg.adjust()
+	cfg.Validate()
 	s := &service{
 		cfg: cfg,
 		fsp: newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
@@ -103,6 +103,10 @@ func (s *service) Unlock(
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
 	return nil
+}
+
+func (s *service) GetConfig() Config {
+	return s.cfg
 }
 
 func (s *service) Close() error {
@@ -166,6 +170,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
 	if txn == nil {
 		return
 	}
+	logAbortDeadLock(s.cfg.ServiceID, wait, txn)
 	txn.abort(s.cfg.ServiceID, wait.TxnID)
 }
 
@@ -219,6 +224,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,
+			s.fsp,
 			s.deadlockDetector,
 			s.clock)
 	} else {
@@ -366,4 +372,8 @@ type remote struct {
 
 func unsafeByteSliceToString(key []byte) string {
 	return *(*string)(unsafe.Pointer(&key))
+}
+
+func unsafeStringToByteSlice(key string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&key))
 }

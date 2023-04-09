@@ -123,6 +123,8 @@ const (
 	ErrFunctionAlreadyExists        uint16 = 20441
 	ErrDropNonExistsFunction        uint16 = 20442
 	ErrNoConfig                     uint16 = 20443
+	ErrNoSuchSequence               uint16 = 20444
+	ErrProcedureAlreadyExists       uint16 = 20445
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -237,6 +239,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLogServiceNotReady:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
 	ErrBadDB:                        {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
 	ErrNoSuchTable:                  {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
+	ErrNoSuchSequence:               {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
 	ErrEmptyVector:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
 	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
@@ -256,6 +259,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
 	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrProcedureAlreadyExists:       {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
 	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
@@ -689,6 +693,10 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	return newError(ctx, ErrNoSuchTable, db, tbl)
+}
+
+func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
+	return newError(ctx, ErrNoSuchSequence, db, tbl)
 }
 
 func NewBadView(ctx context.Context, db, v string) *Error {

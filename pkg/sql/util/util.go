@@ -15,6 +15,7 @@
 package util
 
 import (
+	"fmt"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -46,6 +47,33 @@ func SplitTableAndColumn(name string) (string, string) {
 // TableIsClusterTable check the table type is cluster table
 func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
+}
+func DbIsSystemDb(dbName string) bool {
+	if dbName == catalog.MO_CATALOG {
+		return true
+	}
+	if dbName == catalog.MO_DATABASE {
+		return true
+	}
+	if dbName == catalog.MO_TABLES {
+		return true
+	}
+	if dbName == catalog.MO_COLUMNS {
+		return true
+	}
+	if dbName == "mo_task" {
+		return true
+	}
+	if dbName == "information_schema" {
+		return true
+	}
+	if dbName == "system" {
+		return true
+	}
+	if dbName == "system_metrics" {
+		return true
+	}
+	return false
 }
 
 // Build the filter condition AST expression for mo_database, as follows:
@@ -138,8 +166,11 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
 	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
 	mo_mysql_compatbility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatbility_mode"), "mo_mysql_compatbility_mode", false, tree.P_char)
+	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
+	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
+	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
 
-	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst, mo_user_defined_functionConst, mo_mysql_compatbility_modeConst})
+	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst, mo_user_defined_functionConst, mo_mysql_compatbility_modeConst, mo_indexes, mo_pubs, mo_stored_procedure})
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
 	dbNameEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
@@ -202,4 +233,55 @@ func GetClusterTableAttributeType() *tree.T {
 
 func IsClusterTableAttribute(name string) bool {
 	return name == clusterTableAttributeName
+}
+
+const partitionDelimiter = "%!%"
+
+// IsValidNameForPartitionTable
+// the name forms the partition table does not have the partitionDelimiter
+func IsValidNameForPartitionTable(name string) bool {
+	return !strings.Contains(name, partitionDelimiter)
+}
+
+// MakeNameOfPartitionTable
+// !!!NOTE!!! With assumption: the partition name and the table name does not have partitionDelimiter.
+// partition table name format : %!%partition_name%!%table_name
+func MakeNameOfPartitionTable(partitionName, tableName string) (bool, string) {
+	if strings.Contains(partitionName, partitionDelimiter) ||
+		strings.Contains(tableName, partitionDelimiter) {
+		return false, ""
+	}
+	if len(partitionName) == 0 ||
+		len(tableName) == 0 {
+		return false, ""
+	}
+	return true, fmt.Sprintf("%s%s%s%s", partitionDelimiter, partitionName, partitionDelimiter, tableName)
+}
+
+// SplitNameOfPartitionTable splits the partition table name into partition name and origin table name
+func SplitNameOfPartitionTable(name string) (bool, string, string) {
+	if !strings.HasPrefix(name, partitionDelimiter) {
+		return false, "", ""
+	}
+	partNameIdx := len(partitionDelimiter)
+	if partNameIdx >= len(name) {
+		return false, "", ""
+	}
+	left := name[partNameIdx:]
+	secondIdx := strings.Index(left, partitionDelimiter)
+	if secondIdx < 0 {
+		return false, "", ""
+	}
+
+	if secondIdx == 0 {
+		return false, "", ""
+	}
+	partName := left[:secondIdx]
+
+	tableNameIdx := secondIdx + len(partitionDelimiter)
+	if tableNameIdx >= len(left) {
+		return false, "", ""
+	}
+	tableName := left[tableNameIdx:]
+	return true, partName, tableName
 }

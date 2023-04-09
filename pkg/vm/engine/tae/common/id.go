@@ -16,7 +16,9 @@ package common
 
 import (
 	"fmt"
-	"sync/atomic"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // ID is the general identifier type shared by different types like
@@ -29,15 +31,23 @@ type ID struct {
 	// Internal table id
 	TableID uint64
 	// Internal segment id
-	SegmentID uint64
+	SegmentID types.Uuid
 	// Internal block id
-	BlockID uint64
+	BlockID types.Blockid
 	// Internal column part id
 	PartID uint32
 	// Column index for the column part above
 	Idx uint16
 	// Iter is used for MVCC
 	Iter uint8
+}
+
+const (
+	IDSize int64 = int64(unsafe.Sizeof(ID{}))
+)
+
+func EncodeID(id *ID) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(id)), IDSize)
 }
 
 func (id *ID) AsBlockID() ID {
@@ -56,40 +66,18 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
+	return fmt.Sprintf("<%d:%d-%s-%s:%d-%d>", id.Idx, id.TableID, id.SegmentID.ToString(), id.BlockID.ShortString(), id.PartID, id.Iter)
 }
 
 func (id *ID) TableString() string {
 	return fmt.Sprintf("TBL<%d:%d>", id.Idx, id.TableID)
 }
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("SEG<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
+	return fmt.Sprintf("SEG<%d:%d-%s>", id.Idx, id.TableID, id.SegmentID.ToString())
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("BLK<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
-}
-
-func (id *ID) IsSameSegment(o ID) bool {
-	return id.TableID == o.TableID && id.SegmentID == o.SegmentID
-}
-
-func (id *ID) IsSameBlock(o ID) bool {
-	return id.TableID == o.TableID && id.SegmentID == o.SegmentID && id.BlockID == o.BlockID
-}
-
-func (id *ID) NextBlock() ID {
-	newId := atomic.AddUint64(&id.BlockID, uint64(1))
-	bid := *id
-	bid.BlockID = newId - 1
-	return bid
-}
-
-func (id *ID) NextSegment() ID {
-	newId := atomic.AddUint64(&id.SegmentID, uint64(1))
-	bid := *id
-	bid.SegmentID = newId - 1
-	return bid
+	return fmt.Sprintf("BLK<%d:%d-%s>", id.Idx, id.TableID, id.BlockID.String())
 }
 
 func IDArraryString(ids []ID) string {
@@ -104,7 +92,7 @@ func IDArraryString(ids []ID) string {
 func BlockIDArraryString(ids []ID) string {
 	str := "["
 	for _, id := range ids {
-		str = fmt.Sprintf("%s%d,", str, id.BlockID)
+		str = fmt.Sprintf("%s%s,", str, id.BlockID.String())
 	}
 	str = fmt.Sprintf("%s]", str)
 	return str

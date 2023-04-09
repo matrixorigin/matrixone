@@ -250,7 +250,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			return
 		}
 		defer view.Close()
-		_ = view.GetData().Foreach(func(v any, row int) (err error) {
+		_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
 			pk := v.(uint64)
 			if pk != goodId {
 				return
@@ -259,7 +259,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			id = blk.Fingerprint()
-			key := model.EncodePhyAddrKey(id.SegmentID, id.BlockID, uint32(row))
+			key := model.EncodePhyAddrKeyWithPrefix(id.BlockID[:], uint32(row))
 			cntv, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return
@@ -323,7 +323,7 @@ func (g *APP1Goods) String() string {
 func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	db, err := txn.GetDatabase(dbName)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-		if db, err = txn.CreateDatabase(dbName, ""); err != nil {
+		if db, err = txn.CreateDatabase(dbName, "", ""); err != nil {
 			return
 		}
 	}
@@ -348,7 +348,7 @@ func GetWarehouseRelation(dbName string, txn txnif.AsyncTxn) (rel handle.Relatio
 func GetOrCreateDatabase(name string, txn txnif.AsyncTxn) handle.Database {
 	db, err := txn.GetDatabase(name)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-		if db, err = txn.CreateDatabase(name, ""); err != nil {
+		if db, err = txn.CreateDatabase(name, "", ""); err != nil {
 			panic(err)
 		}
 	}
@@ -417,13 +417,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := containers.MockBatchWithAttrs(
-		user.Types(),
-		user.Attrs(),
-		user.Nullables(),
-		conf.Users,
-		user.GetSingleSortKeyIdx(),
-		provider)
+	userData := containers.MockBatchWithAttrs(user.Types(), user.Attrs(), conf.Users, user.GetSingleSortKeyIdx(), provider)
 	defer userData.Close()
 
 	for i := 0; i < conf.Users; i++ {
@@ -437,7 +431,7 @@ func (app1 *APP1) Init(factor int) {
 	if err = userRel.Append(userData); err != nil {
 		panic(err)
 	}
-	price := containers.MakeVector(goods.ColDefs[2].Type, goods.ColDefs[2].Nullable())
+	price := containers.MakeVector(goods.ColDefs[2].Type)
 	defer price.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodPrice := float64(rand.Intn(1000)+20) / float64(rand.Intn(10)+1) / float64(20)
@@ -449,20 +443,14 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := containers.MockBatchWithAttrs(
-		goods.Types(),
-		goods.Attrs(),
-		goods.Nullables(),
-		conf.GoodKinds,
-		goods.GetSingleSortKeyIdx(),
-		provider)
+	goodsData := containers.MockBatchWithAttrs(goods.Types(), goods.Attrs(), conf.GoodKinds, goods.GetSingleSortKeyIdx(), provider)
 	defer goodsData.Close()
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
 
 	goodIds := goodsData.Vecs[0]
-	count := containers.MakeVector(repertory.ColDefs[2].Type, repertory.ColDefs[2].Nullable())
+	count := containers.MakeVector(repertory.ColDefs[2].Type)
 	defer count.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodCount := rand.Intn(1000) + 100
@@ -477,13 +465,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := containers.MockBatchWithAttrs(
-		repertory.Types(),
-		repertory.Attrs(),
-		repertory.Nullables(),
-		int(conf.GoodKinds),
-		repertory.GetSingleSortKeyIdx(),
-		provider)
+	repertoryData := containers.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), int(conf.GoodKinds), repertory.GetSingleSortKeyIdx(), provider)
 	defer repertoryData.Close()
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
@@ -588,7 +570,7 @@ func TestTxn7(t *testing.T) {
 	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.NoError(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -674,7 +656,7 @@ func TestTxn9(t *testing.T) {
 	bats := bat.Split(5)
 
 	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db", "")
+	db, _ := txn.CreateDatabase("db", "", "")
 	_, _ = db.CreateRelation(schema)
 	assert.NoError(t, txn.Commit())
 
@@ -693,7 +675,9 @@ func TestTxn9(t *testing.T) {
 			it.Next()
 		}
 		val.Store(2)
-		assert.Equal(t, 2, cnt)
+		// Use max commit ts as start ts
+		// 2nd relation is not visible
+		assert.Equal(t, 1, cnt)
 		assert.NoError(t, txn.Commit())
 	}
 
@@ -735,7 +719,9 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
-	assert.Equal(t, uint32(2), val.Load())
+	// Use max commit ts as start ts
+	// When reading snapshot, it's not necessary to wait commit.
+	assert.Equal(t, uint32(1), val.Load())
 
 	apply := func(_ txnif.AsyncTxn) error {
 		wg.Add(1)

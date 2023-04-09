@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"io"
 	"sync/atomic"
 
@@ -68,6 +69,7 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
+	Pipeline    *blockio.IoPipeline
 
 	Fs *objectio.ObjectFS
 
@@ -86,6 +88,10 @@ func (db *DB) FlushTable(
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
+}
+
+func (db *DB) StartTxnWithNow(info []byte) (txnif.AsyncTxn, error) {
+	return db.TxnMgr.StartTxnWithNow(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
@@ -142,6 +148,7 @@ func (db *DB) Close() error {
 	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
+	db.LogtailMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	db.DiskCleaner.Stop()

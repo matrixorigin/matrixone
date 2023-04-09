@@ -61,6 +61,9 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	CreateSequence
+	DropSequence
+	AlterSequence
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -75,6 +78,7 @@ type Source struct {
 	Expr         *plan.Expr
 	TableDef     *plan.TableDef
 	Timestamp    timestamp.Timestamp
+	AccountId    int32
 }
 
 // Col is the information of attribute
@@ -141,7 +145,7 @@ type anaylze struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scope *Scope
+	scope []*Scope
 
 	info plan2.ExecInfo
 
@@ -173,10 +177,7 @@ type Compile struct {
 
 	s3CounterSet perfcounter.CounterSet
 
-	// when we construct the scope, compileTableScan will new a scope, the magic is
-	// remote, but now the tempEngine is just standlone. So for now use this to read
-	// table locally. But int the future, this will disappear.
-	isTemporaryScan bool
+	stepRegs map[int32][]*process.WaitRegister
 }
 
 type RemoteReceivRegInfo struct {

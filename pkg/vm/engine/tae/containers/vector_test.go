@@ -21,10 +21,8 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,27 +31,11 @@ func withAllocator(opt Options) Options {
 	return opt
 }
 
-// func checkFullyEqualVector(t *testing.T, v1, v2 Vector) {
-// 	checkEqualVector(t, v1, v2)
-// 	assert.Equal(t, v1.Capacity(), v2.Capacity())
-// 	assert.Equal(t, v1.Allocated(), v2.Allocated())
-// }
-
-// func checkEqualVector(t *testing.T, v1, v2 Vector) {
-// 	assert.Equal(t, v1.GetType(), v2.GetType())
-// 	assert.Equal(t, v1.Length(), v2.Length())
-// 	assert.Equal(t, v1.HasNull(), v2.HasNull())
-// 	assert.Equal(t, v1.Nullable(), v2.Nullable())
-// 	for i := 0; i < v1.Length(); i++ {
-// 		assert.Equal(t, v1.Get(i), v2.Get(i))
-// 	}
-// }
-
 func TestVectorShallowForeach(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
 	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
-		vec := MakeVector(typ, true, opt)
+		vec := MakeVector(typ, opt)
 		for i := 0; i < 10; i++ {
 			if i%2 == 0 {
 				vec.Append(types.Null{})
@@ -66,26 +48,16 @@ func TestVectorShallowForeach(t *testing.T) {
 				}
 			}
 		}
-		vec.ForeachWindowShallow(0, 10, func(v any, row int) error {
+		vec.ForeachWindowShallow(0, 10, func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
+				assert.True(t, isNull)
 			}
 			return nil
 		}, nil)
 
-		vec.ForeachShallow(func(v any, row int) error {
+		vec.ForeachShallow(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
-			}
-			return nil
-		}, nil)
-
-		vec.GetView().ForeachShallow(func(v any, row int) error {
-			if row%2 == 0 {
-				_, ok := v.(types.Null)
-				assert.True(t, ok)
+				assert.True(t, isNull)
 			}
 			return nil
 		}, nil)
@@ -95,17 +67,16 @@ func TestVectorShallowForeach(t *testing.T) {
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int32.ToType(), false, opt)
+	vec := MakeVector(types.T_int32.ToType(), opt)
 	vec.Append(int32(12))
 	vec.Append(int32(32))
-	assert.False(t, vec.Nullable())
 	vec.AppendMany(int32(1), int32(100))
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, int32(12), vec.Get(0).(int32))
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
 	assert.Equal(t, int32(1), vec.Get(2).(int32))
 	assert.Equal(t, int32(100), vec.Get(3).(int32))
-	vec2 := NewVector[int32](types.T_int32.ToType(), false)
+	vec2 := NewVector[int32](types.T_int32.ToType())
 	vec2.Extend(vec)
 	assert.Equal(t, 4, vec2.Length())
 	assert.Equal(t, int32(12), vec2.Get(0).(int32))
@@ -122,9 +93,8 @@ func TestVector1(t *testing.T) {
 func TestVector2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int64.ToType(), true, opt)
+	vec := MakeVector(types.T_int64.ToType(), opt)
 	t.Log(vec.String())
-	assert.True(t, vec.Nullable())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
 		vec.Append(int64(i))
@@ -179,7 +149,7 @@ func TestVector2(t *testing.T) {
 func TestVector3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec1 := MakeVector(types.T_int32.ToType(), false, opts)
+	vec1 := MakeVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i))
 	}
@@ -190,7 +160,7 @@ func TestVector3(t *testing.T) {
 
 	r := bytes.NewBuffer(w.Bytes())
 
-	vec2 := MakeVector(types.T_int32.ToType(), false, opts)
+	vec2 := MakeVector(types.T_int32.ToType(), opts)
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 
@@ -203,60 +173,14 @@ func TestVector3(t *testing.T) {
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
-func TestVector4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, nil)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
-	buffer := new(bytes.Buffer)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, buffer)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
-}
-
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 10, false, true, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
-		op := func(v any, row int) (err error) {
+		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			assert.Equal(t, vec.Get(row), v)
 			return
@@ -295,16 +219,15 @@ func TestVector6(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	sels := roaring.BitmapOf(2, 6)
 	f := func(vecType types.Type, nullable bool) {
-		vec := MockVector(vecType, 10, false, nullable, nil)
+		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
 			vec.Update(4, types.Null{})
 		}
 		bias := 0
 		win := vec.Window(bias, 8)
 		assert.Equal(t, 8, win.Length())
-		assert.Equal(t, 8, win.Capacity())
 		rows := make([]int, 0)
-		op := func(v any, row int) (err error) {
+		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			assert.Equal(t, vec.Get(row+bias), v)
 			return
@@ -336,7 +259,7 @@ func TestVector6(t *testing.T) {
 		bias = 1
 		win = vec.Window(bias, 8)
 
-		op2 := func(v any, row int) (err error) {
+		op2 := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			// t.Logf("row=%d,v=%v", row, v)
 			// t.Logf("row=%d, winv=%v", row, win.Get(row))
@@ -381,12 +304,12 @@ func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	testF := func(typ types.Type, nullable bool) {
-		vec := MockVector(typ, 10, false, nullable, nil)
+		vec := MockVector(typ, 10, false, nil)
 		if nullable {
 			vec.Append(types.Null{})
 		}
-		vec2 := MockVector(typ, 10, false, nullable, nil)
-		vec3 := MakeVector(typ, nullable)
+		vec2 := MockVector(typ, 10, false, nil)
+		vec3 := MakeVector(typ)
 		vec3.Extend(vec)
 		assert.Equal(t, vec.Length(), vec3.Length())
 		vec3.Extend(vec2)
@@ -399,7 +322,7 @@ func TestVector7(t *testing.T) {
 			}
 		}
 
-		vec4 := MakeVector(typ, nullable)
+		vec4 := MakeVector(typ)
 		cnt := 5
 		if nullable {
 			cnt = 6
@@ -424,7 +347,7 @@ func TestVector7(t *testing.T) {
 
 func TestVector8(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vec := MakeVector(types.T_int32.ToType(), true)
+	vec := MakeVector(types.T_int32.ToType())
 	defer vec.Close()
 	vec.Append(int32(0))
 	vec.Append(int32(1))
@@ -454,7 +377,7 @@ func TestVector8(t *testing.T) {
 func TestVector9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h22"))
 	vec.Append([]byte("h333"))
@@ -473,7 +396,7 @@ func TestVector9(t *testing.T) {
 func TestCompact(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), true, opts)
+	vec := MakeVector(types.T_varchar.ToType(), opts)
 
 	vec.Append(types.Null{})
 	t.Log(vec.String())
@@ -509,8 +432,8 @@ func TestCompact(t *testing.T) {
 }
 
 func BenchmarkVectorExtend(t *testing.B) {
-	vec1 := MockVector(types.T_int32.ToType(), 0, true, false, nil)
-	vec2 := MockVector(types.T_int32.ToType(), 1, true, false, nil)
+	vec1 := MockVector(types.T_int32.ToType(), 0, true, nil)
+	vec2 := MockVector(types.T_int32.ToType(), 1, true, nil)
 	defer vec1.Close()
 	defer vec2.Close()
 
@@ -518,4 +441,137 @@ func BenchmarkVectorExtend(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		vec1.Extend(vec2)
 	}
+}
+
+func TestForeachWindowFixed(t *testing.T) {
+	vec1 := MockVector(types.T_uint32.ToType(), 2, false, nil)
+	defer vec1.Close()
+	vec1.Append(types.Null{})
+
+	cnt := 0
+	op := func(v uint32, isNull bool, row int) (err error) {
+		t.Logf("v=%v,null=%v,row=%d", v, isNull, row)
+		cnt++
+		if cnt == vec1.Length() {
+			assert.True(t, isNull)
+		} else {
+			assert.Equal(t, vec1.Get(row).(uint32), v)
+		}
+		return
+	}
+	ForeachWindowFixed(vec1, 0, vec1.Length(), op)
+	assert.Equal(t, vec1.Length(), cnt)
+}
+
+func TestForeachWindowBytes(t *testing.T) {
+	vec1 := MockVector(types.T_varchar.ToType(), 2, false, nil)
+	defer vec1.Close()
+	vec1.Append(types.Null{})
+
+	cnt := 0
+	op := func(v []byte, isNull bool, row int) (err error) {
+		t.Logf("v=%v,null=%v,row=%d", v, isNull, row)
+		cnt++
+		if cnt == vec1.Length() {
+			assert.True(t, isNull)
+		} else {
+			assert.Equal(t, 0, bytes.Compare(v, vec1.Get(row).([]byte)))
+		}
+		return
+	}
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), op)
+	assert.Equal(t, vec1.Length(), cnt)
+}
+
+func BenchmarkForeachVector(b *testing.B) {
+	rows := 1000
+	int64s := MockVector2(types.T_int64.ToType(), rows, 0)
+	defer int64s.Close()
+	b.Run("int64-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			int64s.Foreach(func(any, bool, int) error {
+				return nil
+			}, nil)
+		}
+	})
+	b.Run("int64-new", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(int64s, 0, rows, func(int64, bool, int) (err error) {
+				return
+			})
+		}
+	})
+
+	chars := MockVector2(types.T_varchar.ToType(), rows, 0)
+	defer chars.Close()
+	b.Run("chars-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			chars.Foreach(func(any, bool, int) error {
+				return nil
+			}, nil)
+		}
+	})
+	b.Run("chars-new", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
+				return
+			})
+		}
+	})
+}
+
+func BenchmarkForeachVectorBytes(b *testing.B) {
+	rows := 1000
+	vec := MockVector2(types.T_int64.ToType(), rows, 0)
+	defer vec.Close()
+	b.Run("int64-bytes", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+				return
+			})
+		}
+	})
+	b.Run("int64-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec.ForeachShallow(func(any, bool, int) error {
+				return nil
+			}, nil)
+		}
+	})
+}
+
+func testFunc[T any](args ...any) func(T, bool, int) error {
+	return func(v T, isNull bool, row int) (err error) {
+		return
+	}
+}
+
+func BenchmarkFunctions(b *testing.B) {
+	var funcs = map[types.T]any{
+		types.T_bool:  testFunc[bool],
+		types.T_int32: testFunc[int32],
+		types.T_char:  testFunc[[]byte],
+	}
+	vec := MockVector2(types.T_char.ToType(), 1000, 0)
+	defer vec.Close()
+	b.Run("func-new", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs))
+		}
+	})
+	b.Run("func-old", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec.ForeachShallow(func(any, bool, int) (err error) {
+				return
+			}, nil)
+		}
+	})
 }

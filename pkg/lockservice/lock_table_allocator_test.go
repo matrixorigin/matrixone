@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -127,7 +128,7 @@ func TestKeepaliveBind(t *testing.T) {
 			c, err := NewClient(morpc.Config{})
 			require.NoError(t, err)
 			defer func() {
-				assert.NoError(t, err)
+				assert.NoError(t, c.Close())
 			}()
 
 			a.Get("s1", 1)
@@ -206,6 +207,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			runtime.WithClock(clock.NewHLCClock(func() int64 {
 				return time.Now().UTC().UnixNano()
 			}, 0))))
+		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
@@ -233,6 +235,8 @@ func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
 	fn func(*lockTableAllocator)) {
+	defer leaktest.AfterTest(t)()
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(testSockets[7:]))
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	cluster := clusterservice.NewMOCluster(

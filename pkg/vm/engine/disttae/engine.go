@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"runtime"
 	"sync"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -47,7 +47,6 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -148,9 +147,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:          txn,
-		databaseName: name,
-		databaseId:   key.Id,
+		txn:               txn,
+		databaseName:      name,
+		databaseId:        key.Id,
+		databaseType:      key.Typ,
+		databaseCreateSql: key.CreateSql,
 	}, nil
 }
 
@@ -267,6 +268,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	return
 }
 
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.idGen.AllocateIDByKey(ctx, key)
+}
+
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	var db *txnDatabase
 
@@ -314,39 +319,6 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-// hasConflict used to detect if a transaction on a cn is in conflict,
-// currently an empty implementation, assuming all transactions on a cn are conflict free
-func (e *Engine) hasConflict(txn *Transaction) bool {
-	return false
-}
-
-// hasDuplicate used to detect if a transaction on a cn has duplicate.
-func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
-	for i := range txn.writes {
-		for _, e := range txn.writes[i] {
-			if e.typ == DELETE {
-				continue
-			}
-			if e.bat.Length() == 0 {
-				continue
-			}
-			key := genTableKey(ctx, e.tableName, e.databaseId)
-			v, ok := txn.tableMap.Load(key)
-			if !ok {
-				continue
-			}
-			tbl := v.(*txnTable)
-			if tbl.meta == nil {
-				continue
-			}
-			if tbl.primaryIdx == -1 {
-				continue
-			}
-		}
-	}
-	return false
-}
-
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
 	proc := process.New(
@@ -355,9 +327,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
+		nil,
+		nil,
 	)
-	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
-	workspace.DisableHistory()
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -366,18 +338,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:        op.Txn(),
 		idGen:       e.idGen,
 		rowId:       [2]uint64{math.MaxUint64, 0},
-		workspace:   workspace,
 		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
 		createMap:   new(sync.Map),
 	}
-	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
-		if err := e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+		if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
 		}
@@ -429,17 +399,11 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn.readOnly {
 		return nil
 	}
-	if e.hasConflict(txn) {
-		return moerr.NewTxnWriteConflictNoCtx("write conflict")
-	}
-	if e.hasDuplicate(ctx, txn) {
-		return moerr.NewDuplicateNoCtx()
-	}
-	err := txn.DumpBatch(true)
+	err := txn.DumpBatch(true, 0)
 	if err != nil {
 		return err
 	}
-	reqs, err := genWriteReqs(txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes)
 	if err != nil {
 		return err
 	}
@@ -546,9 +510,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
-		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.mp)
-		}
+		txn.writes[i].bat.Clean(e.mp)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil
@@ -567,4 +529,20 @@ func (e *Engine) getDNServices() []DNStore {
 			return true
 		})
 	return values
+}
+
+func (e *Engine) cleanMemoryTable() {
+	e.Lock()
+	e.partitions = make(map[[2]uint64]Partitions)
+	e.Unlock()
+}
+
+func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
+	e.Lock()
+	// XXX it's probably not a good way to do that.
+	// after we set it to empty, actually this part of memory was not immediately released.
+	// maybe a very old transaction still using that.
+	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
+	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

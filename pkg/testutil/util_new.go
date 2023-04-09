@@ -45,6 +45,8 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil,
+		nil,
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
@@ -57,15 +59,15 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 var NewProc = NewProcess
 
 func NewFS() *fileservice.FileServices {
-	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		panic(err)
 	}
-	s3, err := fileservice.NewMemoryFS(defines.SharedFileServiceName)
+	s3, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		panic(err)
 	}
-	etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName)
+	etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -228,6 +230,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewRowidVector(n, typ, m, random, vs)
 		}
 		return NewRowidVector(n, typ, m, random, nil)
+	case types.T_Blockid:
+		if vs, ok := Values.([]types.Blockid); ok {
+			return NewBlockidVector(n, typ, m, random, vs)
+		}
+		return NewBlockidVector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}
@@ -272,6 +279,29 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 
 		rowId[1] = int64(i)
 		if err := vector.AppendFixed(vec, *(*types.Rowid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Blockid) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		var rowId [2]int64
+
+		rowId[1] = int64(i)
+		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

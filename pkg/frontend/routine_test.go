@@ -18,9 +18,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -34,10 +40,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
 )
 
 func Test_inc_dec(t *testing.T) {
@@ -162,7 +164,10 @@ func Test_ConnectionCount(t *testing.T) {
 	defer bhStub.Reset()
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	rm, _ := NewRoutineManager(ctx, pu)
+
+	// A mock autoincrcache manager.
+	aicm := &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx, pu, aicm)
 	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}

@@ -37,6 +37,7 @@ type fileServices struct {
 	dnLocalFSs []fileservice.FileService
 	cnLocalFSs []fileservice.FileService
 	s3FS       fileservice.FileService
+	etlFS      fileservice.FileService
 }
 
 // newFileServices constructs an instance of fileServices.
@@ -44,14 +45,14 @@ func (c *testCluster) buildFileServices() *fileServices {
 	dnServiceNum := c.opt.initial.dnServiceNum
 	cnServiceNum := c.opt.initial.cnServiceNum
 
-	factory := func(dir string, name string) fileservice.FileService {
-		fs, err := fileservice.NewMemoryFS(name)
+	factory := func(_ string, name string) fileservice.FileService {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
 		require.NoError(c.t, err)
 		return fs
 	}
 	if c.opt.keepData {
 		factory = func(dir string, name string) fileservice.FileService {
-			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0, nil)
+			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
 			require.NoError(c.t, err)
 			return fs
 		}
@@ -74,6 +75,7 @@ func (c *testCluster) buildFileServices() *fileServices {
 		dnLocalFSs:   dnLocals,
 		cnLocalFSs:   cnLocals,
 		s3FS:         factory(c.opt.rootDataDir, defines.SharedFileServiceName),
+		etlFS:        factory(c.opt.rootDataDir, defines.ETLFileServiceName),
 	}
 }
 
@@ -114,4 +116,12 @@ func (f *fileServices) getS3FileService() fileservice.FileService {
 	defer f.RUnlock()
 	f.assertFileServiceLocked()
 	return f.s3FS
+}
+
+// getETLFileService gets ETL FileService for all DN services.
+func (f *fileServices) getETLFileService() fileservice.FileService {
+	f.RLock()
+	defer f.RUnlock()
+	f.assertFileServiceLocked()
+	return f.etlFS
 }

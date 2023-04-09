@@ -106,7 +106,7 @@ func (blk *block) GetColumnDataByIds(
 	defer node.Unref()
 	return blk.ResolvePersistedColumnDatas(
 		node.MustPNode(),
-		txn.GetStartTS(),
+		txn,
 		colIdxes,
 		false)
 }
@@ -122,7 +122,7 @@ func (blk *block) GetColumnDataById(
 	defer node.Unref()
 	return blk.ResolvePersistedColumnData(
 		node.MustPNode(),
-		txn.GetStartTS(),
+		txn,
 		colIdx,
 		false)
 }
@@ -134,47 +134,28 @@ func (blk *block) BatchDedup(
 	precommit bool) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
+			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
-	ts := txn.GetStartTS()
-	if precommit {
-		//ts is assigned to maximum value of TS.
-		ts = txn.GetPrepareTS()
-	}
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.PersistedBatchDedup(
 		node.MustPNode(),
-		ts,
+		txn,
+		precommit,
 		keys,
 		rowmask,
-		blk.dedupClosure)
-}
-
-func (blk *block) dedupClosure(
-	vec containers.Vector,
-	ts types.TS,
-	mask *roaring.Bitmap,
-	def *catalog.ColDef) func(any, int) error {
-	return func(v any, _ int) (err error) {
-		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(vec.GetType(), v)
-			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-		}
-		return nil
-	}
+		dedupNABlkClosure)
 }
 
 func (blk *block) GetValue(
 	txn txnif.AsyncTxn,
 	row, col int) (v any, err error) {
-	ts := txn.GetStartTS()
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.getPersistedValue(
 		node.MustPNode(),
-		ts,
+		txn,
 		row,
 		col,
 		false)
@@ -222,16 +203,15 @@ func (blk *block) GetByFilter(
 		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
-	ts := txn.GetStartTS()
 
 	node := blk.PinNode()
 	defer node.Unref()
-	return blk.getPersistedRowByFilter(node.MustPNode(), ts, filter)
+	return blk.getPersistedRowByFilter(node.MustPNode(), txn, filter)
 }
 
 func (blk *block) getPersistedRowByFilter(
 	pnode *persistedNode,
-	ts types.TS,
+	txn txnif.TxnReader,
 	filter *handle.Filter) (offset uint32, err error) {
 	ok, err := pnode.ContainsKey(filter.Val)
 	if err != nil {
@@ -257,7 +237,7 @@ func (blk *block) getPersistedRowByFilter(
 
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
-	deleted, err := blk.mvcc.IsDeletedLocked(offset, ts, blk.mvcc.RWMutex)
+	deleted, err := blk.mvcc.IsDeletedLocked(offset, txn, blk.mvcc.RWMutex)
 	if err != nil {
 		return
 	}

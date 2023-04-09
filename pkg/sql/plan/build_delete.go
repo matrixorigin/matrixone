@@ -24,7 +24,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
 	}
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			// I will improve this after cn-write-s3 delete
 			canTruncate = false
 		}
-		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false)
+		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}

@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -35,7 +37,9 @@ func New(
 	m *mpool.MPool,
 	txnClient client.TxnClient,
 	txnOperator client.TxnOperator,
-	fileService fileservice.FileService) *Process {
+	fileService fileservice.FileService,
+	lockService lockservice.LockService,
+	aicm *defines.AutoIncrCacheManager) *Process {
 	return &Process{
 		mp:           m,
 		Ctx:          ctx,
@@ -44,6 +48,8 @@ func New(
 		FileService:  fileService,
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
+		LockService:  lockService,
+		Aicm:         aicm,
 	}
 }
 
@@ -68,6 +74,8 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.FileService = p.FileService
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
+	proc.LockService = p.LockService
+	proc.Aicm = p.Aicm
 
 	// reg and cancel
 	proc.Ctx = newctx

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -61,6 +62,7 @@ type dmlSelectInfo struct {
 }
 
 type dmlTableInfo struct {
+	typ            string
 	objRef         []*ObjectRef
 	tableDefs      []*TableDef
 	isClusterTable []bool
@@ -95,7 +97,7 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 }
 
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +224,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if aliasNames, exist := aliasMap[tblName]; exist {
+		alias = tblName // work in delete statement
 		dbName = aliasNames[0]
 		tblName = aliasNames[1]
 	}
@@ -234,15 +237,32 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+
 	if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
+	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.GetContext().Value(defines.BgKey{}) == nil {
+		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
+
+	var newCols []*ColDef
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			if col.Name == catalog.Row_ID {
+				if tblInfo.typ != "insert" {
+					newCols = append(newCols, col)
+				}
+			}
+		} else {
+			newCols = append(newCols, col)
+		}
+	}
+	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
@@ -251,6 +271,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
+	}
+	if obj.PubAccountId != -1 {
+		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
 	if !tblInfo.haveConstraint {
@@ -287,8 +310,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string) (*dmlTableInfo, error) {
+func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
+		typ:       typ,
 		nameToIdx: make(map[string]int),
 		idToName:  make(map[uint64]string),
 		alias:     make(map[string]int),
@@ -315,15 +339,21 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	fromTables := &tree.From{
 		Tables: stmt.Tables,
 	}
-	selectList := make([]tree.SelectExpr, len(tableInfo.tableDefs))
+	var selectList []tree.SelectExpr
 
 	// append  table.* to project list
 	columnsSize := 0
+	var aliasList = make([]string, len(tableInfo.alias))
 	for alias, i := range tableInfo.alias {
-		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		columnsSize += len(tableInfo.tableDefs[i].Cols)
-		selectList[i] = tree.SelectExpr{
-			Expr: e,
+		aliasList[i] = alias
+	}
+	for i, alias := range aliasList {
+		for _, col := range tableInfo.tableDefs[i].Cols {
+			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+			columnsSize = columnsSize + 1
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: e,
+			})
 		}
 	}
 
@@ -558,7 +588,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// if insert with on duplicate key . need append a join node
 	// create table t1 (a int primary key, b int unique key, c int);
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.a, t1.b，c, t1.row_id from
+	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
 
@@ -707,19 +737,25 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool) (int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
 
-	getResolveExpr := func(tblName string) tree.SelectExpr {
+	getResolveExpr := func(alias string) {
 		var ret *tree.UnresolvedName
 		if haveConstraint {
-			ret, _ = tree.NewUnresolvedNameWithStar(builder.GetContext(), tblName)
+			defIdx := tblInfo.alias[alias]
+			for _, col := range tblInfo.tableDefs[defIdx].Cols {
+				ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+				selectList = append(selectList, tree.SelectExpr{
+					Expr: ret,
+				})
+			}
 		} else {
-			ret, _ = tree.NewUnresolvedName(builder.GetContext(), tblName, catalog.Row_ID)
-		}
-		return tree.SelectExpr{
-			Expr: ret,
+			ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, catalog.Row_ID)
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: ret,
+			})
 		}
 	}
 
@@ -727,13 +763,13 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 		if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
 			alias := string(aliasTbl.As.Alias)
 			if alias != "" {
-				selectList = append(selectList, getResolveExpr(alias))
+				getResolveExpr(alias)
 			} else {
 				astTbl := aliasTbl.Expr.(*tree.TableName)
-				selectList = append(selectList, getResolveExpr(string(astTbl.ObjectName)))
+				getResolveExpr(string(astTbl.ObjectName))
 			}
 		} else if astTbl, ok := tbl.(*tree.TableName); ok {
-			selectList = append(selectList, getResolveExpr(string(astTbl.ObjectName)))
+			getResolveExpr(string(astTbl.ObjectName))
 		}
 	}
 
@@ -765,7 +801,7 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Delete) error {
 	var err error
 	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = deleteToSelect(builder, subCtx, stmt, true)
+	info.rootId, err = deleteToSelect(builder, subCtx, stmt, true, info.tblInfo)
 	if err != nil {
 		return err
 	}
@@ -1029,8 +1065,16 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 
-					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
-					rightIdxPos := int32(0)
+					var rightRowIdPos int32 = -1
+					var rightIdxPos int32 = -1 //it's also a primary key.
+					// it's better to get pos from tableDef
+					for colIdx, col := range rightTableDef.Cols {
+						if col.Name == catalog.Row_ID {
+							rightRowIdPos = int32(colIdx)
+						} else if col.Name == catalog.IndexTableIndexColName {
+							rightIdxPos = int32(colIdx)
+						}
+					}
 
 					// append projection
 					info.projectList = append(info.projectList, &plan.Expr{
@@ -1042,6 +1086,20 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					})
+					// we only keep column index of row_id.
+					// primary key column index = column index of row_id + 1
+					info.onIdx = append(info.onIdx, info.idx)
+					info.idx = info.idx + 1
+					info.projectList = append(info.projectList, &plan.Expr{
+						Typ: rightTableDef.Cols[rightIdxPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: rightIdxPos,
+							},
+						},
+					})
+					info.idx = info.idx + 1
 
 					rightExpr := &plan.Expr{
 						Typ: rightTableDef.Cols[rightIdxPos].Typ,
@@ -1109,8 +1167,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					bindCtx.binder = NewTableBinder(builder, bindCtx)
 					info.rootId = newRootId
 					info.onIdxTbl = append(info.onIdxTbl, idxRef)
-					info.onIdx = append(info.onIdx, info.idx)
-					info.idx = info.idx + 1
 				}
 			}
 		}

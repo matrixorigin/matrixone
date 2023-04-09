@@ -55,9 +55,9 @@ func TestIe(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
-	aic := defines.AutoIncrCaches{}
+	aicm := &defines.AutoIncrCacheManager{}
 
-	executor := newIe(pu, &miniExec{}, aic)
+	executor := newIe(pu, &miniExec{}, aicm)
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
@@ -73,9 +73,9 @@ func TestIeProto(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
-	aic := defines.AutoIncrCaches{}
+	aicm := &defines.AutoIncrCacheManager{}
 
-	executor := NewInternalExecutor(pu, aic)
+	executor := NewInternalExecutor(pu, aicm)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
@@ -85,7 +85,6 @@ func TestIeProto(t *testing.T) {
 	_ = p.ConnectionID()
 	ctx := context.TODO()
 	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
-	assert.Panics(t, func() { p.Peer() })
 	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
 	assert.Nil(t, p.SendColumnCountPacket(1))
 	assert.Nil(t, p.SendEOFPacketIf(0, 1))

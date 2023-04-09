@@ -48,10 +48,7 @@ show collation like '%';
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -149,9 +146,7 @@ Tables_in_test_db
 test_table
 test_view
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -238,9 +233,9 @@ drop user user_name    DCL    external_sql
 revoke test_role from user_name    DCL    external_sql
 grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    external_sql
 create database if not exists db1    DDL    external_sql
-create user user_name identified by 'password'    DCL    external_sql
+create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
-create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    external_sql
+create account test_account admin_name 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
 with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    external_sql
 values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    external_sql
@@ -294,9 +289,9 @@ drop user user_name    DCL    external_sql
 revoke test_role from user_name    DCL    external_sql
 grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    external_sql
 create database if not exists db1    DDL    external_sql
-create user user_name identified by 'password'    DCL    external_sql
+create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
-create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    external_sql
+create account test_account admin_name 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
 delete from test_table where col1 = 3    DML    external_sql
 update test_table set col2 = "xxx" where col1 = 1    DML    external_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
@@ -374,10 +369,7 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 /* cloud_user */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -479,9 +471,9 @@ drop user user_name    DCL    cloud_user_sql
 revoke test_role from user_name    DCL    cloud_user_sql
 grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    cloud_user_sql
 create database if not exists db1    DDL    cloud_user_sql
-create user user_name identified by 'password'    DCL    cloud_user_sql
+create user user_name identified by '******'    DCL    cloud_user_sql
 create role test_role    DCL    cloud_user_sql
-create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    cloud_user_sql
+create account test_account admin_name 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_user_sql
 delete from test_table where col1 = 3    DML    cloud_user_sql
 update test_table set col2 = "xxx" where col1 = 1    DML    cloud_user_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    cloud_user_sql
@@ -560,10 +552,7 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 /* cloud_nonuser */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
-test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
-test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -665,9 +654,9 @@ drop user user_name    DCL    cloud_nonuser_sql
 revoke test_role from user_name    DCL    cloud_nonuser_sql
 grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    cloud_nonuser_sql
 create database if not exists db1    DDL    cloud_nonuser_sql
-create user user_name identified by 'password'    DCL    cloud_nonuser_sql
+create user user_name identified by '******'    DCL    cloud_nonuser_sql
 create role test_role    DCL    cloud_nonuser_sql
-create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    cloud_nonuser_sql
+create account test_account admin_name 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_nonuser_sql
 delete from test_table where col1 = 3    DML    cloud_nonuser_sql
 update test_table set col2 = "xxx" where col1 = 1    DML    cloud_nonuser_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    cloud_nonuser_sql

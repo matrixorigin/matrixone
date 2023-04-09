@@ -1250,6 +1250,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
+	//whether DN does primary key uniqueness check against transaction's workspace or not.
+	"mo_pk_check_by_dn": {
+		Name:              "mo_pk_check_by_dn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
+		Default:           int8(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
@@ -1283,6 +1292,9 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 			}
 		}
 
+		if minIdx != len(tzStr)-2 {
+			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
+		}
 		if tzStr[minIdx] < '0' || tzStr[minIdx] > '9' {
 			return moerr.NewInternalError(sess.requestCtx, "incorrect timezone "+tzStr)
 		}
