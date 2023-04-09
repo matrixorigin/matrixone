@@ -111,7 +111,7 @@ func (srv *Server) GetCnBlockDeletes(blockId string) []int64 {
 	srv.cnBlockDetetesMap.Lock()
 	defer srv.cnBlockDetetesMap.Unlock()
 	res := srv.cnBlockDetetesMap.mp[blockId]
-	offsets := make([]int64, len(res), len(res))
+	offsets := make([]int64, len(res))
 	copy(offsets, res)
 	return offsets
 }
