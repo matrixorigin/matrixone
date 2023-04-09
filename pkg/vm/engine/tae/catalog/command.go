@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -212,7 +211,8 @@ func (cmd *EntryCommand[T, N]) VerboseString() string {
 func (cmd *EntryCommand[T, N]) GetType() int16 { return cmd.cmdType }
 
 func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, cmd.GetType()); err != nil {
+	t := cmd.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
 	n += 2
