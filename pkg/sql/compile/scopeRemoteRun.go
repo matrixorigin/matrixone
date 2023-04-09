@@ -1357,13 +1357,15 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
-		if err != nil {
+		oldVec := bat.Vecs[i]
+		vec, err1 := oldVec.Dup(mp)
+		if err1 != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)
 			}
-			return nil, err
+			return nil, err1
 		}
+		bat.ReplaceVector(oldVec, vec)
 	}
 	// allocated memory of aggVec from mPool.
 	for i, ag := range bat.Aggs {
