@@ -124,7 +124,7 @@ func (writer *BFWriter) Finalize() error {
 	if err != nil {
 		return err
 	}
-	bf := objectio.NewBloomFilter(writer.colIdx, uint8(writer.cType), iBuf)
+	bf := objectio.NewBloomFilter(uint8(writer.cType), iBuf)
 
 	err = appender.WriteIndex(writer.block, bf)
 	if err != nil {

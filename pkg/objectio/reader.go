@@ -177,10 +177,10 @@ func (r *ObjectReader) Read(ctx context.Context,
 		for _, idx := range idxs {
 			col := meta.BlkMetas[id].(*Block).columns[idx]
 			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.GetMeta().location.Offset()),
-				Size:   int64(col.GetMeta().location.Length()),
+				Offset: int64(col.GetMeta().Location().Offset()),
+				Size:   int64(col.GetMeta().Location().Length()),
 
-				ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+				ToObject: readFunc(int64(col.GetMeta().Location().OriginSize())),
 			})
 		}
 	}
@@ -209,10 +209,10 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 		for idx := range block.Idxes {
 			col := blocks[block.Id].(*Block).columns[idx]
 			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.GetMeta().location.Offset()),
-				Size:   int64(col.GetMeta().location.Length()),
+				Offset: int64(col.GetMeta().Location().Offset()),
+				Size:   int64(col.GetMeta().Location().Length()),
 
-				ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+				ToObject: readFunc(int64(col.GetMeta().Location().OriginSize())),
 			})
 		}
 	}

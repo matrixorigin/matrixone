@@ -96,7 +96,7 @@ type BlockObject interface {
 	GetRows() (uint32, error)
 
 	// GetMeta gets the meta of the BlockObject
-	GetMeta() BlockMetaNew
+	GetMeta() BlockMeta
 
 	// GetExtent gets the metadata location of BlockObject in fileservice
 	GetExtent() Extent
@@ -119,7 +119,7 @@ type ColumnObject interface {
 	GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error)
 
 	// GetMeta gets the metadata of ColumnObject
-	GetMeta() *ColumnMeta
+	GetMeta() ColumnMeta
 
 	MarshalMeta() []byte
 	UnmarshalMate(data []byte) error

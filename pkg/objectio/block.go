@@ -21,7 +21,7 @@ import (
 // Block is the organizational structure of a batch in objectio
 // Write one batch at a time, and batch and block correspond one-to-one
 type Block struct {
-	meta BlockMetaNew
+	meta BlockMeta
 	// id is the serial number of the block in the object
 	id uint32
 
@@ -76,7 +76,7 @@ func (b *Block) GetRows() (uint32, error) {
 	panic(any("implement me"))
 }
 
-func (b *Block) GetMeta() BlockMetaNew {
+func (b *Block) GetMeta() BlockMeta {
 	return b.meta
 }
 
@@ -94,7 +94,7 @@ func (b *Block) MarshalMeta() []byte {
 
 func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
 	var err error
-	header := BlockHeaderNew(data[:headerLen])
+	header := BlockHeader(data[:headerLen])
 	metaLen := headerLen + header.ColumnCount()*colMetaLen
 	b.meta = data[:metaLen]
 	return uint32(metaLen), err

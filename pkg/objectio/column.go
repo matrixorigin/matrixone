@@ -26,17 +26,16 @@ import (
 type ColumnBlock struct {
 	// meta is the metadata of the ColumnBlock,
 	// such as index, data location, compression algorithm...
-	meta    *ColumnMeta
-	metaNew ColumnMetaNew
+	meta ColumnMeta
 
 	// object is the block.object
 	object *Object
 }
 
-func NewColumnBlock(meta ColumnMetaNew, object *Object) *ColumnBlock {
+func NewColumnBlock(meta ColumnMeta, object *Object) *ColumnBlock {
 	col := &ColumnBlock{
-		object:  object,
-		metaNew: meta,
+		object: object,
+		meta:   meta,
 	}
 	return col
 }
@@ -48,10 +47,10 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	data.Entries[0] = fileservice.IOEntry{
-		Offset: int64(cb.meta.location.Offset()),
-		Size:   int64(cb.meta.location.Length()),
+		Offset: int64(cb.meta.Location().Offset()),
+		Size:   int64(cb.meta.Location().Length()),
 	}
-	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()))
+	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.Location().OriginSize()))
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
@@ -61,35 +60,35 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 
 func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
 	if dataType == ZoneMapType {
-		return &cb.meta.zoneMap, nil
+		return NewZoneMap(cb.meta.ZoneMap().data)
 	} else if dataType == BloomFilterType {
 		data := &fileservice.IOVector{
 			FilePath: cb.object.name,
 			Entries:  make([]fileservice.IOEntry, 1),
 		}
 		data.Entries[0] = fileservice.IOEntry{
-			Offset: int64(cb.meta.bloomFilter.Offset()),
-			Size:   int64(cb.meta.bloomFilter.Length()),
+			Offset: int64(cb.meta.BloomFilter().Offset()),
+			Size:   int64(cb.meta.BloomFilter().Length()),
 		}
 		var err error
-		data.Entries[0].ToObject = readFunc(int64(cb.meta.bloomFilter.OriginSize()))
+		data.Entries[0].ToObject = readFunc(int64(cb.meta.BloomFilter().OriginSize()))
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			return nil, err
 		}
-		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object), nil
+		return NewBloomFilter(0, data.Entries[0].Object), nil
 	}
 	return nil, nil
 }
 
-func (cb *ColumnBlock) GetMeta() *ColumnMeta {
+func (cb *ColumnBlock) GetMeta() ColumnMeta {
 	return cb.meta
 }
 
 func (cb *ColumnBlock) MarshalMeta() []byte {
-	return cb.meta.Marshal()
+	return cb.meta
 }
 
 func (cb *ColumnBlock) UnmarshalMate(data []byte) error {
-	return cb.meta.Unmarshal(data)
+	return nil
 }

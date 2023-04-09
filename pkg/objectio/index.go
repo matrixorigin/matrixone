@@ -52,7 +52,7 @@ func (z *ZoneMap) GetIdx() uint16 {
 }
 
 func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) error {
-	block.columns[idx].meta.zoneMap = *z
+	block.columns[idx].meta.setZoneMap(*z)
 	return nil
 }
 
@@ -65,7 +65,7 @@ type BloomFilter struct {
 	data any
 }
 
-func NewBloomFilter(idx uint16, alg uint8, data any) IndexData {
+func NewBloomFilter(alg uint8, data any) IndexData {
 	bloomFilter := &BloomFilter{
 		alg:  alg,
 		data: data,
@@ -92,8 +92,11 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block, idx uint16) erro
 	if err != nil {
 		return err
 	}
-	block.columns[idx].meta.bloomFilter.offset = uint32(offset)
-	block.columns[idx].meta.bloomFilter.length = uint32(length)
-	block.columns[idx].meta.bloomFilter.originSize = uint32(dataLen)
+	extent := Extent{
+		offset:     uint32(offset),
+		length:     uint32(length),
+		originSize: uint32(dataLen),
+	}
+	block.columns[idx].meta.setBloomFilter(extent)
 	return err
 }

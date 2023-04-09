@@ -74,7 +74,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 			if err != nil {
 				return 0, err
 			}
-			objectSize += col.GetMeta().GetLocation().Length()
+			objectSize += col.GetMeta().Location().Length()
 		}
 	}
 	return objectSize, nil
