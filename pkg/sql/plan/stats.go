@@ -726,6 +726,9 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	rightChild := builder.qry.Nodes[node.Children[1]]
+	if rightChild.NodeType == plan.Node_FUNCTION_SCAN {
+		return nodeID
+	}
 
 	if node.JoinType == plan.Node_LEFT {
 		//right join does not support non equal join for now
