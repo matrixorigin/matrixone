@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -939,7 +940,6 @@ var (
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
-		owner,
 		args,
 		body,
 		db,
@@ -951,7 +951,7 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1321,6 +1321,8 @@ const (
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,all_account,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
+
+	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
 )
 
 var (
@@ -1756,6 +1758,10 @@ func getSqlForDeleteMysqlCompatbilityModeForAccount(ctx context.Context, account
 		return "", err
 	}
 	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name), nil
+}
+
+func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
+	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
 // isClusterTable decides a table is the index table or not
@@ -7889,7 +7895,6 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	var checkExistence string
 	var argsJson []byte
 	// var fmtctx *tree.FmtCtx
-	var argList []tree.ProcedureArgDecl
 	var erArray []ExecResult
 
 	// a database must be selected or specified as qualifier when create a function
@@ -7906,7 +7911,19 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	defer bh.Close()
 
 	// build argmap and marshal as json
-	argList = make([]tree.ProcedureArgDecl, len(cp.Args))
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	// build argmap and marshal as json
+	argList := make(map[string]tree.ProcedureArgForMarshal)
+	for i := 0; i < len(cp.Args); i++ {
+		curName := cp.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		argList[curName] = tree.ProcedureArgForMarshal{
+			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
+			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
+		}
+	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
 		goto handleFailed
@@ -7936,7 +7953,6 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 		string(cp.Name.Name.ObjectName),
-		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		cp.Body, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
@@ -8254,11 +8270,109 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	return defaultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) error {
-	// 1. fetch sql query of the procedure
-	// 2. plsql.run(args, sql body)
-	// 3. catch any error and return
-	return nil
+func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]ExecResult, error) {
+	// fetch related
+	var spBody string
+	var dbName string
+	var sql string
+	var argstr string
+	var err error
+	var erArray []ExecResult
+	var argList map[string]tree.ProcedureArgForMarshal
+	// execute related
+	var interpreter Interpreter
+	var varScope [](map[string]interface{})
+	var argsMap map[string]tree.Expr
+	var argsAttr map[string]tree.InOutArgType
+
+	// a database must be selected or specified as qualifier when create a function
+	if call.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return nil, moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(call.Name.Name.SchemaName)
+	}
+
+	sql, err = getSqlForSpBody(ctx, string(call.Name.Name.ObjectName), dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	bh.ClearExecResultSet()
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
+		spBody, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		argstr, err = erArray[0].GetString(ctx, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+
+		// perform argument length validation
+		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
+		err = json.Unmarshal([]byte(argstr), &argList)
+		if err != nil {
+			return nil, err
+		}
+		if len(argList) != len(call.Args) {
+			return nil, moerr.NewInvalidArg(ctx, string(call.Name.Name.ObjectName)+" procedure have invalid input args length", len(call.Args))
+		}
+	} else {
+		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
+	}
+
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	argsAttr = make(map[string]tree.InOutArgType)
+	argsMap = make(map[string]tree.Expr) // map arg to param
+
+	// build argsAttr and argsMap
+	logutil.Info("Nuo:" + strconv.Itoa(len(argList)))
+	i := 0
+	for curName, v := range argList {
+		argsAttr[curName] = v.InOutType
+		argsMap[curName] = call.Args[i]
+		i++
+	}
+
+	interpreter.ctx = ctx
+	interpreter.fmtctx = fmtctx
+	interpreter.ses = ses
+	interpreter.varScope = &varScope
+	interpreter.bh = bh
+	interpreter.result = nil
+	interpreter.argsMap = argsMap
+	interpreter.argsAttr = argsAttr
+	interpreter.outParamMap = make(map[string]interface{})
+
+	err = interpreter.ExecuteSp(stmt[0], dbName)
+	if err != nil {
+		return nil, err
+	}
+	return interpreter.GetResult(), nil
 }
 
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
