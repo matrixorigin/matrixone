@@ -827,6 +827,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.aggPullup(rootID, rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.applySwapRuleByStats(rootID, true)
