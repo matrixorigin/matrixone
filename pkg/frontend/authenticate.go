@@ -257,6 +257,9 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 		return splitUserInput(ctx, userInput, ':')
 	} else if strings.IndexByte(userInput, '#') != -1 {
 		return splitUserInput(ctx, userInput, '#')
+	} else if strings.Contains(userInput, "%3A") {
+		newUserInput := strings.ReplaceAll(userInput, "%3A", ":")
+		return splitUserInput(ctx, newUserInput, ':')
 	}
 	return splitUserInput(ctx, userInput, ':')
 }
@@ -2224,7 +2227,7 @@ func nameIsInvalid(name string) bool {
 	if len(s) == 0 {
 		return true
 	}
-	return strings.Contains(s, ":") || strings.Contains(s, "#") || strings.Contains(s, "%")
+	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
 func accountNameIsInvalid(name string) bool {
 	s := strings.TrimSpace(name)
