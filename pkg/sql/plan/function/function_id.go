@@ -182,7 +182,7 @@ const (
 	RTRIM      // RTRIM
 	SIGN       // SIGN
 	SIN        // SIN
-	SINH       //SINH
+	SINH       // SINH
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
@@ -212,8 +212,8 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
-	TIME      //TIME
-	DAY       //DAY
+	TIME      // TIME
+	DAY       // DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
@@ -291,6 +291,9 @@ const (
 	MO_TABLE_COL_MIN // table column min value
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
+
+	GIT_VERSION
+	BUILD_VERSION
 
 	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
 	VALUES
@@ -523,6 +526,8 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"git_version":                    GIT_VERSION,
+	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
