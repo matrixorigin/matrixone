@@ -246,7 +246,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 
 	// it's CN Block
-	if colexec.Srv.GetCnSegmentType(rowids[0].GetObjectString()) == colexec.CnBlockIdType {
+	if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(rowids[0].GetObjectString()) == colexec.CnBlockIdType {
 		txn.deleteOffsets = txn.deleteOffsets[:0]
 		for _, rowId := range rowids {
 			txn.deleteOffsets = append(txn.deleteOffsets, int64(rowId.GetRowOffset()))
