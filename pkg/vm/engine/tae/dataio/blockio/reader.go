@@ -18,6 +18,8 @@ import (
 	"context"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -190,7 +192,7 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 	meta := &dataio.ObjectMeta{}
 	meta.Rows = objmeta.Rows
 	for _, colmeta := range objmeta.ColMetas {
-		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(*BlockIndex)})
+		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{NullCnt: colmeta.NullCnt, Ndv: colmeta.Ndv, Zm: colmeta.Zonemap.GetData().(dataio.Index)})
 	}
 	var idxs []uint16
 	for _, blkmeta := range objmeta.BlkMetas {
@@ -250,7 +252,7 @@ func (r *BlockReader) LoadZoneMap(
 		}
 		data := zm.(*objectio.ZoneMap).GetData()
 
-		zoneMapList[i] = data.(*BlockIndex)
+		zoneMapList[i] = data.(dataio.Index)
 	}
 
 	return zoneMapList, nil
@@ -294,12 +296,8 @@ func (r *BlockReader) GetObjectReader() objectio.Reader {
 }
 
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
-	zm := NewZoneMap(typ)
-	err := zm.Unmarshal(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	return zm, err
+	zm := index.DecodeZM(buf)
+	return &zm, nil
 }
 
 func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
@@ -317,7 +315,7 @@ func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		bf, err := index.NewBinaryFuseFilterFromSource(decompressed)
+		bf, err := index.DecodeBloomFilter(decompressed)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -353,21 +351,48 @@ func PrefetchWithMerged(pref prefetch) error {
 	return pipeline.Prefetch(pref)
 }
 
-func Prefetch(idxes []uint16, reader dataio.Reader,
-	ids []uint32, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
-	}
+func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key string) error {
 
-	pref := BuildPrefetch(reader, m)
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
+	}
 	pref.AddBlock(idxes, ids)
 	return pipeline.Prefetch(pref)
 }
 
-func PrefetchBlocksMeta(reader dataio.Reader, m *mpool.MPool) error {
-	if reader.GetObjectExtent().End() == 0 {
-		return nil
+func PrefetchBlocksMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildPrefetch(service, key)
+	if err != nil {
+		return err
 	}
-	pref := BuildPrefetch(reader, m)
 	return pipeline.Prefetch(pref)
+}
+
+func PrefetchCkpMeta(service fileservice.FileService, key string) error {
+	pref, err := BuildCkpPrefetch(service, key)
+	if err != nil {
+		return err
+	}
+	return pipeline.Prefetch(pref)
+}
+
+func PrefetchFile(service fileservice.FileService, size int64, name string) error {
+	reader, err := NewFileReader(service, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(context.Background(), size, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	pref := buildPrefetch(reader)
+	for i := range bs {
+		idxes := make([]uint16, bs[i].GetColumnCount())
+		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
+			idxes[a] = a
+		}
+		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+	}
+	return PrefetchWithMerged(pref)
 }

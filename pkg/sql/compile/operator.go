@@ -152,8 +152,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:   t.Typs,
 		}
 	case vm.LoopJoin:
-		t := sourceIns.Arg.(*loopanti.Argument)
-		res.Arg = &loopanti.Argument{
+		t := sourceIns.Arg.(*loopjoin.Argument)
+		res.Arg = &loopjoin.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
 			Typs:   t.Typs,
@@ -326,7 +326,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					Name2ColIndex: t.Es.Name2ColIndex,
 					CreateSql:     t.Es.CreateSql,
 					FileList:      t.Es.FileList,
-					OriginCols:    t.Es.OriginCols,
 					Extern:        t.Es.Extern,
 				},
 				ExParam: external.ExParam{
@@ -676,7 +675,6 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Ctx:           ctx,
 				FileList:      fileList,
 				FileSize:      FileSize,
-				OriginCols:    n.TableDef.OriginCols,
 				ClusterTable:  n.GetClusterTable(),
 			},
 			ExParam: external.ExParam{

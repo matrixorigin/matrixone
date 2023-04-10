@@ -15,18 +15,15 @@
 package model
 
 import (
-	"encoding/binary"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // EncodeBlockKeyPrefix [48 Bit (BlockID) + 48 Bit (SegmentID)]
 func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 	buf := make([]byte, 12)
-	tempBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(tempBuf, segmentId)
+	tempBuf := types.EncodeUint64(&segmentId)
 	copy(buf[0:], tempBuf[2:])
-	binary.BigEndian.PutUint64(tempBuf, blockId)
+	tempBuf = types.EncodeUint64(&blockId)
 	copy(buf[6:], tempBuf[2:])
 	return buf
 }
@@ -34,7 +31,7 @@ func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
 	var rowid types.Rowid
 	copy(rowid[:], prefix)
-	binary.BigEndian.PutUint32(rowid[types.BlockidSize:], offset)
+	copy(rowid[types.BlockidSize:], types.EncodeUint32(&offset))
 	return rowid
 }
 
@@ -46,6 +43,6 @@ func DecodePhyAddrKeyFromValue(v any) (segmentId types.Uuid, blockId types.Block
 func DecodePhyAddrKey(src types.Rowid) (segmentId types.Uuid, blockId types.Blockid, offset uint32) {
 	segmentId = src.GetSegid()
 	blockId = src.GetBlockid()
-	offset = binary.BigEndian.Uint32(src[types.BlockidSize:])
+	offset = types.DecodeUint32(src[types.BlockidSize:])
 	return
 }
