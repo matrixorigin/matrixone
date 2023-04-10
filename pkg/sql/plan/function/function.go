@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"math"
-	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -343,7 +342,6 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
 			return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "function "+name, ArgsToPrint)
 		}
-		debug.PrintStack()
 		return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "operator "+name, ArgsToPrint)
 	case tooManyFunctionsMatched:
 		return -1, emptyType, nil, moerr.NewInvalidArg(ctx, "too many overloads matched "+name, args)
