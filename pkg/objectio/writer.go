@@ -141,48 +141,57 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// [total row 4B][blkMetaSize 4B][BlkMeta * blkCnt][ObjectColumnMeta * colCnt][footer: metaStart 4B | metaLen 4B | colCnt 2B |blkCnt 4B | Magic 4B]
 
 	// write total rows and blk meta size
-	var uint32buf [2]uint32
-	uint32buf[0] = w.totalRow
+	blockCount := uint32(len(w.blocks))
+	objectMeta := BuildObjectMeta(w.blocks[0].GetColumnCount())
+	objectMeta.BlockHeader().SetBlockID(uint64(blockCount))
+	objectMeta.BlockHeader().SetRows(w.totalRow)
+	objectMeta.BlockHeader().SetColumnCount(w.blocks[0].GetColumnCount())
+	blockIndex := BuildBlockIndex(blockCount)
+	blockIndex.SetBlockCount(blockCount)
+	start := 0
+	length := 0
 
 	// write block meta
 	metabuf := &bytes.Buffer{}
-	for _, block := range w.blocks {
+	for i, block := range w.blocks {
+		var n int
 		meta := block.MarshalMeta()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := metabuf.Write(meta); err != nil {
+		if n, err = metabuf.Write(meta); err != nil {
 			return nil, err
 		}
+		blockIndex.SetBlockMetaPos(uint32(i), uint32(start), uint32(start+n))
+		start += n
 	}
-	uint32buf[1] = uint32(metabuf.Len())
 
 	// write column meta
-	for _, colmeta := range w.colmeta {
-		if _, err = metabuf.Write(colmeta); err != nil {
-			return nil, err
-		}
+	for i, colmeta := range w.colmeta {
+		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
 
 	// begin write
-	start, _, err := w.buffer.Write(types.EncodeSlice(uint32buf[:]))
+	start, n, err := w.buffer.Write(objectMeta)
 	if err != nil {
 		return nil, err
 	}
-	metaLen := 8 + metabuf.Len()
-
-	_, length, err := w.buffer.Write(metabuf.Bytes())
+	length += n
+	_, n, err = w.buffer.Write(blockIndex)
 	if err != nil {
 		return nil, err
 	}
-	if length+8 != metaLen {
-		panic("bad write")
+	length += n
+	_, n, err = w.buffer.Write(metabuf.Bytes())
+	if err != nil {
+		return nil, err
 	}
+	length += n
 
 	// write footer
 	footer := Footer{
 		metaStart: uint32(start),
-		metaLen:   uint32(metaLen),
+		metaLen:   uint32(length),
 		magic:     Magic,
 	}
 
@@ -196,12 +205,16 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	/*extent := Extent{
-		id:         uint32(0),
-		offset:     uint32(start),
-		length:     uint32(metaLen),
-		originSize: uint32(metaLen),
-	}*/
+	for i := range w.blocks {
+		header := w.blocks[i].BlockHeader()
+		extent := Extent{
+			id:         uint32(i),
+			offset:     uint32(start),
+			length:     uint32(length),
+			originSize: uint32(length),
+		}
+		header.SetMetaLocation(extent)
+	}
 
 	// The buffer needs to be released at the end of WriteEnd
 	// Because the outside may hold this writer

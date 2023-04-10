@@ -23,8 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,29 +37,28 @@ const (
 	ModuleName = "ObjectIo"
 )
 
-func GetDefaultTestPath(module string, t *testing.T) string {
-	return filepath.Join("/tmp", module, t.Name())
+func GetDefaultTestPath(module string, name string) string {
+	return filepath.Join("/tmp", module, name)
 }
 
-func MakeDefaultTestPath(module string, t *testing.T) string {
-	path := GetDefaultTestPath(module, t)
-	err := os.MkdirAll(path, os.FileMode(0755))
-	assert.Nil(t, err)
+func MakeDefaultTestPath(module string, name string) string {
+	path := GetDefaultTestPath(module, name)
+	os.MkdirAll(path, os.FileMode(0755))
 	return path
 }
 
-func RemoveDefaultTestPath(module string, t *testing.T) {
-	path := GetDefaultTestPath(module, t)
+func RemoveDefaultTestPath(module string, name string) {
+	path := GetDefaultTestPath(module, name)
 	os.RemoveAll(path)
 }
 
-func InitTestEnv(module string, t *testing.T) string {
-	RemoveDefaultTestPath(module, t)
-	return MakeDefaultTestPath(module, t)
+func InitTestEnv(module string, name string) string {
+	RemoveDefaultTestPath(module, name)
+	return MakeDefaultTestPath(module, name)
 }
 
 func TestNewObjectWriter(t *testing.T) {
-	dir := InitTestEnv(ModuleName, t)
+	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
@@ -89,10 +86,7 @@ func TestNewObjectWriter(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		index, err = NewZoneMap(zbuf)
-		assert.Nil(t, err)
-		err = objectWriter.WriteIndex(fd, index, uint16(i))
-		assert.Nil(t, err)
+		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -116,8 +110,7 @@ func TestNewObjectWriter(t *testing.T) {
 	nb0 := pool.CurrNB()
 	meta, err := objectReader.ReadMeta(context.Background(), extents, pool, nil)
 	assert.Nil(t, err)
-	bs := meta.BlkMetas
-	assert.Equal(t, 2, len(bs))
+	assert.Equal(t, 2, meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
@@ -132,14 +125,12 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
-	index, err := blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
-	assert.Nil(t, err)
-	buf := index.(*ZoneMap).data
+	buf := blk.ZoneMap()
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
-	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
+	index, err := blk.GetIndex(context.Background(), objectReader.GetObject(), newDecompressToObject, pool)
 	assert.Nil(t, err)
-	assert.Equal(t, "test index 0", string(index.(*BloomFilter).data.([]byte)))
+	assert.Equal(t, "test index 0", string(index.data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
@@ -150,15 +141,14 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
 	assert.Nil(t, err)
-	bs = meta.BlkMetas
-	assert.Equal(t, 2, len(bs))
+	assert.Equal(t, 2, meta.BlockCount())
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(bs))
+	assert.Equal(t, 2, meta.BlockCount())
 	idxs = make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, []uint32{bs[0].GetExtent().id}, pool, nil, newDecompressToObject)
+	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, []uint32{0}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -168,21 +158,93 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
-	index, err = blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
-	assert.Nil(t, err)
-	buf = index.(*ZoneMap).data
+	buf = blk.ZoneMap()
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
-	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
+	index, err = blk.GetIndex(context.Background(), objectReader.GetObject(), newDecompressToObject, pool)
 	assert.Nil(t, err)
-	assert.Equal(t, "test index 0", string(index.(*BloomFilter).data.([]byte)))
+	assert.Equal(t, "test index 0", string(index.data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 }
 
+func getObjectMeta(t *testing.B) ObjectMeta {
+	dir := InitTestEnv(ModuleName, t.Name())
+	dir = path.Join(dir, "/local")
+	id := 1
+	name := fmt.Sprintf("%d.blk", id)
+	mp := mpool.MustNewZero()
+	bat := newBatch(mp)
+	defer bat.Clean(mp)
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c, nil)
+	assert.Nil(t, err)
+
+	objectWriter, err := NewObjectWriter(name, service)
+	assert.Nil(t, err)
+	for y := 0; y < 1; y++ {
+		fd, err := objectWriter.Write(bat)
+		assert.Nil(t, err)
+		for i := range bat.Vecs {
+			buf := fmt.Sprintf("test index %d", i)
+			index := NewBloomFilter(0, []byte(buf))
+			err = objectWriter.WriteIndex(fd, index, uint16(i))
+			assert.Nil(t, err)
+
+			zbuf := make([]byte, 64)
+			zbuf[31] = 1
+			zbuf[63] = 10
+			fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+		}
+	}
+	ts := time.Now()
+	option := WriteOptions{
+		Type: WriteTS,
+		Val:  ts,
+	}
+	blocks, err := objectWriter.WriteEnd(context.Background(), option)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	objectReader, _ := NewObjectReaderWithStr(name, service)
+	meta, err := objectReader.ReadMeta(context.Background(), []Extent{blocks[0].BlockHeader().MetaLocation()}, nil, nil)
+	assert.Nil(t, err)
+	return meta
+}
+
+func BenchmarkMetadata(b *testing.B) {
+	meta := getObjectMeta(b)
+	b.Run("GetBlockMeta", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			meta.GetBlockMeta(0)
+		}
+	})
+	b.Log(meta.GetBlockMeta(0).GetID())
+	b.Run("GetColumnMeta", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			meta.GetColumnMeta(2, 0)
+		}
+	})
+	b.Log(meta.GetColumnMeta(2, 0).ZoneMap())
+
+	b.Run("BlockCount", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			meta.BlockCount()
+		}
+	})
+	b.Log(meta.BlockCount())
+}
+
 func TestNewObjectReader(t *testing.T) {
 	t.Skip("use debug")
-	dir := InitTestEnv(ModuleName, t)
+	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
@@ -210,10 +272,7 @@ func TestNewObjectReader(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		index, err = NewZoneMap(zbuf)
-		assert.Nil(t, err)
-		err = objectWriter.WriteIndex(fd, index, uint16(i))
-		assert.Nil(t, err)
+		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -226,14 +285,6 @@ func TestNewObjectReader(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
-	now := time.Now()
-	var ext Extent
-	buf := blocks[0].(*Block).MarshalMeta()
-	for i := 0; i < 1000000; i++ {
-		blocks[0].(*Block).UnmarshalMeta(buf, nil)
-	}
-	logutil.Infof("marshal&unmarshal: %v, ext: %v", time.Since(now), ext)
-
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

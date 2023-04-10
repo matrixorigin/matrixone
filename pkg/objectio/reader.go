@@ -153,7 +153,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 		return nil, err
 	}
 
-	meta := metas.Entries[0].Object.(ObjectMeta)
+	meta := ObjectMeta(metas.Entries[0].Object.([]byte))
 	return meta, err
 }
 

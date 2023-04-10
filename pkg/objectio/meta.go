@@ -40,6 +40,11 @@ func (o ObjectMeta) ObjectColumnMeta(idx uint16) ObjectColumnMeta {
 	return GetObjectColumnMeta(idx, o)
 }
 
+func (o ObjectMeta) AddColumnMeta(idx uint16, col ObjectColumnMeta) {
+	offset := headerLen + idx*objectColumnMetaLen
+	copy(o[offset:offset+objectColumnMetaLen], col)
+}
+
 func (o ObjectMeta) Length() uint32 {
 	return headerLen + uint32(o.BlockHeader().ColumnCount())*objectColumnMetaLen
 }
@@ -75,14 +80,31 @@ const (
 
 type BlockIndex []byte
 
+func BuildBlockIndex(count uint32) BlockIndex {
+	length := blockCountLen + uint32(count)*posLen
+	buf := make([]byte, length)
+	return buf[:]
+}
+
 func (oh BlockIndex) BlockCount() uint32 {
 	return types.DecodeUint32(oh[:blockCountLen])
+}
+
+func (oh BlockIndex) SetBlockCount(cnt uint32) {
+	copy(oh[:blockCountLen], types.EncodeUint32(&cnt))
 }
 
 func (oh BlockIndex) BlockMetaPos(BlockID uint32) (uint32, uint32) {
 	offStart := blockCountLen + BlockID*posLen
 	offEnd := blockCountLen + BlockID*posLen + blockOffset
 	return types.DecodeUint32(oh[offStart:offEnd]), types.DecodeUint32(oh[offStart+blockLen : offEnd+blockLen])
+}
+
+func (oh BlockIndex) SetBlockMetaPos(BlockID uint32, offset, length uint32) {
+	offStart := blockCountLen + BlockID*posLen
+	offEnd := blockCountLen + BlockID*posLen + blockOffset
+	copy(oh[offStart:offEnd], types.EncodeUint32(&offset))
+	copy(oh[offStart+blockLen:offEnd+blockLen], types.EncodeUint32(&length))
 }
 
 func (oh BlockIndex) Length() uint32 {
@@ -167,8 +189,10 @@ const (
 	columnCountOff    = rowsOff + rowsLen
 	columnCountLen    = 2
 	headerDummyOff    = columnCountOff + columnCountLen
-	headerDummyLen    = 34
-	headerCheckSumOff = headerDummyOff + headerDummyLen
+	headerDummyLen    = 18
+	metaLocationOff   = headerDummyOff + headerDummyLen
+	metaLocationLen   = 16
+	headerCheckSumOff = metaLocationOff + metaLocationLen
 	headerCheckSumLen = 4
 	headerLen         = headerCheckSumOff + headerCheckSumLen
 )
@@ -267,6 +291,16 @@ func (bh BlockHeader) ColumnCount() uint16 {
 
 func (bh BlockHeader) SetColumnCount(count uint16) {
 	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
+}
+
+func (bh BlockHeader) MetaLocation() Extent {
+	extent := Extent{}
+	extent.Unmarshal(bh[metaLocationOff : metaLocationOff+metaLocationLen])
+	return extent
+}
+
+func (bh BlockHeader) SetMetaLocation(location Extent) {
+	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location.Marshal())
 }
 
 func (bh BlockHeader) IsEmpty() bool {
