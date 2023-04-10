@@ -54,8 +54,7 @@ func (o ObjectMeta) BlockCount() uint32 {
 
 func (o ObjectMeta) BlockIndex() BlockIndex {
 	offset := o.Length()
-	end := offset + 4 + o.BlockHeader().BlockID()*8
-	return BlockIndex(o[offset:end])
+	return BlockIndex(o[offset:])
 }
 
 func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
