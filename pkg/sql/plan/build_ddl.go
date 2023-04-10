@@ -1034,7 +1034,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 
-		indexDef.IndexName = indexInfo.Name
+		//indexDef.IndexName = indexInfo.Name
+		indexDef.IndexName = indexInfo.GetIndexName()
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
@@ -1716,7 +1717,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.UniqueIndex:
-				indexName := def.Name
+				//indexName := def.Name
+				indexName := def.GetIndexName()
 				for _, idx := range tableDef.Indexes {
 					if idx.IndexName == indexName {
 						return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)

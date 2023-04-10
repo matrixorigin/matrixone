@@ -940,6 +940,14 @@ func (node *UniqueIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *UniqueIndex) GetIndexName() string {
+	if len(node.Name) != 0 {
+		return node.Name
+	} else {
+		return node.ConstraintSymbol
+	}
+}
+
 func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueIndex {
 	return &UniqueIndex{
 		KeyParts:    k,
