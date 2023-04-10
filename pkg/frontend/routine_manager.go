@@ -105,9 +105,7 @@ func (ar *AccountRoutineManager) deKillQueue(tenantID int64) {
 	}
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	if _, ok := ar.killIdQueue[tenantID]; ok {
-		delete(ar.killIdQueue, tenantID)
-	}
+	delete(ar.killIdQueue, tenantID)
 
 }
 
@@ -450,7 +448,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 		// clean kill queue
 		// ar.killIdQueue = make(map[int64]time.Time)
 		for toKillAccount, createAt := range ar.killIdQueue {
-			if int(time.Now().Sub(createAt)) > rm.pu.SV.CleanKillQueueInterval*int(time.Minute) {
+			if int(time.since(createAt)) > rm.pu.SV.CleanKillQueueInterval*int(time.Minute) {
 				delete(ar.killIdQueue, toKillAccount)
 			}
 		}
