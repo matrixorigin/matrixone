@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -88,6 +89,10 @@ func (r *Rowid) GetBlockidUnsafe() *Blockid {
 
 func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
+}
+
+func (r Rowid) GetRowOffset() uint32 {
+	return binary.BigEndian.Uint32(r[BlockidSize:])
 }
 
 func (r Rowid) GetObjectString() string {
