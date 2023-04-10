@@ -276,6 +276,17 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		return false
 	}
 
+	//rightcol must be primary key of right table
+	// or we  add rowid in group by, implement this in the future
+	pkDef := builder.compCtx.GetPrimaryKeyDef(rightScan.ObjRef.SchemaName, rightScan.ObjRef.ObjName)
+	if len(pkDef) != 1 {
+		return false
+	}
+	rightBinding := builder.ctxByNode[rightScan.NodeId].bindingByTag[rightScan.BindingTags[0]]
+	if rightBinding.FindColumn(pkDef[0].Name) != rightCol.Col.ColPos {
+		return false
+	}
+
 	if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
 		return false
 	}
