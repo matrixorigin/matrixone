@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"hash/fnv"
 	"math"
 	"net"
@@ -37,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var (
@@ -255,14 +256,14 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
 	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
 	return cfg
 }
 
 func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 	cfg := c.Observability
-	cfg.SetDefaultValues(Version)
+	cfg.SetDefaultValues(version.Version)
 	return cfg
 }
 

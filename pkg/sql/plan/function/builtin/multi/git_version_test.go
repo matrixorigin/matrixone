@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package multi
 
 import (
-	"fmt"
-	"os"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
-func maybePrintVersion() {
-	if !*versionFlag {
-		return
-	}
+func TestGitVersion(t *testing.T) {
+	proc := testutil.NewProc()
+	res, err := GitVersion([]*vector.Vector{}, proc)
+	require.NoError(t, err)
 
-	fmt.Println("MatrixOne build info:")
-	fmt.Printf("  The golang version used to build this binary: %s\n", version.GoVersion)
-	fmt.Printf("  Git branch name: %s\n", version.BranchName)
-	fmt.Printf("  Git commit ID: %s\n", version.CommitID)
-	fmt.Printf("  Buildtime: %s\n", version.BuildTime)
-	fmt.Printf("  Version: %s\n", version.Version)
-	os.Exit(0)
+	got := vector.MustStrCol(res)
+	// build info not available on testing
+	require.Equal(t, []string{"unknown"}, got)
 }

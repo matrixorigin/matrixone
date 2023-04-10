@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3030,6 +3029,33 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.MOLogDate,
+			},
+		},
+	},
+
+	GIT_VERSION: {
+		Id:     GIT_VERSION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.GitVersion,
+			},
+		},
+	},
+	BUILD_VERSION: {
+		Id:     BUILD_VERSION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{},
+				ReturnTyp: types.T_timestamp,
+				Fn:        multi.BuildVersion,
 			},
 		},
 	},
