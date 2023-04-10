@@ -36,7 +36,7 @@ func (o ObjectMeta) BlockHeader() BlockHeader {
 }
 
 func (o ObjectMeta) ObjectColumnMeta(idx uint16) ObjectColumnMeta {
-	return GetObjectColumnMeta(idx, o)
+	return GetObjectColumnMeta(idx, o[headerLen:])
 }
 
 func (o ObjectMeta) AddColumnMeta(idx uint16, col ObjectColumnMeta) {
@@ -120,7 +120,7 @@ const (
 type ObjectColumnMeta []byte
 
 func GetObjectColumnMeta(idx uint16, data []byte) ObjectColumnMeta {
-	offset := RowsLen + uint32(idx)*objectColumnMetaLen
+	offset := uint32(idx) * objectColumnMetaLen
 	return data[offset : offset+objectColumnMetaLen]
 }
 
