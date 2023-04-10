@@ -101,7 +101,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		}
 	}
 
-	if targetNode != nil {
+	if targetNode != nil && compareStats(builder.qry.Nodes[node.Children[1]].Stats, builder.qry.Nodes[targetNode.Children[1-targetSide]].Stats) {
 		nodeID = node.Children[0]
 		node.Children[0] = targetNode.Children[targetSide]
 		targetNode.Children[targetSide] = node.NodeId
@@ -184,6 +184,10 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			//swap join order for left & right join, inner join is not here
 			builder.applySwapRuleByStats(node.NodeId, false)
 		}
+		return nodeID
+	}
+
+	if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 		return nodeID
 	}
 

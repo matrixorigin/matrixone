@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -53,7 +54,9 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
-	ctx := context.WithValue(c.ctx, defines.SqlKey{}, c.sql)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	c.stmt.Format(fmtCtx)
+	ctx := context.WithValue(c.ctx, defines.SqlKey{}, fmtCtx.String())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription
