@@ -264,6 +264,9 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
 			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
+			if len(vs) == 0 {
+				continue
+			}
 			if !vs[0].GetSegid().Eq(txn.segId) {
 				continue
 			}
