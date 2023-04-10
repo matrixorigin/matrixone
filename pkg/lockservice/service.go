@@ -170,6 +170,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
 	if txn == nil {
 		return
 	}
+	logAbortDeadLock(s.cfg.ServiceID, wait, txn)
 	txn.abort(s.cfg.ServiceID, wait.TxnID)
 }
 

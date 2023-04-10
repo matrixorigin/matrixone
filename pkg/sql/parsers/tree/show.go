@@ -762,3 +762,21 @@ func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize
 		DbName: dbname,
 	}
 }
+
+// show Roles statement
+
+type ShowRolesStmt struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowRolesStmt) Format(ctx *FmtCtx) {
+	ctx.WriteString("show roles")
+	if node.Like != nil {
+		ctx.WriteString(" ")
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowRolesStmt) GetStatementType() string { return "Show Roles" }
+func (node *ShowRolesStmt) GetQueryType() string     { return QueryTypeOth }
