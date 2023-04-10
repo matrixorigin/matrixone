@@ -56,6 +56,24 @@ func TestBatch(t *testing.T) {
 	}
 }
 
+func TestBatch_ReplaceVector(t *testing.T) {
+	v1, v2, v3 := &vector.Vector{}, &vector.Vector{}, &vector.Vector{}
+	bat := &Batch{
+		Vecs: []*vector.Vector{
+			v1,
+			v1,
+			v1,
+			v2,
+			v2,
+		},
+	}
+	bat.ReplaceVector(bat.Vecs[0], v3)
+	require.Equal(t, v3, bat.Vecs[0])
+	require.Equal(t, v3, bat.Vecs[1])
+	require.Equal(t, v3, bat.Vecs[2])
+	require.Equal(t, v2, bat.Vecs[3])
+}
+
 func newTestCase(ts []types.Type) batchTestCase {
 	return batchTestCase{
 		types: ts,

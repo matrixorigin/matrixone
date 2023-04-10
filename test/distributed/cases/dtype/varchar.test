@@ -4,6 +4,16 @@
 -- @label:bvt
 
 #Test cases of query with single table and operators
+drop table if exists t0;
+create table t0 (a varchar(10));
+insert into t0 values('1.1');
+insert into t0 values('5');
+insert into t0 values('0.3');
+insert into t0 values('-1.22');
+select a+0.5 from t0;
+select a-0.5 from t0;
+select a*0.5 from t0;
+select a/0.5 from t0;
 drop table if exists t1;
 create table t1 (a varchar(10));
 insert into t1 values('abcdef');
