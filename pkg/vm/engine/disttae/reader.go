@@ -106,7 +106,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 		}
 	}
 
-	logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	logutil.Info(testutil.OperatorCatchBatch("block reader", bat))
 	return bat, nil
 }
 
@@ -167,7 +167,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 	}
 	bat.Shrink(r.sels)
 
-	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
+	logutil.Info(testutil.OperatorCatchBatch("block merge reader", bat))
 	return bat, nil
 }
 
@@ -191,7 +191,7 @@ func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, 
 			r.rds = r.rds[1:]
 		}
 		if bat != nil {
-			logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+			logutil.Info(testutil.OperatorCatchBatch("merge reader", bat))
 			return bat, nil
 		}
 	}

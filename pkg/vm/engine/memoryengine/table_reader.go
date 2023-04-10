@@ -178,7 +178,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 			continue
 		}
 
-		logutil.Debug(testutil.OperatorCatchBatch("table reader", resp.Batch))
+		logutil.Info(testutil.OperatorCatchBatch("table reader", resp.Batch))
 		return resp.Batch, nil
 	}
 

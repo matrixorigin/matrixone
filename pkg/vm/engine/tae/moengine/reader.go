@@ -68,7 +68,7 @@ func (r *txnReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, m *m
 	for i := 0; i < n; i++ {
 		bat.Zs[i] = 1
 	}
-	logutil.Debug(testutil.OperatorCatchBatch("txn reader", bat))
+	logutil.Info(testutil.OperatorCatchBatch("txn reader", bat))
 	return bat, nil
 }
 

@@ -146,7 +146,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
+			logutil.Info(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
@@ -175,7 +175,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
+			logutil.Info(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}
 	}
@@ -235,6 +235,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		return nil, nil
 	}
 	// XXX I'm not sure `normal` is a good description
-	logutil.Debug(testutil.OperatorCatchBatch("partition reader[normal]", b))
+	logutil.Info(testutil.OperatorCatchBatch("partition reader[normal]", b))
 	return b, nil
 }
