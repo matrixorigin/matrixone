@@ -6,7 +6,7 @@
 #Test cases of query with single table and operators
 drop table if exists t0;
 create table t0 (a varchar(10));
-insert into t0 values('0.0001');
+insert into t0 values('1.1');
 insert into t0 values('5');
 insert into t0 values('0.3');
 insert into t0 values('-1.22');
