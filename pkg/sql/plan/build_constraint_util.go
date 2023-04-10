@@ -821,7 +821,6 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		return err
 	}
 
-	// lastNode := builder.qry.Nodes[info.rootId]
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 
@@ -867,19 +866,6 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	info.tblInfo.oldColPosMap = oldColPosMap
 	info.tblInfo.newColPosMap = oldColPosMap //we donot need this field in delete statement
 
-	// for idx, expr := range lastNode.ProjectList {
-	// 	if expr.Typ.Id == int32(types.T_Rowid) {
-	// 		info.projectList = append(info.projectList, &plan.Expr{
-	// 			Typ: expr.Typ,
-	// 			Expr: &plan.Expr_Col{
-	// 				Col: &plan.ColRef{
-	// 					RelPos: tag,
-	// 					ColPos: int32(idx),
-	// 				},
-	// 			},
-	// 		})
-	// 	}
-	// }
 	info.idx = int32(len(info.projectList))
 	return nil
 }
