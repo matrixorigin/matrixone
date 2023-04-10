@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -190,7 +191,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		meta, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m, LoadZoneMapFunc)
+		meta, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
 		if err != nil {
 			return err
 		}
