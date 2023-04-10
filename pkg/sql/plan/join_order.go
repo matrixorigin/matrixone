@@ -187,6 +187,10 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		return nodeID
 	}
 
+	if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
+		return nodeID
+	}
+
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
 
 	vertices := builder.getJoinGraph(leaves, conds)
