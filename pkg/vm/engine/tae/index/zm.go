@@ -151,7 +151,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, row int) (err error) {
 			if isNull || zm.containsBytes(key) {
@@ -159,7 +159,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	}
 	ok = !visibility.IsEmpty()
 	return
@@ -178,7 +178,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
 			if isNull || zm.containsBytes(key) {
@@ -187,7 +187,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	}
 	return
 }
@@ -358,7 +358,7 @@ func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
 		UpdateZM(zm, v)
 		return
 	}
-	containers.ForeachWindowBytes(vs, 0, vs.Length(), op)
+	containers.ForeachWindowBytes(vs, 0, vs.Length(), op, nil)
 	return
 }
 

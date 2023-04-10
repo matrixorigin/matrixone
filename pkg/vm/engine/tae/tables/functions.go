@@ -207,7 +207,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 				}
 				entry := common.TypeStringValue(vec.GetType(), any(v1))
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-			})
+			}, nil)
 	}
 }
 
@@ -244,7 +244,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 					}
 					entry := common.TypeStringValue(vec.GetType(), any(v1))
 					return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-				})
+				}, nil)
 		}
 	}
 }

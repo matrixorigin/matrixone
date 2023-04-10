@@ -459,7 +459,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op)
+	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -479,7 +479,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op)
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -500,7 +500,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(int64s, 0, rows, func(int64, bool, int) (err error) {
 				return
-			})
+			}, nil)
 		}
 	})
 
@@ -519,7 +519,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
 				return
-			})
+			}, nil)
 		}
 	})
 }
@@ -533,7 +533,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
-			})
+			}, nil)
 		}
 	})
 	b.Run("int64-old", func(b *testing.B) {
@@ -563,7 +563,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-new", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs))
+			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs), nil)
 		}
 	})
 	b.Run("func-old", func(b *testing.B) {
