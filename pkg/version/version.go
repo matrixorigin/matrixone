@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package version
 
-import (
-	"fmt"
-	"os"
-
-	"github.com/matrixorigin/matrixone/pkg/version"
+var (
+	// GoVersion go version, setup by makefile
+	GoVersion = ""
+	// BranchName git branch, setup by makefile
+	BranchName = ""
+	// CommitID git commit id, setup by makefile
+	CommitID = ""
+	// BuildTime build time, setup by makefile
+	BuildTime = ""
+	// Version version, setup by makefile
+	Version = ""
 )
-
-func maybePrintVersion() {
-	if !*versionFlag {
-		return
-	}
-
-	fmt.Println("MatrixOne build info:")
-	fmt.Printf("  The golang version used to build this binary: %s\n", version.GoVersion)
-	fmt.Printf("  Git branch name: %s\n", version.BranchName)
-	fmt.Printf("  Git commit ID: %s\n", version.CommitID)
-	fmt.Printf("  Buildtime: %s\n", version.BuildTime)
-	fmt.Printf("  Version: %s\n", version.Version)
-	os.Exit(0)
-}
