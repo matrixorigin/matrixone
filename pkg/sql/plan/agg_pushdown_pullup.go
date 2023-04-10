@@ -69,11 +69,9 @@ func replaceCol(expr *plan.Expr, oldRelPos, oldColPos, newRelPos, newColPos int3
 		}
 
 	case *plan.Expr_Col:
-		//for now, shouldAggPushDown make sure only one column in expr,and only one expr in exprlist, so new colpos is always 0
-		//if multi expr in agg list and group list supported in the future, this need to be fixed
-		if exprImpl.Col.RelPos == oldRelPos {
+		if exprImpl.Col.RelPos == oldRelPos && exprImpl.Col.ColPos == oldColPos {
 			exprImpl.Col.RelPos = newRelPos
-			exprImpl.Col.ColPos = 0
+			exprImpl.Col.ColPos = newColPos
 		}
 	}
 }
@@ -117,8 +115,11 @@ func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 	join.Children[0] = newNodeID
 
 	//replace relpos for exprs in join and agg node
-	replaceCol(join.OnList[0], leftChildTag, 0, newGroupTag, 0)
-	replaceCol(agg.AggList[0], leftChildTag, 0, newAggTag, 0)
+	colGroupBy, _ := filterTag(join.OnList[0], leftChildTag).Expr.(*plan.Expr_Col)
+	replaceCol(join.OnList[0], leftChildTag, colGroupBy.Col.ColPos, newGroupTag, 0)
+
+	colAgg, _ := filterTag(agg.AggList[0], leftChildTag).Expr.(*plan.Expr_Col)
+	replaceCol(agg.AggList[0], leftChildTag, colAgg.Col.ColPos, newAggTag, 0)
 }
 
 func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
@@ -139,6 +140,9 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 		return nodeID
 	}
 
+	//make sure left child is bigger and  agg pushdown to left child
+	builder.applySwapRuleByStats(join.NodeId, false)
+
 	leftChild := builder.qry.Nodes[join.Children[0]]
 	rightChild := builder.qry.Nodes[join.Children[1]]
 
@@ -150,42 +154,90 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 	return nodeID
 }
 
-func applyAggPullup(join, project, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) {
-	if len(agg.GroupBy) != 1 {
+func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, *plan.Expr_Col) {
+	fun, ok := cond.Expr.(*plan.Expr_F)
+	if !ok {
+		return nil, nil
+	}
+	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil, nil
+	}
+	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil, nil
+	}
+	if leftCol.Col.RelPos != leftTag {
+		leftCol, rightCol = rightCol, leftCol
+	}
+	if leftCol.Col.RelPos != leftTag || rightCol.Col.RelPos != rightTag {
+		return nil, nil
+	}
+	return leftCol, rightCol
+}
+
+func replaceAllColRefInExprList(exprlist []*plan.Expr, from *plan.Expr_Col, to *plan.Expr_Col) {
+	for _, expr := range exprlist {
+		replaceCol(expr, from.Col.RelPos, from.Col.ColPos, to.Col.RelPos, to.Col.ColPos)
+	}
+}
+
+func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, to *plan.Expr_Col, builder *QueryBuilder) {
+	if nodeID == exceptID {
 		return
+	}
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			replaceAllColRefInPlan(child, exceptID, from, to, builder)
+		}
+	}
+	replaceAllColRefInExprList(node.OnList, from, to)
+	replaceAllColRefInExprList(node.ProjectList, from, to)
+	replaceAllColRefInExprList(node.FilterList, from, to)
+	replaceAllColRefInExprList(node.AggList, from, to)
+	replaceAllColRefInExprList(node.GroupBy, from, to)
+}
+
+func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
+	if len(agg.GroupBy) != 1 {
+		return false
 	}
 	groupColInAgg, ok := agg.GroupBy[0].Expr.(*plan.Expr_Col)
 	if !ok {
-		return
+		return false
 	}
 	if !IsEquiJoin(join.OnList) || len(join.OnList) != 1 {
-		return
+		return false
 	}
-	groupColInJoin, ok := filterTag(join.OnList[0], project.BindingTags[0]).Expr.(*plan.Expr_Col)
-	if !ok {
-		return
+
+	leftCol, rightCol := getJoinCondCol(join.OnList[0], agg.BindingTags[0], rightScan.BindingTags[0])
+	if leftCol == nil {
+		return false
 	}
-	if agg.Stats.Outcnt/agg.Stats.Cost < join.Stats.Outcnt/project.Stats.Outcnt {
-		return
+
+	if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
+		return false
 	}
+
+	replaceAllColRefInPlan(rootID, join.NodeId, rightCol, leftCol, builder)
 
 	join.Children[0] = agg.Children[0]
 	agg.Children[0] = join.NodeId
-	groupColInJoin.Col.RelPos = groupColInAgg.Col.RelPos
-	groupColInJoin.Col.ColPos = groupColInAgg.Col.ColPos
-	// todo 从根节点递归，把【2,0】替换成【3,1】
+	leftCol.Col.RelPos = groupColInAgg.Col.RelPos
+	leftCol.Col.ColPos = groupColInAgg.Col.ColPos
+	return true
 
-	//builder.ctxByNode[project.NodeId] = builder.ctxByNode[join.NodeId]
 }
 
-func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
-	// agg pullup only support node->inner join->project->agg for now
-	// we can change it to node->project->agg->inner join
+func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
+	// agg pullup only support node->inner join->agg for now
+	// we can change it to node->agg->inner join
 	node := builder.qry.Nodes[nodeID]
 
 	if len(node.Children) > 0 {
 		for i, child := range node.Children {
-			node.Children[i] = builder.aggPullup(child)
+			node.Children[i] = builder.aggPullup(rootID, child)
 		}
 	} else {
 		return nodeID
@@ -195,11 +247,11 @@ func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
-	project := builder.qry.Nodes[join.Children[0]]
-	if project.NodeType != plan.Node_PROJECT {
-		return nodeID
-	}
-	agg := builder.qry.Nodes[project.Children[0]]
+
+	//make sure left child is bigger
+	builder.applySwapRuleByStats(join.NodeId, false)
+
+	agg := builder.qry.Nodes[join.Children[0]]
 	if agg.NodeType != plan.Node_AGG {
 		return nodeID
 	}
@@ -212,6 +264,8 @@ func (builder *QueryBuilder) aggPullup(nodeID int32) int32 {
 		return nodeID
 	}
 
-	applyAggPullup(join, project, agg, leftScan, rightScan, builder)
-	return project.NodeId
+	if applyAggPullup(rootID, join, agg, leftScan, rightScan, builder) {
+		return agg.NodeId
+	}
+	return nodeID
 }
