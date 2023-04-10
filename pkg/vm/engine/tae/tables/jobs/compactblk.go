@@ -200,7 +200,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			return
 		}
 		metaLocABlk := blockio.EncodeLocation(
-			ablockTask.blocks[0].GetName(),
+			ablockTask.name,
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
 			ablockTask.blocks[0].GetID())
@@ -213,7 +213,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		if deletes != nil {
 			var deltaLoc objectio.Location
 			deltaLoc = blockio.EncodeLocation(
-				ablockTask.blocks[1].GetName(),
+				ablockTask.name,
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
 				ablockTask.blocks[1].GetID())
@@ -291,7 +291,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	metaLoc := blockio.EncodeLocation(
-		ioTask.blocks[0].GetName(),
+		ioTask.name,
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
 		ioTask.blocks[0].GetID())
@@ -305,7 +305,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if deletes != nil {
 		var deltaLoc objectio.Location
 		deltaLoc = blockio.EncodeLocation(
-			ioTask.blocks[1].GetName(),
+			ioTask.name,
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
 			ioTask.blocks[1].GetID())

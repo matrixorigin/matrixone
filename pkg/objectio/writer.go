@@ -101,7 +101,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		location := Extent{
+		location := &Extent{
 			id:         block.GetID(),
 			offset:     uint32(offset),
 			length:     uint32(length),
@@ -140,7 +140,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(w.blocks[0].GetColumnCount())
-	objectMeta.BlockHeader().SetBlockID(uint64(blockCount))
+	objectMeta.BlockHeader().SetBlockID(blockCount)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	objectMeta.BlockHeader().SetColumnCount(w.blocks[0].GetColumnCount())
 	blockIndex := BuildBlockIndex(blockCount)
@@ -204,7 +204,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	for i := range w.blocks {
 		header := w.blocks[i].BlockHeader()
-		extent := Extent{
+		extent := &Extent{
 			id:         uint32(i),
 			offset:     uint32(start),
 			length:     uint32(length),
@@ -238,9 +238,8 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 func (w *ObjectWriter) AddBlock(block BlockObject) {
 	w.Lock()
 	defer w.Unlock()
-	block.BlockHeader().SetBlockID(uint64(w.lastId))
+	block.BlockHeader().SetBlockID(w.lastId)
 	w.blocks = append(w.blocks, block)
-	//w.blocks[block.id] = block
 	w.lastId++
 }
 

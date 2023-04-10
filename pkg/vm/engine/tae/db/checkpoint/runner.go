@@ -471,7 +471,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	if err != nil {
 		return
 	}
-	location := objectio.BuildLocation(blks[0].GetName(), blks[0].GetExtent(), 0, blks[0].GetID())
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	return
 }
@@ -495,7 +495,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	if err != nil {
 		return
 	}
-	location := objectio.BuildLocation(blks[0].GetName(), blks[0].GetExtent(), 0, blks[0].GetID())
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)

@@ -33,6 +33,7 @@ type flushBlkTask struct {
 	meta   *catalog.BlockEntry
 	fs     *objectio.ObjectFS
 	ts     types.TS
+	name   objectio.ObjectName
 	blocks []objectio.BlockObject
 }
 
@@ -61,6 +62,7 @@ func (task *flushBlkTask) Execute() error {
 	seg := task.meta.ID.Segment()
 	num, _ := task.meta.ID.Offsets()
 	name := objectio.BuildObjectName(seg, num)
+	task.name = name
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name)
 	if err != nil {
 		return err

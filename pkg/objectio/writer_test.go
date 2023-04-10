@@ -148,7 +148,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, []uint32{0}, pool, nil, newDecompressToObject)
+	vec, err = objectReader.Read(context.Background(), *meta.BlockHeader().MetaLocation(), idxs, []uint32{0}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -211,7 +211,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
-	meta, err := objectReader.ReadMeta(context.Background(), []Extent{blocks[0].BlockHeader().MetaLocation()}, nil, nil)
+	meta, err := objectReader.ReadMeta(context.Background(), []Extent{*blocks[0].BlockHeader().MetaLocation()}, nil, nil)
 	assert.Nil(t, err)
 	return meta
 }
@@ -228,11 +228,9 @@ func BenchmarkMetadata(b *testing.B) {
 	b.Run("GetColumnMeta", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			meta.GetColumnMeta(2, 0)
+			meta.Length()
 		}
 	})
-	b.Log(meta.GetColumnMeta(2, 0).ZoneMap())
-
 	b.Run("BlockCount", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

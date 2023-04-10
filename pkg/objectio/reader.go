@@ -84,66 +84,6 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 					return nil, 0, err
 				}
 			}
-			/*meta := ObjectMeta(data)
-			data = data[meta.Length():]
-			header := BlockIndex(data)
-
-			meta.Rows = types.DecodeUint32(data[:4])
-			blkMetaSize := types.DecodeUint32(data[4:8])
-			data = data[8:]
-			blkMeta := data[:blkMetaSize]
-			colMeta := data[blkMetaSize:]
-
-			dataLen := len(blkMeta)
-			blocks := make([]BlockObject, 0)
-			size := 0
-			i := 0
-			// decode block meta
-			for {
-				if size == dataLen {
-					break
-				}
-				extent := Extent{
-					id:         uint32(i),
-					offset:     extents[0].offset,
-					length:     extents[0].length,
-					originSize: extents[0].originSize,
-				}
-				block := &Block{
-					id:     uint32(i),
-					extent: extent,
-					object: r.object,
-					name:   r.name,
-				}
-				cache := blkMeta[size:]
-				unSize, err := block.UnmarshalMeta(cache, ZMUnmarshalFunc)
-				if err != nil {
-					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
-					return nil, 0, err
-				}
-				i++
-				size += int(unSize)
-				blocks = append(blocks, block)
-			}
-
-			meta.BlkMetas = blocks
-
-			// decode column meta
-			cols := make([]ObjectColumnMeta, 0)
-			i = 0
-
-			for len(colMeta) != 0 {
-				col := ObjectColumnMeta{}
-				if err := col.Read(colMeta); err != nil {
-					return nil, 0, err
-				}
-				i++
-				colMeta = colMeta[ObjectColumnMetaSize:]
-				cols = append(cols, col)
-			}
-
-			meta.ColMetas = cols*/
-
 			return data, int64(len(data)), nil
 		},
 	}

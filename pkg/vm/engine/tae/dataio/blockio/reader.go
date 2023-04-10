@@ -122,7 +122,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 		return nil, err
 	}
 	block := meta.GetBlockMeta(0)
-	if block.GetExtent().End() == 0 {
+	if block.BlockHeader().MetaLocation().End() == 0 {
 		return nil, nil
 	}
 	if len(idxs) == 0 {
@@ -132,7 +132,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 		}
 	}
 	bats := make([]*batch.Batch, 0)
-	ioVectors, err := r.reader.Read(ctx, block.GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
+	ioVectors, err := r.reader.Read(ctx, *block.BlockHeader().MetaLocation(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +209,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 		blocks[i] = meta.GetBlockMeta(uint32(i))
 	}
 	if r.meta.End() == 0 && len(blocks) > 0 {
-		r.meta = blocks[0].GetExtent()
+		r.meta = *blocks[0].BlockHeader().MetaLocation()
 	}
 	return blocks, nil
 }

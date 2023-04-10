@@ -399,7 +399,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		metaLoc := blockio.EncodeLocation(
-			blocks[0].GetName(),
+			writer.GetName(),
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks[0].GetID())

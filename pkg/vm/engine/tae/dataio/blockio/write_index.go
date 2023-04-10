@@ -148,8 +148,12 @@ type ObjectColumnMetasBuilder struct {
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
+	metas := make([]objectio.ObjectColumnMeta, colIdx)
+	for i := range metas {
+		metas[i] = objectio.BuildObjectColumnMeta()
+	}
 	return &ObjectColumnMetasBuilder{
-		metas: make([]objectio.ObjectColumnMeta, colIdx),
+		metas: metas,
 		sks:   make([]*hll.Sketch, colIdx),
 		zms:   make([]*index.ZM, colIdx),
 	}

@@ -105,6 +105,8 @@ type Writer interface {
 	// Sync is to write multiple batches written to the buffer to the fileservice at one time
 	// objectio.Extent is the address offset information of all block metadata stored in an object.
 	Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error)
+
+	GetName() objectio.ObjectName
 }
 
 type Index interface {

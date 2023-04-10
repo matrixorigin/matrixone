@@ -63,10 +63,7 @@ func (l Location) ID() uint32 {
 }
 
 func (l Location) IsEmpty() bool {
-	if len(l) == 0 {
-		return true
-	}
-	return false
+	return len(l) == 0
 }
 
 func (l Location) String() string {

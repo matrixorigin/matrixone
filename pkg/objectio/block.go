@@ -32,18 +32,14 @@ func NewBlock(colCnt uint16) BlockObject {
 }
 
 func (bm BlockObject) GetExtent() Extent {
-	return Extent{}
-}
-
-func (bm BlockObject) GetName() ObjectName {
-	return ObjectName{}
+	return *bm.BlockHeader().MetaLocation()
 }
 
 func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
 	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
-			"block: %v, column count: %d",
-			idx, bm.GetName().String(),
+			"block: %d, column count: %d",
+			idx, bm.BlockHeader().BlockID(),
 			bm.BlockHeader().ColumnCount())
 	}
 	return bm.ColumnMeta(idx), nil

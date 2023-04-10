@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unsafe"
 )
 
 const ExtentSize = 16
@@ -48,12 +49,13 @@ func (o ObjectMeta) Length() uint32 {
 }
 
 func (o ObjectMeta) BlockCount() uint32 {
-	return uint32(o.BlockHeader().BlockID())
+	return o.BlockHeader().BlockID()
 }
 
 func (o ObjectMeta) BlockIndex() BlockIndex {
-	end := o.Length() + 4 + uint32(o.BlockHeader().BlockID())*8
-	return BlockIndex(o[o.Length():end])
+	offset := o.Length()
+	end := offset + 4 + o.BlockHeader().BlockID()*8
+	return BlockIndex(o[offset:end])
 }
 
 func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
@@ -151,33 +153,12 @@ func (om ObjectColumnMeta) SetZoneMap(zm []byte) {
 	copy(om[oZoneMapOff:oZoneMapOff+oZoneMapLen], zm)
 }
 
-// +---------------------------------------------------------------------------------------------+
-// |                                           Header                                            |
-// +-------------+---------------+--------------+---------------+---------------+----------------+
-// | TableID(8B) | SegmentID(8B) | BlockID(8B)  | ColumnCnt(2B) | Reserved(34B) |  Chksum(4B)    |
-// +-------------+---------------+--------------+---------------+---------------+----------------+
-// |                                         ColumnMeta                                          |
-// +---------------------------------------------------------------------------------------------+
-// |                                         ColumnMeta                                          |
-// +---------------------------------------------------------------------------------------------+
-// |                                         ColumnMeta                                          |
-// +---------------------------------------------------------------------------------------------+
-// |                                         ..........                                          |
-// +---------------------------------------------------------------------------------------------+
-// Header Size = 64B
-// TableID = Table ID for Block
-// SegmentID = Segment ID
-// BlockID = Block ID
-// ColumnCnt = The number of column in the block
-// Chksum = Block metadata checksum
-// Reserved = 34 bytes reserved space
-
 const (
 	tableIDLen        = 8
 	segmentIDOff      = tableIDLen
 	segmentIDLen      = 8
 	blockIDOff        = segmentIDOff + segmentIDLen
-	blockIDLen        = 8
+	blockIDLen        = 4
 	rowsOff           = blockIDOff + blockIDLen
 	rowsLen           = 4
 	columnCountOff    = rowsOff + rowsLen
@@ -199,23 +180,6 @@ func BuildBlockMeta(count uint16) BlockObject {
 	return buf[:]
 }
 
-func GetBlockMeta(id uint32, data []byte) BlockObject {
-	metaOff := uint32(0)
-	idOff := uint32(0)
-	columnCount := uint16(0)
-	for {
-		header := BlockHeader(data[metaOff : metaOff+headerLen])
-		columnCount = header.ColumnCount()
-		metaLen := headerLen + uint32(columnCount)*colMetaLen
-		metaOff += metaLen
-		if id == idOff {
-			break
-		}
-		idOff++
-	}
-	return data[metaOff : metaOff+headerLen+uint32(columnCount)*colMetaLen]
-}
-
 func (bm BlockObject) BlockHeader() BlockHeader {
 	return BlockHeader(bm[:headerLen])
 }
@@ -234,10 +198,7 @@ func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
 }
 
 func (bm BlockObject) IsEmpty() bool {
-	if len(bm) == 0 {
-		return true
-	}
-	return false
+	return len(bm) == 0
 }
 
 type BlockHeader []byte
@@ -263,12 +224,12 @@ func (bh BlockHeader) SetSegmentID(id uint64) {
 	copy(bh[segmentIDOff:segmentIDOff+segmentIDLen], types.EncodeUint64(&id))
 }
 
-func (bh BlockHeader) BlockID() uint64 {
-	return types.DecodeUint64(bh[blockIDOff : blockIDOff+blockIDLen])
+func (bh BlockHeader) BlockID() uint32 {
+	return types.DecodeUint32(bh[blockIDOff : blockIDOff+blockIDLen])
 }
 
-func (bh BlockHeader) SetBlockID(id uint64) {
-	copy(bh[blockIDOff:blockIDOff+blockIDLen], types.EncodeUint64(&id))
+func (bh BlockHeader) SetBlockID(id uint32) {
+	copy(bh[blockIDOff:blockIDOff+blockIDLen], types.EncodeUint32(&id))
 }
 
 func (bh BlockHeader) Rows() uint32 {
@@ -287,44 +248,17 @@ func (bh BlockHeader) SetColumnCount(count uint16) {
 	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
 }
 
-func (bh BlockHeader) MetaLocation() Extent {
-	extent := Extent{}
-	extent.Unmarshal(bh[metaLocationOff : metaLocationOff+metaLocationLen])
-	return extent
+func (bh BlockHeader) MetaLocation() *Extent {
+	return (*Extent)(unsafe.Pointer(&bh[metaLocationOff]))
 }
 
-func (bh BlockHeader) SetMetaLocation(location Extent) {
+func (bh BlockHeader) SetMetaLocation(location *Extent) {
 	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location.Marshal())
 }
 
 func (bh BlockHeader) IsEmpty() bool {
-	if len(bh) == 0 {
-		return true
-	}
-	return false
+	return len(bh) == 0
 }
-
-// +---------------------------------------------------------------------------------------------------------------+
-// |                                                    ColumnMeta                                                 |
-// +--------+-------+----------+--------+---------+--------+--------+------------+---------+----------+------------+
-// |Type(1B)|Idx(2B)| Algo(1B) |Offset(4B)|Size(4B)|oSize(4B)|Min(32B)|Max(32B)|BFoffset(4b)|BFlen(4b)|BFoSize(4B) |
-// +--------+-------+----------+--------+---------+--------+--------+------------+---------+----------+------------+
-// |                                        Reserved(32B)                                             | Chksum(4B) |
-// +---------------------------------------------------------------------------------------------------------------+
-// ColumnMeta Size = 128B
-// Type = Metadata type, always 0, representing column meta, used for extension.
-// Idx = Column index
-// Algo = Type of compression algorithm for column data
-// Offset = Offset of column data
-// Size = Size of column data
-// oSize = Original data size
-// Min = Column min value
-// Max = Column Max value
-// BFoffset = Bloomfilter data offset
-// Bflen = Bloomfilter data size
-// BFoSize = Bloomfilter original data size
-// Chksum = Data checksum
-// Reserved = 32 bytes reserved space
 
 const (
 	typeLen            = 1
@@ -381,13 +315,11 @@ func (cm ColumnMeta) setAlg(alg uint8) {
 	copy(cm[algOff:algOff+algLen], types.EncodeUint8(&alg))
 }
 
-func (cm ColumnMeta) Location() Extent {
-	extent := Extent{}
-	extent.Unmarshal(cm[locationOff : locationOff+locationLen])
-	return extent
+func (cm ColumnMeta) Location() *Extent {
+	return (*Extent)(unsafe.Pointer(&cm[locationOff]))
 }
 
-func (cm ColumnMeta) setLocation(location Extent) {
+func (cm ColumnMeta) setLocation(location *Extent) {
 	copy(cm[locationOff:locationOff+locationLen], location.Marshal())
 }
 
@@ -399,10 +331,8 @@ func (cm ColumnMeta) setZoneMap(zm ZoneMap) {
 	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm)
 }
 
-func (cm ColumnMeta) BloomFilter() Extent {
-	extent := Extent{}
-	extent.Unmarshal(cm[bloomFilterOff : bloomFilterOff+bloomFilterLen])
-	return extent
+func (cm ColumnMeta) BloomFilter() *Extent {
+	return (*Extent)(unsafe.Pointer(&cm[bloomFilterOff]))
 }
 
 func (cm ColumnMeta) setBloomFilter(location Extent) {
@@ -414,10 +344,7 @@ func (cm ColumnMeta) Checksum() uint32 {
 }
 
 func (cm ColumnMeta) IsEmpty() bool {
-	if len(cm) == 0 {
-		return true
-	}
-	return false
+	return len(cm) == 0
 }
 
 type Header struct {
