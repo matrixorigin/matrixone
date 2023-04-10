@@ -1072,33 +1072,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-/*
-func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
-	ss = append(ss, children...)
-	rs := c.newScopeList(1, int(n.Stats.BlockNum))
-	gn := new(plan.Node)
-	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	copy(gn.GroupBy, n.ProjectList)
-	for i := range rs {
-		ch := c.newMergeScope(dupScopeList(ss))
-		ch.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
-		})
-		ch.IsEnd = true
-		rs[i].PreScopes = []*Scope{ch}
-		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-			Op:  vm.Group,
-			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
-		})
-	}
-	return rs
-}
-*/
-
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
 	rs := c.newScopeList(1, int(n.Stats.BlockNum))
@@ -1647,36 +1620,6 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	rs[idx].PreScopes = append(rs[idx].PreScopes, leftMerge, rightMerge)
 	return rs
 }
-
-/*
-func (c *Compile) newJoinScopeListWithBucket2(rs, ss, children []*Scope) []*Scope {
-	currentFirstFlag := c.anal.isFirst
-	for i := range rs {
-		c.anal.isFirst = currentFirstFlag
-		left := c.newMergeScope(dupScopeList(ss))
-
-		c.anal.isFirst = currentFirstFlag
-		right := c.newMergeScope(dupScopeList(children))
-
-		rs[i].PreScopes = []*Scope{left, right}
-		left.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
-		})
-		right.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-			},
-		})
-		left.IsEnd = true
-		right.IsEnd = true
-	}
-	return rs
-}
-*/
 
 //func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 //rs := make([]*Scope, len(ss))
