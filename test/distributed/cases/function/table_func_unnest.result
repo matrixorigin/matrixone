@@ -226,3 +226,11 @@ path    VARCHAR(65535)    YES        null
 seq    INT(4)    YES        null
 this    JSON(0)    YES        null
 value    JSON(0)    YES        null
+drop table if exists t1;
+create table t1(a int,b json);
+insert into t1 values(1,'{"people":[{"name":"a1","address":"a2"},{"name":"b1","address":"b2"}]}');
+insert into t1 values(2,'{"people":[{"name":"c1","address":"c2"},{"name":"d1","address":"d2"}]}');
+select a,e.* from t1,unnest(t1.b,'$.people[0]') e where seq=0 and e.this=json_extract(t1.b,'$.people[0]');
+a    col    seq    key    path    index    value    this
+1    t1.b    0    address    $.people[0].address    null    "a2"    {"address": "a2", "name": "a1"}
+2    t1.b    0    address    $.people[0].address    null    "c2"    {"address": "c2", "name": "c1"}
