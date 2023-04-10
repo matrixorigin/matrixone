@@ -575,3 +575,84 @@ func BenchmarkFunctions(b *testing.B) {
 		}
 	})
 }
+
+func getOverload(typ types.T, t *testing.T, rows *roaring.Bitmap, vec Vector) any {
+	switch typ {
+	case types.T_bool:
+		return overLoadFactory[bool](t, rows, vec)
+	case types.T_int8:
+		return overLoadFactory[int8](t, rows, vec)
+	case types.T_int16:
+		return overLoadFactory[int16](t, rows, vec)
+	case types.T_int32:
+		return overLoadFactory[int32](t, rows, vec)
+	case types.T_int64:
+		return overLoadFactory[int64](t, rows, vec)
+	case types.T_uint8:
+		return overLoadFactory[uint8](t, rows, vec)
+	case types.T_uint16:
+		return overLoadFactory[uint16](t, rows, vec)
+	case types.T_uint32:
+		return overLoadFactory[uint32](t, rows, vec)
+	case types.T_uint64:
+		return overLoadFactory[uint64](t, rows, vec)
+	case types.T_float32:
+		return overLoadFactory[float32](t, rows, vec)
+	case types.T_float64:
+		return overLoadFactory[float64](t, rows, vec)
+	case types.T_timestamp:
+		return overLoadFactory[types.Timestamp](t, rows, vec)
+	case types.T_date:
+		return overLoadFactory[types.Date](t, rows, vec)
+	case types.T_time:
+		return overLoadFactory[types.Time](t, rows, vec)
+	case types.T_datetime:
+		return overLoadFactory[types.Datetime](t, rows, vec)
+	case types.T_decimal64:
+		return overLoadFactory[types.Decimal64](t, rows, vec)
+	case types.T_decimal128:
+		return overLoadFactory[types.Decimal128](t, rows, vec)
+	case types.T_decimal256:
+		return overLoadFactory[types.Decimal256](t, rows, vec)
+	case types.T_TS:
+		return overLoadFactory[types.TS](t, rows, vec)
+	case types.T_Rowid:
+		return overLoadFactory[types.Rowid](t, rows, vec)
+	case types.T_Blockid:
+		return overLoadFactory[types.Blockid](t, rows, vec)
+	case types.T_uuid:
+		return overLoadFactory[types.Uuid](t, rows, vec)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		return overLoadFactory[[]byte](t, rows, vec)
+	default:
+		panic("unsupport")
+	}
+}
+
+func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func(v T, _ bool, row int) error {
+	return func(v T, _ bool, row int) (err error) {
+		rows.Add(uint32(row))
+		assert.Equal(t, vec.Get(row), v)
+		return
+	}
+}
+
+func TestForeachSelectBitmap(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes(17)
+	sels := roaring.BitmapOf(2, 6)
+	f := func(vecType types.Type, nullable bool) {
+		vec := MockVector(vecType, 10, false, nil)
+		rows := roaring.New()
+		op := getOverload(vecType.Oid, t, rows, vec)
+
+		ForeachVectorWindow(vec, 0, vec.Length(), op, sels)
+		assert.Equal(t, uint64(2), rows.GetCardinality())
+		assert.True(t, rows.Contains(2))
+		assert.True(t, rows.Contains(6))
+	}
+	for _, vecType := range vecTypes {
+		f(vecType, false)
+	}
+
+}
