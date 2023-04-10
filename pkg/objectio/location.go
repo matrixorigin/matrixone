@@ -16,8 +16,9 @@ package objectio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -48,10 +49,8 @@ func (l Location) Name() ObjectName {
 	return ObjectName(l[:FileNameLen])
 }
 
-func (l Location) Extent() Extent {
-	extent := Extent{}
-	extent.Unmarshal(l[ExtentOff : ExtentOff+ExtentLen])
-	return extent
+func (l Location) Extent() *Extent {
+	return (*Extent)(unsafe.Pointer(&l[ExtentOff]))
 }
 
 func (l Location) Rows() uint32 {
