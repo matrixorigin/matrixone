@@ -183,10 +183,9 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	waiters func(pb.WaitTxn) bool,
 	lockTableFunc func(uint64) (lockTable, error)) bool {
 	txn.RLock()
-	defer txn.RUnlock()
-
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
+		txn.RUnlock()
 		return true
 	}
 
@@ -195,7 +194,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	if txn.isRemoteLocked() {
 		panic("can not fetch waiting txn on remote txn")
 	}
-
+	txn.RUnlock()
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
 		if err != nil {
