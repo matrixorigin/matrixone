@@ -35,7 +35,6 @@ type KeysCtx struct {
 	Selects *roaring.Bitmap
 	// Select a continuous interval [Start, Start+Count) from keys
 	Start, Count int
-
 	// Whether need to verify Keys
 	NeedVerify bool
 }
