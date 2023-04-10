@@ -301,8 +301,8 @@ func DecodeStringSlice(data []byte) []string {
 	return vs
 }
 
-func DecodeValue(val []byte, typ Type) any {
-	switch typ.Oid {
+func DecodeValue(val []byte, t T) any {
+	switch t {
 	case T_bool:
 		return DecodeFixed[bool](val)
 	case T_int8:
@@ -346,7 +346,7 @@ func DecodeValue(val []byte, typ Type) any {
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val
 	default:
-		panic(fmt.Sprintf("unsupported type %v", typ))
+		panic(fmt.Sprintf("unsupported type %v", t))
 	}
 }
 
