@@ -1803,11 +1803,8 @@ func (c *Compile) fillAnalyzeInfo() {
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var err error
 	var db engine.Database
+	var rel engine.Relation
 	var nodes engine.Nodes
-
-	// For general table, blocksList only has one element, which is the data block information of a general table
-	// For partition table, blocksList contains multiple elements, each element contains the data block information of a partitioned sub table
-	var blocksList []blocks
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
@@ -1821,47 +1818,42 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 
+	// For general table, blocksList only has one element, which is the data block information of a general table
+	// For partition table, blocksList contains multiple elements, each element contains the data block information of a partitioned sub table
+	blocksList := newBlocksList(n.TableDef)
+	rel, err = db.Relation(ctx, n.TableDef.Name)
+	if err != nil {
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return nil, err
+		}
+		// if temporary table, just scan at local cn.
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+		if e != nil {
+			return nil, err
+		}
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: 1,
+			},
+		}
+	}
+
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err := rel.Ranges(ctx, expr)
+	if err != nil {
+		return nil, err
+	}
+	blocksList[0].rel = rel
+	blocksList[0].ranges = ranges
+
 	if n.TableDef.Partition != nil {
-		expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
 		partitionInfo := n.TableDef.Partition
 		partitionNum := int(partitionInfo.PartitionNum)
 		partitionTableNames := partitionInfo.PartitionTableNames
-
-		//blocksList = newBlocksList(partitionNum)
-		blocksList = newBlocksList(partitionNum + 1)
-
-		// This code is used to process the main table data of the partition table to be compatible with the bvt test.
-		// After the future implementation of the partition table DML function, it should be removed
-		//-------------------------------------------------------------------------------
-		rel, err := db.Relation(ctx, n.TableDef.Name)
-		if err != nil {
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-			if e != nil {
-				return nil, err
-			}
-
-			// if temporary table, just scan at local cn.
-			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
-			if e != nil {
-				return nil, err
-			}
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: 1,
-				},
-			}
-		}
-
-		ranges, err := rel.Ranges(ctx, expr)
-		if err != nil {
-			return nil, err
-		}
-		blocksList[0].rel = rel
-		blocksList[0].ranges = ranges
-		//-------------------------------------------------------------------------------
 		for i := 0; i < partitionNum; i++ {
 			partTableName := partitionTableNames[i]
 			subrelation, err := db.Relation(ctx, partTableName)
@@ -1875,55 +1867,24 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			blocksList[i+1].rel = subrelation
 			blocksList[i+1].ranges = subranges
 		}
-	} else {
-		blocksList = newBlocksList(1)
-		rel, err := db.Relation(ctx, n.TableDef.Name)
-		if err != nil {
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-			if e != nil {
-				return nil, err
-			}
-
-			// if temporary table, just scan at local cn.
-			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
-			if e != nil {
-				return nil, err
-			}
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: 1,
-				},
-			}
-		}
-
-		expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
-		ranges, err := rel.Ranges(ctx, expr)
-		if err != nil {
-			return nil, err
-		}
-		blocksList[0].rel = rel
-		blocksList[0].ranges = ranges
 	}
 
-	for _, blocks := range blocksList {
+	for i := 0; i < len(blocksList); i++ {
 		var subNodes engine.Nodes
-		tableId := blocks.rel.GetTableID(ctx)
-		ranges := blocks.ranges
-		rel := blocks.rel
-		expectedLen := len(ranges)
+		subRel := blocksList[i].rel
+		tableId := subRel.GetTableID(ctx)
+		subRanges := blocksList[i].ranges
+		expectedLen := len(subRanges)
 		logutil.Infof("cn generateNodes, tbl %d ranges is %d", tableId, expectedLen)
 
 		// If ranges == 0, it's temporary table ?
 		// XXX the code is too confused. should be removed once we remove the memory-engine.
-		if len(ranges) == 0 {
-			logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
+		if len(subRanges) == 0 {
+			logutil.Errorf("rel.Ranges return 0, rel is %v", subRel)
 			subNodes = make(engine.Nodes, len(c.cnList))
 			for i, node := range c.cnList {
 				subNodes[i] = engine.Node{
-					Rel:  rel,
+					Rel:  subRel,
 					Id:   node.Id,
 					Addr: node.Addr,
 					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
@@ -1934,91 +1895,104 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 
 		// In fact, the first element of Ranges is always a memory table.
-		if engine.IsMemtable(ranges[0]) {
+		if engine.IsMemtable(subRanges[0]) {
 			if c.info.Typ == plan2.ExecTypeTP {
 				subNodes = append(subNodes, engine.Node{
 					Addr: c.addr,
-					Rel:  rel,
+					Rel:  subRel,
 					Mcpu: 1,
 				})
 			} else {
 				subNodes = append(subNodes, engine.Node{
 					Addr: c.addr,
-					Rel:  rel,
+					Rel:  subRel,
 					Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 				})
 			}
-			subNodes[0].Data = append(subNodes[0].Data, ranges[:1]...)
-			ranges = ranges[1:]
-		}
-
-		// 1. If the length of cn list is 1, query is small or just one cn now.
-		// 2. If the length of ranges is 0 now, the table has only memory table blocks.
-		// Both these queries only needs to be executed on the current cn.
-		if len(ranges) == 0 {
-			nodes = append(nodes, subNodes...)
-			continue
-		}
-
-		if len(c.cnList) == 1 {
-			if len(subNodes) == 0 {
-				subNodes = append(subNodes, engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
-				})
+			// If there is only one CN, xxx_Blocks.range [1:] will be linked to the corresponding on xxx_node0.
+			if len(c.cnList) == 1 {
+				subNodes[0].Data = append(subNodes[0].Data, subRanges...)
+			} else {
+				subNodes[0].Data = append(subNodes[0].Data, subRanges[:1]...)
 			}
-			subNodes[0].Data = append(subNodes[0].Data, ranges...)
-			nodes = append(nodes, subNodes...)
-			continue
+			blocksList[i].ranges = subRanges[1:]
+		} else {
+			// process temporary tables
+			if len(c.cnList) == 1 {
+				if len(subNodes) == 0 {
+					subNodes = append(subNodes, engine.Node{
+						Addr: c.addr,
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
+				subNodes[0].Data = append(subNodes[0].Data, subRanges...)
+			}
 		}
+		if subNodes != nil {
+			nodes = append(nodes, subNodes...)
+		}
+	}
 
+	allRanges := make([][]byte, 0)
+	for _, bks := range blocksList {
+		allRanges = append(allRanges, bks.ranges...)
+	}
+	if len(allRanges) == 0 {
+		return nodes, nil
+	}
+
+	// 1. If the length of cn list is 1, query is small or just one cn now.
+	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
+	// Both these queries only needs to be executed on the current cn.
+	if len(c.cnList) == 1 {
+		return nodes, nil
+	} else {
 		// determines which blocks should be read by each cn node.
-		step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
-		for i := 0; i < len(ranges); i += step {
+		step := (len(allRanges) + len(c.cnList) - 1) / len(c.cnList)
+		for i := 0; i < len(allRanges); i += step {
 			j := i / step
-			if i+step >= len(ranges) {
+			if i+step >= len(allRanges) {
 				if isSameCN(c.cnList[j].Addr, c.addr) {
-					if len(subNodes) == 0 {
-						subNodes = append(subNodes, engine.Node{
+					if len(nodes) == 0 {
+						nodes = append(nodes, engine.Node{
 							Addr: c.addr,
 							Rel:  rel,
 							Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 						})
 					}
-					subNodes[0].Data = append(subNodes[0].Data, ranges[i:]...)
+					nodes[0].Data = append(nodes[0].Data, allRanges[i:]...)
 				} else {
-					subNodes = append(subNodes, engine.Node{
+					nodes = append(nodes, engine.Node{
 						Rel:  rel,
 						Id:   c.cnList[j].Id,
 						Addr: c.cnList[j].Addr,
 						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i:],
+						Data: allRanges[i:],
 					})
 				}
 			} else {
 				if isSameCN(c.cnList[j].Addr, c.addr) {
-					if len(subNodes) == 0 {
-						subNodes = append(subNodes, engine.Node{
+					if len(nodes) == 0 {
+						nodes = append(nodes, engine.Node{
 							Rel:  rel,
 							Addr: c.addr,
 							Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 						})
 					}
-					subNodes[0].Data = append(subNodes[0].Data, ranges[i:i+step]...)
+
+					nodes[0].Data = append(nodes[0].Data, allRanges[i:i+step]...)
 				} else {
-					subNodes = append(subNodes, engine.Node{
+					nodes = append(nodes, engine.Node{
 						Rel:  rel,
 						Id:   c.cnList[j].Id,
 						Addr: c.cnList[j].Addr,
 						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i : i+step],
+						Data: allRanges[i : i+step],
 					})
 				}
 			}
 		}
-		nodes = append(nodes, subNodes...)
-		continue
 	}
 	return nodes, nil
 }
@@ -2164,9 +2138,12 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	return vec, nil
 }
 
-// build a blocks list , size: the number of sub tables.
-// If it is a partition table, size is the number of sub tables (the number of partitions).
-// If it is a normal table, size is 1
-func newBlocksList(size int) []blocks {
-	return make([]blocks, size)
+// build a blocks list, If it is a partition table, blocks list size is the
+// number of sub tables (the number of partitions). If it is a normal table,blocks list size is 1
+func newBlocksList(tableDef *plan.TableDef) []blocks {
+	if tableDef.Partition != nil {
+		partitionInfo := tableDef.Partition
+		return make([]blocks, int(partitionInfo.PartitionNum)+1)
+	}
+	return make([]blocks, 1)
 }
