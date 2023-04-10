@@ -384,12 +384,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	defer view.Close()
 	var dedupFn any
 	if isAblk {
-		var scan containers.Vector
-		scan, err = blk.LoadPersistedCommitTS()
-		if err != nil {
-			return
-		}
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, scan, txn)
+		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def)
 	}
