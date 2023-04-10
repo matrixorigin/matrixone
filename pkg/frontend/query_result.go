@@ -48,7 +48,7 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == "internal_sql" || isSimpleResultQuery(ses.ast) {
+	if ses.tStmt.SqlSourceType == "internal_sql" {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
@@ -191,10 +191,14 @@ func saveQueryResultMeta(ses *Session) error {
 		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
 	}
 
-	sp, err := ses.p.Marshal()
-	if err != nil {
-		return err
+	var sp []byte
+	if ses.p != nil {
+		sp, err = ses.p.Marshal()
+		if err != nil {
+			return err
+		}
 	}
+
 	st, err := simpleAstMarshal(ses.ast)
 	if err != nil {
 		return nil
