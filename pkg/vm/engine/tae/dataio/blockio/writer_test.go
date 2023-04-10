@@ -62,8 +62,8 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	colZoneMap := col.GetMeta().GetZoneMap()
-	zm := index.DecodeZM((colZoneMap.GetData().([]byte)))
+	colZoneMap := col.GetMeta().ZoneMap()
+	zm := index.DecodeZM(colZoneMap)
 
 	require.NoError(t, err)
 	res := zm.Contains(int32(500))
@@ -74,7 +74,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.False(t, res)
 
 	mp := mpool.MustNewZero()
-	metaloc := EncodeLocation(blocks[0].GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
+	metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 	require.NoError(t, err)
 	reader, err := NewObjectReader(service, metaloc)
 	require.NoError(t, err)

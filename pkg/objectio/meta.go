@@ -104,7 +104,7 @@ func (oh BlockIndex) SetBlockMetaPos(BlockID uint32, offset, length uint32) {
 }
 
 func (oh BlockIndex) Length() uint32 {
-	return blockCountLen * posLen
+	return oh.BlockCount()*posLen + blockCountLen
 }
 
 const (

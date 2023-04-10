@@ -145,7 +145,8 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	objectMeta.BlockHeader().SetColumnCount(w.blocks[0].GetColumnCount())
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
-	start := 0
+	start := int(objectMeta.Length())
+	start += int(blockIndex.Length())
 	length := 0
 
 	// write block meta
@@ -167,7 +168,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for i, colmeta := range w.colmeta {
 		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
-
 	// begin write
 	start, n, err := w.buffer.Write(objectMeta)
 	if err != nil {
@@ -184,7 +184,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		return nil, err
 	}
 	length += n
-
+	extent := &Extent{
+		offset:     uint32(start),
+		length:     uint32(length),
+		originSize: uint32(length),
+	}
+	objectMeta.BlockHeader().SetMetaLocation(extent)
 	// write footer
 	footer := Footer{
 		metaStart: uint32(start),
@@ -198,10 +203,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	err = w.Sync(ctx, items...)
-	if err != nil {
-		return nil, err
-	}
 	for i := range w.blocks {
 		header := w.blocks[i].BlockHeader()
 		extent := &Extent{
@@ -211,6 +212,10 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 			originSize: uint32(length),
 		}
 		header.SetMetaLocation(extent)
+	}
+	err = w.Sync(ctx, items...)
+	if err != nil {
+		return nil, err
 	}
 
 	// The buffer needs to be released at the end of WriteEnd
