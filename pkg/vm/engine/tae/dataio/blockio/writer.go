@@ -67,14 +67,14 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.pk = idx
 }
 
-func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
+func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockMeta, err error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.WriteBatch(bat)
 	return
 }
 
-func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockMeta, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
 		return nil, err
@@ -126,17 +126,17 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	return block, nil
 }
 
-func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockMeta, error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	return w.writer.Write(bat)
 }
 
-func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockMeta, error) {
 	return w.writer.Write(batch)
 }
 
-func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
+func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockMeta, objectio.Extent, error) {
 	if w.objMetaBuilder != nil {
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
@@ -152,7 +152,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 }
 
 func (w *BlockWriter) String(
-	blocks []objectio.BlockObject) string {
+	blocks []objectio.BlockMeta) string {
 	size, err := GetObjectSizeWithBlocks(blocks)
 	if err != nil {
 		return fmt.Sprintf("name: %s, err: %s", w.nameStr, err.Error())

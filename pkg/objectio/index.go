@@ -30,7 +30,7 @@ const (
 const ZoneMapSize = 64
 
 type IndexData interface {
-	Write(writer *ObjectWriter, block *Block, idx uint16) error
+	Write(writer *ObjectWriter, block BlockMeta, idx uint16) error
 	GetIdx() uint16
 }
 
@@ -38,8 +38,8 @@ type ZoneMapUnmarshalFunc = func(buf []byte, t types.Type) (any, error)
 
 type ZoneMap []byte
 
-func (z *ZoneMap) Write(_ *ObjectWriter, block *Block, idx uint16) {
-	block.meta.ColumnMeta(idx).setZoneMap(*z)
+func (z *ZoneMap) Write(_ *ObjectWriter, block BlockMeta, idx uint16) {
+	block.ColumnMeta(idx).setZoneMap(*z)
 }
 
 type BloomFilter struct {
@@ -63,7 +63,7 @@ func (b *BloomFilter) GetData() any {
 	return b.data
 }
 
-func (b *BloomFilter) Write(writer *ObjectWriter, block *Block, idx uint16) error {
+func (b *BloomFilter) Write(writer *ObjectWriter, block BlockMeta, idx uint16) error {
 	var err error
 	dataLen := len(b.data.([]byte))
 	data := make([]byte, lz4.CompressBlockBound(dataLen))
@@ -79,6 +79,6 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block, idx uint16) erro
 		length:     uint32(length),
 		originSize: uint32(dataLen),
 	}
-	block.meta.ColumnMeta(idx).setBloomFilter(extent)
+	block.ColumnMeta(idx).setBloomFilter(extent)
 	return err
 }

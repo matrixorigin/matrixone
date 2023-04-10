@@ -29,7 +29,7 @@ import (
 type ZMWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
-	block       objectio.BlockObject
+	block       objectio.BlockMeta
 	zonemap     index.ZM
 	colIdx      uint16
 	internalIdx uint16
@@ -45,7 +45,7 @@ func (writer *ZMWriter) String() string {
 	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
 }
 
-func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockMeta, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType
@@ -62,7 +62,7 @@ func (writer *ZMWriter) Finalize() error {
 		return err
 	}
 	zonemap := objectio.ZoneMap(iBuf)
-	zonemap.Write(nil, writer.block.(*objectio.Block), writer.colIdx)
+	zonemap.Write(nil, writer.block, writer.colIdx)
 	//meta.SetStartOffset(startOffset)
 	return nil
 }
@@ -79,7 +79,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 type BFWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
-	block       objectio.BlockObject
+	block       objectio.BlockMeta
 	impl        index.StaticFilter
 	data        containers.Vector
 	colIdx      uint16
@@ -90,7 +90,7 @@ func NewBFWriter() *BFWriter {
 	return &BFWriter{}
 }
 
-func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockMeta, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType
@@ -161,7 +161,9 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 
 func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) {
 	if vec.HasNull() {
-		b.metas[idx].NullCnt += uint32(vec.NullMask().GetCardinality())
+		cnt := b.metas[idx].NullCnt()
+		cnt += uint32(vec.NullMask().GetCardinality())
+		b.metas[idx].SetNullCnt(cnt)
 	}
 
 	if b.zms[idx] == nil {
@@ -192,11 +194,11 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
 func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta) {
 	for i := range b.metas {
 		if b.sks[i] != nil { // rowid or types.TS
-			b.metas[i].Ndv = uint32(b.sks[i].Estimate())
+			b.metas[i].SetNdv(uint32(b.sks[i].Estimate()))
 		}
 		if b.zms[i] != nil {
 			zmbuf, _ := b.zms[i].Marshal()
-			b.metas[i].Zonemap = zmbuf
+			b.metas[i].SetZoneMap(zmbuf)
 		}
 	}
 	ret := b.metas

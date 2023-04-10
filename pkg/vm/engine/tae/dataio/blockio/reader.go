@@ -121,10 +121,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	metadata := meta.ObjectNext()
-	header := objectio.ObjectHeader(metadata)
-	metadata = metadata[header.Length():]
-	block := objectio.GetBlockMeta(0, metadata)
+	block := meta.GetBlockMeta(0)
 	if block.GetExtent().End() == 0 {
 		return nil, nil
 	}
@@ -139,7 +136,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	for y := 0; y < int(header.BlockCount()); y++ {
+	for y := 0; y < int(meta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
 			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
@@ -155,13 +152,10 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	metadata := meta.ObjectNext()
-	header := objectio.ObjectHeader(metadata)
-	metadata = metadata[header.Length():]
 
 	blocksZoneMap := make([][]dataio.Index, len(ids))
 	for i, id := range ids {
-		block := objectio.GetBlockMeta(id, metadata)
+		block := meta.GetBlockMeta(id)
 		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, block, m)
 		if err != nil {
 			return nil, err
@@ -183,10 +177,9 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{
 			NullCnt: colMeta.NullCnt(), Ndv: colMeta.Ndv(), Zm: index.DecodeZM(colMeta.ZoneMap())})
 	}
-	header, metadata := decodeObjectMeta(objectMeta)
 	var idxs []uint16
-	for i := uint32(0); i < header.BlockCount(); i++ {
-		block := objectio.GetBlockMeta(i, metadata)
+	for i := uint32(0); i < objectMeta.BlockCount(); i++ {
+		block := objectMeta.GetBlockMeta(i)
 		if idxs == nil {
 			idxs = make([]uint16, block.GetColumnCount())
 			for i := 0; i < len(idxs); i++ {
@@ -202,20 +195,19 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 	return meta, nil
 }
 
-func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.key.Extent()}, m, LoadZoneMapFunc)
-	if err != nil {
-		return nil, err
-	}
-	return meta.BlkMetas, nil
+func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
+	return r.reader.ReadMeta(ctx, []objectio.Extent{r.key.Extent()}, m, LoadZoneMapFunc)
 }
 
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockMeta, error) {
 	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
-	blocks := meta.BlkMetas
+	blocks := make([]objectio.BlockMeta, meta.BlockCount())
+	for i := 0; i < int(meta.BlockCount()); i++ {
+		blocks[i] = meta.GetBlockMeta(uint32(i))
+	}
 	if r.meta.End() == 0 && len(blocks) > 0 {
 		r.meta = blocks[0].GetExtent()
 	}
@@ -247,11 +239,8 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	}
 	blocksBloomFilters := make([]index.StaticFilter, len(ids))
 	for i, id := range ids {
-		column, err := meta.BlkMetas[id].GetColumn(idx)
-		if err != nil {
-			return nil, err
-		}
-		bf, err := column.GetIndex(ctx, objectio.BloomFilterType, LoadBloomFilterFunc, m)
+		column := meta.GetColumnMeta(idx, id)
+		bf, err := column.GetIndex(ctx, r.reader.GetObject(), LoadBloomFilterFunc, m)
 		if err != nil {
 			return nil, err
 		}
@@ -375,9 +364,9 @@ func PrefetchFile(service fileservice.FileService, size int64, name string) erro
 	return PrefetchWithMerged(pref)
 }
 
-func decodeObjectMeta(meta objectio.ObjectMeta) (objectio.ObjectHeader, []byte) {
+func decodeObjectMeta(meta objectio.ObjectMeta) (objectio.BlockIndex, []byte) {
 	metadata := meta.ObjectNext()
-	header := objectio.ObjectHeader(metadata)
+	header := objectio.BlockIndex(metadata)
 	data := metadata[header.Length():]
 	return header, data
 }

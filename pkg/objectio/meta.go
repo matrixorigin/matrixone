@@ -44,22 +44,49 @@ func (o ObjectMeta) Length() uint32 {
 	return headerLen + uint32(o.BlockHeader().ColumnCount())*objectColumnMetaLen
 }
 
+func (o ObjectMeta) BlockCount() uint32 {
+	return uint32(o.BlockHeader().BlockID())
+}
+
+func (o ObjectMeta) BlockIndex() BlockIndex {
+	end := o.Length() + 4 + uint32(o.BlockHeader().BlockID())*8
+	return BlockIndex(o[o.Length():end])
+}
+
 func (o ObjectMeta) ObjectNext() []byte {
 	return o[o.Length():]
 }
 
+func (o ObjectMeta) GetBlockMeta(id uint32) BlockMeta {
+	offset, length := o.BlockIndex().BlockMetaPos(id)
+	return BlockMeta(o[offset:length])
+}
+
+func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {
+	return o.GetBlockMeta(id).ColumnMeta(idx)
+}
+
 const (
 	blockCountLen = 4
+	blockOffset   = 4
+	blockLen      = 4
+	posLen        = blockOffset + blockLen
 )
 
-type ObjectHeader []byte
+type BlockIndex []byte
 
-func (oh ObjectHeader) BlockCount() uint32 {
+func (oh BlockIndex) BlockCount() uint32 {
 	return types.DecodeUint32(oh[:blockCountLen])
 }
 
-func (oh ObjectHeader) Length() uint32 {
-	return blockCountLen
+func (oh BlockIndex) BlockMetaPos(BlockID uint32) (uint32, uint32) {
+	offStart := blockCountLen + BlockID*posLen
+	offEnd := blockCountLen + BlockID*posLen + blockOffset
+	return types.DecodeUint32(oh[offStart:offEnd]), types.DecodeUint32(oh[offStart+blockLen : offEnd+blockLen])
+}
+
+func (oh BlockIndex) Length() uint32 {
+	return blockCountLen * posLen
 }
 
 const (
@@ -88,12 +115,24 @@ func (om ObjectColumnMeta) Ndv() uint32 {
 	return types.DecodeUint32(om[:ndvLen])
 }
 
+func (om ObjectColumnMeta) SetNdv(cnt uint32) {
+	copy(om[:ndvLen], types.EncodeUint32(&cnt))
+}
+
 func (om ObjectColumnMeta) NullCnt() uint32 {
 	return types.DecodeUint32(om[nullCntOff : nullCntOff+nullCntLen])
 }
 
+func (om ObjectColumnMeta) SetNullCnt(cnt uint32) {
+	copy(om[nullCntOff:nullCntOff+nullCntLen], types.EncodeUint32(&cnt))
+}
+
 func (om ObjectColumnMeta) ZoneMap() ZoneMap {
 	return ZoneMap(om[oZoneMapOff : oZoneMapOff+oZoneMapLen])
+}
+
+func (om ObjectColumnMeta) SetZoneMap(zm []byte) {
+	copy(om[oZoneMapOff:oZoneMapOff+oZoneMapLen], zm)
 }
 
 // +---------------------------------------------------------------------------------------------+

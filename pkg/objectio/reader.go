@@ -55,6 +55,10 @@ func NewObjectReader(name ObjectName, fs fileservice.FileService, opts ...Reader
 	return reader, nil
 }
 
+func (r *ObjectReader) GetObject() *Object {
+	return r.object
+}
+
 func (r *ObjectReader) ReadMeta(ctx context.Context,
 	extents []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error) {
 	l := len(extents)
@@ -82,7 +86,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 			}
 			/*meta := ObjectMeta(data)
 			data = data[meta.Length():]
-			header := ObjectHeader(data)
+			header := BlockIndex(data)
 
 			meta.Rows = types.DecodeUint32(data[:4])
 			blkMetaSize := types.DecodeUint32(data[4:8])
@@ -161,11 +165,8 @@ func (r *ObjectReader) Read(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	metadata := meta.ObjectNext()
-	header := ObjectHeader(metadata)
-	metadata = metadata[header.Length():]
 	if len(ids) == 0 {
-		ids = make([]uint32, header.BlockCount())
+		ids = make([]uint32, meta.BlockCount())
 		for i := range ids {
 			ids[i] = uint32(i)
 		}
@@ -177,7 +178,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {
-			col := GetBlockMeta(id, metadata).ColumnMeta(idx)
+			col := meta.GetColumnMeta(idx, id)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -202,16 +203,13 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	metadata := meta.ObjectNext()
-	header := ObjectHeader(metadata)
-	metadata = metadata[header.Length():]
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, block := range ids {
 		for idx := range block.Idxes {
-			col := GetBlockMeta(block.Id, metadata).ColumnMeta(idx)
+			col := meta.GetColumnMeta(idx, block.Id)
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),

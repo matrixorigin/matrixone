@@ -194,8 +194,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if err != nil {
 			return err
 		}
-
-		colCount := meta.BlkMetas[0].GetColumnCount()
+		block := meta.GetBlockMeta(0)
+		colCount := block.GetColumnCount()
 		idxes = append(idxes, colCount-2) // committs
 		idxes = append(idxes, colCount-1) // aborted
 		bats, err := loadBlock(idxes)

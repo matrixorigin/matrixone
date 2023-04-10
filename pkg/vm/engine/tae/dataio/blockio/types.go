@@ -64,7 +64,7 @@ func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
 	return
 }
 
-func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
+func GetObjectSizeWithBlocks(blocks []objectio.BlockMeta) (uint32, error) {
 	objectSize := uint32(0)
 	for _, block := range blocks {
 		meta := block.GetMeta()

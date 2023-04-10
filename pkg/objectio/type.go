@@ -85,6 +85,8 @@ type Reader interface {
 
 	// ReadAllMeta is read the meta of all blocks in an object
 	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error)
+
+	GetObject() *Object
 }
 
 /*
