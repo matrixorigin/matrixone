@@ -93,53 +93,6 @@ func initQueryResulConfig(ses *Session) error {
 	return nil
 }
 
-func isSimpleResultQuery(ast tree.Statement) bool {
-	switch stmt := ast.(type) {
-	case *tree.Select:
-		if stmt.With != nil || stmt.OrderBy != nil || stmt.Ep != nil {
-			return false
-		}
-		if clause, ok := stmt.Select.(*tree.SelectClause); ok {
-			if len(clause.From.Tables) > 1 || clause.Where != nil || clause.Having != nil || len(clause.GroupBy) > 0 {
-				return false
-			}
-			t := clause.From.Tables[0]
-			// judge table
-			if j, ok := t.(*tree.JoinTableExpr); ok {
-				if j.Right != nil {
-					return false
-				}
-				if a, ok := j.Left.(*tree.AliasedTableExpr); ok {
-					if f, ok := a.Expr.(*tree.TableFunction); ok {
-						if f.Id() != "result_scan" && f.Id() != "meta_scan" {
-							return false
-						}
-						// judge proj
-						for _, selectExpr := range clause.Exprs {
-							switch selectExpr.Expr.(type) {
-							case tree.UnqualifiedStar:
-								continue
-							case *tree.UnresolvedName:
-								continue
-							default:
-								return false
-							}
-						}
-						return true
-					}
-					return false
-				}
-				return false
-			}
-			return false
-		}
-		return false
-	case *tree.ParenSelect:
-		return isSimpleResultQuery(stmt)
-	}
-	return false
-}
-
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
