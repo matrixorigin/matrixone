@@ -942,13 +942,39 @@ var builtins = map[int]Functions{
 				Fn:        multi.CeilFloat64,
 			},
 			{
-				Index:     6,
-				Args:      []types.T{types.T_decimal128},
-				ReturnTyp: types.T_decimal128,
-				Fn:        multi.CeilDecimal128,
+				Index: 6,
+				Args:  []types.T{types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.CeilDecimal64,
 			},
 			{
-				Index:     7,
+				Index: 7,
+				Args:  []types.T{types.T_decimal64, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.CeilDecimal64,
+			},
+			{
+				Index: 8,
+				Args:  []types.T{types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.CeilDecimal128,
+			},
+			{
+				Index: 9,
+				Args:  []types.T{types.T_decimal128, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.CeilDecimal128,
+			},
+			{
+				Index:     10,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.CeilStr,
@@ -998,14 +1024,38 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index: 6,
+				Args:  []types.T{types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.FloorDecimal64,
+			},
+			{
+				Index: 7,
+				Args:  []types.T{types.T_decimal64, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.FloorDecimal64,
+			},
+			{
+				Index: 8,
 				Args:  []types.T{types.T_decimal128},
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, parameters[0].Width, 0)
+					return parameters[0]
 				},
 				Fn: multi.FloorDecimal128,
 			},
 			{
-				Index:     7,
+				Index: 9,
+				Args:  []types.T{types.T_decimal128, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.FloorDecimal128,
+			},
+			{
+				Index:     10,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.FloorStr,
@@ -1090,6 +1140,38 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.RoundFloat64,
+			},
+			{
+				Index: 6,
+				Args:  []types.T{types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.RoundDecimal64,
+			},
+			{
+				Index: 7,
+				Args:  []types.T{types.T_decimal64, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.RoundDecimal64,
+			},
+			{
+				Index: 8,
+				Args:  []types.T{types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.RoundDecimal128,
+			},
+			{
+				Index: 9,
+				Args:  []types.T{types.T_decimal128, types.T_int64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				Fn: multi.RoundDecimal128,
 			},
 		},
 	},
