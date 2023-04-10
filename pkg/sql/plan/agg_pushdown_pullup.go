@@ -246,18 +246,17 @@ func checkAllColRefInPlan(nodeID int32, exceptID int32, col *plan.Expr_Col, buil
 			}
 		}
 	}
-	checkAllColRefInExprList(node.OnList, col)
-	checkAllColRefInExprList(node.ProjectList, col)
-	checkAllColRefInExprList(node.FilterList, col)
-	checkAllColRefInExprList(node.AggList, col)
-	checkAllColRefInExprList(node.GroupBy, col)
-	checkAllColRefInExprList(node.GroupingSet, col)
+	ret := true
+	ret = ret && checkAllColRefInExprList(node.OnList, col)
+	ret = ret && checkAllColRefInExprList(node.ProjectList, col)
+	ret = ret && checkAllColRefInExprList(node.FilterList, col)
+	ret = ret && checkAllColRefInExprList(node.AggList, col)
+	ret = ret && checkAllColRefInExprList(node.GroupBy, col)
+	ret = ret && checkAllColRefInExprList(node.GroupingSet, col)
 	for _, orderby := range node.OrderBy {
-		if !checkColRef(orderby.Expr, col) {
-			return false
-		}
+		ret = ret && checkColRef(orderby.Expr, col)
 	}
-	return true
+	return ret
 }
 
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
@@ -277,9 +276,9 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		return false
 	}
 
-	if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
-		return false
-	}
+	//if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
+	//	return false
+	//}
 
 	//col ref to right table can not been seen after agg pulled up
 	//since join cond is leftcol=rightcol, we can change col ref from right col to left col
