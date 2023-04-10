@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,36 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnbase
+package multi
 
 import (
-	"bytes"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	IDSize = 8 + types.UuidSize + types.BlockidSize + 4 + 2 + 1
-)
+func TestBuildVersion(t *testing.T) {
+	proc := testutil.NewProc()
+	res, err := BuildVersion([]*vector.Vector{}, proc)
+	require.NoError(t, err)
 
-func MarshalID(id *common.ID) []byte {
-	var err error
-	var w bytes.Buffer
-	_, err = w.Write(common.EncodeID(id))
-	if err != nil {
-		panic(err)
-	}
-	return w.Bytes()
-}
+	got := vector.MustFixedCol[types.Timestamp](res)
+	require.Equal(t, []types.Timestamp{0}, got)
 
-func UnmarshalID(buf []byte) *common.ID {
-	var err error
-	r := bytes.NewBuffer(buf)
-	id := common.ID{}
-	_, err = r.Read(common.EncodeID(&id))
-	if err != nil {
-		panic(err)
-	}
-	return &id
+	t.Run("parseBuildTime", func(t *testing.T) {
+		ts := parseBuildTime("2023-03-24T21:55:01+08:00")
+		require.Equal(t, ts, types.Timestamp(63815262901000000))
+	})
 }

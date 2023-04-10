@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,36 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnbase
+package multi
 
 import (
-	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	IDSize = 8 + types.UuidSize + types.BlockidSize + 4 + 2 + 1
-)
+var buildTime = parseBuildTime(version.BuildTime)
 
-func MarshalID(id *common.ID) []byte {
-	var err error
-	var w bytes.Buffer
-	_, err = w.Write(common.EncodeID(id))
-	if err != nil {
-		panic(err)
-	}
-	return w.Bytes()
+func BuildVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.T_timestamp.ToType()
+	return vector.NewConstFixed(rtyp, buildTime, 1, proc.Mp()), nil
 }
 
-func UnmarshalID(buf []byte) *common.ID {
-	var err error
-	r := bytes.NewBuffer(buf)
-	id := common.ID{}
-	_, err = r.Read(common.EncodeID(&id))
+func parseBuildTime(s string) types.Timestamp {
+	if s == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		panic(err)
 	}
-	return &id
+	return types.UnixNanoToTimestamp(t.UnixNano())
 }

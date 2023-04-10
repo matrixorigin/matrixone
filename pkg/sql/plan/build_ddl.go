@@ -18,9 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -747,19 +748,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		} else {
 			//pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
 			pkeyName = catalog.CPrimaryKeyColName
-			colDef := &ColDef{
-				Name: pkeyName,
-				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
+			colDef := MakeHiddenColDefByName(pkeyName)
 			colDef.Primary = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[pkeyName] = colDef
@@ -804,20 +793,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		} else {
 			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
-			colDef := &ColDef{
-				Name:      clusterByColName,
-				Alg:       plan.CompressType_Lz4,
-				ClusterBy: true,
-				Typ: &Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
-				Default: &plan.Default{
-					NullAbility:  true,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
+			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
 		}

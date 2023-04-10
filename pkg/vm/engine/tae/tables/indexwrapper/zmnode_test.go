@@ -70,7 +70,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	interIdx := uint16(0)
 	// var visibility *roaring.Bitmap
 
-	writer := blockio.NewZMWriter()
+	writer := blockio.NewZMWriter(typ.Oid)
 	err = writer.Init(objectWriter, blocks[0], cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
