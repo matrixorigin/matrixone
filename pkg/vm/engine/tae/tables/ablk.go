@@ -591,7 +591,7 @@ func (blk *ablock) BatchDedup(
 			precommit,
 			keys,
 			rowmask,
-			dedupABlkClosureFactory(blk.LoadPersistedCommitTS))
+			true)
 	}
 }
 

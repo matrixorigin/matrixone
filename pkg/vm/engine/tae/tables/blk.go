@@ -145,7 +145,7 @@ func (blk *block) BatchDedup(
 		precommit,
 		keys,
 		rowmask,
-		dedupNABlkClosure)
+		false)
 }
 
 func (blk *block) GetValue(
