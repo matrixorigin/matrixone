@@ -85,7 +85,7 @@ func (l *localLockTable) lock(
 		}
 		// no waiter, all locks are added
 		if w == nil {
-			txn.setBlocked(txn.txnID, nil)
+			txn.setBlocked(txn.txnID, nil, false)
 			logLocalLockAdded(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
 			if result.Timestamp.IsEmpty() {
 				result.Timestamp = lockedTS
@@ -182,6 +182,12 @@ func (l *localLockTable) doAcquireLock(
 	offset int,
 	rows [][]byte,
 	opts LockOptions) (int, *waiter, timestamp.Timestamp, error) {
+	// The txn lock here to avoid dead lock between doAcquireLock and getLock.
+	// The doAcquireLock and getLock operations of the same transaction will be
+	// concurrent (deadlock detection), which may lead to a deadlock in mutex.
+	txn.Lock()
+	defer txn.Unlock()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -229,7 +235,7 @@ func (l *localLockTable) acquireRowLockLocked(
 				continue
 			}
 			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
-			l.handleLockConflict(txn, w, key, lock)
+			l.handleLockConflictLocked(txn, w, key, lock)
 			return idx, w, timestamp.Timestamp{}
 		}
 		l.addRowLockLocked(txn, row, getWaiter(l.bind.ServiceID, w, txn.txnID), mode)
@@ -261,7 +267,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 		confilct, conflictWith := l.addRangeLockLocked(w, txn, start, end, mode)
 		if len(confilct) > 0 {
 			w = getWaiter(l.bind.ServiceID, w, txn.txnID)
-			l.handleLockConflict(txn, w, confilct, conflictWith)
+			l.handleLockConflictLocked(txn, w, confilct, conflictWith)
 			return i, w, timestamp.Timestamp{}
 		}
 
@@ -282,23 +288,23 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, false)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, true)
 	l.mu.store.Add(row, lock)
 }
 
-func (l *localLockTable) handleLockConflict(
+func (l *localLockTable) handleLockConflictLocked(
 	txn *activeTxn,
 	w *waiter,
 	key []byte,
 	conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	txn.setBlocked(w.txnID, w)
+	txn.setBlocked(w.txnID, w, true)
 	conflictWith.waiter.add(l.bind.ServiceID, w)
 	if err := l.detector.check(
 		txn.toWaitTxn(
 			l.bind.ServiceID,
-			false)); err != nil {
+			true)); err != nil {
 		panic("BUG: active dead lock check can not fail")
 	}
 	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
@@ -381,7 +387,7 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiter = w
 
 	// similar to row lock
-	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, false)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, true)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 	return nil, Lock{}
@@ -525,7 +531,7 @@ func (c *mergeContext) commit(
 		bind.ServiceID,
 		bind.Table,
 		c.mergedLocks,
-		false)
+		true)
 
 	for _, w := range c.changedWaiters {
 		w.waiters.commitChange()
