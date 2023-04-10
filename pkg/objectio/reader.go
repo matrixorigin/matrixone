@@ -119,11 +119,12 @@ func (r *ObjectReader) Read(ctx context.Context,
 	for _, id := range ids {
 		for _, idx := range idxs {
 			col := meta.GetColumnMeta(idx, id)
+			ext := col.Location()
 			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
+				Offset: int64(ext.Offset()),
+				Size:   int64(ext.Length()),
 
-				ToObject: readFunc(int64(col.Location().OriginSize())),
+				ToObject: readFunc(int64(ext.OriginSize())),
 			})
 		}
 	}

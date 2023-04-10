@@ -110,12 +110,12 @@ func TestNewObjectWriter(t *testing.T) {
 	nb0 := pool.CurrNB()
 	meta, err := objectReader.ReadMeta(context.Background(), extents, pool, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, meta.BlockCount())
+	assert.Equal(t, uint32(2), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, []uint32{blocks[0].GetExtent().id}, pool, nil, newDecompressToObject)
+	vec, err := objectReader.Read(context.Background(), extents[0], idxs, []uint32{extents[0].id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -141,9 +141,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, meta.BlockCount())
+	assert.Equal(t, uint32(2), meta.BlockCount())
 	assert.Nil(t, err)
-	assert.Equal(t, 2, meta.BlockCount())
+	assert.Equal(t, uint32(2), meta.BlockCount())
 	idxs = make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
