@@ -53,10 +53,10 @@ import (
 )
 
 var (
-	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	version    = flag.Bool("version", false, "print version information")
-	daemon     = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	configFile  = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile  = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag = flag.Bool("version", false, "print version information")
+	daemon      = flag.Bool("daemon", false, "run mo-service in daemon mode")
 )
 
 func main() {
