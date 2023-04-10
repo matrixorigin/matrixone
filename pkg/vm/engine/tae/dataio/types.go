@@ -91,20 +91,20 @@ type Writer interface {
 	// a BloomFilter for the primary key if there is a primary key, and
 	// these indexes are also written into the buffer
 	// Returns metadata of a block (BlockObject)
-	WriteBatch(batch *batch.Batch) (objectio.BlockMeta, error)
+	WriteBatch(batch *batch.Batch) (objectio.BlockObject, error)
 
 	// WriteBlock is dn interface used internally by dn, which converts vector
-	WriteBlock(columns *containers.Batch) (block objectio.BlockMeta, err error)
+	WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error)
 
 	// WriteBatchWithOutIndex writes a batch into the buffer without generating any index
-	WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockMeta, error)
+	WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error)
 
 	// WriteBlockWithOutIndex is dn interface used internally by dn, which converts vector
-	WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockMeta, error)
+	WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error)
 
 	// Sync is to write multiple batches written to the buffer to the fileservice at one time
 	// objectio.Extent is the address offset information of all block metadata stored in an object.
-	Sync(ctx context.Context) ([]objectio.BlockMeta, objectio.Extent, error)
+	Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error)
 }
 
 type Index interface {

@@ -83,8 +83,8 @@ func (w *ObjectWriter) WriteHeader() error {
 }
 
 func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
-	block := NewBlock(uint16(len(batch.Vecs)), w.object, w.name)
-	w.AddBlock(block.(*Block))
+	block := NewBlock(uint16(len(batch.Vecs)))
+	w.AddBlock(block)
 	for i, vec := range batch.Vecs {
 		buf, err := vec.MarshalBinary()
 		if err != nil {
@@ -107,9 +107,9 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			length:     uint32(length),
 			originSize: uint32(originSize),
 		}
-		block.(*Block).meta.ColumnMeta(uint16(i)).setLocation(location)
-		block.(*Block).meta.ColumnMeta(uint16(i)).setAlg(compress.Lz4)
-		block.(*Block).meta.ColumnMeta(uint16(i)).setType(uint8(vec.GetType().Oid))
+		block.ColumnMeta(uint16(i)).setLocation(location)
+		block.ColumnMeta(uint16(i)).setAlg(compress.Lz4)
+		block.ColumnMeta(uint16(i)).setType(uint8(vec.GetType().Oid))
 	}
 	return block, nil
 }
@@ -118,7 +118,7 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData, idx uint16) e
 	var err error
 
 	block := w.GetBlock(fd.GetID())
-	if block == nil || block.meta.ColumnMeta(idx).IsEmpty() {
+	if block == nil || block.ColumnMeta(idx).IsEmpty() {
 		return moerr.NewInternalErrorNoCtx("object io: not found")
 	}
 	err = index.Write(w, block, idx)
@@ -147,7 +147,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// write block meta
 	metabuf := &bytes.Buffer{}
 	for _, block := range w.blocks {
-		meta := block.(*Block).MarshalMeta()
+		meta := block.MarshalMeta()
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +159,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	// write column meta
 	for _, colmeta := range w.colmeta {
-		if err = colmeta.Write(metabuf); err != nil {
+		if _, err = metabuf.Write(colmeta); err != nil {
 			return nil, err
 		}
 	}
@@ -196,14 +196,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	for i := range w.blocks {
-		w.blocks[i].(*Block).extent = Extent{
-			id:         uint32(i),
-			offset:     uint32(start),
-			length:     uint32(metaLen),
-			originSize: uint32(metaLen),
-		}
-	}
+	/*extent := Extent{
+		id:         uint32(0),
+		offset:     uint32(start),
+		length:     uint32(metaLen),
+		originSize: uint32(metaLen),
+	}*/
 
 	// The buffer needs to be released at the end of WriteEnd
 	// Because the outside may hold this writer
@@ -227,17 +225,17 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	return err
 }
 
-func (w *ObjectWriter) AddBlock(block *Block) {
+func (w *ObjectWriter) AddBlock(block BlockObject) {
 	w.Lock()
 	defer w.Unlock()
-	block.id = w.lastId
+	block.BlockHeader().SetBlockID(uint64(w.lastId))
 	w.blocks = append(w.blocks, block)
 	//w.blocks[block.id] = block
 	w.lastId++
 }
 
-func (w *ObjectWriter) GetBlock(id uint32) *Block {
+func (w *ObjectWriter) GetBlock(id uint32) BlockObject {
 	w.Lock()
 	defer w.Unlock()
-	return w.blocks[id].(*Block)
+	return w.blocks[id]
 }

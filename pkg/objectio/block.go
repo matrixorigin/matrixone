@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func NewBlock(colCnt uint16) BlockMeta {
+func NewBlock(colCnt uint16) BlockObject {
 	header := BuildBlockHeader()
 	header.SetColumnCount(colCnt)
 	blockMeta := BuildBlockMeta(colCnt)
@@ -31,15 +31,15 @@ func NewBlock(colCnt uint16) BlockMeta {
 	return blockMeta
 }
 
-func (bm BlockMeta) GetExtent() Extent {
+func (bm BlockObject) GetExtent() Extent {
 	return Extent{}
 }
 
-func (bm BlockMeta) GetName() ObjectName {
+func (bm BlockObject) GetName() ObjectName {
 	return ObjectName{}
 }
 
-func (bm BlockMeta) GetColumn(idx uint16) (ColumnMeta, error) {
+func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
 	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %v, column count: %d",
@@ -49,27 +49,27 @@ func (bm BlockMeta) GetColumn(idx uint16) (ColumnMeta, error) {
 	return bm.ColumnMeta(idx), nil
 }
 
-func (bm BlockMeta) GetRows() (uint32, error) {
+func (bm BlockObject) GetRows() (uint32, error) {
 	panic(any("implement me"))
 }
 
-func (bm BlockMeta) GetMeta() BlockMeta {
+func (bm BlockObject) GetMeta() BlockObject {
 	return bm
 }
 
-func (bm BlockMeta) GetID() uint32 {
+func (bm BlockObject) GetID() uint32 {
 	return uint32(bm.BlockHeader().BlockID())
 }
 
-func (bm BlockMeta) GetColumnCount() uint16 {
+func (bm BlockObject) GetColumnCount() uint16 {
 	return bm.BlockHeader().ColumnCount()
 }
 
-func (bm BlockMeta) MarshalMeta() []byte {
+func (bm BlockObject) MarshalMeta() []byte {
 	return bm
 }
 
-func (bm BlockMeta) UnmarshalMeta(data []byte) (uint32, error) {
+func (bm BlockObject) UnmarshalMeta(data []byte) (uint32, error) {
 	var err error
 	header := BlockHeader(data[:headerLen])
 	metaLen := headerLen + header.ColumnCount()*colMetaLen

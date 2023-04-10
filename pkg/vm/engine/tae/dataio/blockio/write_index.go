@@ -29,7 +29,7 @@ import (
 type ZMWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
-	block       objectio.BlockMeta
+	block       objectio.BlockObject
 	zonemap     index.ZM
 	colIdx      uint16
 	internalIdx uint16
@@ -45,7 +45,7 @@ func (writer *ZMWriter) String() string {
 	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
 }
 
-func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockMeta, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType
@@ -79,7 +79,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 type BFWriter struct {
 	cType       common.CompressType
 	writer      objectio.Writer
-	block       objectio.BlockMeta
+	block       objectio.BlockObject
 	impl        index.StaticFilter
 	data        containers.Vector
 	colIdx      uint16
@@ -90,7 +90,7 @@ func NewBFWriter() *BFWriter {
 	return &BFWriter{}
 }
 
-func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockMeta, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType

@@ -199,12 +199,12 @@ func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) (objec
 	return r.reader.ReadMeta(ctx, []objectio.Extent{r.key.Extent()}, m, LoadZoneMapFunc)
 }
 
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockMeta, error) {
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
 	meta, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
-	blocks := make([]objectio.BlockMeta, meta.BlockCount())
+	blocks := make([]objectio.BlockObject, meta.BlockCount())
 	for i := 0; i < int(meta.BlockCount()); i++ {
 		blocks[i] = meta.GetBlockMeta(uint32(i))
 	}
@@ -217,7 +217,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
 	idxs []uint16,
-	block objectio.BlockMeta,
+	block objectio.BlockObject,
 	m *mpool.MPool) ([]dataio.Index, error) {
 	zoneMapList := make([]dataio.Index, len(idxs))
 	for i, idx := range idxs {

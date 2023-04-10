@@ -483,14 +483,6 @@ func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
-	reader, err := blockio.NewObjectReader(service, key)
-	if err != nil {
-		return
-	}
-	metas, err := reader.LoadBlocksMeta(ctx, common.DefaultAllocator)
-	if err != nil {
-		return
-	}
 
 	pref, err := blockio.BuildPrefetch(service, key)
 	if err != nil {
@@ -501,7 +493,7 @@ func (data *CheckpointData) PrefetchFrom(
 		for i := range item.attrs {
 			idxes[i] = uint16(i)
 		}
-		pref.AddBlock(idxes, []uint32{metas[idx].GetID()})
+		pref.AddBlock(idxes, []uint32{uint32(idx)})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -512,14 +504,10 @@ func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	reader dataio.Reader,
 	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
-	if err != nil {
-		return
-	}
 
 	for idx, item := range checkpointDataRefer {
 		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, metas[idx].GetID(), reader)
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), reader)
 		if err != nil {
 			return
 		}

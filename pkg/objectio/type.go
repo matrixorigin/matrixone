@@ -44,20 +44,20 @@ type Writer interface {
 	// Write writes one batch to the Buffer at a time,
 	// one batch corresponds to a virtual block,
 	// and returns the handle of the block.
-	Write(batch *batch.Batch) (BlockMeta, error)
+	Write(batch *batch.Batch) (BlockObject, error)
 
 	// WriteIndex is the index of the column in the block written to the block's handle.
 	// block is the handle of the block
 	// idx is the column to which the index is written
 	// buf is the data to write to the index
-	WriteIndex(fd BlockMeta, index IndexData, idx uint16) error
+	WriteIndex(fd BlockObject, index IndexData, idx uint16) error
 
 	// Write metadata for every column of all blocks
 	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
-	WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockMeta, error)
+	WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error)
 }
 
 // Reader is to read data from fileservice
@@ -99,7 +99,7 @@ type BlockObject interface {
 	GetRows() (uint32, error)
 
 	// GetMeta gets the meta of the BlockObject
-	GetMeta() BlockMeta
+	GetMeta() BlockObject
 
 	// GetExtent gets the metadata location of BlockObject in fileservice
 	GetExtent() Extent

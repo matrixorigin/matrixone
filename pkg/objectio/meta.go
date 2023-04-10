@@ -57,9 +57,9 @@ func (o ObjectMeta) ObjectNext() []byte {
 	return o[o.Length():]
 }
 
-func (o ObjectMeta) GetBlockMeta(id uint32) BlockMeta {
+func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
-	return BlockMeta(o[offset:length])
+	return BlockObject(o[offset:length])
 }
 
 func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {
@@ -173,15 +173,15 @@ const (
 	headerLen         = headerCheckSumOff + headerCheckSumLen
 )
 
-type BlockMeta []byte
+type BlockObject []byte
 
-func BuildBlockMeta(count uint16) BlockMeta {
+func BuildBlockMeta(count uint16) BlockObject {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	return buf[:]
 }
 
-func GetBlockMeta(id uint32, data []byte) BlockMeta {
+func GetBlockMeta(id uint32, data []byte) BlockObject {
 	metaOff := uint32(0)
 	idOff := uint32(0)
 	columnCount := uint16(0)
@@ -198,24 +198,24 @@ func GetBlockMeta(id uint32, data []byte) BlockMeta {
 	return data[metaOff : metaOff+headerLen+uint32(columnCount)*colMetaLen]
 }
 
-func (bm BlockMeta) BlockHeader() BlockHeader {
+func (bm BlockObject) BlockHeader() BlockHeader {
 	return BlockHeader(bm[:headerLen])
 }
 
-func (bm BlockMeta) SetBlockMetaHeader(header BlockHeader) {
+func (bm BlockObject) SetBlockMetaHeader(header BlockHeader) {
 	copy(bm[:headerLen], header)
 }
 
-func (bm BlockMeta) ColumnMeta(idx uint16) ColumnMeta {
+func (bm BlockObject) ColumnMeta(idx uint16) ColumnMeta {
 	return GetColumnMeta(idx, bm)
 }
 
-func (bm BlockMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
+func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + idx*colMetaLen
 	copy(bm[offset:offset+colMetaLen], col)
 }
 
-func (bm BlockMeta) IsEmpty() bool {
+func (bm BlockObject) IsEmpty() bool {
 	if len(bm) == 0 {
 		return true
 	}
