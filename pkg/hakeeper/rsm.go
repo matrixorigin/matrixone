@@ -148,6 +148,18 @@ func parseAllocateIDCmd(cmd []byte) pb.CNAllocateID {
 	return result
 }
 
+func parseUpdateCNLabelCmd(cmd []byte) pb.CNStoreLabel {
+	if parseCmdTag(cmd) != pb.UpdateCNLabel {
+		panic("not a SetCNLabel cmd")
+	}
+	payload := cmd[headerSize:]
+	var result pb.CNStoreLabel
+	if err := result.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return result
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
@@ -200,6 +212,15 @@ func GetAllocateIDCmd(allocID pb.CNAllocateID) []byte {
 	cmd := make([]byte, headerSize+allocID.Size())
 	binaryEnc.PutUint32(cmd, uint32(pb.GetIDUpdate))
 	if _, err := allocID.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GetUpdateCNLabelCmd(label pb.CNStoreLabel) []byte {
+	cmd := make([]byte, headerSize+label.Size())
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateCNLabel))
+	if _, err := label.MarshalTo(cmd[headerSize:]); err != nil {
 		panic(err)
 	}
 	return cmd
@@ -516,6 +537,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
+	case pb.UpdateCNLabel:
+		return s.handleUpdateCNLabel(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtx("unknown haKeeper cmd '%v'", cmd))
 	}
@@ -566,6 +589,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			SQLAddress:         info.SQLAddress,
 			LockServiceAddress: info.LockServiceAddress,
 			State:              state,
+			Labels:             info.Labels,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -600,6 +624,11 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.LogStores = append(cd.LogStores, n)
 	}
 	return cd
+}
+
+func (s *stateMachine) handleUpdateCNLabel(cmd []byte) sm.Result {
+	s.state.CNState.UpdateLabel(parseUpdateCNLabelCmd(cmd))
+	return sm.Result{}
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {

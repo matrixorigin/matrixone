@@ -651,3 +651,81 @@ func TestGetCommandBatch(t *testing.T) {
 	_, ok := rsm.state.ScheduleCommands["uuid1"]
 	assert.False(t, ok)
 }
+
+func TestHandleUpdateCNLabel(t *testing.T) {
+	uuid := "uuid1"
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	label := pb.CNStoreLabel{
+		UUID:      uuid,
+		Operation: pb.SetLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {Labels: []string{"a", "b"}},
+			"role":    {Labels: []string{"1", "2"}},
+		},
+	}
+	cmd := GetUpdateCNLabelCmd(label)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s := tsm1.state.CNState
+	assert.Equal(t, 0, len(s.Stores))
+
+	cmd = GetTickCmd()
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: uuid,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+
+	label = pb.CNStoreLabel{
+		UUID:      uuid,
+		Operation: pb.SetLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {Labels: []string{"a", "b"}},
+			"role":    {Labels: []string{"1", "2"}},
+		},
+	}
+	cmd = GetUpdateCNLabelCmd(label)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok := s.Stores[uuid]
+	assert.True(t, ok)
+	labels, ok := info.Labels["account"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"a", "b"})
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+
+	label = pb.CNStoreLabel{
+		UUID:      uuid,
+		Operation: pb.DeleteLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {Labels: []string{"a", "b"}},
+		},
+	}
+	cmd = GetUpdateCNLabelCmd(label)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	_, ok = info.Labels["account"]
+	assert.False(t, ok)
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+}
