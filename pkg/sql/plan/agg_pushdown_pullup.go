@@ -276,9 +276,9 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		return false
 	}
 
-	//if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
-	//	return false
-	//}
+	if agg.Stats.Outcnt/leftScan.Stats.Outcnt < join.Stats.Outcnt/agg.Stats.Outcnt {
+		return false
+	}
 
 	//col ref to right table can not been seen after agg pulled up
 	//since join cond is leftcol=rightcol, we can change col ref from right col to left col
