@@ -15,11 +15,12 @@
 package compute
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestComapreGeneric(t *testing.T) {
@@ -32,12 +33,12 @@ func TestComapreGeneric(t *testing.T) {
 		B0_63: ^x.B0_63, B64_127: ^x.B64_127,
 		B128_191: ^x.B128_191, B192_255: ^x.B192_255,
 	}
-	assert.True(t, CompareGeneric(x, y, types.T_decimal256.ToType()) == 1)
+	assert.True(t, CompareGeneric(x, y, types.T_decimal256) == 1)
 
 	t1 := types.TimestampToTS(timestamp.Timestamp{
 		PhysicalTime: 100,
 		LogicalTime:  10,
 	})
 	t2 := t1.Next()
-	assert.True(t, CompareGeneric(t1, t2, types.T_TS.ToType()) == -1)
+	assert.True(t, CompareGeneric(t1, t2, types.T_TS) == -1)
 }

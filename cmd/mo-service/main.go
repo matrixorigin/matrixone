@@ -73,6 +73,9 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
+	if *heapProfilePathFlag != "" {
+		defer writeHeapProfile()
+	}
 	if *fileServiceProfilePathFlag != "" {
 		stop := startFileServiceProfile()
 		defer stop()
