@@ -183,6 +183,7 @@ func replaceAllColRefInExprList(exprlist []*plan.Expr, from *plan.Expr_Col, to *
 }
 
 func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, to *plan.Expr_Col, builder *QueryBuilder) {
+	//change all nodes in plan, except join and its children
 	if nodeID == exceptID {
 		return
 	}
@@ -197,9 +198,66 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, t
 	replaceAllColRefInExprList(node.FilterList, from, to)
 	replaceAllColRefInExprList(node.AggList, from, to)
 	replaceAllColRefInExprList(node.GroupBy, from, to)
+	replaceAllColRefInExprList(node.GroupingSet, from, to)
 	for _, orderby := range node.OrderBy {
 		replaceCol(orderby.Expr, from.Col.RelPos, from.Col.ColPos, to.Col.RelPos, to.Col.ColPos)
 	}
+}
+
+func checkColRef(expr *plan.Expr, col *plan.Expr_Col) bool {
+	if expr == nil {
+		return true
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !checkColRef(arg, col) {
+				return false
+			}
+		}
+
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == col.Col.RelPos && exprImpl.Col.ColPos != col.Col.ColPos {
+			return false
+		}
+	}
+	return true
+}
+
+func checkAllColRefInExprList(exprlist []*plan.Expr, col *plan.Expr_Col) bool {
+	for _, expr := range exprlist {
+		if !checkColRef(expr, col) {
+			return false
+		}
+	}
+	return true
+}
+
+func checkAllColRefInPlan(nodeID int32, exceptID int32, col *plan.Expr_Col, builder *QueryBuilder) bool {
+	//change all nodes in plan, except join and its children
+	if nodeID == exceptID {
+		return true
+	}
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			if !checkAllColRefInPlan(child, exceptID, col, builder) {
+				return false
+			}
+		}
+	}
+	checkAllColRefInExprList(node.OnList, col)
+	checkAllColRefInExprList(node.ProjectList, col)
+	checkAllColRefInExprList(node.FilterList, col)
+	checkAllColRefInExprList(node.AggList, col)
+	checkAllColRefInExprList(node.GroupBy, col)
+	checkAllColRefInExprList(node.GroupingSet, col)
+	for _, orderby := range node.OrderBy {
+		if !checkColRef(orderby.Expr, col) {
+			return false
+		}
+	}
+	return true
 }
 
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
@@ -223,6 +281,12 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		return false
 	}
 
+	//col ref to right table can not been seen after agg pulled up
+	//since join cond is leftcol=rightcol, we can change col ref from right col to left col
+	// and other col in right table must not be referenced
+	if checkAllColRefInPlan(rootID, join.NodeId, rightCol, builder) {
+		return false
+	}
 	replaceAllColRefInPlan(rootID, join.NodeId, rightCol, leftCol, builder)
 
 	join.Children[0] = agg.Children[0]
