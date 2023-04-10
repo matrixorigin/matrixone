@@ -1240,7 +1240,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, int(n.Stats.BlockNum)), ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1591,7 +1591,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i] = new(Scope)
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
-		ss[i].NodeInfo.Mcpu = 1 // ss is the mcpu length so we don't need to parallel it
+		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:      vm.Merge,
@@ -1604,21 +1604,17 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 	return ss
 }
 
-func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
 	var ss []*Scope
-	for _, n := range c.cnList {
-		cpunum := c.generateCPUNumber(n.Mcpu, blocks)
-		tmps := make([]*Scope, cpunum)
-		for j := range tmps {
-			tmps[j] = new(Scope)
-			tmps[j].Magic = Remote
-			tmps[j].IsJoin = true
-			tmps[j].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
-			tmps[j].NodeInfo.Addr = n.Addr
-			tmps[j].NodeInfo.Mcpu = 1
-		}
-		ss = append(ss, tmps...)
+	for i := range leftScopes {
+		tmp := new(Scope)
+		tmp.Magic = Remote
+		tmp.IsJoin = true
+		tmp.Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+		tmp.NodeInfo = leftScopes[i].NodeInfo
+		ss = append(ss, tmp)
 	}
+
 	return ss
 }
 

@@ -954,14 +954,13 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
-func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, bool, *dispatch.Argument) {
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
 
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
-	hasLocal := false
 	hasRemote := false
 	for _, s := range ss {
 		if s.IsEnd {
@@ -972,7 +971,6 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			hasLocal = true
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
 			// Remote reg.
@@ -992,21 +990,17 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			})
 		}
 	}
-	return hasLocal, hasRemote, arg
+	return hasRemote, arg
 }
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
 func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
-	hasLocal, hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if hasLocal && hasRemote {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
+	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
-		if hasLocal {
-			arg.FuncId = dispatch.SendToAllLocalFunc
-		} else {
-			arg.FuncId = dispatch.SendToAllRemoteFunc
-		}
+		arg.FuncId = dispatch.SendToAllLocalFunc
 	}
 
 	return arg
