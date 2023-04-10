@@ -20,8 +20,6 @@ import (
 )
 
 const ExtentSize = 16
-
-const ObjectColumnMetaSize = 72
 const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
 
 type ObjectMeta []byte
@@ -56,10 +54,6 @@ func (o ObjectMeta) BlockCount() uint32 {
 func (o ObjectMeta) BlockIndex() BlockIndex {
 	end := o.Length() + 4 + uint32(o.BlockHeader().BlockID())*8
 	return BlockIndex(o[o.Length():end])
-}
-
-func (o ObjectMeta) ObjectNext() []byte {
-	return o[o.Length():]
 }
 
 func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
@@ -346,7 +340,7 @@ const (
 	bloomFilterLen     = 16
 	colMetaDummyOff    = bloomFilterOff + bloomFilterLen
 	colMetaDummyLen    = 32
-	colMetaChecksumOff = colMetaDummyOff + colMetaDummyOff
+	colMetaChecksumOff = colMetaDummyOff + colMetaDummyLen
 	colMetaChecksumLen = 4
 	colMetaLen         = colMetaChecksumOff + colMetaChecksumLen
 )

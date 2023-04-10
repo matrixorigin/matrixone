@@ -363,10 +363,3 @@ func PrefetchFile(service fileservice.FileService, size int64, name string) erro
 	}
 	return PrefetchWithMerged(pref)
 }
-
-func decodeObjectMeta(meta objectio.ObjectMeta) (objectio.BlockIndex, []byte) {
-	metadata := meta.ObjectNext()
-	header := objectio.BlockIndex(metadata)
-	data := metadata[header.Length():]
-	return header, data
-}

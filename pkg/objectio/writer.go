@@ -138,9 +138,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		logutil.Warn("object io: no block needs to be written")
 	}
 
-	// [total row 4B][blkMetaSize 4B][BlkMeta * blkCnt][ObjectColumnMeta * colCnt][footer: metaStart 4B | metaLen 4B | colCnt 2B |blkCnt 4B | Magic 4B]
-
-	// write total rows and blk meta size
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(w.blocks[0].GetColumnCount())
 	objectMeta.BlockHeader().SetBlockID(uint64(blockCount))
