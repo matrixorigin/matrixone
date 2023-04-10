@@ -63,10 +63,9 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	zm := index.NewZoneMap(bats[0].Vecs[2].GetType())
 	colZoneMap := col.GetMeta().GetZoneMap()
+	zm := index.DecodeZM((colZoneMap.GetData().([]byte)))
 
-	err = zm.Unmarshal(colZoneMap.GetData().([]byte))
 	require.NoError(t, err)
 	res := zm.Contains(int32(500))
 	require.True(t, res)

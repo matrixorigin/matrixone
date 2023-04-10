@@ -16,11 +16,11 @@ package entry
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"os"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -56,7 +56,7 @@ func (e *Entry) SetInfo() {
 	}
 }
 func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &e.Lsn); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
 		return
 	}
 	_, err = e.Entry.ReadFrom(r)
@@ -76,7 +76,7 @@ func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 	offset += 8
 
 	bbuf := bytes.NewBuffer(lsnbuf)
-	if err := binary.Read(bbuf, binary.BigEndian, &e.Lsn); err != nil {
+	if _, err := bbuf.Read(types.EncodeUint64(&e.Lsn)); err != nil {
 		return n, err
 	}
 
@@ -85,7 +85,7 @@ func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 }
 
 func (e *Entry) WriteTo(w io.Writer) (int64, error) {
-	if err := binary.Write(w, binary.BigEndian, e.Lsn); err != nil {
+	if _, err := w.Write(types.EncodeUint64(&e.Lsn)); err != nil {
 		return 0, err
 	}
 	n, err := e.Entry.WriteTo(w)

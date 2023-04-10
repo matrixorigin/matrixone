@@ -17,6 +17,7 @@ package compute
 import (
 	"bytes"
 	"fmt"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -59,6 +60,60 @@ func CompareBytes(a, b []byte) int64 {
 		return -1
 	} else {
 		return 0
+	}
+}
+
+func Compare(a, b []byte, t types.T) int64 {
+	switch t {
+	case types.T_bool:
+		return CompareBool(types.DecodeBool(a), types.DecodeBool(b))
+	case types.T_int8:
+		return CompareOrdered2(types.DecodeInt8(a), types.DecodeInt8(b))
+	case types.T_int16:
+		return CompareOrdered2(types.DecodeInt16(a), types.DecodeInt16(b))
+	case types.T_int32:
+		return CompareOrdered2(types.DecodeInt32(a), types.DecodeInt32(b))
+	case types.T_int64:
+		return CompareOrdered2(types.DecodeInt64(a), types.DecodeInt64(b))
+	case types.T_uint8:
+		return CompareOrdered2(types.DecodeUint8(a), types.DecodeUint8(b))
+	case types.T_uint16:
+		return CompareOrdered2(types.DecodeUint16(a), types.DecodeUint16(b))
+	case types.T_uint32:
+		return CompareOrdered2(types.DecodeUint32(a), types.DecodeUint32(b))
+	case types.T_uint64:
+		return CompareOrdered2(types.DecodeUint64(a), types.DecodeUint64(b))
+	case types.T_decimal64:
+		return types.CompareDecimal64(types.DecodeDecimal64(a), types.DecodeDecimal64(b))
+	case types.T_decimal128:
+		return types.CompareDecimal128(types.DecodeDecimal128(a), types.DecodeDecimal128(b))
+	case types.T_decimal256:
+		return types.CompareDecimal256(*(*types.Decimal256)(unsafe.Pointer(&a[0])), *(*types.Decimal256)(unsafe.Pointer(&b[0])))
+	case types.T_float32:
+		return CompareOrdered2(types.DecodeFloat32(a), types.DecodeFloat32(b))
+	case types.T_float64:
+		return CompareOrdered2(types.DecodeFloat64(a), types.DecodeFloat64(b))
+	case types.T_timestamp:
+		return CompareOrdered2(types.DecodeTimestamp(a), types.DecodeTimestamp(b))
+	case types.T_date:
+		return CompareOrdered2(types.DecodeDate(a), types.DecodeDate(b))
+	case types.T_time:
+		return CompareOrdered2(types.DecodeTime(a), types.DecodeTime(b))
+	case types.T_datetime:
+		return CompareOrdered2(types.DecodeDatetime(a), types.DecodeDatetime(b))
+	case types.T_TS:
+		return CompareBytes(a, b)
+	case types.T_Rowid:
+		return CompareBytes(a, b)
+	case types.T_uuid:
+		return types.CompareUuid(types.DecodeUuid(a), types.DecodeUuid(b))
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		return CompareBytes(a, b)
+	case types.T_any:
+		return 0
+	default:
+		panic(fmt.Sprintf("unsupported type: %v", t))
 	}
 }
 
