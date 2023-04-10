@@ -133,6 +133,8 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			s.NodeInfo.Addr = c.addr
 		}
 	}
+
+	logutil.Infof("sql is %s, scope is %s", c.sql, DebugShowScopes(c.scope))
 	return nil
 }
 
@@ -1845,6 +1847,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
+	logutil.Infof("sql is %s, range is [len: %d]", c.sql, len(ranges))
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
