@@ -25,15 +25,16 @@ type Argument struct {
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
-	s3Writer  *colexec.S3Writer
+	s3Writers []*colexec.S3Writer
 	InsertCtx *InsertCtx
 }
 
 type InsertCtx struct {
-	Source       engine.Relation
-	Ref          *plan.ObjectRef
-	TableDef     *plan.TableDef
-	UniqueSource []engine.Relation
+	//insert data into Rels.
+	Rels []engine.Relation
+	Ref  *plan.ObjectRef
+	//origin table's def.
+	TableDef *plan.TableDef
 
 	ParentIdx    map[string]int32
 	ClusterTable *plan.ClusterTable

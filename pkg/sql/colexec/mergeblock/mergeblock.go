@@ -55,7 +55,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}()
 	}
-
+	//handle unique index tables
 	for i := range ap.Unique_tbls {
 		if ap.container.mp[i+1].Length() > 0 {
 			if err = ap.Unique_tbls[i].Write(proc.Ctx, ap.container.mp[i+1]); err != nil {
@@ -70,6 +70,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 		ap.container.mp2[i+1] = ap.container.mp2[i+1][:0]
 	}
+	// handle origin/main table.
 	if ap.container.mp[0].Length() > 0 {
 		if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 			return false, err
