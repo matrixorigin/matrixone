@@ -285,7 +285,7 @@ func dedupABlkClosureFactory(
 				if mask != nil && mask.ContainsInt(row) {
 					return
 				}
-				if compute.CompareGeneric(v1, v2, vec.GetType()) != 0 {
+				if compute.CompareGeneric(v1, v2, vec.GetType().Oid) != 0 {
 					return
 				}
 				if tsVec == nil {

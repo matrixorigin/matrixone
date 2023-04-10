@@ -107,8 +107,8 @@ func Compare(a, b []byte, t types.T) int64 {
 	}
 }
 
-func CompareGeneric(a, b any, t types.Type) int64 {
-	switch t.Oid {
+func CompareGeneric(a, b any, t types.T) int64 {
+	switch t {
 	case types.T_bool:
 		return CompareBool(a.(bool), b.(bool))
 	case types.T_int8:
