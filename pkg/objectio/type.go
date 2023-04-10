@@ -69,22 +69,20 @@ type Reader interface {
 		extent Extent, idxs []uint16,
 		ids []uint32,
 		m *mpool.MPool,
-		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
 	ReadBlocks(ctx context.Context,
 		extent Extent,
 		ids map[uint32]*ReadBlockOptions,
 		m *mpool.MPool,
-		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error)
+	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool) (ObjectMeta, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error)
+	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) (ObjectMeta, error)
 
 	GetObject() *Object
 }

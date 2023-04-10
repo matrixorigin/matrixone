@@ -106,7 +106,7 @@ func jobFactory(
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -127,7 +127,7 @@ func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := pref.reader.ReadBlocks(ctx,
-				pref.meta, pref.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+				pref.meta, pref.ids, nil, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -148,7 +148,7 @@ func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := pref.reader.ReadMeta(ctx,
-				[]objectio.Extent{pref.meta}, nil, LoadZoneMapFunc)
+				[]objectio.Extent{pref.meta}, nil)
 			if err != nil {
 				res.Err = err
 				return
@@ -163,7 +163,7 @@ type FetchFunc = func(ctx context.Context, proc fetch) (any, error)
 type PrefetchFunc = func(pref prefetch) error
 
 func syncFetch(ctx context.Context, proc fetch) (any, error) {
-	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}

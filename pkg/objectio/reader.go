@@ -60,7 +60,7 @@ func (r *ObjectReader) GetObject() *Object {
 }
 
 func (r *ObjectReader) ReadMeta(ctx context.Context,
-	extents []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error) {
+	extents []Extent, m *mpool.MPool) (ObjectMeta, error) {
 	l := len(extents)
 	if l == 0 {
 		return nil, nil
@@ -99,9 +99,8 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 
 func (r *ObjectReader) Read(ctx context.Context,
 	extent Extent, idxs []uint16, ids []uint32, m *mpool.MPool,
-	zoneMapFunc ZoneMapUnmarshalFunc,
 	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	meta, err := r.ReadMeta(ctx, []Extent{extent}, m)
 	if err != nil {
 		return nil, err
 	}
@@ -137,9 +136,8 @@ func (r *ObjectReader) Read(ctx context.Context,
 
 func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	extent Extent, ids map[uint32]*ReadBlockOptions, m *mpool.MPool,
-	zoneMapFunc ZoneMapUnmarshalFunc,
 	readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, []Extent{extent}, m, zoneMapFunc)
+	meta, err := r.ReadMeta(ctx, []Extent{extent}, m)
 	if err != nil {
 		return nil, err
 	}
@@ -166,14 +164,17 @@ func (r *ObjectReader) ReadBlocks(ctx context.Context,
 	return data, nil
 }
 
-func (r *ObjectReader) ReadAllMeta(ctx context.Context,
-	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (ObjectMeta, error) {
+func (r *ObjectReader) ReadAllMeta(
+	ctx context.Context,
+	fileSize int64,
+	m *mpool.MPool,
+) (ObjectMeta, error) {
 	footer, err := r.readFooter(ctx, fileSize, m)
 	if err != nil {
 		return nil, err
 	}
 	extent := []Extent{{offset: footer.metaStart, length: footer.metaLen, originSize: footer.metaLen}}
-	return r.ReadMeta(ctx, extent, m, ZMUnmarshalFunc)
+	return r.ReadMeta(ctx, extent, m)
 }
 
 func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
