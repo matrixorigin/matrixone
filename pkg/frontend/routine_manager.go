@@ -448,7 +448,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 		// clean kill queue
 		// ar.killIdQueue = make(map[int64]time.Time)
 		for toKillAccount, createAt := range ar.killIdQueue {
-			if int(time.since(createAt)) > rm.pu.SV.CleanKillQueueInterval*int(time.Minute) {
+			if time.since(createAt) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
 				delete(ar.killIdQueue, toKillAccount)
 			}
 		}
