@@ -146,7 +146,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.ContainsString(key) {
+			if isNull || zm.containsString(key) {
 				visibility.AddInt(row)
 			}
 			return
@@ -154,7 +154,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
 	} else {
 		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.ContainsFixed(key) {
+			if isNull || zm.containsBytes(key) {
 				visibility.AddInt(row)
 			}
 			return
@@ -172,7 +172,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if isNull || zm.ContainsString(key) {
+			if isNull || zm.containsString(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
@@ -181,7 +181,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if isNull || zm.ContainsFixed(key) {
+			if isNull || zm.containsBytes(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
@@ -193,13 +193,13 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 }
 
 // Optimize me later
-func (zm ZM) ContainsFixed(k []byte) bool {
+func (zm ZM) containsBytes(k []byte) bool {
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
 }
 
-func (zm ZM) ContainsString(k []byte) bool {
+func (zm ZM) containsString(k []byte) bool {
 	if zm.MaxTruncated() {
 		return true
 	}
@@ -213,12 +213,12 @@ func (zm ZM) Contains(k any) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.ContainsString(k.([]byte))
+		return zm.containsString(k.([]byte))
 	}
 
 	t := types.T(zm[63])
 	v := types.EncodeValue(k, t)
-	return zm.ContainsFixed(v)
+	return zm.containsBytes(v)
 }
 
 func (zm ZM) ContainsKey(k []byte) bool {
@@ -226,7 +226,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.ContainsString(k)
+		return zm.containsString(k)
 	}
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
