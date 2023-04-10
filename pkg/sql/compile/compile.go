@@ -402,16 +402,18 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	var err error
 	client := cnclient.GetRPCClient()
 	c.cnList, err = c.e.Nodes()
-	for i := 0; i < len(c.cnList); i++ {
-		if isSameCN(c.addr, c.cnList[i].Addr) {
-			continue
+	if client != nil {
+		for i := 0; i < len(c.cnList); i++ {
+			if isSameCN(c.addr, c.cnList[i].Addr) {
+				continue
+			}
+			err := client.Ping(ctx, c.cnList[i].Addr)
+			// ping failed
+			if err != nil {
+				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+			}
+			i--
 		}
-		err := client.Ping(ctx, c.cnList[i].Addr)
-		// ping failed
-		if err != nil {
-			c.cnList = append(c.cnList[i:], c.cnList[i+1:]...)
-		}
-		i--
 	}
 	if err != nil {
 		return nil, err
