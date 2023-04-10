@@ -591,7 +591,6 @@ func (blk *ablock) BatchDedup(
 	if !node.IsPersisted() {
 		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask)
 	} else {
-		logutil.Infof("misuxi")
 		return blk.PersistedBatchDedup(
 			node.MustPNode(),
 			txn,

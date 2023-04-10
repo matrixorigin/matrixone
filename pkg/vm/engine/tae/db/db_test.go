@@ -5952,12 +5952,12 @@ func TestDedup2(t *testing.T) {
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
-	schema.BlockMaxRows = 10
+	schema.BlockMaxRows = 2
 	schema.SegmentMaxBlocks = 10
 	schema.Partitioned = 1
 	tae.bindSchema(schema)
 
-	count := 200
+	count := 50
 	data := catalog.MockBatch(schema, count)
 	datas := data.Split(count)
 
@@ -5966,8 +5966,10 @@ func TestDedup2(t *testing.T) {
 	for i := 1; i < count; i++ {
 		tae.DoAppend(datas[i])
 		txn, rel := tae.getRelation()
-		err := rel.Append(datas[i])
-		assert.Error(t, err)
+		for j := 0; j <= i; j++ {
+			err := rel.Append(datas[j])
+			assert.Error(t, err)
+		}
 		assert.NoError(t, txn.Commit())
 	}
 }
