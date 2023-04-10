@@ -83,6 +83,8 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 			if err != nil {
 				return false, err
 			}
+			bats[0].ReplaceVector(vec, metaVecs[i])
+			vec.Free(proc.Mp())
 		} else {
 			metaVecs[i] = vec
 		}
