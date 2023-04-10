@@ -284,7 +284,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	//col ref to right table can not been seen after agg pulled up
 	//since join cond is leftcol=rightcol, we can change col ref from right col to left col
 	// and other col in right table must not be referenced
-	if checkAllColRefInPlan(rootID, join.NodeId, rightCol, builder) {
+	if !checkAllColRefInPlan(rootID, join.NodeId, rightCol, builder) {
 		return false
 	}
 	replaceAllColRefInPlan(rootID, join.NodeId, rightCol, leftCol, builder)
