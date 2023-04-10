@@ -75,7 +75,7 @@ type Reader interface {
 
 	GetObjectName() objectio.ObjectName
 	GetName() string
-	GetObjectExtent() objectio.Extent
+	GetObjectExtent() *objectio.Extent
 	GetObjectReader() objectio.Reader
 }
 

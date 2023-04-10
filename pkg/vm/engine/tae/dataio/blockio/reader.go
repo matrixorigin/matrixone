@@ -37,13 +37,13 @@ type BlockReader struct {
 	reader  objectio.Reader
 	key     objectio.Location
 	name    string
-	meta    objectio.Extent
+	meta    *objectio.Extent
 	manager *IoPipeline
 }
 
 type fetch struct {
 	name   string
-	meta   objectio.Extent
+	meta   *objectio.Extent
 	idxes  []uint16
 	ids    []uint32
 	pool   *mpool.MPool
@@ -148,7 +148,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
-	meta, err := r.reader.ReadMeta(ctx, &r.meta, m)
+	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
-	objectMeta, err := r.reader.ReadMeta(ctx, &r.meta, m)
+	objectMeta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +196,7 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 }
 
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	ext := r.key.Extent()
-	return r.reader.ReadMeta(ctx, &ext, m)
+	return r.reader.ReadMeta(ctx, r.key.Extent(), m)
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -209,8 +208,8 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MP
 	for i := 0; i < int(meta.BlockCount()); i++ {
 		blocks[i] = meta.GetBlockMeta(uint32(i))
 	}
-	if r.meta.End() == 0 && len(blocks) > 0 {
-		r.meta = *meta.BlockHeader().MetaLocation()
+	if r.meta == nil && len(blocks) > 0 {
+		r.meta = meta.BlockHeader().MetaLocation()
 	}
 	return blocks, nil
 }
@@ -234,7 +233,7 @@ func (r *BlockReader) LoadZoneMap(
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
-	meta, err := r.reader.ReadMeta(ctx, &r.meta, m)
+	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +263,7 @@ func (r *BlockReader) GetName() string {
 	return r.name
 }
 
-func (r *BlockReader) GetObjectExtent() objectio.Extent {
+func (r *BlockReader) GetObjectExtent() *objectio.Extent {
 	return r.meta
 }
 func (r *BlockReader) GetObjectReader() objectio.Reader {
