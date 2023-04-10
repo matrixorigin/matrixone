@@ -35,8 +35,6 @@ N >= 0, floor to the Nth placeholder after decimal point
 
 import (
 	"math"
-	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -52,7 +50,8 @@ var (
 	FloorInt64      func([]int64, []int64, int64) []int64
 	FloorFloat32    func([]float32, []float32, int64) []float32
 	FloorFloat64    func([]float64, []float64, int64) []float64
-	FloorDecimal128 func(int32, []types.Decimal128, []types.Decimal128, int64) []types.Decimal128
+	FloorDecimal64  func([]types.Decimal64, []types.Decimal64, int64, int32) []types.Decimal64
+	FloorDecimal128 func([]types.Decimal128, []types.Decimal128, int64, int32) []types.Decimal128
 )
 
 var MaxUint8digits = numOfDigits(math.MaxUint8)
@@ -108,6 +107,7 @@ func init() {
 	FloorInt64 = floorInt64
 	FloorFloat32 = floorFloat32
 	FloorFloat64 = floorFloat64
+	FloorDecimal64 = floorDecimal64
 	FloorDecimal128 = floorDecimal128
 }
 
@@ -294,23 +294,28 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 	return rs
 }
 
-func floorDecimal128(scale int32, xs, rs []types.Decimal128, digits int64) []types.Decimal128 {
-	digit := int32(digits)
-	if digit > scale {
-		digit = scale
+func floorDecimal64(xs, rs []types.Decimal64, digits int64, scale int32) []types.Decimal64 {
+	if digits > 19 {
+		digits = 19
+	}
+	if digits < -18 {
+		digits = -18
 	}
 	for i := range xs {
-		strs := strings.Split(xs[i].Format(scale-digit), ".")
-		x, _, _ := types.Parse128(strs[0])
-		if strs[0][0] != '-' || len(strs) == 1 {
-			rs[i] = x
-			continue
-		}
-		v, _ := strconv.ParseFloat(strs[1], 64)
-		if v > float64(0) {
-			x, _ = x.Sub128(types.Decimal128{B0_63: 1, B64_127: 0})
-		}
-		rs[i] = x
+		rs[i] = xs[i].Floor(scale, int32(digits))
+	}
+	return rs
+}
+
+func floorDecimal128(xs, rs []types.Decimal128, digits int64, scale int32) []types.Decimal128 {
+	if digits > 39 {
+		digits = 39
+	}
+	if digits < -38 {
+		digits = -38
+	}
+	for i := range xs {
+		rs[i] = xs[i].Floor(scale, int32(digits))
 	}
 	return rs
 }
