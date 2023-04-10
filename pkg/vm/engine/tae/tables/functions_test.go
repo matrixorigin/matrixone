@@ -43,7 +43,7 @@ func BenchmarkFunctions(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupNABlkFunctions, vec, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op)
+			containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op, nil)
 		}
 	})
 
@@ -63,7 +63,7 @@ func BenchmarkFunctions(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec4.GetType().Oid, dedupNABlkFunctions, vec4, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec5, 0, vec5.Length(), op)
+			containers.ForeachVectorWindow(vec5, 0, vec5.Length(), op, nil)
 		}
 	})
 
@@ -84,7 +84,7 @@ func BenchmarkFunctions(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupNABlkFunctions, vec7, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
+			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil)
 		}
 	})
 
@@ -101,7 +101,7 @@ func BenchmarkFunctions(b *testing.B) {
 		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
+			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil)
 		}
 	})
 }
