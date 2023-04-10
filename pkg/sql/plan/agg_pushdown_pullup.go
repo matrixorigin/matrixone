@@ -197,6 +197,9 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, t
 	replaceAllColRefInExprList(node.FilterList, from, to)
 	replaceAllColRefInExprList(node.AggList, from, to)
 	replaceAllColRefInExprList(node.GroupBy, from, to)
+	for _, orderby := range node.OrderBy {
+		replaceCol(orderby.Expr, from.Col.RelPos, from.Col.ColPos, to.Col.RelPos, to.Col.ColPos)
+	}
 }
 
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
