@@ -107,6 +107,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	colIdToName := make(map[uint64]string)
 	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
 		colName := col.Name
 		colIdToName[col.ColId] = col.Name
 		if colName == catalog.Row_ID {
@@ -604,11 +607,13 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	ddlType := plan.DataDefinition_SHOW_TARGET
 
 	sql := "SELECT"
-	tableCols := tableDef.Cols
 	isAllNull := true
-	for i := range tableCols {
-		colName := tableCols[i].Name
-		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		colName := col.Name
+		if types.T(col.GetTyp().Id) == types.T_json {
 			sql += " null as `max(%s)`, null as `min(%s)`,"
 			sql = fmt.Sprintf(sql, colName, colName)
 		} else {
