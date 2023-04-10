@@ -243,16 +243,17 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
-	min1 := uint64(math.MaxUint64)
-	max1 := uint64(0)
+	min1 := uint32(math.MaxUint32)
+	max1 := uint32(0)
 	for _, rowid := range rowids {
 		mp[rowid] = 0
-		if uint64(rowid.GetRowOffset()) < (min1) {
-			min1 = uint64(rowid.GetRowOffset())
+		rowOffset := rowid.GetRowOffset()
+		if rowOffset < (min1) {
+			min1 = rowOffset
 		}
 
-		if uint64(rowid.GetRowOffset()) > (max1) {
-			max1 = uint64(rowid.GetRowOffset())
+		if rowOffset > max1 {
+			max1 = rowOffset
 		}
 		// update workspace
 	}
@@ -268,7 +269,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			}
 			min2 := vs[0].GetRowOffset()
 			max2 := vs[len(vs)-1].GetRowOffset()
-			if min1 > uint64(max2) || max1 < uint64(min2) {
+			if min1 > max2 || max1 < min2 {
 				continue
 			}
 			for k, v := range vs {
@@ -302,7 +303,7 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
-	txn.rowId[1]++
+	txn.rowId[5]++
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 

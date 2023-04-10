@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"encoding/binary"
 	"runtime"
 	"sync"
 	"time"
@@ -337,13 +336,20 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	bytes := types.EncodeUuid(&id)
 
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      e,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		rowId:       [3]uint64{binary.BigEndian.Uint64(bytes[0:8]), binary.BigEndian.Uint64(bytes[8:16]), 0},
+		op:       op,
+		proc:     proc,
+		engine:   e,
+		readOnly: true,
+		meta:     op.Txn(),
+		idGen:    e.idGen,
+		rowId: [6]uint32{
+			types.DecodeUint32(bytes[0:4]),
+			types.DecodeUint32(bytes[4:8]),
+			types.DecodeUint32(bytes[8:12]),
+			types.DecodeUint32(bytes[12:16]),
+			0,
+			0,
+		},
 		segId:       id,
 		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
