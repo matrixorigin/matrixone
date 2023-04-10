@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -231,7 +232,7 @@ func (p *PartitionState) HandleRowsInsert(
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -292,7 +293,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	}
 
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -338,7 +339,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
 			pivot := BlockEntry{
 				BlockInfo: catalog.BlockInfo{
