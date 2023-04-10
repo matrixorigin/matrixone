@@ -1263,16 +1263,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 	return err
 }
 
-type QueryType int
-
-const (
-	TXN_DEFAULT QueryType = iota
-	TXN_DELETE
-	TXN_UPDATE
-	TXN_DROP
-	TXN_ALTER
-)
-
 func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:

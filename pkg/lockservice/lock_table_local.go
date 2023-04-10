@@ -168,9 +168,7 @@ func (l *localLockTable) close() {
 			// if there are waiters in the current lock, just notify
 			// the head, and the subsequent waiters will be notified
 			// by the previous waiter.
-			if w = w.close(l.bind.ServiceID, notifyValue{err: ErrLockTableNotFound}); w != nil {
-				w.notify(l.bind.ServiceID, notifyValue{err: ErrLockTableNotFound})
-			}
+			w.close(l.bind.ServiceID, notifyValue{err: ErrLockTableNotFound})
 		}
 		return true
 	})
