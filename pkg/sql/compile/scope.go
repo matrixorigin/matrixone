@@ -635,8 +635,9 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 }
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
-	for _, rr := range s.RemoteReceivRegInfos {
-		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				reg.Ch <- nil
@@ -677,7 +678,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			}
 			reg.Ch <- nil
 			errChan <- nil
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
+		}(op, s.Proc.Reg.MergeReceivers[op.Idx], s.Proc.GetMPool())
 	}
 
 	return nil

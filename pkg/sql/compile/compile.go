@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -149,7 +150,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 		// free pipeline
 		c.scope = nil
 	}()
-
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -994,6 +994,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
+/*
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
 	rs := c.newScopeList(1, int(n.Stats.BlockNum))
@@ -1016,6 +1017,33 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
 		})
 	}
+	return rs
+}
+*/
+
+func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
+	ss = append(ss, children...)
+	rs := c.newScopeList(1, int(n.Stats.BlockNum))
+	gn := new(plan.Node)
+	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
+	copy(gn.GroupBy, n.ProjectList)
+	idx := 0
+	for i := range rs {
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.Group,
+			Idx: c.anal.curr,
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
+		})
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+		}
+	}
+	mergeChildren := c.newMergeScope(ss)
+	mergeChildren.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructBroadcastDispatch(0, rs, c.addr),
+	})
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
 }
 
@@ -1387,7 +1415,8 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatchLocal(true, extraRegisters(rs, j)),
+				Arg: constructBroadcastDispatch(j, rs, c.addr),
+				//Arg: constructDispatchLocal(true, extraRegisters(rs, j)),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1472,17 +1501,19 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)...)
 	}
 	return ss
 }
 
-func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
+func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
 	ss := make([]*Scope, mcpu)
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = new(Scope)
 		ss[i].Magic = Remote
+		ss[i].NodeInfo.Addr = addr
+		ss[i].NodeInfo.Mcpu = 1 // ss is the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:      vm.Merge,
@@ -1505,6 +1536,8 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Sco
 			tmps[j].Magic = Remote
 			tmps[j].IsJoin = true
 			tmps[j].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+			tmps[j].NodeInfo.Addr = n.Addr
+			tmps[j].NodeInfo.Mcpu = 1
 		}
 		ss = append(ss, tmps...)
 	}
@@ -1512,6 +1545,37 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Sco
 }
 
 func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	// construct left
+	leftMerge := c.newMergeScope(ss)
+	leftMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructBroadcastDispatch(0, rs, c.addr),
+	})
+	leftMerge.IsEnd = true
+
+	// construct right
+	c.anal.isFirst = currentFirstFlag
+	rightMerge := c.newMergeScope(children)
+	rightMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructBroadcastDispatch(1, rs, c.addr),
+	})
+	rightMerge.IsEnd = true
+
+	// append left and right to correspond rs
+	idx := 0
+	for i := range rs {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+		}
+	}
+	rs[idx].PreScopes = append(rs[idx].PreScopes, leftMerge, rightMerge)
+	return rs
+}
+
+/*
+func (c *Compile) newJoinScopeListWithBucket2(rs, ss, children []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range rs {
 		c.anal.isFirst = currentFirstFlag
@@ -1538,6 +1602,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	}
 	return rs
 }
+*/
 
 //func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 //rs := make([]*Scope, len(ss))
@@ -1602,8 +1667,9 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
+		Arg: constructBroadcastDispatch(1, rs, c.addr),
 	})
+	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
 	return rs
@@ -1626,6 +1692,19 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
+
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		if op.Idx == 0 {
+			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      0,
+				Uuid:     op.Uuid,
+				FromAddr: op.FromAddr,
+			})
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
+			break
+		}
+	}
 	return rs
 }
 
@@ -1647,15 +1726,15 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
 
-	for i, u := range s.RemoteReceivRegInfos {
-		if u.Idx == 1 {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		if op.Idx == 1 {
 			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      0,
-				Uuid:     u.Uuid,
-				FromAddr: u.FromAddr,
+				Uuid:     op.Uuid,
+				FromAddr: op.FromAddr,
 			})
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
-			break
 		}
 	}
 
