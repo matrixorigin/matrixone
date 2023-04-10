@@ -2008,7 +2008,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
 		return true
 	}
-	parts2 := strings.Split(addr, ":")
+	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
 		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true

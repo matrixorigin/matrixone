@@ -1076,7 +1076,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1243,7 +1243,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					joinCtx := NewBindContext(builder, bindCtx)
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(childTableDef.Name), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1477,7 +1477,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			rightCtx := NewBindContext(builder, joinCtx)
 			astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
-			rightId, err := builder.buildTable(astTblName, rightCtx)
+			rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 			if err != nil {
 				return err
 			}

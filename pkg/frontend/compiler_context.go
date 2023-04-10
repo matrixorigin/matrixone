@@ -37,7 +37,6 @@ import (
 
 type TxnCompilerContext struct {
 	dbName               string
-	QryTyp               QueryType
 	txnHandler           *TxnHandler
 	ses                  *Session
 	proc                 *process.Process
@@ -56,7 +55,7 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
-	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+	return &TxnCompilerContext{txnHandler: txn, dbName: db}
 }
 
 func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -71,12 +70,6 @@ func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
-}
-
-func (tcc *TxnCompilerContext) GetQueryType() QueryType {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.QryTyp
 }
 
 func (tcc *TxnCompilerContext) SetSession(ses *Session) {
@@ -101,12 +94,6 @@ func (tcc *TxnCompilerContext) GetUserName() string {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.ses.GetUserName()
-}
-
-func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
