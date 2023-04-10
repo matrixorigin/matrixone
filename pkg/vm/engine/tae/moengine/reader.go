@@ -17,6 +17,8 @@ package moengine
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -66,6 +68,7 @@ func (r *txnReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, m *m
 	for i := 0; i < n; i++ {
 		bat.Zs[i] = 1
 	}
+	logutil.Debug(testutil.OperatorCatchBatch("txn reader", bat))
 	return bat, nil
 }
 
