@@ -132,7 +132,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 		}
 	}
 	bats := make([]*batch.Batch, 0)
-	ioVectors, err := r.reader.Read(ctx, *meta.BlockHeader().MetaLocation(), idxs, nil, nil, LoadColumnFunc)
+	ioVectors, err := r.reader.Read(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, nil, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
-	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m)
+	meta, err := r.reader.ReadMeta(ctx, &r.meta, m)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
-	objectMeta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m)
+	objectMeta, err := r.reader.ReadMeta(ctx, &r.meta, m)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,8 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*data
 }
 
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	return r.reader.ReadMeta(ctx, []objectio.Extent{r.key.Extent()}, m)
+	ext := r.key.Extent()
+	return r.reader.ReadMeta(ctx, &ext, m)
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -233,7 +234,7 @@ func (r *BlockReader) LoadZoneMap(
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
-	meta, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m)
+	meta, err := r.reader.ReadMeta(ctx, &r.meta, m)
 	if err != nil {
 		return nil, err
 	}
