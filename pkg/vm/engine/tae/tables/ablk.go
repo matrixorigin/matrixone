@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -376,12 +377,19 @@ func (blk *ablock) getPersistedRowByFilter(
 		return
 	}
 	defer sortKey.Close()
-	rows := roaring.NewBitmap()
-	err = containers.ForeachVector(sortKey, generateGetRowClosure(sortKey.GetType().Oid, filter, sortKey, rows), nil)
+	rows := make([]uint32, 0)
+	err = sortKey.ForeachShallow(func(v any, _ bool, offset int) error {
+		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
+			row := uint32(offset)
+			rows = append(rows, row)
+			return nil
+		}
+		return nil
+	}, nil)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 		return
 	}
-	if rows.IsEmpty() {
+	if len(rows) == 0 {
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
@@ -401,9 +409,7 @@ func (blk *ablock) getPersistedRowByFilter(
 
 	exist := false
 	var deleted bool
-	it := rows.Iterator()
-	for it.HasNext() {
-		offset := it.Next()
+	for _, offset := range rows {
 		commitTS := commitTSVec.Get(int(offset)).(types.TS)
 		if commitTS.Greater(txn.GetStartTS()) {
 			break
@@ -585,6 +591,7 @@ func (blk *ablock) BatchDedup(
 	if !node.IsPersisted() {
 		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask)
 	} else {
+		logutil.Infof("misuxi")
 		return blk.PersistedBatchDedup(
 			node.MustPNode(),
 			txn,

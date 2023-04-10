@@ -17,10 +17,7 @@ package tables
 import (
 	"context"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -96,75 +93,4 @@ func LoadPersistedDeletes(
 		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat[0].Vecs[i]))
 	}
 	return
-}
-
-func generateGetRowClosure(
-	typ types.T,
-	filter *handle.Filter,
-	sortKey containers.Vector,
-	rows *roaring.Bitmap) any {
-	switch typ {
-	case types.T_bool:
-		return getPersistedRowByFilterClosureFactory[bool](filter, sortKey, rows)
-	case types.T_int8:
-		return getPersistedRowByFilterClosureFactory[int8](filter, sortKey, rows)
-	case types.T_int16:
-		return getPersistedRowByFilterClosureFactory[int16](filter, sortKey, rows)
-	case types.T_int32:
-		return getPersistedRowByFilterClosureFactory[int32](filter, sortKey, rows)
-	case types.T_int64:
-		return getPersistedRowByFilterClosureFactory[int64](filter, sortKey, rows)
-	case types.T_uint8:
-		return getPersistedRowByFilterClosureFactory[uint8](filter, sortKey, rows)
-	case types.T_uint16:
-		return getPersistedRowByFilterClosureFactory[uint16](filter, sortKey, rows)
-	case types.T_uint32:
-		return getPersistedRowByFilterClosureFactory[uint32](filter, sortKey, rows)
-	case types.T_uint64:
-		return getPersistedRowByFilterClosureFactory[uint64](filter, sortKey, rows)
-	case types.T_float32:
-		return getPersistedRowByFilterClosureFactory[float32](filter, sortKey, rows)
-	case types.T_float64:
-		return getPersistedRowByFilterClosureFactory[float64](filter, sortKey, rows)
-	case types.T_timestamp:
-		return getPersistedRowByFilterClosureFactory[types.Timestamp](filter, sortKey, rows)
-	case types.T_date:
-		return getPersistedRowByFilterClosureFactory[types.Date](filter, sortKey, rows)
-	case types.T_time:
-		return getPersistedRowByFilterClosureFactory[types.Time](filter, sortKey, rows)
-	case types.T_datetime:
-		return getPersistedRowByFilterClosureFactory[types.Datetime](filter, sortKey, rows)
-	case types.T_decimal64:
-		return getPersistedRowByFilterClosureFactory[types.Decimal64](filter, sortKey, rows)
-	case types.T_decimal128:
-		return getPersistedRowByFilterClosureFactory[types.Decimal128](filter, sortKey, rows)
-	case types.T_decimal256:
-		return getPersistedRowByFilterClosureFactory[types.Decimal256](filter, sortKey, rows)
-	case types.T_TS:
-		return getPersistedRowByFilterClosureFactory[types.TS](filter, sortKey, rows)
-	case types.T_Rowid:
-		return getPersistedRowByFilterClosureFactory[types.Rowid](filter, sortKey, rows)
-	case types.T_Blockid:
-		return getPersistedRowByFilterClosureFactory[types.Blockid](filter, sortKey, rows)
-	case types.T_uuid:
-		return getPersistedRowByFilterClosureFactory[types.Uuid](filter, sortKey, rows)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text:
-		return getPersistedRowByFilterClosureFactory[[]byte](filter, sortKey, rows)
-	default:
-		panic("unsupport")
-	}
-}
-
-func getPersistedRowByFilterClosureFactory[T any](
-	filter *handle.Filter,
-	sortKey containers.Vector,
-	rows *roaring.Bitmap) func(v T, _ bool, offset int) error {
-	return func(v T, _ bool, offset int) error {
-		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
-			row := uint32(offset)
-			rows.Add(row)
-			return nil
-		}
-		return nil
-	}
 }
