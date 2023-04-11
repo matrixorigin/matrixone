@@ -15,11 +15,8 @@
 package blockio
 
 import (
-	"fmt"
-
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -32,40 +29,6 @@ type ZMWriter struct {
 	zonemap     index.ZM
 	colIdx      uint16
 	internalIdx uint16
-}
-
-func NewZMWriter(t types.T) *ZMWriter {
-	return &ZMWriter{
-		zonemap: *index.NewZM(t),
-	}
-}
-
-func (writer *ZMWriter) String() string {
-	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
-}
-
-func (writer *ZMWriter) Init(block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.block = block
-	writer.cType = cType
-	writer.colIdx = colIdx
-	writer.internalIdx = internalIdx
-	return nil
-}
-
-func (writer *ZMWriter) Finalize() error {
-	objectio.SetColumnMetaZoneMap(
-		objectio.ColumnMeta(writer.block.ColumnMeta(writer.colIdx)),
-		writer.zonemap)
-	return nil
-}
-
-func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
-	typ := values.GetType()
-	if writer.zonemap.GetType() != typ.Oid {
-		err = moerr.NewInternalErrorNoCtx("wrong type")
-		return
-	}
-	return index.BatchUpdateZM(&writer.zonemap, values)
 }
 
 type BFWriter struct {

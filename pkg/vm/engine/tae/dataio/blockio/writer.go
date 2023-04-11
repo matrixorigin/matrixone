@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BlockWriter struct {
@@ -92,21 +93,17 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		columnData := containers.NewVectorWithSharedMemory(vec)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData)
-		zmPos := 0
-		zoneMapWriter := NewZMWriter(vec.GetType().Oid)
-		if err = zoneMapWriter.Init(block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
+
+		// Build ZM
+		zm := index.NewZM(vec.GetType().Oid)
+		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}
-		err = zoneMapWriter.AddValues(columnData)
-		if err != nil {
-			return nil, err
-		}
-		err = zoneMapWriter.Finalize()
-		// update zonemap
-		w.objMetaBuilder.UpdateZm(i, &zoneMapWriter.zonemap)
-		if err != nil {
-			return nil, err
-		}
+		// Update column meta zonemap
+		objectio.SetColumnMetaZoneMap(block.ColumnMeta(uint16(i)), *zm)
+		// update object zonemap
+		w.objMetaBuilder.UpdateZm(i, zm)
+
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
