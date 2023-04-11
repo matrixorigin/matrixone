@@ -4780,7 +4780,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
-		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions:
 		objType = objectTypeNone
 		kind = privilegeKindNone

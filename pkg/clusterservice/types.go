@@ -31,10 +31,9 @@ type Selector struct {
 	byServiceID bool
 	serviceID   string
 
-	byLabel     bool
-	labelName   string
-	labelOp     Op
-	labelValues []string
+	byLabel bool
+	labels  map[string]string
+	labelOp Op
 }
 
 // MOCluster is used to get the meta and status information of the MO cluster.
@@ -61,4 +60,7 @@ type MOCluster interface {
 	ForceRefresh()
 	// Close close the cluster
 	Close()
+	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
+	// internally for debug purpose.
+	DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 }

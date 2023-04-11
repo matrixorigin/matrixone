@@ -90,6 +90,10 @@ func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
+func (r Rowid) GetRowOffset() uint32 {
+	return DecodeUint32(r[BlockidSize:])
+}
+
 func (r Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
 	s := DecodeUint16(r[UuidSize:ObjectBytesSize])

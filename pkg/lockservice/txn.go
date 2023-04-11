@@ -230,9 +230,12 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	return true
 }
 
-func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
-	txn.Lock()
-	defer txn.Unlock()
+func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
+	}
+
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
 		panic("invalid set Blocked")
