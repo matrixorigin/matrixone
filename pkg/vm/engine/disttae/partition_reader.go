@@ -117,6 +117,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			metaLoc := p.blockBatch.read()
 			location, err = blockio.EncodeLocationFromString(metaLoc)
+			if err != nil {
+				return nil, err
+			}
 			name := location.Name().String()
 			if name != p.currentFileName {
 				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, location)
