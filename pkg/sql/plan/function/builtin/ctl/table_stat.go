@@ -37,15 +37,10 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
-	if err != nil {
-		return nil, err
+	if proc.TxnOperator == nil {
+		panic("txn operator in MoTableRows is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err := e.New(proc.Ctx, txn); err != nil {
-		return nil, err
-	}
-	defer e.Rollback(proc.Ctx, txn)
+	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		var rel engine.Relation
 		if isClusterTable(dbs[i], tbls[i]) {
@@ -92,15 +87,10 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
-	if err != nil {
-		return nil, err
+	if proc.TxnOperator == nil {
+		panic("txn operator in MoTableSize is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err := e.New(proc.Ctx, txn); err != nil {
-		return nil, err
-	}
-	defer e.Rollback(proc.Ctx, txn)
+	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		var rel engine.Relation
 		if isClusterTable(dbs[i], tbls[i]) {
@@ -170,16 +160,10 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
-	if err != nil {
-		return nil, err
+	if proc.TxnOperator == nil {
+		panic("txn operator in MoTableColMax is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err := e.New(proc.Ctx, txn); err != nil {
-		return nil, err
-	}
-	defer e.Rollback(proc.Ctx, txn)
-
+	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		col := cols[i]
 		if col == "__mo_rowid" {
@@ -244,16 +228,10 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
-	if err != nil {
-		return nil, err
+	if proc.TxnOperator == nil {
+		panic("txn operator in MoTableColMin is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err := e.New(proc.Ctx, txn); err != nil {
-		return nil, err
-	}
-	defer e.Rollback(proc.Ctx, txn)
-
+	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		col := cols[i]
 		if col == "__mo_rowid" {

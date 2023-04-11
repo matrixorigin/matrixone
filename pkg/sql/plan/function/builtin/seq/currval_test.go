@@ -60,6 +60,7 @@ func TestCurrvalSingle(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, eng)
 	proc.TxnClient = txnClient
+	proc.TxnOperator = txnOperator
 
 	tests := []struct {
 		name    string
@@ -123,6 +124,7 @@ func TestCurrvalMulti(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, eng)
 	proc.TxnClient = txnClient
+	proc.TxnOperator = txnOperator
 
 	tests := []struct {
 		name    string

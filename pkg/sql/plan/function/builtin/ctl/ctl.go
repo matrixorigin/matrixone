@@ -58,14 +58,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {
-				v, err := proc.TxnClient.New()
-				if err != nil {
-					return nil, err
-				}
-				txnOp = v
-				defer func() {
-					_ = txnOp.Commit(proc.Ctx)
-				}()
+				panic("txn operator in ctl is nil")
 			}
 			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {

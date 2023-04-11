@@ -135,6 +135,10 @@ func execResultArrayHasData(arr []ExecResult) bool {
 	return len(arr) != 0 && arr[0].GetRowCount() != 0
 }
 
+func execResultArrayHasOneRow(arr []ExecResult) bool {
+	return len(arr) != 0 && arr[0].GetRowCount() == 1
+}
+
 // BackgroundExec executes the sql in background session without network output.
 type BackgroundExec interface {
 	Close()

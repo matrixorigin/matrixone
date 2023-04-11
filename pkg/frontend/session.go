@@ -178,6 +178,8 @@ type Session struct {
 
 	sqlHelper *SqlHelper
 
+	proc *process.Process
+
 	// when starting a transaction in session, the snapshot ts of the transaction
 	// is to get a DN push to CN to get the maximum commitTS. but there is a problem,
 	// when the last transaction ends and the next one starts, it is possible that the
