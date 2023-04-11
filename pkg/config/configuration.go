@@ -294,6 +294,10 @@ type FrontendParameters struct {
 	PrintDebug bool `toml:"printDebug"`
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
+
+	// ProxyEnabled indicates that proxy module is enabled and something extra
+	// is needed, such as update the salt.
+	ProxyEnabled bool `toml:"proxy-enabled"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
