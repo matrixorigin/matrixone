@@ -70,11 +70,10 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -618,7 +617,7 @@ func LoadCheckpointEntries(
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
 
-	readers := make([]dataio.Reader, len(locations))
+	readers := make([]*blockio.BlockReader, len(locations))
 	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
 		location, err := blockio.EncodeLocationFromString(key)

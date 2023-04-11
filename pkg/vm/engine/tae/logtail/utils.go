@@ -17,11 +17,11 @@ package logtail
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -453,7 +453,7 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint32, reader dataio.Reader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint32, reader *blockio.BlockReader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
@@ -502,7 +502,7 @@ func (data *CheckpointData) PrefetchFrom(
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
-	reader dataio.Reader,
+	reader *blockio.BlockReader,
 	m *mpool.MPool) (err error) {
 
 	for idx, item := range checkpointDataRefer {

@@ -41,7 +41,7 @@ type ObjectMeta struct {
 }*/
 
 // Reader is the only interface that mo provides for CN/DN/ETL... modules to read data
-type Reader interface {
+type Reader2 interface {
 	// LoadColumns loads the data of a block specified column
 	// idxes is the column number of the data to be read
 	// if idxes is nil, read data for all columns.
@@ -79,7 +79,7 @@ type Reader interface {
 
 // Writer is the only interface that mo provides to CN/DN/ETL... modules to write data
 // default no primary key，a buffer will be created in the Writer to store the written batch
-type Writer interface {
+type Writer2 interface {
 	// SetPrimaryKey Set the primary key of the writer, because the written
 	// data needs to generate BloomFilter according to the primary key
 	SetPrimaryKey(idx uint16)

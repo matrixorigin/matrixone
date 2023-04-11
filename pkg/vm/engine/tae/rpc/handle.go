@@ -17,12 +17,12 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
@@ -819,8 +819,7 @@ func (h *Handle) HandleWrite(
 			nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		columnIdx := 0
-		var reader dataio.Reader
-		reader = nil
+		var reader *blockio.BlockReader
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
 			location, err = blockio.EncodeLocationFromString(key)

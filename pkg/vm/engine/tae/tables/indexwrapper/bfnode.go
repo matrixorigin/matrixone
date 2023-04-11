@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -30,7 +29,7 @@ import (
 type BfReader struct {
 	bfKey  objectio.Location
 	idx    uint16
-	reader dataio.Reader
+	reader *blockio.BlockReader
 	typ    types.T
 }
 

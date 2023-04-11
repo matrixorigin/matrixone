@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,7 +40,7 @@ type S3Writer struct {
 	sortIndex []int
 	pk        map[string]struct{}
 
-	writer  dataio.Writer
+	writer  *blockio.BlockWriter
 	lengths []uint64
 
 	metaLocBat *batch.Batch

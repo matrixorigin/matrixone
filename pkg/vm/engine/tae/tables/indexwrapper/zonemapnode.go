@@ -29,7 +29,7 @@ import (
 type ZmReader struct {
 	metaKey objectio.Location
 	idx     uint16
-	reader  dataio.Reader
+	reader  *blockio.BlockReader
 	cache   atomic.Pointer[index.ZM]
 }
 

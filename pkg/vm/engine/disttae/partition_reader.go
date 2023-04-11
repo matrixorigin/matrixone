@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,7 +43,7 @@ type PartitionReader struct {
 	// the following attributes are used to support cn2s3
 	procMPool       *mpool.MPool
 	s3FileService   fileservice.FileService
-	s3BlockReader   dataio.Reader
+	s3BlockReader   *blockio.BlockReader
 	extendId2s3File map[string]int
 
 	// used to get idx of sepcified col

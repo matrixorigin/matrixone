@@ -191,7 +191,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		meta, err := reader.(*BlockReader).reader.ReadMeta(ctx, extent, m)
+		meta, err := reader.reader.ReadMeta(ctx, extent, m)
 		if err != nil {
 			return err
 		}

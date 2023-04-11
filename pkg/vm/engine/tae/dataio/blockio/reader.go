@@ -50,7 +50,7 @@ type fetch struct {
 	reader *objectio.ObjectReader
 }
 
-func NewObjectReader(service fileservice.FileService, key objectio.Location) (dataio.Reader, error) {
+func NewObjectReader(service fileservice.FileService, key objectio.Location) (*BlockReader, error) {
 	reader, err := objectio.NewObjectReader(key.Name(), service)
 	if err != nil {
 		return nil, err
