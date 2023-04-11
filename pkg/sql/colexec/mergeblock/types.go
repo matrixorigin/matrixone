@@ -14,12 +14,10 @@
 package mergeblock
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -72,11 +70,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
 			if tblIdx[i] == 0 {
-				val, err := strconv.ParseUint(strings.Split(string(metaLocs[i]), ":")[2], 0, 64)
-				if err != nil {
-					return err
-				}
-				arg.AffectedRows += val
+				arg.AffectedRows += uint64(objectio.Location(metaLocs[i]).Rows())
 			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {

@@ -17,9 +17,10 @@ package moengine
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,7 +64,7 @@ type Relation interface {
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add non-appendable blocks on S3 into txn's workspace.
-	AddBlksWithMetaLoc(ctx context.Context, zm []dataio.Index, metaloc []string) error
+	AddBlksWithMetaLoc(ctx context.Context, zm []objectio.ZoneMap, metaloc []objectio.Location) error
 
 	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error

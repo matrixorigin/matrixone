@@ -18,8 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -116,8 +117,8 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
-	zm []dataio.Index,
-	metaLocs []string) error {
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
@@ -342,7 +343,7 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
@@ -373,14 +374,14 @@ func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	return table.SoftDeleteBlock(id)
 }
-func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc string) (err error) {
+func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
 	return table.UpdateMetaLoc(id, metaLoc)
 }
-func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc string) (err error) {
+func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return

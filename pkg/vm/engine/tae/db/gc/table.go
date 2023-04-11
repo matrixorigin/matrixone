@@ -24,10 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -123,22 +123,21 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
-		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
 			BlockID:   blkID,
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
-		t.addBlock(id, name)
+		t.addBlock(id, metaLoc.Name().String())
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
-		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 
 		id := common.ID{
 			SegmentID: sid,
@@ -146,8 +145,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   blkID.GetBlockid(),
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
-		t.deleteBlock(id, name)
+		t.deleteBlock(id, metaLoc.Name().String())
 	}
 	_, _, _, del, delTxn = data.GetTblBatchs()
 	for i := 0; i < del.Length(); i++ {
@@ -306,12 +304,12 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, err := reader.LoadColumns(ctx, idxes, []uint32{bs[typ].GetID()}, common.DefaultAllocator)
+	mobat, err := reader.LoadColumns(ctx, idxes, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
 	for i := range attrs {
-		pkgVec := mobat[0].Vecs[i]
+		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i])

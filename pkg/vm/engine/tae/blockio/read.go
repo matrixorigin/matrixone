@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -70,7 +71,7 @@ func BlockReadInner(
 	if err != nil {
 		return nil, err
 	}
-	if info.DeltaLoc != "" {
+	if !info.DeltaLoc.IsEmpty() {
 		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
 		if err != nil {
 			return nil, err
@@ -136,10 +137,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
 	deleteRows := make([]int64, 0)
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	_, id, extent, rows, err := DecodeLocation(info.MetaLoc)
-	if err != nil {
-		return nil, deleteRows, err
-	}
+	id := info.MetaLoc.ID()
+	extent := info.MetaLoc.Extent()
 	reader, err := NewObjectReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, deleteRows, err
@@ -153,7 +152,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
-			rows,
+			info.MetaLoc.Rows(),
 			m,
 		)
 		if err != nil {
@@ -166,18 +165,18 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		}()
 	}
 
-	loadBlock := func(idxes []uint16) ([]*batch.Batch, error) {
+	loadBlock := func(idxes []uint16) (*batch.Batch, error) {
 		if len(idxes) == 0 && ok {
 			// only read rowid column on non appendable block, return early
 			bat = batch.NewWithSize(0)
 			bat.Vecs = append(bat.Vecs, rowIdVec)
 			return nil, nil
 		}
-		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, nil)
+		bats, err := reader.LoadColumns(ctx, idxes, id, nil)
 		if err != nil {
 			return nil, err
 		}
-		entry := bats[0].Vecs
+		entry := bats.Vecs
 		bat = batch.NewWithSize(0)
 		for _, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
@@ -192,22 +191,22 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		meta, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m, LoadZoneMapFunc)
+		meta, err := reader.reader.ReadMeta(ctx, extent, m)
 		if err != nil {
 			return err
 		}
-
-		colCount := meta.BlkMetas[0].GetColumnCount()
+		block := meta.GetBlockMeta(0)
+		colCount := block.GetColumnCount()
 		idxes = append(idxes, colCount-2) // committs
 		idxes = append(idxes, colCount-1) // aborted
 		bats, err := loadBlock(idxes)
 		if err != nil {
 			return err
 		}
-		lenVecs := len(bats[0].Vecs)
+		lenVecs := len(bats.Vecs)
 		t0 := time.Now()
-		commits := bats[0].Vecs[lenVecs-2]
-		abort := bats[0].Vecs[lenVecs-1]
+		commits := bats.Vecs[lenVecs-2]
+		abort := bats.Vecs[lenVecs-1]
 		for i := 0; i < commits.Length(); i++ {
 			if vector.GetFixedAt[bool](abort, i) || vector.GetFixedAt[types.TS](commits, i).Greater(ts) {
 				deleteRows = append(deleteRows, int64(i))
@@ -232,21 +231,17 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	return bat, deleteRows, nil
 }
 
-func readBlockDelete(ctx context.Context, deltaloc string, fs fileservice.FileService) (*batch.Batch, error) {
-	_, id, _, _, err := DecodeLocation(deltaloc)
-	if err != nil {
-		return nil, err
-	}
+func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
 	reader, err := NewObjectReader(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{id}, nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, deltaloc.ID(), nil)
 	if err != nil {
 		return nil, err
 	}
-	return bat[0], nil
+	return bat, nil
 }
 
 func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {

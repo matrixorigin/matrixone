@@ -21,11 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
 func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err error) {
@@ -43,54 +43,42 @@ func LoadPersistedColumnData(
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
-	location string,
+	location objectio.Location,
 ) (vec containers.Vector, err error) {
-	_, _, meta, rows, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return nil, err
-	}
 	if def.IsPhyAddr() {
-		return constructRowId(id, rows)
+		return constructRowId(id, location.Rows())
 	}
 	reader, err := blockio.NewObjectReader(fs.Service, location)
 	if err != nil {
 		return
 	}
-	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, []uint32{meta.Id()}, nil)
+	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, location.ID(), nil)
 	if err != nil {
 		return
 	}
-	return containers.NewVectorWithSharedMemory(bat[0].Vecs[0]), nil
+	return containers.NewVectorWithSharedMemory(bat.Vecs[0]), nil
 }
 
-func ReadPersistedBlockRow(location string) int {
-	meta, err := blockio.DecodeMetaLocToMeta(location)
-	if err != nil {
-		panic(err)
-	}
-	return int(meta.GetRows())
+func ReadPersistedBlockRow(location objectio.Location) int {
+	return int(location.Rows())
 }
 
 func LoadPersistedDeletes(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
-	location string) (bat *containers.Batch, err error) {
-	_, _, meta, _, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return nil, err
-	}
+	location objectio.Location) (bat *containers.Batch, err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, location)
 	if err != nil {
 		return
 	}
-	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, []uint32{meta.Id()}, nil)
+	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, location.ID(), nil)
 	if err != nil {
 		return
 	}
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	for i := 0; i < 3; i++ {
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat[0].Vecs[i]))
+		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat.Vecs[i]))
 	}
 	return
 }

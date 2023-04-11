@@ -19,8 +19,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -374,11 +375,11 @@ func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
@@ -446,7 +447,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
@@ -458,7 +459,7 @@ func (tbl *txnTable) createBlock(
 	sid types.Uuid,
 	state catalog.EntryState,
 	is1PC bool,
-	opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -577,8 +578,8 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 }
 
 func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []dataio.Index,
-	metaLocs []string) (err error) {
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -594,20 +595,16 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				if err != nil {
 					return err
 				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					return err
-				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -768,7 +765,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	return block.GetValue(tbl.store.txn, int(row), int(col))
 }
 
-func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
+func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -777,7 +774,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	if err != nil {
 		panic(err)
 	}
-	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaloc)
+	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaLoc)
 	if err != nil {
 		return
 	}
@@ -787,7 +784,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	return
 }
 
-func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
+func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -887,7 +884,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 // DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
@@ -914,20 +911,16 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
 				if err != nil {
 					return err
 				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					return err
-				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
