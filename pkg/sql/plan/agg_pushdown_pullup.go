@@ -202,7 +202,7 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from []*plan.Expr_Col,
 	replaceAllColRefInExprList(node.GroupBy, from, to)
 	replaceAllColRefInExprList(node.GroupingSet, from, to)
 	for _, orderby := range node.OrderBy {
-		for i, _ := range from {
+		for i := range from {
 			replaceCol(orderby.Expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
 		}
 	}
@@ -222,7 +222,7 @@ func checkColRef(expr *plan.Expr, cols []*plan.Expr_Col) bool {
 
 	case *plan.Expr_Col:
 		if exprImpl.Col.RelPos == cols[0].Col.RelPos {
-			for i, _ := range cols {
+			for i := range cols {
 				if exprImpl.Col.RelPos == cols[i].Col.RelPos && exprImpl.Col.ColPos == cols[i].Col.ColPos {
 					return true
 				}
@@ -277,7 +277,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	}
 	pkNames := rightScan.TableDef.Pkey.Names
 	pks := make([]int32, len(pkNames))
-	for i, _ := range pkNames {
+	for i := range pkNames {
 		pks[i] = rightBinding.FindColumn(pkNames[i])
 	}
 
@@ -290,7 +290,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	rightCols := make([]*plan.Expr_Col, len(join.OnList))
 	groupColsInAgg := make([]*plan.Expr_Col, len(join.OnList))
 
-	for i, _ := range join.OnList {
+	for i := range join.OnList {
 		leftCol, rightCol := getJoinCondCol(join.OnList[i], agg.BindingTags[0], rightScan.BindingTags[0])
 		if leftCol == nil {
 			return false
@@ -323,7 +323,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	join.Children[0] = agg.Children[0]
 	agg.Children[0] = join.NodeId
 
-	for i, _ := range leftCols {
+	for i := range leftCols {
 		j := leftCols[i].Col.ColPos
 		leftCols[i].Col.RelPos = groupColsInAgg[j].Col.RelPos
 		leftCols[i].Col.ColPos = groupColsInAgg[j].Col.ColPos
