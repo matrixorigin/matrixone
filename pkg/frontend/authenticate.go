@@ -1007,8 +1007,6 @@ const (
 
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s";`
 
-	checkUserFormat = `select user_name from mo_catalog.mo_user where user_host = "%s" and  user_name = "%s" ;`
-
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1396,14 +1394,6 @@ func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (
 		return "", err
 	}
 	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
-}
-
-func getSqlForCheckUserExists(ctx context.Context, host, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkUserFormat, host, user), nil
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
