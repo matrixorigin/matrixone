@@ -580,6 +580,11 @@ message Node {
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
+
+		//
+		ON_DUPLICATE_KEY = 58;
+		PRE_INSERT = 59;
+		PRE_DELETE = 60;
 	}
 
 	enum JoinFlag {
@@ -649,6 +654,23 @@ message Node {
 	// used to connect two plans[steps]
 	int32 current_step = 30;
 	int32 source_step = 31;
+
+	// when refactor finish. we should remove insertCtx/UpdateCtx/deleteCtx.
+	// and only keep preInsertCtx, preDeleteCtx
+	PreDeleteCtx pre_delete_ctx = 32;
+	PreInsertCtx pre_insert_ctx = 33;
+}
+
+message PreDeleteCtx {
+	//the indexes of row_id&pk column in the batch
+	repeated int32 idx = 1;  
+}
+
+message PreInsertCtx {
+	//the indexes of insert columns in the batch
+	repeated int32 idx 	= 1;
+	//the index of pk column in the batch
+	int32 pk_idx 		= 2;
 }
 
 message IdList {

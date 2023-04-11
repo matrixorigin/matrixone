@@ -1758,6 +1758,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	return nodeID, nil
 }
 
+func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
+	stepPos := len(builder.qry.Steps)
+	builder.qry.Steps = append(builder.qry.Steps, nodeID)
+	return int32(stepPos)
+}
+
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
 	node.NodeId = nodeID

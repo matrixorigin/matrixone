@@ -34,8 +34,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		rootId:  -1,
 		tblInfo: tblInfo,
 	}
-	tblDef := tblInfo.tableDefs[0]
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, tblInfo.isClusterTable[0])
+	tableDef := tblInfo.tableDefs[0]
+	objRef := tblInfo.objRef[0]
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +56,17 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, err
 	}
 
+	if len(rewriteInfo.onDuplicateIdx) > 0 {
+		buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
+	} else {
+		// if table have parent table. add left join to query
+		if len(tableDef.Fkeys) > 0 {
+
+		}
+		buildInsertPlans(builder, bindCtx, objRef, tableDef)
+	}
+
+	/**
 	if tblInfo.haveConstraint {
 		for i, tableDef := range tblInfo.tableDefs {
 			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
@@ -110,5 +122,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		Plan: &plan.Plan_Query{
 			Query: query,
 		},
+	}, err
+	**/
+	return &Plan{
+		Plan: &plan.Plan_Query{},
 	}, err
 }

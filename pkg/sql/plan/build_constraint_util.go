@@ -543,10 +543,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
 	// rewrite 'insert into t1 select * from t2' to
-	// select 'select _t.j, _t.k from (select * from t2) _t
+	// select 'select _t.j, _t.k from (select * from t2) _t(j,k)
 	// --------
 	// rewrite 'insert into t1(b) values (1)' to
-	// select 'select 0, _t.column_0 from (select * from values (1)) _t
+	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
