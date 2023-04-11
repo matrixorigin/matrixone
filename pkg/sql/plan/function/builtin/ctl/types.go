@@ -47,6 +47,7 @@ var (
 		strings.ToUpper(pb.CmdMethod_Checkpoint.String()):  handleCheckpoint(),
 		strings.ToUpper(pb.CmdMethod_ForceGC.String()):     handleCNGC,
 		strings.ToUpper(pb.CmdMethod_Inspect.String()):     handleInspectDN(),
+		strings.ToUpper(pb.CmdMethod_Label.String()):       handleSetLabel,
 	}
 )
 

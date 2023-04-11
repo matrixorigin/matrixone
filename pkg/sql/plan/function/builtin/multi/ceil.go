@@ -57,10 +57,18 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	return generalMathMulti("ceil", vecs, proc, ceil.CeilFloat64)
 }
 
+func CeilDecimal64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := vecs[0].GetType().Scale
+	cb := func(vs []types.Decimal64, rs []types.Decimal64, digits int64) []types.Decimal64 {
+		return ceil.CeilDecimal64(vs, rs, digits, scale)
+	}
+	return generalMathMulti("ceil", vecs, proc, cb)
+}
+
 func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	scale := vecs[0].GetType().Scale
 	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
-		return ceil.CeilDecimal128(scale, 0, vs, rs)
+		return ceil.CeilDecimal128(vs, rs, digits, scale)
 	}
 	return generalMathMulti("ceil", vecs, proc, cb)
 }
