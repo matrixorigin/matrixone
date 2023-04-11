@@ -164,39 +164,8 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 	return blocksZoneMap, nil
 }
 
-func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (*dataio.ObjectMeta, error) {
-	objectMeta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	if err != nil {
-		return nil, err
-	}
-	meta := &dataio.ObjectMeta{}
-	meta.Rows = objectMeta.BlockHeader().Rows()
-
-	for i := uint16(0); i < objectMeta.BlockHeader().ColumnCount(); i++ {
-		colMeta := objectMeta.ObjectColumnMeta(i)
-		meta.ColMetas = append(meta.ColMetas, dataio.ColMeta{
-			NullCnt: colMeta.NullCnt(), Ndv: colMeta.Ndv(), Zm: index.DecodeZM(colMeta.ZoneMap())})
-	}
-	var idxs []uint16
-	for i := uint32(0); i < objectMeta.BlockCount(); i++ {
-		block := objectMeta.GetBlockMeta(i)
-		if idxs == nil {
-			idxs = make([]uint16, block.GetColumnCount())
-			for i := 0; i < len(idxs); i++ {
-				idxs[i] = uint16(i)
-			}
-		}
-		zm, err := r.LoadZoneMap(ctx, idxs, block, m)
-		meta.Zms = append(meta.Zms, zm)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return meta, nil
-}
-
-func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	return r.reader.ReadMeta(ctx, r.key.Extent(), m)
+func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
+	return r.reader.ReadMeta(ctx, r.meta, m)
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
