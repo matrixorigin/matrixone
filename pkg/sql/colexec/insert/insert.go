@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync/atomic"
 	"time"
 
@@ -92,9 +93,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	// write unique key table
 	nameToPos, pkPos := getUniqueKeyInfo(insertCtx.TableDef)
+	var uniqIndexs []engine.Relation
+	if len(insertCtx.Rels) > 1 {
+		uniqIndexs = insertCtx.Rels[1:]
+	}
 	err := colexec.WriteUniqueTable(
 		s3Writers, proc, bat, insertCtx.TableDef,
-		nameToPos, pkPos, insertCtx.Rels[1:])
+		nameToPos, pkPos, uniqIndexs)
 	if err != nil {
 		return false, err
 	}
