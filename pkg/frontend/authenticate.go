@@ -1007,6 +1007,8 @@ const (
 
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s";`
 
+	checkUserFormat = `select user_name from mo_catalog.mo_user where user_host = "%s" and  user_name = "%s" ;`
+
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1394,6 +1396,14 @@ func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (
 		return "", err
 	}
 	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
+}
+
+func getSqlForCheckUserExists(ctx context.Context, host, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkUserFormat, host, user), nil
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2310,10 +2320,10 @@ func normalizeNamesOfUsers(ctx context.Context, users []*tree.User) error {
 func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 
 	var err error
-	// var sql string
-	// var erArray []ExecResult
-	// var targetUserId uint64
-	// var accountExist bool
+	var sql string
+	var vr *verifiedRole
+	account := ses.GetTenantInfo()
+	currentUser := account.User
 
 	//1.authenticate the actions
 	if au.Role != nil {
@@ -2329,9 +2339,15 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 		return moerr.NewInternalError(ctx, "at least one option at a time")
 	}
 
+	err = normalizeNamesOfUsers(ctx, au.Users)
+	if err != nil {
+		return err
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	//put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	if err != nil {
 		goto handleFailed
@@ -2344,13 +2360,72 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 		}
 
 		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+			goto handleFailed
 		}
 
-		//normalize the name
-		user.Username, err = normalizeName(ctx, user.Username)
+		//check the user exists or not
+		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
 		if err != nil {
-			return err
+			goto handleFailed
+		}
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if vr == nil {
+			//If Exists :
+			// false : return an error
+			// true : skip and do nothing
+			if !au.IfExists {
+				err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+				goto handleFailed
+			} else {
+				continue
+			}
+		}
+
+		userName := user.Username
+		passWord := user.AuthOption.Str
+		//if the account is sysAccount
+		if account.IsSysTenant() {
+			if currentUser == rootName {
+				sql, err = getSqlForUpdatePasswordOfUser(ctx, passWord, userName)
+				if err != nil {
+					goto handleFailed
+				}
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+			} else {
+				if currentUser != userName {
+					err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+					goto handleFailed
+				}
+				sql, err = getSqlForUpdatePasswordOfUser(ctx, passWord, userName)
+				if err != nil {
+					goto handleFailed
+				}
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+		} else {
+			if currentUser != userName {
+				err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+				goto handleFailed
+			}
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, passWord, userName)
+			if err != nil {
+				goto handleFailed
+			}
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
 		}
 
 	}
