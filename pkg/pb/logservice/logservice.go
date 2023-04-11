@@ -73,6 +73,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = CNStoreInfo{}
+		storeInfo.Labels = make(map[string]metadata.LabelList)
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
@@ -81,6 +82,23 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
+}
+
+// UpdateLabel updates labels of CN store.
+func (s *CNState) UpdateLabel(label CNStoreLabel) {
+	storeInfo, ok := s.Stores[label.UUID]
+	// If the CN store does not exist, we should do nothing and wait for
+	// CN heartbeat.
+	if !ok {
+		return
+	}
+	for k, v := range label.Labels {
+		storeInfo.Labels[k] = v
+		if label.Operation == DeleteLabel {
+			delete(storeInfo.Labels, k)
+		}
+	}
+	s.Stores[label.UUID] = storeInfo
 }
 
 // NewDNState creates a new DNState.

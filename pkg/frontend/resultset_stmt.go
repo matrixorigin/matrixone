@@ -244,14 +244,6 @@ func (eae *ExplainAnalyzeExecutor) Setup(ctx context.Context, ses *Session) erro
 		return err
 	}
 	ses.SetData(nil)
-	switch eae.ea.Statement.(type) {
-	case *tree.Delete:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-	case *tree.Update:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-	default:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-	}
 	return err
 }
 

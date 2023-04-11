@@ -379,7 +379,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	defer sortKey.Close()
 	rows := make([]uint32, 0)
 	err = sortKey.ForeachShallow(func(v any, _ bool, offset int) error {
-		if compute.CompareGeneric(v, filter.Val, sortKey.GetType()) == 0 {
+		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
 			row := uint32(offset)
 			rows = append(rows, row)
 			return nil
