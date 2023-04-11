@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -91,10 +92,10 @@ func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMet
 					info.ValMap[colIdx][currentBlockMin] = 1
 				}
 
-				if compute.CompareGeneric(currentBlockMin, info.MinVal[colIdx], info.DataTypes[colIdx]) < 0 {
+				if compute.CompareGeneric(currentBlockMin, info.MinVal[colIdx], info.DataTypes[colIdx].Oid) < 0 {
 					info.MinVal[colIdx] = currentBlockMin
 				}
-				if compute.CompareGeneric(currentBlockMax, info.MaxVal[colIdx], info.DataTypes[colIdx]) > 0 {
+				if compute.CompareGeneric(currentBlockMax, info.MaxVal[colIdx], info.DataTypes[colIdx].Oid) > 0 {
 					info.MaxVal[colIdx] = currentBlockMax
 				}
 			}

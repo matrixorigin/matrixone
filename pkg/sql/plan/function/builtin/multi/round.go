@@ -15,6 +15,7 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/round"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,4 +31,20 @@ func RoundInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 
 func RoundFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return generalMathMulti("round", vecs, proc, round.RoundFloat64)
+}
+
+func RoundDecimal64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := vecs[0].GetType().Scale
+	cb := func(vs []types.Decimal64, rs []types.Decimal64, digits int64) []types.Decimal64 {
+		return round.RoundDecimal64(vs, rs, digits, scale)
+	}
+	return generalMathMulti("round", vecs, proc, cb)
+}
+
+func RoundDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := vecs[0].GetType().Scale
+	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
+		return round.RoundDecimal128(vs, rs, digits, scale)
+	}
+	return generalMathMulti("round", vecs, proc, cb)
 }

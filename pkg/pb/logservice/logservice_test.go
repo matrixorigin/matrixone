@@ -42,6 +42,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
+		Labels:         map[string]metadata.LabelList{},
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
@@ -52,6 +53,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick2,
 		ServiceAddress: hb2.ServiceAddress,
 		Role:           metadata.CNRole_TP,
+		Labels:         map[string]metadata.LabelList{},
 	})
 
 	hb3 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_TP}
@@ -62,6 +64,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick3,
 		ServiceAddress: hb3.ServiceAddress,
 		Role:           metadata.CNRole_TP,
+		Labels:         map[string]metadata.LabelList{},
 	})
 }
 
@@ -335,4 +338,87 @@ func TestLogString(t *testing.T) {
 		output := c.command.LogString()
 		assert.Equal(t, c.expected, output)
 	}
+}
+
+func TestCNLabelUpdate(t *testing.T) {
+	state := CNState{Stores: map[string]CNStoreInfo{}}
+
+	label := CNStoreLabel{
+		UUID:      "cn-1",
+		Operation: SetLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	}
+
+	state.UpdateLabel(label)
+	// No heartbeat yet, nothing happens.
+	assert.Equal(t, state.Stores[label.UUID], CNStoreInfo{})
+
+	// Add CN store to HAKeeper.
+	hb1 := CNStoreHeartbeat{UUID: "cn-1", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
+	tick1 := uint64(100)
+
+	state.Update(hb1, tick1)
+	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		Labels:         map[string]metadata.LabelList{},
+	})
+
+	label = CNStoreLabel{
+		UUID:      "cn-1",
+		Operation: SetLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	}
+
+	state.UpdateLabel(label)
+	assert.Equal(t, state.Stores[label.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	})
+
+	label = CNStoreLabel{
+		UUID:      "cn-1",
+		Operation: DeleteLabel,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+		},
+	}
+
+	state.UpdateLabel(label)
+	assert.Equal(t, state.Stores[label.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		Labels: map[string]metadata.LabelList{
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	})
 }

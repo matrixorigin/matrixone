@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -561,4 +562,79 @@ func mustHaveReplica(t *testing.T,
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("failed to locate the replica")
+}
+
+func TestUpdateCNLabel(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		label := pb.CNStoreLabel{
+			UUID:      uuid,
+			Operation: pb.SetLabel,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err := store.updateCNLabel(ctx, label)
+		assert.EqualError(t, err, fmt.Sprintf("internal error: CN [%s] does not exist", uuid))
+
+		// begin heartbeat to add CN store.
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err = store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+
+		label = pb.CNStoreLabel{
+			UUID:      uuid,
+			Operation: pb.SetLabel,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err = store.updateCNLabel(ctx, label)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 := state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		label = pb.CNStoreLabel{
+			UUID:      uuid,
+			Operation: pb.DeleteLabel,
+			Labels: map[string]metadata.LabelList{
+				"role": {Labels: []string{"1", "2"}},
+			},
+		}
+		err = store.updateCNLabel(ctx, label)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		_, ok3 = info.Labels["role"]
+		assert.False(t, ok3)
+	}
+	runStoreTest(t, fn)
 }
