@@ -595,8 +595,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
-		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+		rowIdCol := MakeRowIdColDef()
+		rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 		rightTableDef.Name2ColIndex = map[string]int32{}
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)
@@ -1071,8 +1071,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					rightTableDef := builder.qry.Nodes[rightId].TableDef
 
 					if info.typ == "insert" {
-						hiddenCol := builder.compCtx.GetHideKeyDef(idxRef.SchemaName, idxRef.ObjName)
-						rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+						rowIdCol := MakeRowIdColDef()
+						rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 
