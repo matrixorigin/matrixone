@@ -156,7 +156,7 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 
 func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, *plan.Expr_Col) {
 	fun, ok := cond.Expr.(*plan.Expr_F)
-	if !ok {
+	if !ok || fun.F.Func.ObjName != "=" {
 		return nil, nil
 	}
 	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
@@ -176,13 +176,15 @@ func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, 
 	return leftCol, rightCol
 }
 
-func replaceAllColRefInExprList(exprlist []*plan.Expr, from *plan.Expr_Col, to *plan.Expr_Col) {
+func replaceAllColRefInExprList(exprlist []*plan.Expr, from []*plan.Expr_Col, to []*plan.Expr_Col) {
 	for _, expr := range exprlist {
-		replaceCol(expr, from.Col.RelPos, from.Col.ColPos, to.Col.RelPos, to.Col.ColPos)
+		for i := range from {
+			replaceCol(expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
+		}
 	}
 }
 
-func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, to *plan.Expr_Col, builder *QueryBuilder) {
+func replaceAllColRefInPlan(nodeID int32, exceptID int32, from []*plan.Expr_Col, to []*plan.Expr_Col, builder *QueryBuilder) {
 	//change all nodes in plan, except join and its children
 	if nodeID == exceptID {
 		return
@@ -200,90 +202,126 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from *plan.Expr_Col, t
 	replaceAllColRefInExprList(node.GroupBy, from, to)
 	replaceAllColRefInExprList(node.GroupingSet, from, to)
 	for _, orderby := range node.OrderBy {
-		replaceCol(orderby.Expr, from.Col.RelPos, from.Col.ColPos, to.Col.RelPos, to.Col.ColPos)
+		for i := range from {
+			replaceCol(orderby.Expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
+		}
 	}
 }
 
-func checkColRef(expr *plan.Expr, col *plan.Expr_Col) bool {
+func addAnyValue(expr *plan.Expr, agg *plan.Node, builder *QueryBuilder) {
+	col, _ := expr.Expr.(*plan.Expr_Col)
+	idx := -1
+	for i := range agg.AggList {
+		fun, _ := agg.AggList[i].Expr.(*plan.Expr_F)
+		if fun.F.Func.ObjName != "any_value" {
+			continue
+		}
+		colAgg := fun.F.Args[0].Expr.(*plan.Expr_Col)
+		if col.Col.RelPos == colAgg.Col.RelPos && col.Col.ColPos == colAgg.Col.ColPos {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		idx = len(agg.AggList)
+		anyValueExpr, _ := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{DeepCopyExpr(expr)})
+		agg.AggList = append(agg.AggList, anyValueExpr)
+	}
+	col.Col.RelPos = agg.BindingTags[1]
+	col.Col.ColPos = int32(idx)
+}
+
+func addAnyValueForNonPKCol(expr *plan.Expr, cols []*plan.Expr_Col, agg *plan.Node, builder *QueryBuilder) {
 	if expr == nil {
-		return true
+		return
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			if !checkColRef(arg, col) {
-				return false
-			}
+			addAnyValueForNonPKCol(arg, cols, agg, builder)
 		}
 
 	case *plan.Expr_Col:
-		if exprImpl.Col.RelPos == col.Col.RelPos && exprImpl.Col.ColPos != col.Col.ColPos {
-			return false
+		if exprImpl.Col.RelPos == cols[0].Col.RelPos {
+			for i := range cols {
+				if exprImpl.Col.RelPos == cols[i].Col.RelPos && exprImpl.Col.ColPos == cols[i].Col.ColPos {
+					return
+				}
+			}
+			//nonPK col, need to add any_value
+			//first check if it is already in agg list
+			addAnyValue(expr, agg, builder)
 		}
 	}
-	return true
+
 }
 
-func checkAllColRefInExprList(exprlist []*plan.Expr, col *plan.Expr_Col) bool {
+func addAnyValueForNonPKInExprList(exprlist []*plan.Expr, cols []*plan.Expr_Col, agg *plan.Node, builder *QueryBuilder) {
 	for _, expr := range exprlist {
-		if !checkColRef(expr, col) {
-			return false
-		}
+		addAnyValueForNonPKCol(expr, cols, agg, builder)
 	}
-	return true
 }
 
-func checkAllColRefInPlan(nodeID int32, exceptID int32, col *plan.Expr_Col, builder *QueryBuilder) bool {
+func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_Col, agg *plan.Node, builder *QueryBuilder) {
 	//change all nodes in plan, except join and its children
 	if nodeID == exceptID {
-		return true
+		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			if !checkAllColRefInPlan(child, exceptID, col, builder) {
-				return false
-			}
+			addAnyValueForNonPKInPlan(child, exceptID, cols, agg, builder)
 		}
 	}
-	ret := true
-	ret = ret && checkAllColRefInExprList(node.OnList, col)
-	ret = ret && checkAllColRefInExprList(node.ProjectList, col)
-	ret = ret && checkAllColRefInExprList(node.FilterList, col)
-	ret = ret && checkAllColRefInExprList(node.AggList, col)
-	ret = ret && checkAllColRefInExprList(node.GroupBy, col)
-	ret = ret && checkAllColRefInExprList(node.GroupingSet, col)
+
+	addAnyValueForNonPKInExprList(node.OnList, cols, agg, builder)
+	addAnyValueForNonPKInExprList(node.ProjectList, cols, agg, builder)
+	addAnyValueForNonPKInExprList(node.FilterList, cols, agg, builder)
+	addAnyValueForNonPKInExprList(node.AggList, cols, agg, builder)
+	addAnyValueForNonPKInExprList(node.GroupBy, cols, agg, builder)
+	addAnyValueForNonPKInExprList(node.GroupingSet, cols, agg, builder)
 	for _, orderby := range node.OrderBy {
-		ret = ret && checkColRef(orderby.Expr, col)
+		addAnyValueForNonPKCol(orderby.Expr, cols, agg, builder)
 	}
-	return ret
 }
 
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
-	if len(agg.GroupBy) != 1 {
-		return false
-	}
-	groupColInAgg, ok := agg.GroupBy[0].Expr.(*plan.Expr_Col)
-	if !ok {
-		return false
-	}
-	if !IsEquiJoin(join.OnList) || len(join.OnList) != 1 {
-		return false
-	}
-
-	leftCol, rightCol := getJoinCondCol(join.OnList[0], agg.BindingTags[0], rightScan.BindingTags[0])
-	if leftCol == nil {
-		return false
-	}
-
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
-	pkDef := builder.compCtx.GetPrimaryKeyDef(rightScan.ObjRef.SchemaName, rightScan.ObjRef.ObjName)
-	if len(pkDef) != 1 {
+	rightBinding := builder.ctxByNode[rightScan.NodeId].bindingByTag[rightScan.BindingTags[0]]
+	if rightScan.TableDef.Pkey == nil {
 		return false
 	}
-	rightBinding := builder.ctxByNode[rightScan.NodeId].bindingByTag[rightScan.BindingTags[0]]
-	if rightBinding.FindColumn(pkDef[0].Name) != rightCol.Col.ColPos {
+	pkNames := rightScan.TableDef.Pkey.Names
+	pks := make([]int32, len(pkNames))
+	for i := range pkNames {
+		pks[i] = rightBinding.FindColumn(pkNames[i])
+	}
+
+	if !IsEquiJoin(join.OnList) || len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) {
+		return false
+	}
+
+	leftCols := make([]*plan.Expr_Col, len(join.OnList))
+	leftColPos := make([]int32, len(join.OnList))
+	rightCols := make([]*plan.Expr_Col, len(join.OnList))
+	groupColsInAgg := make([]*plan.Expr_Col, len(join.OnList))
+
+	for i := range join.OnList {
+		leftCol, rightCol := getJoinCondCol(join.OnList[i], agg.BindingTags[0], rightScan.BindingTags[0])
+		if leftCol == nil {
+			return false
+		}
+		groupColInAgg, ok := agg.GroupBy[i].Expr.(*plan.Expr_Col)
+		if !ok {
+			return false
+		}
+		leftCols[i] = leftCol
+		rightCols[i] = rightCol
+		leftColPos[i] = leftCol.Col.ColPos
+		groupColsInAgg[i] = groupColInAgg
+	}
+	if !containsAllPKs(leftColPos, pks) {
 		return false
 	}
 
@@ -291,25 +329,25 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		return false
 	}
 
-	//col ref to right table can not been seen after agg pulled up
-	//since join cond is leftcol=rightcol, we can change col ref from right col to left col
-	// and other col in right table must not be referenced
-	if !checkAllColRefInPlan(rootID, join.NodeId, rightCol, builder) {
-		return false
-	}
-	replaceAllColRefInPlan(rootID, join.NodeId, rightCol, leftCol, builder)
+	addAnyValueForNonPKInPlan(rootID, join.NodeId, rightCols, agg, builder)
+
+	replaceAllColRefInPlan(rootID, join.NodeId, rightCols, leftCols, builder)
 
 	join.Children[0] = agg.Children[0]
 	agg.Children[0] = join.NodeId
-	leftCol.Col.RelPos = groupColInAgg.Col.RelPos
-	leftCol.Col.ColPos = groupColInAgg.Col.ColPos
+
+	for i := range leftCols {
+		j := leftCols[i].Col.ColPos
+		leftCols[i].Col.RelPos = groupColsInAgg[j].Col.RelPos
+		leftCols[i].Col.ColPos = groupColsInAgg[j].Col.ColPos
+	}
 	return true
 
 }
 
 func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
-	// agg pullup only support node->inner join->agg for now
-	// we can change it to node->agg->inner join
+	// agg pullup only support node->(filter)->inner join->agg for now
+	// we can change it to node->agg->(filter)->inner join
 	node := builder.qry.Nodes[nodeID]
 
 	if len(node.Children) > 0 {
@@ -337,6 +375,9 @@ func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
 		return nodeID
 	}
 	rightScan := builder.qry.Nodes[join.Children[1]]
+	for rightScan.NodeType == plan.Node_JOIN && rightScan.JoinType == plan.Node_SEMI {
+		rightScan = builder.qry.Nodes[rightScan.Children[0]]
+	}
 	if rightScan.NodeType != plan.Node_TABLE_SCAN {
 		return nodeID
 	}
