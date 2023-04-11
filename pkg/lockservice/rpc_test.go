@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -137,6 +138,7 @@ func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
 	opts ...ServerOption) {
+	defer leaktest.AfterTest(t)()
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	assert.NoError(t, os.RemoveAll(testSockets[7:]))
 

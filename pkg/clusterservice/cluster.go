@@ -156,6 +156,26 @@ func (c *cluster) Close() {
 	close(c.forceRefreshC)
 }
 
+// DebugUpdateCNLabel implements the MOCluster interface.
+func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	defer cancel()
+	convert := make(map[string]metadata.LabelList)
+	for k, v := range kvs {
+		convert[k] = metadata.LabelList{Labels: v}
+	}
+	label := logpb.CNStoreLabel{
+		UUID:      uuid,
+		Operation: logpb.SetLabel,
+		Labels:    convert,
+	}
+	proxyClient := c.client.(logservice.ProxyHAKeeperClient)
+	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *cluster) waitReady() {
 	<-c.readyC
 }
@@ -231,6 +251,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		PipelineServiceAddress: cn.ServiceAddress,
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
+		Labels:                 cn.Labels,
 	}
 }
 

@@ -37,7 +37,6 @@ import (
 
 type TxnCompilerContext struct {
 	dbName               string
-	QryTyp               QueryType
 	txnHandler           *TxnHandler
 	ses                  *Session
 	proc                 *process.Process
@@ -56,7 +55,7 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
-	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+	return &TxnCompilerContext{txnHandler: txn, dbName: db}
 }
 
 func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -71,12 +70,6 @@ func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
-}
-
-func (tcc *TxnCompilerContext) GetQueryType() QueryType {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.QryTyp
 }
 
 func (tcc *TxnCompilerContext) SetSession(ses *Session) {
@@ -101,12 +94,6 @@ func (tcc *TxnCompilerContext) GetUserName() string {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.ses.GetUserName()
-}
-
-func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
@@ -504,21 +491,13 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		})
 	}
 
-	if tcc.GetQueryType() != TXN_DEFAULT {
-		hideKeys, err := table.GetHideKeys(ctx)
-		if err != nil {
-			return nil, nil
-		}
-		hideKey := hideKeys[0]
-		cols = append(cols, &plan2.ColDef{
-			Name: hideKey.Name,
-			Typ: &plan2.Type{
-				Id:    int32(hideKey.Type.Oid),
-				Width: hideKey.Type.Width,
-				Scale: hideKey.Type.Scale,
-			},
-			Primary: hideKey.Primary,
-		})
+	rowIdCol := plan2.MakeRowIdColDef()
+	cols = append(cols, rowIdCol)
+	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	}
+	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
+		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
 	}
 
 	//convert
@@ -660,37 +639,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		})
 	}
 	return priDefs
-}
-
-func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName, sub)
-	if err != nil {
-		return nil
-	}
-
-	hideKeys, err := relation.GetHideKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(hideKeys) == 0 {
-		return nil
-	}
-	hideKey := hideKeys[0]
-
-	hideDef := &plan2.ColDef{
-		Name: hideKey.Name,
-		Typ: &plan2.Type{
-			Id:    int32(hideKey.Type.Oid),
-			Width: hideKey.Type.Width,
-			Scale: hideKey.Type.Scale,
-		},
-		Primary: hideKey.Primary,
-	}
-	return hideDef
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {

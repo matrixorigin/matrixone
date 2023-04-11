@@ -79,8 +79,6 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (string, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
-	// get the definition of hide key
-	GetHideKeyDef(dbName string, tableName string) *ColDef
 	// get estimated stats by table & expr
 	Stats(obj *ObjectRef, e *Expr) *Stats
 	// get origin sql string of the root
@@ -309,6 +307,7 @@ type Binding struct {
 	table          string
 	tableID        uint64
 	cols           []string
+	colIsHidden    []bool
 	types          []*plan.Type
 	refCnts        []uint
 	colIdByName    map[string]int32

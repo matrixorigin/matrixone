@@ -152,20 +152,6 @@ func (mr *MockCompilerContext2MockRecorder) GetDatabaseId(dbName interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDatabaseId", reflect.TypeOf((*MockCompilerContext2)(nil).GetDatabaseId), dbName)
 }
 
-// GetHideKeyDef mocks base method.
-func (m *MockCompilerContext2) GetHideKeyDef(dbName, tableName string) *ColDef {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHideKeyDef", dbName, tableName)
-	ret0, _ := ret[0].(*ColDef)
-	return ret0
-}
-
-// GetHideKeyDef indicates an expected call of GetHideKeyDef.
-func (mr *MockCompilerContext2MockRecorder) GetHideKeyDef(dbName, tableName interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeyDef", reflect.TypeOf((*MockCompilerContext2)(nil).GetHideKeyDef), dbName, tableName)
-}
-
 // GetPrimaryKeyDef mocks base method.
 func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string) []*ColDef {
 	m.ctrl.T.Helper()

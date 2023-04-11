@@ -38,7 +38,8 @@ var (
 	CeilInt64      func([]int64, []int64, int64) []int64
 	CeilFloat32    func([]float32, []float32, int64) []float32
 	CeilFloat64    func([]float64, []float64, int64) []float64
-	CeilDecimal128 func(int32, int32, []types.Decimal128, []types.Decimal128) []types.Decimal128
+	CeilDecimal64  func([]types.Decimal64, []types.Decimal64, int64, int32) []types.Decimal64
+	CeilDecimal128 func([]types.Decimal128, []types.Decimal128, int64, int32) []types.Decimal128
 )
 
 func init() {
@@ -52,6 +53,7 @@ func init() {
 	CeilInt64 = ceilInt64
 	CeilFloat32 = ceilFloat32
 	CeilFloat64 = ceilFloat64
+	CeilDecimal64 = ceilDecimal64
 	CeilDecimal128 = ceilDecimal128
 }
 
@@ -294,9 +296,28 @@ func ceilFloat64(xs, rs []float64, digits int64) []float64 {
 	return rs
 }
 
-func ceilDecimal128(scale1, scale2 int32, xs, rs []types.Decimal128) []types.Decimal128 {
+func ceilDecimal64(xs, rs []types.Decimal64, digits int64, scale int32) []types.Decimal64 {
+	if digits > 19 {
+		digits = 19
+	}
+	if digits < -18 {
+		digits = -18
+	}
 	for i := range xs {
-		rs[i] = xs[i].Ceil(scale1, scale2)
+		rs[i] = xs[i].Ceil(scale, int32(digits))
+	}
+	return rs
+}
+
+func ceilDecimal128(xs, rs []types.Decimal128, digits int64, scale int32) []types.Decimal128 {
+	if digits > 39 {
+		digits = 39
+	}
+	if digits < -38 {
+		digits = -38
+	}
+	for i := range xs {
+		rs[i] = xs[i].Ceil(scale, int32(digits))
 	}
 	return rs
 }

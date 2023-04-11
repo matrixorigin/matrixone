@@ -17,6 +17,7 @@ package clusterservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,8 +34,8 @@ func TestSelectByServiceID(t *testing.T) {
 
 func TestSelectByLabel(t *testing.T) {
 	assert.Equal(t,
-		Selector{byLabel: true, labelName: "l1", labelOp: EQ, labelValues: []string{"v1"}},
-		NewSelector().SelectByLabel("l1", EQ, []string{"v1"}))
+		Selector{byLabel: true, labels: map[string]string{"l1": "v1"}, labelOp: EQ},
+		NewSelector().SelectByLabel(map[string]string{"l1": "v1"}, EQ))
 }
 
 func TestFilterWithServiceID(t *testing.T) {
@@ -48,18 +49,25 @@ func TestFilterWithServiceID(t *testing.T) {
 }
 
 func TestFilterWithLabel(t *testing.T) {
-	assert.False(t,
+	assert.True(t,
 		NewSelector().
-			SelectByLabel("l1", EQ, []string{"v2"}).
+			SelectByLabel(map[string]string{"l1": "v2"}, EQ).
 			filter("", nil))
 
 	assert.False(t,
 		NewSelector().
-			SelectByLabel("l1", EQ, []string{"v2"}).
-			filter("", map[string]string{"l1": "v1"}))
+			SelectByLabel(map[string]string{"l1": "v2"}, EQ).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
 
 	assert.True(t,
 		NewSelector().
-			SelectByLabel("l1", EQ, []string{"v1"}).
-			filter("", map[string]string{"l1": "v1"}))
+			SelectByLabel(map[string]string{"l1": "v1"}, EQ).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+
+	// Test the nil cases.
+	assert.True(t, NewSelector().SelectByLabel(nil, EQ).filter("", map[string]metadata.LabelList{}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{}, EQ).filter("", nil))
+	assert.True(t, NewSelector().SelectByLabel(nil, EQ).filter("", nil))
+	assert.False(t, NewSelector().SelectByLabel(nil, EQ).filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{"li": "v1"}, EQ).filter("", map[string]metadata.LabelList{}))
 }

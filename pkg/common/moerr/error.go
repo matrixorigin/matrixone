@@ -77,6 +77,7 @@ const (
 	ErrDuplicateEntry       uint16 = 20307
 	ErrWrongValueCountOnRow uint16 = 20308
 	ErrBadFieldError        uint16 = 20309
+	ErrWrongDatetimeSpec    uint16 = 20310
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -233,6 +234,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
+	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -889,6 +891,10 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
+}
+
+func NewWrongDatetimeSpec(ctx context.Context, val string) *Error {
+	return newError(ctx, ErrWrongDatetimeSpec, val)
 }
 
 func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {

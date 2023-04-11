@@ -189,6 +189,7 @@ alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.
 select version();
 drop database test;
 
+drop account if exists abc;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=abc:admin&password=123456
 drop database if exists test;
