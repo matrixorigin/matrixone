@@ -1674,7 +1674,6 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 				FromAddr: op.FromAddr,
 			})
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
-			break
 		}
 	}
 	return rs
