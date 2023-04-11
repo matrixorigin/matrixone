@@ -41,17 +41,17 @@ func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *
 	}
 }
 
-func (r *ZmReader) getZoneMap() (*objectio.ZoneMap, error) {
+func (r *ZmReader) getZoneMap() (*index.ZM, error) {
 	cached := r.cache.Load()
 	if cached != nil {
 		return cached, nil
 	}
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{r.metaKey.ID()}, nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, r.metaKey.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	zm := zmList[0][0]
+	zm := zmList[0]
 	r.cache.Store(&zm)
 	return &zm, err
 }

@@ -67,9 +67,17 @@ type Reader interface {
 	// idxs is the column serial number of the data to be read
 	Read(ctx context.Context,
 		extent *Extent, idxs []uint16,
-		ids []uint32,
+		id uint32,
 		m *mpool.MPool,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+
+	ReadAll(
+		ctx context.Context,
+		extent *Extent,
+		idxs []uint16,
+		m *mpool.MPool,
+		readFunc ReadObjectFunc,
+	) (*fileservice.IOVector, error)
 
 	ReadBlocks(ctx context.Context,
 		extent *Extent,

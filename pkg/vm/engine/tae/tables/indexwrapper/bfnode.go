@@ -50,12 +50,12 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{r.bfKey.ID()}, nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, r.bfKey.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	return bf[0], err
+	return bf, err
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {

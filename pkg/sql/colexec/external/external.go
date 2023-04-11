@@ -625,7 +625,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	bat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +641,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = bats[0].Vecs[i]
+				vecTmp = bat.Vecs[i]
 				if err != nil {
 					return nil, err
 				}
@@ -658,7 +658,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = bats[0].Vecs[i]
+			vecTmp = bat.Vecs[i]
 			if err != nil {
 				return nil, err
 			}

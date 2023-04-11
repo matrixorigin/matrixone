@@ -177,13 +177,13 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	bat, err := reader.LoadColumns(
 		context.Background(),
 		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
-		[]uint32{location.ID()},
+		location.ID(),
 		nil,
 	)
 	if err != nil {
 		return
 	}
-	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0])
+	vec = containers.NewVectorWithSharedMemory(bat.Vecs[0])
 	return
 }
 

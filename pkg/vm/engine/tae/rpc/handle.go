@@ -833,17 +833,17 @@ func (h *Handle) HandleWrite(
 					return
 				}
 			}
-			var bats []*batch.Batch
-			bats, err = reader.LoadColumns(
+			var bat *batch.Batch
+			bat, err = reader.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
-				[]uint32{location.ID()},
+				location.ID(),
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+			vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 
 			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
 			if err != nil {
