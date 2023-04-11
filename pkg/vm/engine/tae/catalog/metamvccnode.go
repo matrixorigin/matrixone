@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"unsafe"
 
@@ -23,8 +24,8 @@ import (
 )
 
 type MetadataMVCCNode struct {
-	MetaLoc  string
-	DeltaLoc string
+	MetaLoc  objectio.Location
+	DeltaLoc objectio.Location
 }
 
 func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
@@ -49,27 +50,27 @@ func (e *MetadataMVCCNode) CloneData() *MetadataMVCCNode {
 func (e *MetadataMVCCNode) String() string {
 
 	return fmt.Sprintf("[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
-		e.MetaLoc,
-		e.DeltaLoc)
+		e.MetaLoc.String(),
+		e.DeltaLoc.String())
 }
 
 // for create drop in one txn
 func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
-	if un.MetaLoc != "" {
+	if !un.MetaLoc.IsEmpty() {
 		e.MetaLoc = un.MetaLoc
 	}
-	if un.DeltaLoc != "" {
+	if !un.DeltaLoc.IsEmpty() {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
 
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	if sn, err = common.WriteString(e.MetaLoc, w); err != nil {
+	if sn, err = common.WriteBytes(e.MetaLoc, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(e.DeltaLoc, w); err != nil {
+	if sn, err = common.WriteBytes(e.DeltaLoc, w); err != nil {
 		return
 	}
 	n += sn
@@ -78,11 +79,11 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	if e.MetaLoc, sn, err = common.ReadString(r); err != nil {
+	if e.MetaLoc, sn, err = common.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn
-	if e.DeltaLoc, sn, err = common.ReadString(r); err != nil {
+	if e.DeltaLoc, sn, err = common.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn

@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -165,20 +166,20 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
 }
 
-func (blk *txnBlock) GetMetaLoc() (metaloc string) {
+func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
 	return blk.entry.GetVisibleMetaLoc(blk.Txn)
 }
-func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
+func (blk *txnBlock) GetDeltaLoc() (deltaloc objectio.Location) {
 	return blk.entry.GetVisibleDeltaLoc(blk.Txn)
 }
-func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
+func (blk *txnBlock) UpdateMetaLoc(metaLoc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaLoc)
 	return
 }
 
-func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
+func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)

@@ -26,14 +26,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BlockWriter struct {
-	writer         objectio.Writer
+	writer         *objectio.ObjectWriter
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
-	name           string
+	nameStr        string
+	name           objectio.ObjectName
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -44,6 +46,19 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	return &BlockWriter{
 		writer:  writer,
 		isSetPK: false,
+		nameStr: name,
+	}, nil
+}
+
+func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*BlockWriter, error) {
+	writer, err := objectio.NewObjectWriterNew(name, fs)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockWriter{
+		writer:  writer,
+		isSetPK: false,
+		nameStr: name.String(),
 		name:    name,
 	}, nil
 }
@@ -78,34 +93,30 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		columnData := containers.NewVectorWithSharedMemory(vec)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData)
-		zmPos := 0
-		zoneMapWriter := NewZMWriter(vec.GetType().Oid)
-		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
+
+		// Build ZM
+		zm := index.NewZM(vec.GetType().Oid)
+		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}
-		err = zoneMapWriter.AddValues(columnData)
-		if err != nil {
-			return nil, err
-		}
-		err = zoneMapWriter.Finalize()
-		// update zonemap
-		w.objMetaBuilder.UpdateZm(i, &zoneMapWriter.zonemap)
-		if err != nil {
-			return nil, err
-		}
+		// Update column meta zonemap
+		w.writer.UpdateBlockZM(int(block.GetID()), i, *zm)
+		// update object zonemap
+		w.objMetaBuilder.UpdateZm(i, zm)
+
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
-		bfPos := 1
-		bfWriter := NewBFWriter()
-		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
-			return nil, err
-		}
-		if err = bfWriter.AddValues(columnData); err != nil {
-			return nil, err
-		}
-		err = bfWriter.Finalize()
+		bf, err := index.NewBinaryFuseFilter(columnData)
 		if err != nil {
+			return nil, err
+		}
+		buf, err := bf.Marshal()
+		if err != nil {
+			return nil, err
+		}
+
+		if err = w.writer.WriteBF(int(block.GetID()), i, buf); err != nil {
 			return nil, err
 		}
 	}
@@ -129,22 +140,26 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
-		logutil.Info("[WriteEnd]", common.OperationField(w.name),
+		logutil.Info("[WriteEnd]", common.OperationField(w.nameStr),
 			common.OperandField("[Size=0]"))
 		return blocks, objectio.Extent{}, err
 	}
 	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
-	return blocks, blocks[0].GetExtent(), err
+	return blocks, *blocks[0].BlockHeader().MetaLocation(), err
+}
+
+func (w *BlockWriter) GetName() objectio.ObjectName {
+	return w.name
 }
 
 func (w *BlockWriter) String(
 	blocks []objectio.BlockObject) string {
 	size, err := GetObjectSizeWithBlocks(blocks)
 	if err != nil {
-		return fmt.Sprintf("name: %s, err: %s", w.name, err.Error())
+		return fmt.Sprintf("name: %s, err: %s", w.nameStr, err.Error())
 	}
 	return fmt.Sprintf("name: %s, block count: %d, size: %d",
-		w.name,
+		w.nameStr,
 		len(blocks),
 		size,
 	)
