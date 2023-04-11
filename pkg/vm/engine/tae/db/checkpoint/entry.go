@@ -24,9 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -35,7 +35,7 @@ type CheckpointEntry struct {
 	start, end types.TS
 	state      State
 	entryType  EntryType
-	location   string
+	location   objectio.Location
 }
 
 func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -68,13 +68,13 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
 	return e.end.LessEq(ts)
 }
-func (e *CheckpointEntry) SetLocation(location string) {
+func (e *CheckpointEntry) SetLocation(location objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
 	e.location = location
 }
 
-func (e *CheckpointEntry) GetLocation() string {
+func (e *CheckpointEntry) GetLocation() objectio.Location {
 	e.RLock()
 	defer e.RUnlock()
 	return e.location
@@ -130,7 +130,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -170,7 +170,7 @@ func (e *CheckpointEntry) Read(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -186,7 +186,7 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -210,10 +210,7 @@ func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	fileName, _, err := blockio.DecodeLocationToMetas(e.location)
+	err := fs.Delete(e.location.Name().String())
 	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
-	if err != nil {
-		return err
-	}
-	return fs.Delete(fileName)
+	return err
 }

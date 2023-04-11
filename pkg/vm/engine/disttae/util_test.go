@@ -130,7 +130,7 @@ func makeTableDefForTest(columns []string) *plan.TableDef {
 func TestBlockMetaMarshal(t *testing.T) {
 	meta := BlockMeta{
 		Info: catalog.BlockInfo{
-			MetaLoc: "test",
+			MetaLoc: []byte("test"),
 		},
 		Zonemap: [][64]byte{
 			makeZonemapForTest(types.T_int64, int64(10), int64(100)),

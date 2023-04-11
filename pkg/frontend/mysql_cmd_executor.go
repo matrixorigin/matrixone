@@ -1361,12 +1361,17 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	}
 	vs = vs[:count]
 	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
 	err := fill(session, bat)
-	vec.Free(session.GetMemPool())
+	if err != nil {
+		return err
+	}
+	// to trigger save result meta
+	err = fill(session, nil)
 	return err
 }
 
@@ -2713,7 +2718,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
-			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
 			columns, err = cw.GetColumns()

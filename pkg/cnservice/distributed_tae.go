@@ -17,8 +17,6 @@ package cnservice
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func (s *service) initDistributedTAE(

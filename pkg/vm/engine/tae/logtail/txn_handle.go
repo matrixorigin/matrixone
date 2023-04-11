@@ -79,7 +79,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.Ta
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	blk := iblk.(*catalog.BlockEntry)
 	node := blk.GetLatestNodeLocked()
-	if node.BaseNode.MetaLoc == "" {
+	if node.BaseNode.MetaLoc.IsEmpty() {
 		return
 	}
 	if b.batches[blkMetaInsBatch] == nil {

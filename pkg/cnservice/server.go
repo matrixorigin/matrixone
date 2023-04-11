@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func NewService(

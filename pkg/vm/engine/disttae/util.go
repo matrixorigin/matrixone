@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -51,10 +51,6 @@ func fetchZonemapAndRowsFromBlockInfo(
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
 	m *mpool.MPool) ([][64]byte, uint32, error) {
-	_, _, extent, rows, err := blockio.DecodeLocation(blockInfo.MetaLoc)
-	if err != nil {
-		return nil, 0, err
-	}
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
@@ -63,17 +59,17 @@ func fetchZonemapAndRowsFromBlockInfo(
 		return nil, 0, err
 	}
 
-	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{extent.Id()}, m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLoc.ID(), m)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	for i := range idxs {
-		bytes := obs[0][i].GetBuf()
+		bytes := obs[i].GetBuf()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, rows, nil
+	return zonemapList, blockInfo.MetaLoc.Rows(), nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
