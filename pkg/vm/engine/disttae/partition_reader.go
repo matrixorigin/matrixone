@@ -108,7 +108,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
 			var err error
 			//var ivec *fileservice.IOVector
-			var bats []*batch.Batch
 			// read block
 			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
@@ -131,11 +130,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
-			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{location.ID()}, p.procMPool)
+			bat, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), location.ID(), p.procMPool)
 			if err != nil {
 				return nil, err
 			}
-			rbat := bats[0]
+			rbat := bat
 			for i, vec := range rbat.Vecs {
 				rbat.Vecs[i], err = vec.Dup(p.procMPool)
 				if err != nil {

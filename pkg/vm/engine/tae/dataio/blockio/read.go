@@ -165,18 +165,18 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		}()
 	}
 
-	loadBlock := func(idxes []uint16) ([]*batch.Batch, error) {
+	loadBlock := func(idxes []uint16) (*batch.Batch, error) {
 		if len(idxes) == 0 && ok {
 			// only read rowid column on non appendable block, return early
 			bat = batch.NewWithSize(0)
 			bat.Vecs = append(bat.Vecs, rowIdVec)
 			return nil, nil
 		}
-		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, nil)
+		bats, err := reader.LoadColumns(ctx, idxes, id, nil)
 		if err != nil {
 			return nil, err
 		}
-		entry := bats[0].Vecs
+		entry := bats.Vecs
 		bat = batch.NewWithSize(0)
 		for _, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
@@ -203,10 +203,10 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if err != nil {
 			return err
 		}
-		lenVecs := len(bats[0].Vecs)
+		lenVecs := len(bats.Vecs)
 		t0 := time.Now()
-		commits := bats[0].Vecs[lenVecs-2]
-		abort := bats[0].Vecs[lenVecs-1]
+		commits := bats.Vecs[lenVecs-2]
+		abort := bats.Vecs[lenVecs-1]
 		for i := 0; i < commits.Length(); i++ {
 			if vector.GetFixedAt[bool](abort, i) || vector.GetFixedAt[types.TS](commits, i).Greater(ts) {
 				deleteRows = append(deleteRows, int64(i))
@@ -237,11 +237,11 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{deltaloc.ID()}, nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, deltaloc.ID(), nil)
 	if err != nil {
 		return nil, err
 	}
-	return bat[0], nil
+	return bat, nil
 }
 
 func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {

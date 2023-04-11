@@ -569,11 +569,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bats, err := reader.LoadColumns(ctx, indexes, []uint32{block.GetExtent().Id()}, ses.GetMemPool())
+			bat, err := reader.LoadColumns(ctx, indexes, block.GetExtent().Id(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}
-			tmpBatch = bats[0]
+			tmpBatch = bat
 			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string

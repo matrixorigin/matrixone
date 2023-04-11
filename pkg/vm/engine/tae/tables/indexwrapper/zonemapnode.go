@@ -47,14 +47,14 @@ func (r *ZmReader) getZoneMap() (dataio.Index, error) {
 	if cached != nil {
 		return cached, nil
 	}
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{r.metaKey.ID()}, nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, r.metaKey.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	zm := zmList[0][0].(index.ZM)
+	zm := zmList[0].(index.ZM)
 	r.cache.Store(&zm)
-	return zmList[0][0], err
+	return zmList[0], err
 }
 
 func (r *ZmReader) Contains(key any) bool {

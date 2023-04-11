@@ -99,7 +99,7 @@ func (r *ObjectReader) Read(
 	ctx context.Context,
 	extent *Extent,
 	idxs []uint16,
-	ids []uint32,
+	id uint32,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
@@ -107,16 +107,48 @@ func (r *ObjectReader) Read(
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) == 0 {
-		ids = make([]uint32, meta.BlockCount())
-		for i := range ids {
-			ids[i] = uint32(i)
-		}
+	data := &fileservice.IOVector{
+		FilePath: r.nameStr,
+		Entries:  make([]fileservice.IOEntry, 0),
+		NoCache:  r.noCache,
+	}
+	for _, idx := range idxs {
+		col := meta.GetColumnMeta(idx, id)
+		ext := col.Location()
+		data.Entries = append(data.Entries, fileservice.IOEntry{
+			Offset: int64(ext.Offset()),
+			Size:   int64(ext.Length()),
+
+			ToObject: readFunc(int64(ext.OriginSize())),
+		})
+	}
+
+	err = r.object.fs.Read(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (r *ObjectReader) ReadAll(
+	ctx context.Context,
+	extent *Extent,
+	idxs []uint16,
+	m *mpool.MPool,
+	readFunc ReadObjectFunc,
+) (*fileservice.IOVector, error) {
+	meta, err := r.ReadMeta(ctx, extent, m)
+	if err != nil {
+		return nil, err
 	}
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
-		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
+		Entries:  make([]fileservice.IOEntry, 0),
 		NoCache:  r.noCache,
+	}
+	ids := make([]uint32, meta.BlockCount())
+	for i := range ids {
+		ids[i] = uint32(i)
 	}
 	for _, id := range ids {
 		for _, idx := range idxs {

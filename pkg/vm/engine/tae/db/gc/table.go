@@ -304,12 +304,12 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, err := reader.LoadColumns(ctx, idxes, []uint32{bs[typ].GetID()}, common.DefaultAllocator)
+	mobat, err := reader.LoadColumns(ctx, idxes, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
 	for i := range attrs {
-		pkgVec := mobat[0].Vecs[i]
+		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i])

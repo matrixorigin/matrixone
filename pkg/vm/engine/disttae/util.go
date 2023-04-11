@@ -59,13 +59,13 @@ func fetchZonemapAndRowsFromBlockInfo(
 		return nil, 0, err
 	}
 
-	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{blockInfo.MetaLoc.ID()}, m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLoc.ID(), m)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	for i := range idxs {
-		bytes := obs[0][i].GetBuf()
+		bytes := obs[i].GetBuf()
 		copy(zonemapList[i][:], bytes[:])
 	}
 

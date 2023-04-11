@@ -459,13 +459,13 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, []uint32{id}, nil)
+	ioResult, err := reader.LoadColumns(cxt, idxs, id, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, idx := range idxs {
-		pkgVec := ioResult[0].Vecs[i]
+		pkgVec := ioResult.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])

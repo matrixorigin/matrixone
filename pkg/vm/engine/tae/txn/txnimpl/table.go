@@ -596,16 +596,16 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				if err != nil {
 					return err
 				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{loc.ID()},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -912,16 +912,16 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				if err != nil {
 					return err
 				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{loc.ID()},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
