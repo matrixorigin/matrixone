@@ -1076,7 +1076,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		if indexInfo.Name == "" {
+		if indexInfo.GetIndexName() == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 			nameCount[firstPart]++
 			count := nameCount[firstPart]
@@ -1086,7 +1086,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			indexDef.IndexName = indexName
 		} else {
-			indexDef.IndexName = indexInfo.Name
+			indexDef.IndexName = indexInfo.GetIndexName()
 		}
 		indexDef.IndexTableName = ""
 		indexDef.Parts = indexParts
@@ -1929,7 +1929,7 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	refer := def.Refer
 	fkData := fkData{
 		Def: &plan.ForeignKeyDef{
-			Name:        def.Name,
+			Name:        def.ConstraintSymbol,
 			Cols:        make([]uint64, len(def.KeyParts)),
 			OnDelete:    getRefAction(refer.OnDelete),
 			OnUpdate:    getRefAction(refer.OnUpdate),

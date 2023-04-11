@@ -27,8 +27,10 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
-		output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 	}
 )
 
@@ -652,10 +654,10 @@ var (
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, constraint sdf foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, constraint sdf foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -664,7 +666,7 @@ var (
 		input: "create table t (a int, b char, fulltext idx (a, b))",
 	}, {
 		input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
-		output: "create table t (a int, b char, primary key p1 using none (a, b))",
+		output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
