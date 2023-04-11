@@ -5156,7 +5156,7 @@ user_spec_list_of_create_user:
     }
 
 user_spec_with_identified:
-    user_name user_identified
+    user_name user_identified_opt
     {
         $$ = &tree.User{
             Username: $1.Username,

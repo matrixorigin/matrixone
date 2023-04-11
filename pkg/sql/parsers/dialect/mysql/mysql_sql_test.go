@@ -1651,6 +1651,9 @@ var (
 			input:  "alter user abc1 identified by '123'",
 			output: "alter user abc1 identified by '******'",
 		}, {
+			input:  "alter user 'username'@'host'",
+			output: "alter user username@host",
+		}, {
 			input: "create role if not exists role1, role2, role2",
 		}, {
 			input: "create role role1",
