@@ -124,15 +124,19 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	var err error
 	w.RLock()
 	defer w.RUnlock()
+	var columnCount uint16
+	columnCount = 0
 	if len(w.blocks) == 0 {
 		logutil.Warn("object io: no block needs to be written")
+	} else {
+		columnCount = w.blocks[0].GetColumnCount()
 	}
 
 	blockCount := uint32(len(w.blocks))
-	objectMeta := BuildObjectMeta(w.blocks[0].GetColumnCount())
+	objectMeta := BuildObjectMeta(columnCount)
 	objectMeta.BlockHeader().SetBlockID(blockCount)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
-	objectMeta.BlockHeader().SetColumnCount(w.blocks[0].GetColumnCount())
+	objectMeta.BlockHeader().SetColumnCount(columnCount)
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
 	start := int(objectMeta.Length())
