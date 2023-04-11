@@ -188,12 +188,6 @@ type RemoteReceivRegInfo struct {
 	FromAddr string
 }
 
-// Blocks represent the data block information of an atomic table
-type blocks struct {
-	rel    engine.Relation
-	ranges [][]byte
-}
-
 type mergeReader struct {
 	rds []engine.Reader
 }
