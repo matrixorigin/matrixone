@@ -24,6 +24,7 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClusterReady(t *testing.T) {
@@ -105,6 +106,29 @@ func BenchmarkGetService(b *testing.B) {
 		})
 }
 
+func TestCluster_DebugUpdateCNLabel(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			var cns []metadata.CNService
+			apply := func(c metadata.CNService) bool {
+				cns = append(cns, c)
+				return true
+			}
+			hc.addCN("cn0")
+			err := c.DebugUpdateCNLabel("cn0", map[string][]string{"k1": {"v1"}})
+			require.NoError(t, err)
+			c.ForceRefresh()
+			time.Sleep(time.Millisecond * 100)
+			c.GetCNService(NewServiceIDSelector("cn0"), apply)
+			require.Equal(t, 1, len(cns))
+			require.Equal(t, "cn0", cns[0].ServiceID)
+			require.Equal(t, map[string]metadata.LabelList{
+				"k1": {Labels: []string{"v1"}},
+			}, cns[0].Labels)
+		})
+}
+
 func runClusterTest(
 	refreshInterval time.Duration,
 	fn func(*testHAKeeperClient, *cluster)) {
@@ -153,4 +177,17 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 }
 func (c *testHAKeeperClient) GetClusterState(ctx context.Context) (logpb.CheckerState, error) {
 	return logpb.CheckerState{}, nil
+}
+func (c *testHAKeeperClient) GetCNState(ctx context.Context) (logpb.CNState, error) {
+	return logpb.CNState{}, nil
+}
+func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNStoreLabel) error {
+	c.Lock()
+	defer c.Unlock()
+	for i, cn := range c.value.CNStores {
+		if cn.UUID == label.UUID {
+			c.value.CNStores[i].Labels = label.Labels
+		}
+	}
+	return nil
 }

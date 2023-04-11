@@ -30,6 +30,8 @@ enum ServiceType {
   DN  = 1;
   // LOG log service
   LOG = 2;
+  // Proxy proxy service
+  PROXY = 3;
 }
 
 // DNShardRecord is DN shard metadata describing what is a DN shard. It
@@ -115,7 +117,7 @@ message CNService {
   // SQLAddress is used to provide SQL input.
   string SQLAddress             = 4;
   // Labels lables on service
-  map<string,string> Labels     = 5 [(gogoproto.nullable) = false];
+  map<string, LabelList> Labels = 5 [(gogoproto.nullable) = false];
 }
 
 // DNService dn service metadata
@@ -130,7 +132,11 @@ message DNService {
   string LockServiceAddress     = 4;
   // Shards DN shards on service
   repeated DNShard Shards       = 5 [(gogoproto.nullable) = false];
-  // Labels lables on service
-  map<string,string> Labels     = 6 [(gogoproto.nullable) = false];
+  // Labels labels on service
+  map<string, LabelList> Labels = 6 [(gogoproto.nullable) = false];
 }
 
+// LabelList defines the labels on CN store.
+message LabelList {
+  repeated string Labels = 1;
+}
