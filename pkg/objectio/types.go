@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type WriteType int8
@@ -27,6 +28,11 @@ type WriteType int8
 const (
 	WriteTS WriteType = iota
 )
+
+const ZoneMapSize = index.ZMSize
+
+type ZoneMap = index.ZM
+type StaticFilter = index.StaticFilter
 
 type WriteOptions struct {
 	Type WriteType
@@ -45,12 +51,6 @@ type Writer interface {
 	// one batch corresponds to a virtual block,
 	// and returns the handle of the block.
 	Write(batch *batch.Batch) (BlockObject, error)
-
-	// WriteIndex is the index of the column in the block written to the block's handle.
-	// block is the handle of the block
-	// idx is the column to which the index is written
-	// buf is the data to write to the index
-	WriteIndex(fd BlockObject, index IndexData, idx uint16) error
 
 	// Write metadata for every column of all blocks
 	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)

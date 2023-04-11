@@ -111,17 +111,6 @@ func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
 	return
 }
 
-func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData, idx uint16) error {
-	var err error
-
-	block := w.GetBlock(fd.GetID())
-	if block == nil || block.ColumnMeta(idx).IsEmpty() {
-		return moerr.NewInternalErrorNoCtx("object io: not found")
-	}
-	err = index.Write(w, block, idx)
-	return err
-}
-
 func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ObjectColumnMeta) {
 	w.totalRow = totalrow
 	w.colmeta = metas
