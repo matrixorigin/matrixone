@@ -71,7 +71,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			// I will improve this after cn-write-s3 delete
 			canTruncate = false
 		}
-		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, nil)
+		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, tblInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -87,6 +87,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	deleteCtx := &plan.DeleteCtx{
 		CanTruncate: canTruncate,
 		Ref:         rewriteInfo.tblInfo.objRef,
+		Idx:         make([]*plan.IdList, len(rewriteInfo.tblInfo.tableDefs)),
 
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
@@ -100,6 +101,21 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
 		OnSetDef:       rewriteInfo.onSetTableDef,
 		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
+	}
+	rowIdIdx := int64(0)
+	for i, table_def := range rewriteInfo.tblInfo.tableDefs {
+		if table_def.Pkey == nil {
+			deleteCtx.Idx[i] = &plan.IdList{
+				List: []int64{rowIdIdx},
+			}
+			rowIdIdx = rowIdIdx + 1
+		} else {
+			// have pk
+			deleteCtx.Idx[i] = &plan.IdList{
+				List: []int64{rowIdIdx, rowIdIdx + 1},
+			}
+			rowIdIdx = rowIdIdx + 2
+		}
 	}
 	for i, idxList := range rewriteInfo.onCascade {
 		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
