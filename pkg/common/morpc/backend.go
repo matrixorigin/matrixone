@@ -389,6 +389,14 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		close(rb.writeC)
 	}()
 
+	// fatal if panic
+	defer func() {
+		if err := recover(); err != nil {
+			rb.logger.Fatal("write loop failed",
+				zap.Any("err", err))
+		}
+	}()
+
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
 	for {
@@ -480,6 +488,14 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	if rb.options.hasPayloadResponse {
 		cb = wg.Done
 	}
+
+	// fatal if panic
+	defer func() {
+		if err := recover(); err != nil {
+			rb.logger.Fatal("read loop failed",
+				zap.Any("err", err))
+		}
+	}()
 
 	for {
 		select {
