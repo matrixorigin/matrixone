@@ -222,6 +222,10 @@ func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte)
 	return false, nil
 }
 
+func (ip *internalProtocol) Authenticate(ctx context.Context) error {
+	return nil
+}
+
 func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
 	return nil
 }
@@ -232,6 +236,10 @@ func (ip *internalProtocol) GetDebugString() string {
 
 func (ip *internalProtocol) GetSequenceId() uint8 {
 	return 0
+}
+
+func (ip *internalProtocol) GetConnectAttrs() map[string]string {
+	return nil
 }
 
 func (ip *internalProtocol) SetSequenceID(value uint8) {

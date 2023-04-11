@@ -15,10 +15,10 @@
 package store
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -151,12 +151,12 @@ func (info *checkpointInfo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	length := uint64(len(info.partial))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	for lsn, partialInfo := range info.partial {
-		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&lsn)); err != nil {
 			return
 		}
 		n += 8
@@ -177,13 +177,13 @@ func (info *checkpointInfo) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	length := uint64(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	for i := 0; i < int(length); i++ {
 		lsn := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
 			return
 		}
 		n += 8
