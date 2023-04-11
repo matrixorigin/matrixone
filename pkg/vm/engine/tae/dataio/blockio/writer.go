@@ -107,18 +107,31 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
-		bfPos := 1
-		bfWriter := NewBFWriter()
-		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
-			return nil, err
-		}
-		if err = bfWriter.AddValues(columnData); err != nil {
-			return nil, err
-		}
-		err = bfWriter.Finalize()
+		bf, err := index.NewBinaryFuseFilter(columnData)
 		if err != nil {
 			return nil, err
 		}
+		buf, err := bf.Marshal()
+		if err != nil {
+			return nil, err
+		}
+
+		if err = w.writer.WriteBF(int(block.GetID()), i, buf); err != nil {
+			return nil, err
+		}
+
+		// bfPos := 1
+		// bfWriter := NewBFWriter()
+		// if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
+		// 	return nil, err
+		// }
+		// if err = bfWriter.AddValues(columnData); err != nil {
+		// 	return nil, err
+		// }
+		// err = bfWriter.Finalize()
+		// if err != nil {
+		// 	return nil, err
+		// }
 	}
 	return block, nil
 }

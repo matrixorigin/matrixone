@@ -101,6 +101,16 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
+func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
+	var ext *Extent
+	if ext, err = w.buffer.WriteWithCompress(buf); err != nil {
+		return
+	}
+	meta := w.blocks[blkIdx].ColumnMeta(uint16(colIdx))
+	meta.setBloomFilter(ext)
+	return
+}
+
 func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData, idx uint16) error {
 	var err error
 
