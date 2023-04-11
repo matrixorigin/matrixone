@@ -2356,7 +2356,8 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	for _, user := range au.Users {
 
 		if user.AuthOption == nil {
-			continue
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+			goto handleFailed
 		}
 
 		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
