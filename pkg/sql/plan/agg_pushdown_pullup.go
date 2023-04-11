@@ -178,7 +178,7 @@ func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, 
 
 func replaceAllColRefInExprList(exprlist []*plan.Expr, from []*plan.Expr_Col, to []*plan.Expr_Col) {
 	for _, expr := range exprlist {
-		for i, _ := range from {
+		for i := range from {
 			replaceCol(expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
 		}
 	}
