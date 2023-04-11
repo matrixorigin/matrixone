@@ -641,37 +641,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName, sub)
-	if err != nil {
-		return nil
-	}
-
-	hideKeys, err := relation.GetHideKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(hideKeys) == 0 {
-		return nil
-	}
-	hideKey := hideKeys[0]
-
-	hideDef := &plan2.ColDef{
-		Name: hideKey.Name,
-		Typ: &plan2.Type{
-			Id:    int32(hideKey.Type.Oid),
-			Width: hideKey.Type.Width,
-			Scale: hideKey.Type.Scale,
-		},
-		Primary: hideKey.Primary,
-	}
-	return hideDef
-}
-
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
 
 	dbName := obj.GetSchemaName()
