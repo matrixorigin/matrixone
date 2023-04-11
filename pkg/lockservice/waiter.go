@@ -292,7 +292,7 @@ func (w *waiter) close(
 		value.ts = w.latestCommitTS
 	}
 	nextWaiter := w.fetchNextWaiter(serviceID, value)
-	logWaiterClose(serviceID, w)
+	logWaiterClose(serviceID, w, value.err)
 	w.unref(serviceID)
 	return nextWaiter
 }

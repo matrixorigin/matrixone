@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -187,7 +188,10 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		exprs := make([]tree.SelectExpr, 0)
 		names := make([]string, 0)
 
-		for _, col := range binding.cols {
+		for i, col := range binding.cols {
+			if binding.colIsHidden[i] {
+				continue
+			}
 			if catalog.ContainExternalHidenCol(col) {
 				continue
 			}
@@ -209,7 +213,10 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		return
 	}
 	if root.binding != nil {
-		for _, col := range root.binding.cols {
+		for i, col := range root.binding.cols {
+			if root.binding.colIsHidden[i] {
+				continue
+			}
 			if catalog.ContainExternalHidenCol(col) {
 				continue
 			}

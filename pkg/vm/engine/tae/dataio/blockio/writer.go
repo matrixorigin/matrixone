@@ -79,7 +79,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData)
 		zmPos := 0
-		zoneMapWriter := NewZMWriter()
+		zoneMapWriter := NewZMWriter(vec.GetType().Oid)
 		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
 			return nil, err
 		}
@@ -89,7 +89,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		err = zoneMapWriter.Finalize()
 		// update zonemap
-		w.objMetaBuilder.UpdateZm(i, zoneMapWriter.zonemap)
+		w.objMetaBuilder.UpdateZm(i, &zoneMapWriter.zonemap)
 		if err != nil {
 			return nil, err
 		}

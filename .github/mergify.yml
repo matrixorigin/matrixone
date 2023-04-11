@@ -13,6 +13,7 @@ pull_request_rules:
       - "check-success=e2e BVT Test on Linux/x64(LAUNCH, PULL, 1CN)"
       - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL)"
       - "check-success=e2e BVT Test on Linux/x64(LAUNCH, PUSH, 1CN)"
+      - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PROXY, PUSH)"
       # - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PUSH)"
       # - "check-success=UT Test on Darwin/x86"
       - "check-success=UT Test on Linux/Arm"

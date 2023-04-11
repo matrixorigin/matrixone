@@ -356,10 +356,6 @@ func (client *pushClient) unusedTableGCTicker() {
 	}()
 }
 
-// to ensure we can pass the SCA for unused code.
-var pushClientDemo pushClient
-var _ = pushClientDemo.unsubscribeTable
-
 type subscribeID struct {
 	db  uint64
 	tbl uint64
@@ -638,22 +634,38 @@ func distributeUpdateResponse(
 	response *logtail.UpdateResponse,
 	recRoutines []routineController) error {
 	list := response.GetLogtailList()
-	logList(list).insertionSort()
 
-	// after sort, the smaller tblId, the smaller the index.
-	var index int
-	for index = 0; index < len(list); index++ {
-		table := list[index].Table
-		notDistribute := ifShouldNotDistribute(table.DbId, table.TbId)
-		if !notDistribute {
-			break
-		}
-		if err := e.consumeUpdateLogTail(ctx, list[index], false); err != nil {
-			return err
+	// loops for mo_database, mo_tables, mo_columns.
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_DATABASE_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
 		}
 	}
-	for ; index < len(list); index++ {
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_TABLES_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
+		}
+	}
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_COLUMNS_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
+		}
+	}
+
+	for index := 0; index < len(list); index++ {
 		table := list[index].Table
+		if ifShouldNotDistribute(table.DbId, table.TbId) {
+			continue
+		}
 		recIndex := table.TbId % parallelNums
 		recRoutines[recIndex].sendTableLogTail(list[index])
 	}
@@ -889,21 +901,4 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		}
 	}
 	return nil
-}
-
-type logList []logtail.TableLogtail
-
-func (ls logList) insertionSort() {
-	aLessB := func(a, b int) bool {
-		ts := *ls[b].Ts
-		return ls[a].Ts.Less(ts) || (ls[a].Table.TbId < ls[b].Table.TbId && ls[a].Ts.Equal(ts))
-	}
-
-	if len(ls) > 1 {
-		for i := 1; i < len(ls); i++ {
-			for j := i - 1; j >= 0 && aLessB(j+1, j); j-- {
-				ls[j], ls[j+1] = ls[j+1], ls[j]
-			}
-		}
-	}
 }
