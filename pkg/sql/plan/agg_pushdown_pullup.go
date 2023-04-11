@@ -222,7 +222,6 @@ func addAnyValue(expr *plan.Expr, agg *plan.Node, builder *QueryBuilder) {
 			break
 		}
 	}
-	
 	if idx == -1 {
 		idx = len(agg.AggList)
 		anyValueExpr, _ := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{DeepCopyExpr(expr)})
