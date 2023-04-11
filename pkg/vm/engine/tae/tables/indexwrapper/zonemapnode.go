@@ -16,17 +16,21 @@ package indexwrapper
 
 import (
 	"context"
+	"sync/atomic"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ZmReader struct {
 	metaKey string
 	idx     uint16
 	reader  dataio.Reader
+	cache   atomic.Pointer[index.ZM]
 }
 
 func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
@@ -39,12 +43,17 @@ func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
 }
 
 func (r *ZmReader) getZoneMap() (dataio.Index, error) {
+	zm := r.cache.Load()
+	if zm != nil {
+		return zm, nil
+	}
 	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
 	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
+	r.cache.Store(zmList[0][0].(*index.ZM))
 	return zmList[0][0], err
 }
 

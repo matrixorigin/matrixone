@@ -9297,6 +9297,7 @@ non_reserved_keyword:
 |   PUBLICATION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
+|   PROPERTIES
 
 func_not_keyword:
     DATE_ADD
