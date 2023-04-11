@@ -91,7 +91,7 @@ func (w *S3Writer) Init() {
 	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
 		w.sels[i] = int64(i)
 	}
-	w.resetMetaLocBat()
+	w.ResetMetaLocBat()
 }
 
 func (w *S3Writer) SetSortIdx(sortIdx int) {
@@ -117,7 +117,7 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
 			writers[i].sels[j] = int64(j)
 		}
-		writers[i].resetMetaLocBat()
+		writers[i].ResetMetaLocBat()
 		//handle origin/main table's sort index.
 		if i == 0 {
 			//tableDef := insertCtx.TableDef
@@ -163,7 +163,7 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 	return writers, nil
 }
 
-func (w *S3Writer) resetMetaLocBat() {
+func (w *S3Writer) ResetMetaLocBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
@@ -178,7 +178,7 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 	if w.metaLocBat.Vecs[0].Length() > 0 {
 		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 		proc.SetInputBatch(w.metaLocBat)
-		w.resetMetaLocBat()
+		w.ResetMetaLocBat()
 	}
 }
 
@@ -187,6 +187,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		if err := w.MergeBlock(len(w.Bats), proc, false); err != nil {
 			return err
 		}
+		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 		//w.WriteEnd(proc)
 		return nil
 	}
@@ -207,6 +208,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		}
 
 	}
+	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	//w.WriteEnd(proc)
 	return nil
 }
@@ -542,8 +544,21 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		vector.AppendFixed(w.metaLocBat.Vecs[0], w.idx, false, proc.GetMPool())
-		vector.AppendBytes(w.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
+		if err := vector.AppendFixed(
+			w.metaLocBat.Vecs[0],
+			w.idx,
+			false,
+			proc.GetMPool()); err != nil {
+			return err
+		}
+		if err := vector.AppendBytes(
+			w.metaLocBat.Vecs[1],
+			[]byte(metaLoc),
+			false,
+			proc.GetMPool()); err != nil {
+			return err
+		}
 	}
+	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return nil
 }

@@ -115,11 +115,15 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
 	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	for _, w := range s3Writers {
+		//deep copy.
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
 		if err != nil {
 			return
 		}
+		w.ResetMetaLocBat()
 	}
+	//FIXME:: res.Cnt = 1 ?
+	//res.Cnt = 1
 	proc.SetInputBatch(res)
 	return
 }
