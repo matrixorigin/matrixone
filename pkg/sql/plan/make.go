@@ -347,7 +347,6 @@ func MakeRowIdColDef() *ColDef {
 		Typ: &Type{
 			Id: int32(types.T_Rowid),
 		},
-		Primary: true,
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,

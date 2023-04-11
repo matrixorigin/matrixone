@@ -92,11 +92,13 @@ func (zm ZM) SetType(t types.T) {
 }
 
 func (zm ZM) GetMin() any {
-	return zm.getValue(true)
+	buf := zm.GetMinBuf()
+	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMax() any {
-	return zm.getValue(false)
+	buf := zm.GetMaxBuf()
+	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMinBuf() []byte {
@@ -132,7 +134,7 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 
 // TODO: remove me later
 func (zm ZM) Update(v any) (err error) {
-	UpdateZMAny(&zm, v, zm.GetType().ToType())
+	UpdateZMAny(&zm, v)
 	return
 }
 
@@ -144,20 +146,20 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.ContainsString(key) {
+			if isNull || zm.containsString(key) {
 				visibility.AddInt(row)
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.ContainsFixed(key) {
+			if isNull || zm.containsBytes(key) {
 				visibility.AddInt(row)
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	}
 	ok = !visibility.IsEmpty()
 	return
@@ -170,34 +172,34 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if isNull || zm.ContainsString(key) {
+			if isNull || zm.containsString(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if isNull || zm.ContainsFixed(key) {
+			if isNull || zm.containsBytes(key) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	}
 	return
 }
 
 // Optimize me later
-func (zm ZM) ContainsFixed(k []byte) bool {
+func (zm ZM) containsBytes(k []byte) bool {
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
 }
 
-func (zm ZM) ContainsString(k []byte) bool {
+func (zm ZM) containsString(k []byte) bool {
 	if zm.MaxTruncated() {
 		return true
 	}
@@ -211,12 +213,12 @@ func (zm ZM) Contains(k any) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.ContainsString(k.([]byte))
+		return zm.containsString(k.([]byte))
 	}
 
 	t := types.T(zm[63])
-	v := types.EncodeValue(k, t.ToType())
-	return zm.ContainsFixed(v)
+	v := types.EncodeValue(k, t)
+	return zm.containsBytes(v)
 }
 
 func (zm ZM) ContainsKey(k []byte) bool {
@@ -224,7 +226,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.ContainsString(k)
+		return zm.containsString(k)
 	}
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
@@ -239,61 +241,55 @@ func (zm ZM) setInited() {
 	zm[62] |= 0x80
 }
 
-func (zm ZM) getValue(min bool) any {
-	offset := 0
-	if !min {
-		offset = 31
-	}
+func (zm ZM) getValue(buf []byte) any {
 	switch types.T(zm[63]) {
 	case types.T_bool:
-		return types.DecodeFixed[bool](zm[offset : offset+1])
+		return types.DecodeFixed[bool](buf)
 	case types.T_int8:
-		return types.DecodeFixed[int8](zm[offset : offset+1])
+		return types.DecodeFixed[int8](buf)
 	case types.T_int16:
-		return types.DecodeFixed[int16](zm[offset : offset+2])
+		return types.DecodeFixed[int16](buf)
 	case types.T_int32:
-		return types.DecodeFixed[int32](zm[offset : offset+4])
+		return types.DecodeFixed[int32](buf)
 	case types.T_int64:
-		return types.DecodeFixed[int64](zm[offset : offset+8])
+		return types.DecodeFixed[int64](buf)
 	case types.T_uint8:
-		return types.DecodeFixed[uint8](zm[offset : offset+1])
+		return types.DecodeFixed[uint8](buf)
 	case types.T_uint16:
-		return types.DecodeFixed[uint16](zm[offset : offset+2])
+		return types.DecodeFixed[uint16](buf)
 	case types.T_uint32:
-		return types.DecodeFixed[uint32](zm[offset : offset+4])
+		return types.DecodeFixed[uint32](buf)
 	case types.T_uint64:
-		return types.DecodeFixed[uint64](zm[offset : offset+8])
+		return types.DecodeFixed[uint64](buf)
 	case types.T_float32:
-		return types.DecodeFixed[float32](zm[offset : offset+4])
+		return types.DecodeFixed[float32](buf)
 	case types.T_float64:
-		return types.DecodeFixed[float64](zm[offset : offset+8])
+		return types.DecodeFixed[float64](buf)
 	case types.T_date:
-		return types.DecodeFixed[types.Date](zm[offset : offset+types.DateSize])
+		return types.DecodeFixed[types.Date](buf)
 	case types.T_time:
-		return types.DecodeFixed[types.Time](zm[offset : offset+types.TimeSize])
+		return types.DecodeFixed[types.Time](buf)
 	case types.T_datetime:
-		return types.DecodeFixed[types.Datetime](zm[offset : offset+types.DatetimeSize])
+		return types.DecodeFixed[types.Datetime](buf)
 	case types.T_timestamp:
-		return types.DecodeFixed[types.Timestamp](zm[offset : offset+types.TimestampSize])
+		return types.DecodeFixed[types.Timestamp](buf)
 	case types.T_decimal64:
-		return types.DecodeFixed[types.Decimal64](zm[offset : offset+types.Decimal64Size])
+		return types.DecodeFixed[types.Decimal64](buf)
 	case types.T_decimal128:
-		return types.DecodeFixed[types.Decimal128](zm[offset : offset+types.Decimal128Size])
+		return types.DecodeFixed[types.Decimal128](buf)
 	case types.T_uuid:
-		return types.DecodeFixed[types.Uuid](zm[offset : offset+types.UuidSize])
+		return types.DecodeFixed[types.Uuid](buf)
 	case types.T_TS:
-		return types.DecodeFixed[types.TS](zm[offset : offset+types.TxnTsSize])
+		return types.DecodeFixed[types.TS](buf)
 	case types.T_Rowid:
-		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.RowidSize])
+		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_Blockid:
-		return types.DecodeFixed[types.Rowid](zm[offset : offset+types.BlockidSize])
+		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		length := int(zm[offset+30] & 0x01f)
-		return []byte(zm)[offset : offset+length]
-	default:
-		panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
+		return buf
 	}
+	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
 
 func (zm ZM) updateMinString(v []byte) {
@@ -362,7 +358,7 @@ func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
 		UpdateZM(zm, v)
 		return
 	}
-	containers.ForeachWindowBytes(vs, 0, vs.Length(), op)
+	containers.ForeachWindowBytes(vs, 0, vs.Length(), op, nil)
 	return
 }
 
@@ -386,8 +382,8 @@ func UpdateZM(zm *ZM, v []byte) {
 	}
 }
 
-func UpdateZMAny(zm *ZM, v any, typ types.Type) {
-	vv := types.EncodeValue(v, typ)
+func UpdateZMAny(zm *ZM, v any) {
+	vv := types.EncodeValue(v, zm.GetType())
 	UpdateZM(zm, vv)
 }
 
