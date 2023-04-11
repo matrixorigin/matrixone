@@ -349,6 +349,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{"function_id", types.T_int32, false, 50, 0},
 			{"name", types.T_varchar, false, 100, 0},
+			{"creator", types.T_uint64, false, 50, 0},
 			{"args", types.T_text, false, 1000, 0},
 			{"retType", types.T_varchar, false, 20, 0},
 			{"body", types.T_text, false, 1000, 0},
@@ -382,6 +383,17 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"options", types.T_text, true, 50, 0},
 			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	moSchema["mo_role"] = &Schema{
+		cols: []col{
+			{"role_id", types.T_uint64, false, 100, 0},
+			{"role_name", types.T_varchar, false, 64, 0},
+			{"creator", types.T_int64, false, 50, 0},
+			{"owner", types.T_int64, false, 50, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"comments", types.T_varchar, false, 2048, 0},
 		},
 	}
 
