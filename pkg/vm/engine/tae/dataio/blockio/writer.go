@@ -100,7 +100,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 		// Update column meta zonemap
-		objectio.SetColumnMetaZoneMap(block.ColumnMeta(uint16(i)), *zm)
+		w.writer.UpdateBlockZM(int(block.GetID()), i, *zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)
 

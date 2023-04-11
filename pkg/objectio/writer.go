@@ -101,6 +101,10 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
+func (w *ObjectWriter) UpdateBlockZM(blkIdx, colIdx int, zm ZoneMap) {
+	w.blocks[blkIdx].ColumnMeta(uint16(colIdx)).setZoneMap(zm)
+}
+
 func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
 	var ext *Extent
 	if ext, err = w.buffer.WriteWithCompress(buf); err != nil {
