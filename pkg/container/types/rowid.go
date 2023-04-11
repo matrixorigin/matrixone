@@ -16,7 +16,6 @@ package types
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -79,7 +78,7 @@ func (r Rowid) GetSegid() Uuid {
 
 func (r Rowid) Decode() (Blockid, uint32) {
 	b := *(*Blockid)(r[:BlockidSize])
-	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	s := DecodeUint32(r[BlockidSize:])
 	return b, s
 }
 
@@ -91,15 +90,19 @@ func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
+func (r Rowid) GetRowOffset() uint32 {
+	return DecodeUint32(r[BlockidSize:])
+}
+
 func (r Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
-	s := binary.BigEndian.Uint16(r[UuidSize:ObjectBytesSize])
+	s := DecodeUint16(r[UuidSize:ObjectBytesSize])
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
 }
 
 func (r *Rowid) String() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
-	s := binary.BigEndian.Uint32(r[BlockidSize:])
+	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.String(), s)
 }
 
@@ -135,8 +138,8 @@ func (b *Blockid) ShortString() string {
 }
 
 func (b *Blockid) Offsets() (uint16, uint16) {
-	filen := binary.BigEndian.Uint16(b[UuidSize:ObjectBytesSize])
-	blkn := binary.BigEndian.Uint16(b[ObjectBytesSize:BlockidSize])
+	filen := DecodeUint16(b[UuidSize:ObjectBytesSize])
+	blkn := DecodeUint16(b[ObjectBytesSize:BlockidSize])
 	return filen, blkn
 }
 

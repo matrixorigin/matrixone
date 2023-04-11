@@ -152,8 +152,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:   t.Typs,
 		}
 	case vm.LoopJoin:
-		t := sourceIns.Arg.(*loopanti.Argument)
-		res.Arg = &loopanti.Argument{
+		t := sourceIns.Arg.(*loopjoin.Argument)
+		res.Arg = &loopjoin.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
 			Typs:   t.Typs,
@@ -403,6 +403,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	delCtx := &deletion.DeleteCtx{
 		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
 		DelRef:    oldCtx.Ref,
+		DelIdx:    make([][]int32, len(oldCtx.Idx)),
 
 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
 		IdxIdx:    oldCtx.IdxIdx,
@@ -431,6 +432,12 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			delCtx.DelSource[i] = rel
 		}
 	} else {
+		for i, list := range oldCtx.Idx {
+			delCtx.DelIdx[i] = make([]int32, len(list.List))
+			for j, id := range list.List {
+				delCtx.DelIdx[i][j] = int32(id)
+			}
+		}
 		for i, list := range oldCtx.OnSetIdx {
 			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
 			for j, id := range list.List {

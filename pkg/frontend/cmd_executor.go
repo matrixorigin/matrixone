@@ -114,8 +114,6 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-
 	if err = stmtExec.SetDatabaseName(ses.GetDatabaseName()); err != nil {
 		goto handleRet
 	}

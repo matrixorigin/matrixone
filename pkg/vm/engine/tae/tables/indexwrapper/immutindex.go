@@ -122,7 +122,7 @@ func (index *immutableIndex) ReadFrom(
 	if colDef.IsPrimary() {
 		index.bfReader = NewBfReader(
 			id,
-			colDef.Type,
+			colDef.Type.Oid,
 			location,
 			fs,
 		)

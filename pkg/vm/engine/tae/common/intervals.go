@@ -15,10 +15,10 @@
 package common
 
 import (
-	"encoding/binary"
 	"io"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -158,45 +158,39 @@ func (intervals *ClosedIntervals) GetCardinality() int {
 }
 func (intervals *ClosedIntervals) WriteTo(w io.Writer) (n int64, err error) {
 	if intervals == nil {
-		if err = binary.Write(w, binary.BigEndian, uint64(0)); err != nil {
+		length := uint64(0)
+		if _, err = w.Write(types.EncodeUint64(&length)); err != nil {
 			return
 		}
 		n += 8
 		return n, nil
 	}
-	if err = binary.Write(w, binary.BigEndian, uint64(len(intervals.Intervals))); err != nil {
+	length := uint64(len(intervals.Intervals))
+	if _, err = w.Write(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	for _, interval := range intervals.Intervals {
-		if err = binary.Write(w, binary.BigEndian, interval.Start); err != nil {
+		if _, err = w.Write(EncodeCloseInterval(interval)); err != nil {
 			return
 		}
-		n += 8
-		if err = binary.Write(w, binary.BigEndian, interval.End); err != nil {
-			return
-		}
-		n += 8
+		n += CloseIntervalSize
 	}
 	return
 }
 func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
 	length := uint64(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	intervals.Intervals = make([]*ClosedInterval, length)
 	for i := 0; i < int(length); i++ {
 		intervals.Intervals[i] = &ClosedInterval{}
-		if err = binary.Read(r, binary.BigEndian, &intervals.Intervals[i].Start); err != nil {
+		if _, err = r.Read(EncodeCloseInterval(intervals.Intervals[i])); err != nil {
 			return
 		}
-		n += 8
-		if err = binary.Read(r, binary.BigEndian, &intervals.Intervals[i].End); err != nil {
-			return
-		}
-		n += 8
+		n += CloseIntervalSize
 	}
 	return
 }
