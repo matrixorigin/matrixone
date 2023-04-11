@@ -182,7 +182,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 		}
 		b.sks[idx].Insert(v)
 		return
-	})
+	}, nil)
 }
 
 func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {

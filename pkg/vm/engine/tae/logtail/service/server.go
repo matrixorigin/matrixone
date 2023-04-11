@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	gotrace "runtime/trace"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -399,7 +399,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// fetch total logtail for table
 				var tail logtail.TableLogtail
-				gotrace.WithRegion(ctx, "subscription-pull-logtail", func() {
+				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
 					tail, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
 				})
 				if subErr != nil {

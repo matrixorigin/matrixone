@@ -31,12 +31,12 @@ type BfReader struct {
 	bfKey  objectio.Location
 	idx    uint16
 	reader dataio.Reader
-	typ    types.Type
+	typ    types.T
 }
 
 func NewBfReader(
 	id *common.ID,
-	typ types.Type,
+	typ types.T,
 	metaLoc objectio.Location,
 	fs *objectio.ObjectFS,
 ) *BfReader {
