@@ -16,8 +16,9 @@ package objectio
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const ExtentSize = 16
@@ -288,6 +289,14 @@ type ColumnMeta []byte
 func BuildColumnMeta() ColumnMeta {
 	var buf [colMetaLen]byte
 	return buf[:]
+}
+
+func SetColumnMetaType(meta ColumnMeta, t uint8) {
+	meta.setType(t)
+}
+
+func SetColumnMetaZoneMap(meta ColumnMeta, zm ZoneMap) {
+	meta.setZoneMap(zm)
 }
 
 func (cm ColumnMeta) Type() uint8 {
