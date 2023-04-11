@@ -244,7 +244,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 		if err != nil {
 			return nil, err
 		}
-		blocksBloomFilters[i] = bf.GetData().(index.StaticFilter)
+		blocksBloomFilters[i] = bf
 	}
 	return blocksBloomFilters, nil
 }

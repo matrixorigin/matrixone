@@ -16,84 +16,10 @@ package blockio
 
 import (
 	hll "github.com/axiomhq/hyperloglog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
-
-type ZMWriter struct {
-	cType       common.CompressType
-	block       objectio.BlockObject
-	zonemap     index.ZM
-	colIdx      uint16
-	internalIdx uint16
-}
-
-type BFWriter struct {
-	cType       common.CompressType
-	writer      objectio.Writer
-	block       objectio.BlockObject
-	impl        index.StaticFilter
-	data        containers.Vector
-	colIdx      uint16
-	internalIdx uint16
-}
-
-func NewBFWriter() *BFWriter {
-	return &BFWriter{}
-}
-
-func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.writer = wr
-	writer.block = block
-	writer.cType = cType
-	writer.colIdx = colIdx
-	writer.internalIdx = internalIdx
-	return nil
-}
-
-func (writer *BFWriter) Finalize() error {
-	if writer.impl != nil {
-		panic(any("formerly finalized filter not cleared yet"))
-	}
-	sf, err := index.NewBinaryFuseFilter(writer.data)
-	if err != nil {
-		return err
-	}
-	writer.impl = sf
-	writer.data = nil
-
-	appender := writer.writer
-
-	//var startOffset uint32
-	iBuf, err := writer.impl.Marshal()
-	if err != nil {
-		return err
-	}
-	bf := objectio.NewBloomFilter(uint8(writer.cType), iBuf)
-
-	err = appender.WriteIndex(writer.block, bf, writer.colIdx)
-	if err != nil {
-		return err
-	}
-	//meta.SetStartOffset(startOffset)
-	writer.impl = nil
-	return nil
-}
-
-func (writer *BFWriter) AddValues(values containers.Vector) error {
-	if writer.data == nil {
-		writer.data = values
-		return nil
-	}
-	if writer.data.GetType() != values.GetType() {
-		return moerr.NewInternalErrorNoCtx("wrong type")
-	}
-	writer.data.Extend(values)
-	return nil
-}
 
 type ObjectColumnMetasBuilder struct {
 	totalRow uint32

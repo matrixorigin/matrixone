@@ -40,7 +40,7 @@ type ObjectWriter struct {
 	name     ObjectName
 }
 
-func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
+func NewObjectWriter(name string, fs fileservice.FileService) (*ObjectWriter, error) {
 	object := NewObject(name, fs)
 	writer := &ObjectWriter{
 		nameStr: name,
@@ -53,7 +53,7 @@ func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
 	return writer, err
 }
 
-func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (Writer, error) {
+func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (*ObjectWriter, error) {
 	nameStr := name.String()
 	object := NewObject(nameStr, fs)
 	writer := &ObjectWriter{
@@ -101,15 +101,18 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
-func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData, idx uint16) error {
-	var err error
+func (w *ObjectWriter) UpdateBlockZM(blkIdx, colIdx int, zm ZoneMap) {
+	w.blocks[blkIdx].ColumnMeta(uint16(colIdx)).setZoneMap(zm)
+}
 
-	block := w.GetBlock(fd.GetID())
-	if block == nil || block.ColumnMeta(idx).IsEmpty() {
-		return moerr.NewInternalErrorNoCtx("object io: not found")
+func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
+	var ext *Extent
+	if ext, err = w.buffer.WriteWithCompress(buf); err != nil {
+		return
 	}
-	err = index.Write(w, block, idx)
-	return err
+	meta := w.blocks[blkIdx].ColumnMeta(uint16(colIdx))
+	meta.setBloomFilter(ext)
+	return
 }
 
 func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ObjectColumnMeta) {

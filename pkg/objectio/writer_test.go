@@ -78,11 +78,6 @@ func TestNewObjectWriter(t *testing.T) {
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
-		buf := fmt.Sprintf("test index %d", i)
-		index := NewBloomFilter(0, []byte(buf))
-		err = objectWriter.WriteIndex(fd, index, uint16(i))
-		assert.Nil(t, err)
-
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
@@ -98,7 +93,7 @@ func TestNewObjectWriter(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 2)
@@ -128,9 +123,6 @@ func TestNewObjectWriter(t *testing.T) {
 	buf := blk.ZoneMap()
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
-	index, err := blk.GetIndex(context.Background(), objectReader.GetObject(), newDecompressToObject, pool)
-	assert.Nil(t, err)
-	assert.Equal(t, "test index 0", string(index.data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
@@ -161,9 +153,6 @@ func TestNewObjectWriter(t *testing.T) {
 	buf = blk.ZoneMap()
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
-	index, err = blk.GetIndex(context.Background(), objectReader.GetObject(), newDecompressToObject, pool)
-	assert.Nil(t, err)
-	assert.Equal(t, "test index 0", string(index.data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 }
@@ -190,11 +179,6 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 		fd, err := objectWriter.Write(bat)
 		assert.Nil(t, err)
 		for i := range bat.Vecs {
-			buf := fmt.Sprintf("test index %d", i)
-			index := NewBloomFilter(0, []byte(buf))
-			err = objectWriter.WriteIndex(fd, index, uint16(i))
-			assert.Nil(t, err)
-
 			zbuf := make([]byte, 64)
 			zbuf[31] = 1
 			zbuf[63] = 10
@@ -209,7 +193,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	meta, err := objectReader.ReadMeta(context.Background(), blocks[0].BlockHeader().MetaLocation(), nil)
 	assert.Nil(t, err)
@@ -262,11 +246,6 @@ func TestNewObjectReader(t *testing.T) {
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
-		buf := fmt.Sprintf("test index %d", i)
-		index := NewBloomFilter(0, []byte(buf))
-		err = objectWriter.WriteIndex(fd, index, uint16(i))
-		assert.Nil(t, err)
-
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
@@ -282,7 +261,7 @@ func TestNewObjectReader(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

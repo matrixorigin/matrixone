@@ -16,11 +16,12 @@ package objectio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-func (cm ColumnMeta) GetIndex(ctx context.Context, object *Object, readFunc ReadObjectFunc, m *mpool.MPool) (*BloomFilter, error) {
+func (cm ColumnMeta) GetIndex(ctx context.Context, object *Object, readFunc ReadObjectFunc, m *mpool.MPool) (StaticFilter, error) {
 	data := &fileservice.IOVector{
 		FilePath: object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -35,7 +36,7 @@ func (cm ColumnMeta) GetIndex(ctx context.Context, object *Object, readFunc Read
 	if err != nil {
 		return nil, err
 	}
-	return NewBloomFilter(0, data.Entries[0].Object), nil
+	return data.Entries[0].Object.(StaticFilter), nil
 }
 
 func (cm ColumnMeta) GetMeta() ColumnMeta {
