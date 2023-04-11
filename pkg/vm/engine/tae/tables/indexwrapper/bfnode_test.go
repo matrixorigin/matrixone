@@ -44,6 +44,6 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	objectWriter, err := objectio.NewObjectWriter(name, service)
 	assert.Nil(t, err)
-	/*fd*/ block, err := objectWriter.Write(bat)
+	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
 }
