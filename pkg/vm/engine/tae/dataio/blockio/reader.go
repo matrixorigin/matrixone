@@ -34,7 +34,7 @@ import (
 )
 
 type BlockReader struct {
-	reader  objectio.Reader
+	reader  *objectio.ObjectReader
 	key     objectio.Location
 	name    string
 	meta    *objectio.Extent
@@ -47,7 +47,7 @@ type fetch struct {
 	idxes  []uint16
 	ids    []uint32
 	pool   *mpool.MPool
-	reader objectio.Reader
+	reader *objectio.ObjectReader
 }
 
 func NewObjectReader(service fileservice.FileService, key objectio.Location) (dataio.Reader, error) {
@@ -235,7 +235,7 @@ func (r *BlockReader) GetName() string {
 func (r *BlockReader) GetObjectExtent() *objectio.Extent {
 	return r.meta
 }
-func (r *BlockReader) GetObjectReader() objectio.Reader {
+func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
 }
 
