@@ -119,19 +119,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = w.writer.WriteBF(int(block.GetID()), i, buf); err != nil {
 			return nil, err
 		}
-
-		// bfPos := 1
-		// bfWriter := NewBFWriter()
-		// if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
-		// 	return nil, err
-		// }
-		// if err = bfWriter.AddValues(columnData); err != nil {
-		// 	return nil, err
-		// }
-		// err = bfWriter.Finalize()
-		// if err != nil {
-		// 	return nil, err
-		// }
 	}
 	return block, nil
 }
