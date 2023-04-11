@@ -210,9 +210,24 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from []*plan.Expr_Col,
 
 func addAnyValue(expr *plan.Expr, agg *plan.Node, builder *QueryBuilder) {
 	col, _ := expr.Expr.(*plan.Expr_Col)
-	idx := len(agg.AggList)
-	anyValueExpr, _ := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{DeepCopyExpr(expr)})
-	agg.AggList = append(agg.AggList, anyValueExpr)
+	idx := -1
+	for i := range agg.AggList {
+		fun, _ := agg.AggList[i].Expr.(*plan.Expr_F)
+		if fun.F.Func.ObjName != "any_value" {
+			continue
+		}
+		colAgg := fun.F.Args[0].Expr.(*plan.Expr_Col)
+		if col.Col.RelPos == colAgg.Col.RelPos && col.Col.ColPos == colAgg.Col.ColPos {
+			idx = i
+			break
+		}
+	}
+	
+	if idx == -1 {
+		idx = len(agg.AggList)
+		anyValueExpr, _ := bindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{DeepCopyExpr(expr)})
+		agg.AggList = append(agg.AggList, anyValueExpr)
+	}
 	col.Col.RelPos = agg.BindingTags[1]
 	col.Col.ColPos = int32(idx)
 }
