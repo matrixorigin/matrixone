@@ -1213,6 +1213,9 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 		if err != nil {
 			return err
 		}
+		if err = pro.Authenticate(ctx); err != nil {
+			return err
+		}
 		pro.SetEstablished()
 		return nil
 	}

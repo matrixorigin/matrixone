@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -57,6 +58,7 @@ var (
 	launchFile  = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	versionFlag = flag.Bool("version", false, "print version information")
 	daemon      = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy   = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
 )
 
 func main() {
@@ -165,6 +167,8 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return startDNService(cfg, stopper, fs, globalCounterSet)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, globalCounterSet)
+	case metadata.ServiceType_PROXY:
+		return startProxyService(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -271,6 +275,27 @@ func startLogService(
 			}
 		}
 
+		<-ctx.Done()
+		if err := s.Close(); err != nil {
+			panic(err)
+		}
+	})
+}
+
+// startProxyService starts the proxy service.
+func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
+	return stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
+		s, err := proxy.NewServer(
+			ctx,
+			cfg.getProxyConfig(),
+			proxy.WithRuntime(runtime.ProcessLevelRuntime()),
+		)
+		if err != nil {
+			panic(err)
+		}
+		if err := s.Start(); err != nil {
+			panic(err)
+		}
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
 			panic(err)
