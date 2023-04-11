@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -343,7 +344,7 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return

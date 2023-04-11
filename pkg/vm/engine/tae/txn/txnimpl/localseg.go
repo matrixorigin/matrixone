@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -258,13 +259,13 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	}
 
 	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(common.CreateSegOpt).WithId(&sid))
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
 			return
 		}
 	}
-	opts := new(common.CreateBlockOpt).
+	opts := new(objectio.CreateBlockOpt).
 		WithMetaloc(metaloc).
 		WithDetaloc(deltaloc).
 		WithFileIdx(filen).

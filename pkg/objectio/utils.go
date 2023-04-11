@@ -11,11 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package common
+package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type CreateSegOpt struct {
@@ -29,8 +28,8 @@ func (o *CreateSegOpt) WithId(id *types.Uuid) *CreateSegOpt {
 
 type CreateBlockOpt struct {
 	Loc *struct {
-		Metaloc  objectio.Location
-		Deltaloc objectio.Location
+		Metaloc  Location
+		Deltaloc Location
 	}
 
 	Id *struct {
@@ -39,25 +38,25 @@ type CreateBlockOpt struct {
 	}
 }
 
-func (o *CreateBlockOpt) WithMetaloc(s objectio.Location) *CreateBlockOpt {
+func (o *CreateBlockOpt) WithMetaloc(s Location) *CreateBlockOpt {
 	if o.Loc != nil {
 		o.Loc.Metaloc = s
 	} else {
 		o.Loc = &struct {
-			Metaloc  objectio.Location
-			Deltaloc objectio.Location
+			Metaloc  Location
+			Deltaloc Location
 		}{Metaloc: s}
 	}
 	return o
 }
 
-func (o *CreateBlockOpt) WithDetaloc(s objectio.Location) *CreateBlockOpt {
+func (o *CreateBlockOpt) WithDetaloc(s Location) *CreateBlockOpt {
 	if o.Loc != nil {
 		o.Loc.Deltaloc = s
 	} else {
 		o.Loc = &struct {
-			Metaloc  objectio.Location
-			Deltaloc objectio.Location
+			Metaloc  Location
+			Deltaloc Location
 		}{Deltaloc: s}
 	}
 	return o

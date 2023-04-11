@@ -17,9 +17,10 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
@@ -284,7 +285,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
 		blk, err = toSegEntry.CreateNonAppendableBlock(
-			new(common.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
+			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
 		}
