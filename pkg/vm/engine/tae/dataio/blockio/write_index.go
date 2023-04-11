@@ -28,7 +28,6 @@ import (
 
 type ZMWriter struct {
 	cType       common.CompressType
-	writer      objectio.Writer
 	block       objectio.BlockObject
 	zonemap     index.ZM
 	colIdx      uint16
@@ -45,8 +44,7 @@ func (writer *ZMWriter) String() string {
 	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
 }
 
-func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.writer = wr
+func (writer *ZMWriter) Init(block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.block = block
 	writer.cType = cType
 	writer.colIdx = colIdx
@@ -55,15 +53,9 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 }
 
 func (writer *ZMWriter) Finalize() error {
-
-	//var startOffset uint32
-	iBuf, err := writer.zonemap.Marshal()
-	if err != nil {
-		return err
-	}
-	zonemap := objectio.ZoneMap(iBuf)
-	zonemap.Write(nil, writer.block, writer.colIdx)
-	//meta.SetStartOffset(startOffset)
+	objectio.SetColumnMetaZoneMap(
+		objectio.ColumnMeta(writer.block.ColumnMeta(writer.colIdx)),
+		writer.zonemap)
 	return nil
 }
 

@@ -101,7 +101,7 @@ func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Bloc
 func (store *NoopTxnStore) CreateBlock(uint64, uint64, types.Uuid, bool) (blk handle.Block, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return
 }
 

@@ -16,7 +16,7 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/pierrec/lz4"
 )
 
@@ -27,19 +27,13 @@ const (
 	BloomFilterType
 )
 
-const ZoneMapSize = 64
+const ZoneMapSize = index.ZMSize
+
+type ZoneMap = index.ZM
 
 type IndexData interface {
 	Write(writer *ObjectWriter, block BlockObject, idx uint16) error
 	GetIdx() uint16
-}
-
-type ZoneMapUnmarshalFunc = func(buf []byte, t types.Type) (any, error)
-
-type ZoneMap []byte
-
-func (z *ZoneMap) Write(_ *ObjectWriter, block BlockObject, idx uint16) {
-	block.ColumnMeta(idx).setZoneMap(*z)
 }
 
 type BloomFilter struct {

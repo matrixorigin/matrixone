@@ -16,7 +16,6 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -232,8 +231,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			var deltaLoc objectio.Location
-			deltaLoc = blockio.EncodeLocation(
+			deltaLoc := blockio.EncodeLocation(
 				ablockTask.name,
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
@@ -324,8 +322,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if deletes != nil {
-		var deltaLoc objectio.Location
-		deltaLoc = blockio.EncodeLocation(
+		deltaLoc := blockio.EncodeLocation(
 			ioTask.name,
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),

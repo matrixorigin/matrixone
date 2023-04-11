@@ -71,7 +71,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	// var visibility *roaring.Bitmap
 
 	writer := blockio.NewZMWriter(typ.Oid)
-	err = writer.Init(objectWriter, blocks[0], cType, pkColIdx, interIdx)
+	err = writer.Init(blocks[0], cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := containers.MockVector2(typ, 1000, 0)

@@ -94,7 +94,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.objMetaBuilder.InspectVector(i, columnData)
 		zmPos := 0
 		zoneMapWriter := NewZMWriter(vec.GetType().Oid)
-		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
+		if err = zoneMapWriter.Init(block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
 			return nil, err
 		}
 		err = zoneMapWriter.AddValues(columnData)

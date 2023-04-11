@@ -15,9 +15,10 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
@@ -264,7 +265,7 @@ type TxnStore interface {
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
 	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error)

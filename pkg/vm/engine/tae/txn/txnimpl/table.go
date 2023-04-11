@@ -17,8 +17,9 @@ package txnimpl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -375,11 +376,11 @@ func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
@@ -447,7 +448,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
@@ -459,7 +460,7 @@ func (tbl *txnTable) createBlock(
 	sid types.Uuid,
 	state catalog.EntryState,
 	is1PC bool,
-	opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
