@@ -640,6 +640,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 
+	case plan.Node_EXTERNAL_SCAN:
+		// no good method to estimate external table
+		node.Stats = &plan.Stats{
+			TableCnt:    1000000,
+			BlockNum:    100,
+			Outcnt:      1000000,
+			Cost:        1000000,
+			Selectivity: 1,
+		}
+
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
