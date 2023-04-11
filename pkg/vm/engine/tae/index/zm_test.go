@@ -23,6 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestZMNull(t *testing.T) {
+	zm := NewZM(types.T_datetime)
+	x := zm.GetMin()
+	require.Nil(t, x)
+	y := zm.GetMax()
+	require.Nil(t, y)
+}
+
 func TestZM(t *testing.T) {
 	int64v := int64(100)
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
