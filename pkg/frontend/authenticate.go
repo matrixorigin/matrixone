@@ -2307,6 +2307,71 @@ func normalizeNamesOfUsers(ctx context.Context, users []*tree.User) error {
 	return nil
 }
 
+func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
+
+	var err error
+	// var sql string
+	// var erArray []ExecResult
+	// var targetUserId uint64
+	// var accountExist bool
+
+	//1.authenticate the actions
+	if au.Role != nil {
+		return moerr.NewInternalError(ctx, "not support alter role")
+	}
+	if au.MiscOpt != nil {
+		return moerr.NewInternalError(ctx, "not support password or lock operation")
+	}
+	if au.CommentOrAttribute.Exist {
+		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
+	}
+	if len(au.Users) == 0 {
+		return moerr.NewInternalError(ctx, "at least one option at a time")
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	for _, user := range au.Users {
+
+		if user.AuthOption == nil {
+			continue
+		}
+
+		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s'", user.Username, user.Hostname)
+		}
+
+		//normalize the name
+		user.Username, err = normalizeName(ctx, user.Username)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+
+}
 func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) error {
 	var err error
 	var sql string
