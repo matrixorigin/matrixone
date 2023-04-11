@@ -61,7 +61,7 @@ type Writer interface {
 }
 
 // Reader is to read data from fileservice
-type Reader interface {
+type Reader2 interface {
 	// Read is to read columns data of a block from fileservice at one time
 	// extent is location of the block meta
 	// idxs is the column serial number of the data to be read

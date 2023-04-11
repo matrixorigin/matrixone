@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 /*type ColMeta struct {
@@ -59,7 +58,7 @@ type Reader interface {
 	// idx is the column number of the index to be read,Only one column of data in a block has BloomFilter
 	// ids is the block id to read.
 	// Returns index.StaticFilter data structures
-	LoadBloomFilter(ctx context.Context, idx uint16, ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error)
+	LoadBloomFilter(ctx context.Context, idx uint16, ids []uint32, m *mpool.MPool) ([]objectio.StaticFilter, error)
 
 	// MvccLoadColumns loads the data of the column specified by the block at a certain point in time(ts)
 	// info is the BlockInfo of the block, including MetaLoc/DeltaLoc/CommitTs... some
@@ -75,7 +74,7 @@ type Reader interface {
 	GetObjectName() objectio.ObjectName
 	GetName() string
 	GetObjectExtent() *objectio.Extent
-	GetObjectReader() objectio.Reader
+	GetObjectReader() *objectio.ObjectReader
 }
 
 // Writer is the only interface that mo provides to CN/DN/ETL... modules to write data

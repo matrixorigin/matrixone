@@ -31,7 +31,7 @@ type ObjectReader struct {
 	ReaderOptions
 }
 
-func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
+func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (*ObjectReader, error) {
 	reader := &ObjectReader{
 		nameStr: name,
 		object:  NewObject(name, fs),
@@ -42,7 +42,7 @@ func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...Rea
 	return reader, nil
 }
 
-func NewObjectReader(name ObjectName, fs fileservice.FileService, opts ...ReaderOptionFunc) (Reader, error) {
+func NewObjectReader(name ObjectName, fs fileservice.FileService, opts ...ReaderOptionFunc) (*ObjectReader, error) {
 	str := name.String()
 	reader := &ObjectReader{
 		nameStr: str,

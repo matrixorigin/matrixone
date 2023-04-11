@@ -28,7 +28,7 @@ type prefetch struct {
 	nameStr string
 	meta    *objectio.Extent
 	ids     map[uint32]*objectio.ReadBlockOptions
-	reader  objectio.Reader
+	reader  *objectio.ObjectReader
 }
 
 func BuildPrefetch(service fileservice.FileService, key objectio.Location) (prefetch, error) {
