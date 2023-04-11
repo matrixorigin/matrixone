@@ -1467,7 +1467,6 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
 				Arg: constructBroadcastDispatch(j, rs, c.addr),
-				//Arg: constructDispatchLocal(true, extraRegisters(rs, j)),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1578,7 +1577,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 }
 
 func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
-	var ss []*Scope
+	ss := make([]*Scope, 0, len(leftScopes))
 	for i := range leftScopes {
 		tmp := new(Scope)
 		tmp.Magic = Remote

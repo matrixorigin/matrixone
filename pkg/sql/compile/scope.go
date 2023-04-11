@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -515,28 +514,7 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-//func dupScopeList(ss []*Scope) []*Scope {
-//rs := make([]*Scope, len(ss))
-//for i := range rs {
-//rs[i] = dupScope(ss[i])
-//}
-//return rs
-//}
-
-//func dupScope(s *Scope) *Scope {
-//regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-
-//newScope, err := copyScope(s, regMap)
-//if err != nil {
-//return nil
-//}
-//err = fillInstructionsByCopyScope(newScope, s, regMap)
-//if err != nil {
-//return nil
-//}
-//return newScope
-//}
-
+/*
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
@@ -633,6 +611,7 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	}
 	return nil
 }
+*/
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 	for i := range s.RemoteReceivRegInfos {
