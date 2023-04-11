@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -147,13 +146,13 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
+	ids []uint32, m *mpool.MPool) ([][]objectio.ZoneMap, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
 
-	blocksZoneMap := make([][]dataio.Index, len(ids))
+	blocksZoneMap := make([][]objectio.ZoneMap, len(ids))
 	for i, id := range ids {
 		block := meta.GetBlockMeta(id)
 		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, block, m)
@@ -187,8 +186,8 @@ func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
 	idxs []uint16,
 	block objectio.BlockObject,
-	m *mpool.MPool) ([]dataio.Index, error) {
-	zoneMapList := make([]dataio.Index, len(idxs))
+	m *mpool.MPool) ([]objectio.ZoneMap, error) {
+	zoneMapList := make([]objectio.ZoneMap, len(idxs))
 	for i, idx := range idxs {
 		column, err := block.GetColumn(idx)
 		if err != nil {

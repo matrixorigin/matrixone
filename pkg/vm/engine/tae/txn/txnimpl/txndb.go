@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -118,7 +117,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
-	zm []dataio.Index,
+	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {

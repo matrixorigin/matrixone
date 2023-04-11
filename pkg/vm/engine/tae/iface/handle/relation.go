@@ -15,11 +15,11 @@
 package handle
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -52,7 +52,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(zm []dataio.Index, metaLcos []objectio.Location) error
+	AddBlksWithMetaLoc(zm []objectio.ZoneMap, metaLcos []objectio.Location) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
