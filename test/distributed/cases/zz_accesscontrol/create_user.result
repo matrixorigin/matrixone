@@ -99,7 +99,6 @@ customername    localhost
 CREATE USER ''@'localhost' IDENTIFIED BY '1111';
 internal error: the name "" is invalid
 create user if not exists user1 ,user2 ,user3 identified by '12345678';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " ,user2 ,user3 identified by '12345678';";
 create user if not exists all identified by '111' ;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " all identified by '111' ;";
 create user user:1 identified by '111' ;
