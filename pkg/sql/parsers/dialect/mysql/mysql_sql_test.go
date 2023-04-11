@@ -27,22 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 add constraint unique key (col3, col4)",
-		output: "alter table t1 add unique key (col3, col4)",
-		//input:  "alter table t1 add constraint unique key zxxxxxx (col3, col4)",
-		//output: "alter table t1 add unique key zxxxxxx (col3, col4)",
-		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
-		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
-		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
-		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
-		//input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
-		//output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
-		//input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
-		//output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
-		//input:  "alter table t1 add constraint foreign key fk1 (col4) references dept(deptno)",
-		//output: "alter table t1 add foreign key fk1 (col4) references dept(deptno)",
-		//input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
-		//output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 	}
 )
 
@@ -2071,6 +2057,54 @@ var (
 		{
 			input:  "alter table t1 alter index c invisible",
 			output: "alter table t1 alter index c invisible",
+		},
+		{
+			input:  "alter table t1 add constraint index (col3, col4)",
+			output: "alter table t1 add index (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint index zxxxxxx (col3, col4)",
+			output: "alter table t1 add index zxxxxxx (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key (col3, col4)",
+			output: "alter table t1 add unique key (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key zxxxxxx (col3, col4)",
+			output: "alter table t1 add unique key zxxxxxx (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key (col4) references dept(deptno)",
 		},
 		{
 			input: "create publication pub1 database db1",

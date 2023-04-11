@@ -6266,12 +6266,11 @@ constaint_def:
             case *tree.ForeignKey:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
-                fmt.Println("--> wuxiliang -- UniqueIndex ConstraintSymbol :" + $1)
                 v.ConstraintSymbol = $1
-                fmt.Println("--> wuxiliang -- v.ConstraintSymbol :" + v.ConstraintSymbol)
+            case *tree.Index:
+		v.ConstraintSymbol = $1
             }
         }
-     	fmt.Printf("--> wuxiliang -- $2 : %v \n", $2)
         $$ = $2
     }
 |    constraint_elem

@@ -860,14 +860,18 @@ func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Primar
 
 type Index struct {
 	tableDefImpl
-	IfNotExists bool
-	KeyParts    []*KeyPart
-	Name        string
-	KeyType     IndexType
-	IndexOption *IndexOption
+	IfNotExists      bool
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	KeyType          IndexType
+	IndexOption      *IndexOption
 }
 
 func (node *Index) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("index")
 	if node.IfNotExists {
 		ctx.WriteString(" if not exists")
@@ -892,6 +896,14 @@ func (node *Index) Format(ctx *FmtCtx) {
 	if node.IndexOption != nil {
 		ctx.WriteByte(' ')
 		node.IndexOption.Format(ctx)
+	}
+}
+
+func (node *Index) GetIndexName() string {
+	if len(node.Name) != 0 {
+		return node.Name
+	} else {
+		return node.ConstraintSymbol
 	}
 }
 
