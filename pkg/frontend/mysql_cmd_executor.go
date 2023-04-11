@@ -1361,12 +1361,17 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	}
 	vs = vs[:count]
 	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
 	err := fill(session, bat)
-	vec.Free(session.GetMemPool())
+	if err != nil {
+		return err
+	}
+	// to trigger save result meta
+	err = fill(session, nil)
 	return err
 }
 
