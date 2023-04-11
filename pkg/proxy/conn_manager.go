@@ -119,21 +119,26 @@ func (ci *connInfo) count() int {
 // connManager tracks the connections to backend CN servers.
 type connManager struct {
 	sync.Mutex
-	// LabelHash =>
+	// LabelHash => connInfo
 	// The hash is a hashed value from labelInfo.
 	conns map[LabelHash]*connInfo
+
+	// Map from connection ID to CN server.
+	connIDServers map[uint32]*CNServer
 }
 
 // newConnManager creates a new connManager.
 func newConnManager() *connManager {
-	m := &connManager{}
-	m.conns = make(map[LabelHash]*connInfo)
+	m := &connManager{
+		conns:         make(map[LabelHash]*connInfo),
+		connIDServers: make(map[uint32]*CNServer),
+	}
 	return m
 }
 
 // selectOne select the most suitable CN server according the connection count
 // on each CN server. The least count CN server is returned.
-func (m *connManager) selectOne(hash LabelHash, cns []*CNServer, excludeEmptyCN bool) (*CNServer, error) {
+func (m *connManager) selectOne(hash LabelHash, cns []*CNServer, excludeEmptyCN bool) *CNServer {
 	m.Lock()
 	defer m.Unlock()
 
@@ -150,12 +155,12 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer, excludeEmptyCN 
 		// Means that no CN server has been connected for this tenant.
 		// So return any of it.
 		if !ok {
-			return cn, nil
+			return cn
 		}
 		tunnels, ok := ci.cnTunnels[cn.uuid]
 		// There are no connections on this CN server.
 		if !ok {
-			return cn, nil
+			return cn
 		}
 		// Choose the CNServer that has the least connections on it.
 		if tunnels.count() < minCount {
@@ -163,7 +168,7 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer, excludeEmptyCN 
 			minCount = tunnels.count()
 		}
 	}
-	return ret, nil
+	return ret
 }
 
 // connect adds a new connection to connection manager.
@@ -175,6 +180,7 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
 	}
 	m.conns[cn.hash].cnTunnels.add(cn.uuid, t)
+	m.connIDServers[cn.connID] = cn
 }
 
 // disconnect removes a connection from connection manager.
@@ -186,6 +192,7 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 		return
 	}
 	ci.cnTunnels.del(cn.uuid, t)
+	delete(m.connIDServers, cn.connID)
 }
 
 // count returns the total connection count.
@@ -232,4 +239,15 @@ func (m *connManager) getLabelInfo(hash LabelHash) labelInfo {
 		return labelInfo{}
 	}
 	return ci.label
+}
+
+// getCNServer returns a CN server which has the connection ID.
+func (m *connManager) getCNServer(connID uint32) *CNServer {
+	m.Lock()
+	defer m.Unlock()
+	cn, ok := m.connIDServers[connID]
+	if ok {
+		return cn
+	}
+	return nil
 }
