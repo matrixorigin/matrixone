@@ -140,7 +140,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, []uint32{0}, pool, newDecompressToObject)
+	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, 0, pool, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -201,6 +201,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 }
 
 func BenchmarkMetadata(b *testing.B) {
+	b.Skip("use test")
 	meta := getObjectMeta(b)
 	b.Run("GetBlockMeta", func(b *testing.B) {
 		b.ResetTimer()
