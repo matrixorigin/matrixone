@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -163,7 +165,26 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 
 	if !empty {
-		if _, err = task.createAndFlushNewBlock(seg, preparer, deletes); err != nil {
+		createOnSeg := seg
+		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
+		// double the threshold to make more room for creating new appendable segment during appending, just a piece of defensive code
+		// check GetAppender function in tableHandle
+		if curSeg.GetNextObjectIndex() > options.DefaultObejctPerSegment*2 {
+			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
+			if nextSeg.ID == curSeg.ID {
+				// we can't create appendable seg here because compaction can be rollbacked.
+				// so just wait until the new appendable seg is available.
+				// actually this log can barely be printed.
+				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				return moerr.GetOkExpectedEOB()
+			}
+			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(nextSeg.ID)
+			if err != nil {
+				return err
+			}
+		}
+
+		if _, err = task.createAndFlushNewBlock(createOnSeg, preparer, deletes); err != nil {
 			return
 		}
 	}

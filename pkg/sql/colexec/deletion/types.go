@@ -41,6 +41,7 @@ type DeleteCtx struct {
 
 	DelSource []engine.Relation
 	DelRef    []*plan.ObjectRef
+	DelIdx    [][]int32
 
 	IdxSource []engine.Relation
 	IdxIdx    []int32

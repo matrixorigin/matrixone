@@ -74,11 +74,21 @@ type LogHAKeeperClient interface {
 	SendLogHeartbeat(ctx context.Context, hb pb.LogStoreHeartbeat) (pb.CommandBatch, error)
 }
 
+// ProxyHAKeeperClient is the HAKeeper client used by proxy service.
+type ProxyHAKeeperClient interface {
+	basicHAKeeperClient
+	// GetCNState gets CN state from HAKeeper.
+	GetCNState(ctx context.Context) (pb.CNState, error)
+	// UpdateCNLabel updates the labels of CN.
+	UpdateCNLabel(ctx context.Context, label pb.CNStoreLabel) error
+}
+
 // TODO: HAKeeper discovery to be implemented
 
 var _ CNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ DNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
+var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 //
@@ -107,6 +117,17 @@ func NewDNHAKeeperClient(ctx context.Context,
 // NB: caller could specify options for morpc.Client via ctx.
 func NewLogHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (LogHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return newManagedHAKeeperClient(ctx, cfg)
+}
+
+// NewProxyHAKeeperClient creates a HAKeeper client to be used by a proxy service.
+//
+// NB: caller could specify options for morpc.Client via ctx.
+func NewProxyHAKeeperClient(ctx context.Context,
+	cfg HAKeeperClientConfig) (ProxyHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -312,6 +333,40 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 			continue
 		}
 		return cb, err
+	}
+}
+
+// GetCNState implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CNState{}, err
+		}
+		s, err := c.getClient().getCNState(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
+	}
+}
+
+// UpdateCNLabel implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) UpdateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().updateCNLabel(ctx, label)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
 	}
 }
 
@@ -541,6 +596,26 @@ func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, nil
 	}
 	return *resp.CommandBatch, nil
+}
+
+func (c *hakeeperClient) getCNState(ctx context.Context) (pb.CNState, error) {
+	s, err := c.getClusterState(ctx)
+	if err != nil {
+		return pb.CNState{}, err
+	}
+	return s.CNState, nil
+}
+
+func (c *hakeeperClient) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
+	req := pb.Request{
+		Method:       pb.UPDATE_CN_LABEL,
+		CNStoreLabel: &label,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
