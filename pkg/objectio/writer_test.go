@@ -201,7 +201,6 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 }
 
 func BenchmarkMetadata(b *testing.B) {
-	b.Skip("use test")
 	meta := getObjectMeta(b)
 	b.Run("GetBlockMeta", func(b *testing.B) {
 		b.ResetTimer()

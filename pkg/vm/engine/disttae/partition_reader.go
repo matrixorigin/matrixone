@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -106,6 +107,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
 			var err error
+			var location objectio.Location
 			//var ivec *fileservice.IOVector
 			// read block
 			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
@@ -114,7 +116,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				p.inserts = p.inserts[1:]
 			}
 			metaLoc := p.blockBatch.read()
-			location, err := blockio.EncodeLocationFromString(metaLoc)
+			location, err = blockio.EncodeLocationFromString(metaLoc)
 			name := location.Name().String()
 			if name != p.currentFileName {
 				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, location)

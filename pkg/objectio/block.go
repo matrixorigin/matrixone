@@ -64,11 +64,3 @@ func (bm BlockObject) GetColumnCount() uint16 {
 func (bm BlockObject) MarshalMeta() []byte {
 	return bm
 }
-
-func (bm BlockObject) UnmarshalMeta(data []byte) (uint32, error) {
-	var err error
-	header := BlockHeader(data[:headerLen])
-	metaLen := headerLen + header.ColumnCount()*colMetaLen
-	bm = data[:metaLen]
-	return uint32(metaLen), err
-}
