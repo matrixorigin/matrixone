@@ -143,6 +143,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowColumnNumber(stmt, ctx)
 	case *tree.ShowTableValues:
 		return buildShowTableValues(stmt, ctx)
+	case *tree.ShowRolesStmt:
+		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
 		return buildSetVariables(stmt, ctx)
 	case *tree.Execute:
