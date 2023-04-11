@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,7 +82,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm dataio.Index) {
+func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
 		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
@@ -330,7 +329,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	zm []dataio.Index,
+	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location,
 ) (err error) {
 	for i, metaLoc := range metaLocs {

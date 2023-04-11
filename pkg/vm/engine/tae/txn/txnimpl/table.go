@@ -21,8 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -579,7 +578,7 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 }
 
 func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []dataio.Index,
+	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {

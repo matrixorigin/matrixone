@@ -17,7 +17,6 @@ package blockio
 import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 )
 
 // prefetch is the parameter of the executed IoPipeline.Prefetch, which
@@ -39,7 +38,7 @@ func BuildPrefetch(service fileservice.FileService, key objectio.Location) (pref
 	return buildPrefetch(reader), nil
 }
 
-func buildPrefetch(reader dataio.Reader) prefetch {
+func buildPrefetch(reader *BlockReader) prefetch {
 	ids := make(map[uint32]*objectio.ReadBlockOptions)
 	return prefetch{
 		name:    reader.GetObjectName(),
@@ -49,7 +48,7 @@ func buildPrefetch(reader dataio.Reader) prefetch {
 		reader:  reader.GetObjectReader(),
 	}
 }
-func buildPrefetchNew(reader dataio.Reader) prefetch {
+func buildPrefetchNew(reader *BlockReader) prefetch {
 	ids := make(map[uint32]*objectio.ReadBlockOptions)
 	return prefetch{
 		nameStr: reader.GetName(),
