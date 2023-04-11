@@ -40,7 +40,7 @@ type ObjectWriter struct {
 	name     ObjectName
 }
 
-func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
+func NewObjectWriter(name string, fs fileservice.FileService) (*ObjectWriter, error) {
 	object := NewObject(name, fs)
 	writer := &ObjectWriter{
 		nameStr: name,
@@ -53,7 +53,7 @@ func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
 	return writer, err
 }
 
-func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (Writer, error) {
+func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (*ObjectWriter, error) {
 	nameStr := name.String()
 	object := NewObject(nameStr, fs)
 	writer := &ObjectWriter{

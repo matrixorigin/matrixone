@@ -98,7 +98,7 @@ func TestNewObjectWriter(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 2)
@@ -209,7 +209,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	meta, err := objectReader.ReadMeta(context.Background(), blocks[0].BlockHeader().MetaLocation(), nil)
 	assert.Nil(t, err)
@@ -282,7 +282,7 @@ func TestNewObjectReader(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
+	assert.Nil(t, objectWriter.buffer)
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

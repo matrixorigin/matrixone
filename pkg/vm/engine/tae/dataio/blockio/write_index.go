@@ -23,17 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type ZMWriter struct {
-	cType       common.CompressType
-	block       objectio.BlockObject
-	zonemap     index.ZM
-	colIdx      uint16
-	internalIdx uint16
-}
-
 type BFWriter struct {
 	cType       common.CompressType
-	writer      objectio.Writer
+	writer      *objectio.ObjectWriter
 	block       objectio.BlockObject
 	impl        index.StaticFilter
 	data        containers.Vector
@@ -45,7 +37,7 @@ func NewBFWriter() *BFWriter {
 	return &BFWriter{}
 }
 
-func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *BFWriter) Init(wr *objectio.ObjectWriter, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType

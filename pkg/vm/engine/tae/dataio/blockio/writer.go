@@ -30,7 +30,7 @@ import (
 )
 
 type BlockWriter struct {
-	writer         objectio.Writer
+	writer         *objectio.ObjectWriter
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
