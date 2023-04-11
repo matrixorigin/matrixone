@@ -155,6 +155,9 @@
 /pkg/vm/engine/tae @XuPeng-SH 
 /pkg/vm/engine/memoryengine @reusee
 
+# proxy
+/pkg/proxy @zhangxu19830126 @volgariver6
+
 
 # /proto contains pb definitions, owners will be responsible
 # for compatibility issues required for rolling upgrade.
