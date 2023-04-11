@@ -179,11 +179,6 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 		fd, err := objectWriter.Write(bat)
 		assert.Nil(t, err)
 		for i := range bat.Vecs {
-			buf := fmt.Sprintf("test index %d", i)
-			index := NewBloomFilter(0, []byte(buf))
-			err = objectWriter.WriteIndex(fd, index, uint16(i))
-			assert.Nil(t, err)
-
 			zbuf := make([]byte, 64)
 			zbuf[31] = 1
 			zbuf[63] = 10
@@ -251,11 +246,6 @@ func TestNewObjectReader(t *testing.T) {
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
-		buf := fmt.Sprintf("test index %d", i)
-		index := NewBloomFilter(0, []byte(buf))
-		err = objectWriter.WriteIndex(fd, index, uint16(i))
-		assert.Nil(t, err)
-
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
