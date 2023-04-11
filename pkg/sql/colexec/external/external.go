@@ -53,7 +53,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
@@ -617,8 +617,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
-	header := meta.GetHeader()
-	colCnt := header.GetColumnCount()
+	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if param.Extern.SysTable && idxs[i] >= colCnt {
@@ -626,7 +625,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +641,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = bats[0].Vecs[i]
+				vecTmp = tmpBat.Vecs[i]
 				if err != nil {
 					return nil, err
 				}
@@ -659,7 +658,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = bats[0].Vecs[i]
+			vecTmp = tmpBat.Vecs[i]
 			if err != nil {
 				return nil, err
 			}

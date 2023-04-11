@@ -257,6 +257,9 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 		return splitUserInput(ctx, userInput, ':')
 	} else if strings.IndexByte(userInput, '#') != -1 {
 		return splitUserInput(ctx, userInput, '#')
+	} else if strings.Contains(userInput, "%3A") {
+		newUserInput := strings.ReplaceAll(userInput, "%3A", ":")
+		return splitUserInput(ctx, newUserInput, ':')
 	}
 	return splitUserInput(ctx, userInput, ':')
 }

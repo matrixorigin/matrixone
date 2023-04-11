@@ -18,7 +18,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -237,7 +237,7 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
-		zm []dataio.Index, metaLocs []string) error
+		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
@@ -263,11 +263,11 @@ type TxnStore interface {
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
-	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
-	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error)
+	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error)
+	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 

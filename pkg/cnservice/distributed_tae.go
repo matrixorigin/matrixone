@@ -16,7 +16,8 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
