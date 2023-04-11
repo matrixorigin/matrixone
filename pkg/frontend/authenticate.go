@@ -257,6 +257,9 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 		return splitUserInput(ctx, userInput, ':')
 	} else if strings.IndexByte(userInput, '#') != -1 {
 		return splitUserInput(ctx, userInput, '#')
+	} else if strings.Contains(userInput, "%3A") {
+		newUserInput := strings.ReplaceAll(userInput, "%3A", ":")
+		return splitUserInput(ctx, newUserInput, ':')
 	}
 	return splitUserInput(ctx, userInput, ':')
 }
@@ -4780,7 +4783,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
-		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions:
 		objType = objectTypeNone
 		kind = privilegeKindNone

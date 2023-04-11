@@ -37,15 +37,10 @@ func (s Selector) SelectByServiceID(serviceID string) Selector {
 }
 
 // SelectByLabel select service by label
-func (s Selector) SelectByLabel(labelName string, op Op, values []string) Selector {
-	if len(values) == 0 {
-		panic("invalid expect values")
-	}
-
+func (s Selector) SelectByLabel(labels map[string]string, op Op) Selector {
 	s.byLabel = true
 	s.labelOp = op
-	s.labelName = labelName
-	s.labelValues = values
+	s.labels = labels
 	return s
 }
 
@@ -57,18 +52,49 @@ func (s Selector) filterDN(dn metadata.DNService) bool {
 	return s.filter(dn.ServiceID, dn.Labels)
 }
 
-func (s Selector) filter(serviceID string, labels map[string]string) bool {
+func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList) bool {
 	if s.byServiceID {
 		return serviceID == s.serviceID
 	}
 	if s.byLabel {
 		switch s.labelOp {
 		case EQ:
-			return labels != nil &&
-				s.labelValues[0] == labels[s.labelName]
+			if s.emptyLabel() && len(labels) > 0 {
+				return false
+			}
+			// If it is an empty CN server, return true.
+			if len(labels) == 0 {
+				return true
+			}
+			for k, v := range s.labels {
+				values, ok := labels[k]
+				if !ok {
+					return false
+				}
+				if !containLabel(values.Labels, v) {
+					return false
+				}
+			}
+			return true
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+func (s Selector) emptyLabel() bool {
+	if s.labels == nil || len(s.labels) == 0 {
+		return true
+	}
+	return false
+}
+
+func containLabel(labels []string, label string) bool {
+	for _, l := range labels {
+		if l == label {
+			return true
+		}
+	}
+	return false
 }

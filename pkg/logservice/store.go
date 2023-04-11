@@ -528,6 +528,28 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	return v.(uint64), nil
 }
 
+func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[label.UUID]; !ok {
+		return moerr.NewInternalError(ctx, "CN [%s] does not exist", label.UUID)
+	}
+	cmd := hakeeper.GetUpdateCNLabelCmd(label)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose CN label",
+			zap.String("label", label.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
 func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))
