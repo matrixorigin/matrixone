@@ -17,8 +17,8 @@ package txnimpl
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -82,7 +82,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc string, deltaLoc string, zm dataio.Index) {
+func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
 		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
@@ -245,8 +245,9 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	}
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
-	name, blkn, _, _, _ := blockio.DecodeLocation(metaloc)
-	sid, filen := common.MustSegmentidFromMetalocName(name)
+	blkn := metaloc.ID()
+	sid := metaloc.Name().Sid()
+	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {
 		if seg.nseg == nil {
@@ -257,13 +258,13 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	}
 
 	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(common.CreateSegOpt).WithId(&sid))
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
 			return
 		}
 	}
-	opts := new(common.CreateBlockOpt).
+	opts := new(objectio.CreateBlockOpt).
 		WithMetaloc(metaloc).
 		WithDetaloc(deltaloc).
 		WithFileIdx(filen).
@@ -328,11 +329,11 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	zm []dataio.Index,
-	metaLocs []string,
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location,
 ) (err error) {
 	for i, metaLoc := range metaLocs {
-		seg.registerNode(metaLoc, "", nil)
+		seg.registerNode(metaLoc, nil, nil)
 		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
 		if pkVecs != nil && skip == txnif.PKDedupSkipNone {

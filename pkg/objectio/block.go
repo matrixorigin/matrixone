@@ -15,115 +15,52 @@
 package objectio
 
 import (
-	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// Block is the organizational structure of a batch in objectio
-// Write one batch at a time, and batch and block correspond one-to-one
-type Block struct {
-	// id is the serial number of the block in the object
-	id uint32
-
-	// header is the metadata of the block, such as tableid, blockid, column count...
-	header BlockHeader
-
-	// columns is the vector in the batch
-	columns []*ColumnBlock
-
-	// object is a container that can store multiple blocks,
-	// using a fileservice file storage
-	object *Object
-
-	// extent is the location of the block's metadata on the fileservice
-	extent Extent
-
-	// name is the file name or object name of the block
-	name string
+func NewBlock(colCnt uint16) BlockObject {
+	header := BuildBlockHeader()
+	header.SetColumnCount(colCnt)
+	blockMeta := BuildBlockMeta(colCnt)
+	blockMeta.SetBlockMetaHeader(header)
+	for i := uint16(0); i < colCnt; i++ {
+		col := BuildColumnMeta()
+		col.setIdx(i)
+		blockMeta.AddColumnMeta(i, col)
+	}
+	return blockMeta
 }
 
-func NewBlock(colCnt uint16, object *Object, name string) BlockObject {
-	header := BlockHeader{
-		columnCount: colCnt,
-	}
-	block := &Block{
-		header:  header,
-		object:  object,
-		columns: make([]*ColumnBlock, colCnt),
-		name:    name,
-	}
-	for i := range block.columns {
-		block.columns[i] = NewColumnBlock(uint16(i), block.object)
-	}
-	return block
+func (bm BlockObject) GetExtent() Extent {
+	return *bm.BlockHeader().MetaLocation()
 }
 
-func (b *Block) GetExtent() Extent {
-	return b.extent
-}
-
-func (b *Block) GetColumn(idx uint16) (*ColumnBlock, error) {
-	if idx >= uint16(len(b.columns)) {
+func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
+	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
-			"block: %v, column count: %d",
-			idx, b.name,
-			len(b.columns))
+			"block: %d, column count: %d",
+			idx, bm.BlockHeader().BlockID(),
+			bm.BlockHeader().ColumnCount())
 	}
-	return b.columns[idx], nil
+	return bm.ColumnMeta(idx), nil
 }
 
-func (b *Block) GetRows() (uint32, error) {
+func (bm BlockObject) GetRows() (uint32, error) {
 	panic(any("implement me"))
 }
 
-func (b *Block) GetMeta() BlockMeta {
-	return BlockMeta{
-		header: b.header,
-		name:   b.name,
-	}
+func (bm BlockObject) GetMeta() BlockObject {
+	return bm
 }
 
-func (b *Block) GetID() uint32 {
-	return b.id
+func (bm BlockObject) GetID() uint32 {
+	return uint32(bm.BlockHeader().BlockID())
 }
 
-func (b *Block) GetColumnCount() uint16 {
-	return b.header.columnCount
+func (bm BlockObject) GetColumnCount() uint16 {
+	return bm.BlockHeader().ColumnCount()
 }
 
-func (b *Block) MarshalMeta() []byte {
-	var (
-		buffer bytes.Buffer
-	)
-	// write header
-	buffer.Write(b.header.Marshal())
-	// write columns meta
-	for _, column := range b.columns {
-		buffer.Write(column.MarshalMeta())
-	}
-	return buffer.Bytes()
-}
-
-func (b *Block) UnmarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
-	var err error
-	size := uint32(0)
-	b.header = BlockHeader{}
-	b.header.Unmarshal(data)
-	size += HeaderSize
-	data = data[HeaderSize:]
-	b.columns = make([]*ColumnBlock, b.header.columnCount)
-	for i := range b.columns {
-		b.columns[i] = NewColumnBlock(uint16(i), b.object)
-		b.columns[i].meta.zoneMap = ZoneMap{
-			idx:           uint16(i),
-			unmarshalFunc: ZMUnmarshalFunc,
-		}
-		err = b.columns[i].UnmarshalMate(data)
-		if err != nil {
-			return 0, err
-		}
-		size += ColumnMetaSize
-		data = data[ColumnMetaSize:]
-	}
-	return size, err
+func (bm BlockObject) MarshalMeta() []byte {
+	return bm
 }

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -106,7 +105,7 @@ func jobFactory(
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.id, nil, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -121,13 +120,13 @@ func jobFactory(
 func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pref.name),
+		makeName(pref.nameStr),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := pref.reader.ReadBlocks(ctx,
-				pref.meta, pref.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+				pref.meta, pref.ids, nil, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -142,13 +141,13 @@ func prefetchJob(ctx context.Context, pref prefetch) *tasks.Job {
 func prefetchMetaJob(ctx context.Context, pref prefetch) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(pref.name),
+		makeName(pref.nameStr),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := pref.reader.ReadMeta(ctx,
-				[]objectio.Extent{pref.meta}, nil, LoadZoneMapFunc)
+				pref.meta, nil)
 			if err != nil {
 				res.Err = err
 				return
@@ -163,7 +162,7 @@ type FetchFunc = func(ctx context.Context, proc fetch) (any, error)
 type PrefetchFunc = func(pref prefetch) error
 
 func syncFetch(ctx context.Context, proc fetch) (any, error) {
-	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.id, nil, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}

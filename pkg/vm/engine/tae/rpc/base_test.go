@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"testing"
 	"time"
 
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"

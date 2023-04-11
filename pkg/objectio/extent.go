@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -53,4 +54,8 @@ func (ex *Extent) Unmarshal(data []byte) {
 	ex.offset = e.offset
 	ex.length = e.length
 	ex.originSize = e.originSize
+}
+
+func (ex Extent) String() string {
+	return fmt.Sprintf("%d_%d_%d_%d", ex.id, ex.offset, ex.length, ex.originSize)
 }

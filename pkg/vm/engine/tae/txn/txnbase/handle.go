@@ -16,9 +16,9 @@ package txnbase
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -67,7 +67,7 @@ func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
 func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
-func (rel *TxnRelation) AddBlksWithMetaLoc([]dataio.Index, []string) error {
+func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Location) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                    { return nil }

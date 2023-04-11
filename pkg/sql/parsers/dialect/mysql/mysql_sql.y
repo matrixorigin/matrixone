@@ -6262,9 +6262,13 @@ constaint_def:
         if $1 != "" {
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
-                v.Name = $1
+                v.ConstraintSymbol = $1
             case *tree.ForeignKey:
-                v.Name = $1
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                v.ConstraintSymbol = $1
+            case *tree.Index:
+		v.ConstraintSymbol = $1
             }
         }
         $$ = $2
