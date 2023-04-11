@@ -15,21 +15,13 @@
 package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/pierrec/lz4"
-)
-
-type IndexDataType uint8
-
-const (
-	ZoneMapType IndexDataType = iota
-	BloomFilterType
 )
 
 const ZoneMapSize = index.ZMSize
 
 type ZoneMap = index.ZM
+type StaticFilter = index.StaticFilter
 
 type IndexData interface {
 	Write(writer *ObjectWriter, block BlockObject, idx uint16) error
@@ -58,21 +50,7 @@ func (b *BloomFilter) GetData() any {
 }
 
 func (b *BloomFilter) Write(writer *ObjectWriter, block BlockObject, idx uint16) error {
-	var err error
-	dataLen := len(b.data.([]byte))
-	data := make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(b.data.([]byte), data, compress.Lz4); err != nil {
-		return err
-	}
-	offset, length, err := writer.buffer.Write(data)
-	if err != nil {
-		return err
-	}
-	extent := Extent{
-		offset:     uint32(offset),
-		length:     uint32(length),
-		originSize: uint32(dataLen),
-	}
+	extent, err := writer.buffer.WriteWithCompress(b.data.([]byte))
 	block.ColumnMeta(idx).setBloomFilter(extent)
 	return err
 }

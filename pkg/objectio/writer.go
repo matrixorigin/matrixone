@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/pierrec/lz4"
 )
 
 type ObjectWriter struct {
@@ -90,24 +89,12 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		originSize := len(buf)
-		// TODO:Now by default, lz4 compression must be used for Write,
-		// and parameters need to be passed in later to determine the compression type
-		data := make([]byte, lz4.CompressBlockBound(originSize))
-		if buf, err = compress.Compress(buf, data, compress.Lz4); err != nil {
+		var ext *Extent
+		if ext, err = w.buffer.WriteWithCompress(buf); err != nil {
 			return nil, err
 		}
-		offset, length, err := w.buffer.Write(buf)
-		if err != nil {
-			return nil, err
-		}
-		location := &Extent{
-			id:         block.GetID(),
-			offset:     uint32(offset),
-			length:     uint32(length),
-			originSize: uint32(originSize),
-		}
-		block.ColumnMeta(uint16(i)).setLocation(location)
+		ext.id = block.GetID()
+		block.ColumnMeta(uint16(i)).setLocation(ext)
 		block.ColumnMeta(uint16(i)).setAlg(compress.Lz4)
 		block.ColumnMeta(uint16(i)).setType(uint8(vec.GetType().Oid))
 	}

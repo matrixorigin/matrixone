@@ -343,7 +343,7 @@ func (cm ColumnMeta) BloomFilter() *Extent {
 	return (*Extent)(unsafe.Pointer(&cm[bloomFilterOff]))
 }
 
-func (cm ColumnMeta) setBloomFilter(location Extent) {
+func (cm ColumnMeta) setBloomFilter(location *Extent) {
 	copy(cm[bloomFilterOff:bloomFilterOff+bloomFilterLen], location.Marshal())
 }
 

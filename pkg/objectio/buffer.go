@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/pierrec/lz4"
 )
 
 // ObjectBuffer is the buffer prepared before writing to
@@ -78,4 +80,22 @@ func (b *ObjectBuffer) SetDataOptions(items ...WriteOptions) {
 			continue
 		}
 	}
+}
+
+func (b *ObjectBuffer) WriteWithCompress(buf []byte) (ext *Extent, err error) {
+	dataLen := len(buf)
+	data := make([]byte, lz4.CompressBlockBound(dataLen))
+	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
+		return
+	}
+	offset, length, err := b.Write(data)
+	if err != nil {
+		return
+	}
+	ext = &Extent{
+		offset:     uint32(offset),
+		length:     uint32(length),
+		originSize: uint32(dataLen),
+	}
+	return
 }
