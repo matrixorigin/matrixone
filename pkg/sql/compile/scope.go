@@ -81,48 +81,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
+	for _, scope := range s.PreScopes {
+		switch scope.Magic {
 		case Normal:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.Run(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
 		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
 		case Remote:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.RemoteRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
 		case Parallel:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.ParallelRun(c, cs.IsRemote)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.ParallelRun(c, cs.IsRemote) }(scope)
 		case Pushdown:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.PushdownRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
 		}
 	}
 	var errReceiveChan chan error
@@ -267,11 +237,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(c, s, ss)
+	newScope := newParallelScope(s, ss)
 	return newScope.MergeRun(c)
 }
 
-func (s *Scope) PushdownRun(c *Compile) error {
+func (s *Scope) PushdownRun() error {
 	var end bool // exist flag
 	var err error
 
@@ -316,7 +286,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
-	s = newParallelScope(c, s, ss)
+	s = newParallelScope(s, ss)
 
 	if isRight {
 		channel := make(chan *[]int32)
@@ -339,7 +309,7 @@ func (s *Scope) isRight() bool {
 	return s != nil && s.Instructions[0].Op == vm.Right
 }
 
-func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
+func newParallelScope(s *Scope, ss []*Scope) *Scope {
 	var flg bool
 
 	for i, in := range s.Instructions {
@@ -634,7 +604,7 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	return nil
 }
 
-func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
+func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for _, rr := range s.RemoteReceivRegInfos {
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
@@ -679,8 +649,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			errChan <- nil
 		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
 	}
-
-	return nil
 }
 
 func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {

@@ -4677,6 +4677,108 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+// This is used to observe a lot of compactions to overflow a segment, it is not compulsory
+func TestAlwaysUpdate(t *testing.T) {
+	t.Skip("This is a long test, run it manully to observe catalog")
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts2(nil, 100)
+	opts.GCCfg.ScanGCInterval = 3600 * time.Second
+	opts.CatalogCfg.GCInterval = 3600 * time.Second
+	// opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.Name = "testupdate"
+	schema.BlockMaxRows = 8192
+	schema.SegmentMaxBlocks = 200
+	tae.bindSchema(schema)
+
+	bats := catalog.MockBatch(schema, 400*100).Split(100)
+	metalocs := make([]string, 0, 100)
+	// write only one segment
+	for i := 0; i < 1; i++ {
+		objName1 := common.NewSegmentid().ToString() + "-0"
+		writer, err := blockio.NewBlockWriter(tae.Fs.Service, objName1)
+		assert.Nil(t, err)
+		writer.SetPrimaryKey(3)
+		for _, bat := range bats[i*25 : (i+1)*25] {
+			_, err := writer.WriteBlock(bat)
+			assert.Nil(t, err)
+		}
+		blocks, _, err := writer.Sync(context.Background())
+		assert.Nil(t, err)
+		assert.Equal(t, 25, len(blocks))
+		for _, blk := range blocks {
+			loc, err := blockio.EncodeLocation(blk.GetExtent(), 8192, blocks)
+			assert.Nil(t, err)
+			metalocs = append(metalocs, loc)
+		}
+	}
+
+	txn, _ := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	tbl, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, tbl.AddBlksWithMetaLoc(nil, metalocs))
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
+	wg := &sync.WaitGroup{}
+
+	updateFn := func(i, j int) {
+		defer wg.Done()
+		tuples := bats[0].CloneWindow(0, 1)
+		defer tuples.Close()
+		for x := i; x < j; x++ {
+			txn, rel := tae.getRelation()
+			filter := handle.NewEQFilter(int64(x))
+			id, offset, err := rel.GetByFilter(filter)
+			assert.NoError(t, err)
+			_, err = rel.GetValue(id, offset, 2)
+			assert.NoError(t, err)
+			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+			if err != nil {
+				t.Logf("range delete %v, rollbacking", err)
+				_ = txn.Rollback()
+				return
+			}
+			tuples.Vecs[3].Update(0, int64(x))
+			err = rel.Append(tuples)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+		}
+		t.Logf("(%d, %d) done", i, j)
+	}
+
+	p, _ := ants.NewPool(10)
+	defer p.Release()
+
+	ch := make(chan int, 1)
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				t.Log(tae.Catalog.SimplePPString(common.PPL1))
+			case <-ch:
+			}
+		}
+	}()
+
+	for r := 0; r < 10; r++ {
+		for i := 0; i < 40; i++ {
+			wg.Add(1)
+			start, end := i*200, (i+1)*200
+			f := func() { updateFn(start, end) }
+			p.Submit(f)
+		}
+		wg.Wait()
+	}
+}
+
 func TestInsertPerf(t *testing.T) {
 	t.Skip(any("for debug"))
 	opts := new(options.Options)
