@@ -52,7 +52,7 @@ type Vector interface {
 	GetDownstreamVector() *cnVector.Vector
 	setDownstreamVector(vec *cnVector.Vector)
 
-	Update(i int, v any)
+	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
 
 	Extend(o Vector)

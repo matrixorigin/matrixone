@@ -376,7 +376,7 @@ func TestCopy1(t *testing.T) {
 	t1 := types.T_varchar.ToType()
 	v1 := containers.MockVector(t1, 10, false, nil)
 	defer v1.Close()
-	v1.Update(5, types.Null{})
+	v1.Update(5, nil, true)
 	mv1 := containers.CopyToMoVec(v1)
 	for i := 0; i < v1.Length(); i++ {
 		if v1.IsNull(i) {
@@ -389,7 +389,7 @@ func TestCopy1(t *testing.T) {
 	t2 := types.T_date.ToType()
 	v2 := containers.MockVector(t2, 20, false, nil)
 	defer v2.Close()
-	v2.Update(6, types.Null{})
+	v2.Update(6, nil, true)
 	mv2 := containers.CopyToMoVec(v2)
 	for i := 0; i < v2.Length(); i++ {
 		if v2.IsNull(i) {

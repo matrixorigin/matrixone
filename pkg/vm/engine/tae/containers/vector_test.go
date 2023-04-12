@@ -107,19 +107,19 @@ func TestVector2(t *testing.T) {
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 
-	vec.Update(2, types.Null{})
+	vec.Update(2, nil, true)
 	assert.Equal(t, 11, vec.Length())
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 	assert.True(t, vec.IsNull(2))
 
-	vec.Update(2, int64(22))
+	vec.Update(2, int64(22), false)
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 	assert.False(t, vec.IsNull(2))
 	assert.Equal(t, any(int64(22)), vec.Get(2))
 
-	vec.Update(10, int64(100))
+	vec.Update(10, int64(100), false)
 	assert.False(t, vec.HasNull())
 	assert.False(t, vec.IsNull(10))
 	assert.False(t, vec.IsNull(2))
@@ -221,7 +221,7 @@ func TestVector6(t *testing.T) {
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
-			vec.Update(4, types.Null{})
+			vec.Update(4, nil, true)
 		}
 		bias := 0
 		win := vec.Window(bias, 8)
@@ -360,7 +360,7 @@ func TestVector8(t *testing.T) {
 	assert.True(t, types.IsNull(vec.Get(2)))
 	vec.Delete(3)
 	assert.True(t, types.IsNull(vec.Get(2)))
-	vec.Update(1, types.Null{})
+	vec.Update(1, nil, true)
 	assert.True(t, types.IsNull(vec.Get(1)))
 	assert.True(t, types.IsNull(vec.Get(2)))
 	vec.Append(types.Null{})

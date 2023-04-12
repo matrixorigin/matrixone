@@ -134,8 +134,7 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 
 var mockMp = common.DefaultAllocator
 
-func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
+func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
@@ -149,8 +148,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 	}
 }
 
-func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
+func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
@@ -164,53 +162,53 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	}
 }
 
-func UpdateValue(col *movec.Vector, row uint32, val any) {
+func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 	switch col.GetType().Oid {
 	case types.T_bool:
-		GenericUpdateFixedValue[bool](col, row, val)
+		GenericUpdateFixedValue[bool](col, row, val, isNull)
 	case types.T_int8:
-		GenericUpdateFixedValue[int8](col, row, val)
+		GenericUpdateFixedValue[int8](col, row, val, isNull)
 	case types.T_int16:
-		GenericUpdateFixedValue[int16](col, row, val)
+		GenericUpdateFixedValue[int16](col, row, val, isNull)
 	case types.T_int32:
-		GenericUpdateFixedValue[int32](col, row, val)
+		GenericUpdateFixedValue[int32](col, row, val, isNull)
 	case types.T_int64:
-		GenericUpdateFixedValue[int64](col, row, val)
+		GenericUpdateFixedValue[int64](col, row, val, isNull)
 	case types.T_uint8:
-		GenericUpdateFixedValue[uint8](col, row, val)
+		GenericUpdateFixedValue[uint8](col, row, val, isNull)
 	case types.T_uint16:
-		GenericUpdateFixedValue[uint16](col, row, val)
+		GenericUpdateFixedValue[uint16](col, row, val, isNull)
 	case types.T_uint32:
-		GenericUpdateFixedValue[uint32](col, row, val)
+		GenericUpdateFixedValue[uint32](col, row, val, isNull)
 	case types.T_uint64:
-		GenericUpdateFixedValue[uint64](col, row, val)
+		GenericUpdateFixedValue[uint64](col, row, val, isNull)
 	case types.T_decimal64:
-		GenericUpdateFixedValue[types.Decimal64](col, row, val)
+		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull)
 	case types.T_decimal128:
-		GenericUpdateFixedValue[types.Decimal128](col, row, val)
+		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull)
 	case types.T_float32:
-		GenericUpdateFixedValue[float32](col, row, val)
+		GenericUpdateFixedValue[float32](col, row, val, isNull)
 	case types.T_float64:
-		GenericUpdateFixedValue[float64](col, row, val)
+		GenericUpdateFixedValue[float64](col, row, val, isNull)
 	case types.T_date:
-		GenericUpdateFixedValue[types.Date](col, row, val)
+		GenericUpdateFixedValue[types.Date](col, row, val, isNull)
 	case types.T_time:
-		GenericUpdateFixedValue[types.Time](col, row, val)
+		GenericUpdateFixedValue[types.Time](col, row, val, isNull)
 	case types.T_datetime:
-		GenericUpdateFixedValue[types.Datetime](col, row, val)
+		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull)
 	case types.T_timestamp:
-		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull)
 	case types.T_uuid:
-		GenericUpdateFixedValue[types.Uuid](col, row, val)
+		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull)
 	case types.T_TS:
-		GenericUpdateFixedValue[types.TS](col, row, val)
+		GenericUpdateFixedValue[types.TS](col, row, val, isNull)
 	case types.T_Rowid:
-		GenericUpdateFixedValue[types.Rowid](col, row, val)
+		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull)
 	case types.T_Blockid:
-		GenericUpdateFixedValue[types.Blockid](col, row, val)
+		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		GenericUpdateBytes(col, row, val)
+		GenericUpdateBytes(col, row, val, isNull)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
 	}

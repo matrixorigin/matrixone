@@ -62,7 +62,7 @@ func (view *ColumnView) Eval(clear bool) (err error) {
 	it := view.UpdateMask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		view.data.Update(int(row), view.UpdateVals[row])
+		view.data.Update(int(row), view.UpdateVals[row], false)
 	}
 	if clear {
 		view.UpdateMask = nil

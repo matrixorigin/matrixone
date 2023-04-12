@@ -117,9 +117,9 @@ func (vec *vector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec *vector[T]) Update(i int, v any) {
+func (vec *vector[T]) Update(i int, v any, isNull bool) {
 	vec.tryCoW()
-	UpdateValue(vec.downstreamVector, uint32(i), v)
+	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
 
 func (vec *vector[T]) Slice() any {
