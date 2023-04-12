@@ -15,7 +15,7 @@
 package tables
 
 import (
-	"strings"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,8 +64,7 @@ func (node *persistedNode) init() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
 	metaloc := node.block.meta.GetMetaLoc()
-	info := strings.Split(metaloc, ":")
-	if len(info) < 2 {
+	if len(metaloc) != objectio.LocationLen {
 		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
 	}
 	for i := range schema.ColDefs {
@@ -73,7 +72,7 @@ func (node *persistedNode) init() {
 		if err := index.ReadFrom(
 			node.block.fs,
 			node.block.meta.AsCommonID(),
-			node.block.meta.GetMetaLoc(),
+			metaloc,
 			schema.ColDefs[i]); err != nil {
 			panic(err)
 		}

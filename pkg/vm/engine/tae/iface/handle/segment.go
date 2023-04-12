@@ -18,7 +18,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -57,7 +57,7 @@ type SegmentWriter interface {
 	// create a non-appendable block, instructed by CreateBlockOpt.
 	// CreateBlockOpt can be nil, and the created block's id
 	// will be <segid>-<nextObjectid>-0
-	CreateNonAppendableBlock(*common.CreateBlockOpt) (Block, error)
+	CreateNonAppendableBlock(*objectio.CreateBlockOpt) (Block, error)
 
 	SoftDeleteBlock(id types.Blockid) (err error)
 }

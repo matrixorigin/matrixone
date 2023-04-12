@@ -54,13 +54,12 @@ type container struct {
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr       bool
-	NeedHashMap    bool
-	NeedSelectList bool
-	Ibucket        uint64
-	Nbucket        uint64
-	Typs           []types.Type
-	Conditions     []*plan.Expr
+	NeedExpr    bool
+	NeedHashMap bool
+	Ibucket     uint64
+	Nbucket     uint64
+	Typs        []types.Type
+	Conditions  []*plan.Expr
 
 	IsRight bool
 }

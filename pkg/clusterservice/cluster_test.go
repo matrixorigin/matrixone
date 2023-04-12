@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,7 +174,9 @@ func (c *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (u
 func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	c.RLock()
 	defer c.RUnlock()
-	return c.value, c.err
+	// deep copy the cluster details to avoid data race.
+	copied := deepcopy.Copy(c.value)
+	return copied.(logpb.ClusterDetails), c.err
 }
 func (c *testHAKeeperClient) GetClusterState(ctx context.Context) (logpb.CheckerState, error) {
 	return logpb.CheckerState{}, nil
