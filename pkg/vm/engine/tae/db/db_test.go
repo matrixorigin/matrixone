@@ -2483,7 +2483,7 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	v := view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
@@ -2494,7 +2494,7 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	v = view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 
 	v = getSingleSortKeyValue(bats[0], schema, 2)
