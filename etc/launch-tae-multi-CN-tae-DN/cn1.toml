@@ -52,4 +52,5 @@ send-queue-size = 2
 busy-queue-size = 1
 
 [cn.txn]
-non-freshness = false
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true

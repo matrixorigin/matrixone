@@ -40,4 +40,6 @@ type = "memory"
 statusPort = 9001
 
 [cn.txn]
-non-freshness = false
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true
+

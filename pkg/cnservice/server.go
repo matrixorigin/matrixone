@@ -456,9 +456,13 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			return
 		}
 		var opts []client.TxnClientCreateOption
-		if s.cfg.Txn.NonFreshness {
+		if s.cfg.Txn.EnableSacrificingFreshness {
 			opts = append(opts,
-				client.WithTimestampWaiter(s.timestampWaiter))
+				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+		}
+		if s.cfg.Txn.EnableCNBasedConsistency {
+			opts = append(opts,
+				client.WithEnableCNBasedConsistency())
 		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(

@@ -61,4 +61,5 @@ type = "distributed-tae"
 port = 6001
 
 [cn.txn]
-non-freshness = false
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true

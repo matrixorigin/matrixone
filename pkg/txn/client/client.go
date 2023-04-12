@@ -41,21 +41,52 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 	}
 }
 
-// WithTimestampWaiter setup timestamp waiter
-func WithTimestampWaiter(timestampWaiter TimestampWaiter) TxnClientCreateOption {
+// WithEnableSacrificingFreshness sacrifice freshness to reduce the waiting time for transaction start,
+// which will help to improve the latency of the transaction, but will sacrifice some data freshness.
+//
+// In Push mode, DN will bba to push Logtail to CN, if we need to guarantee the freshness of data, then
+// we need to use the current latest time as the start time of the transaction, this will ensure that
+// enough logtail is collected before the transaction read/write starts, but this will have some delayed
+// waiting time.
+//
+// But if we can accept to sacrifice some data freshness, we can optimize this waiting time, we just need to
+// use the latest logtail timestamp received + 1 as the transaction start timestamp, so we can not wait.
+
+// When making this optimization, there are some scenarios where data consistency must be guaranteed, such as
+// a database connection in a session where the latter transaction must be able to read the data committed by
+// the previous transaction, then it is necessary to maintain a Session-level transaction last commit time, and
+// the start time of the next transaction cannot be less than this value.
+//
+// If we need to ensure that all the transactions on a CN can read the writes of the previous committed
+// transaction, then we can use WithEenableCNBasedConsistency to turn on.
+func WithEnableSacrificingFreshness(timestampWaiter TimestampWaiter) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.timestampWaiter = timestampWaiter
+		tc.enableSacrificingFreshness = true
+	}
+}
+
+// WithEnableCNBasedConsistency let all transactions on a CN see writes committed by other
+// transactions before them. When this feature is enabled, the client maintains a CN-Based
+// commit timestamp, and when opening a new transaction, it adjusts the transaction's snapshot
+// timestamp to at least >= lastCommitTimestamp, so that it can see the writes of the previously
+// committed transaction
+func WithEnableCNBasedConsistency() TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.enableCNBasedConsistency = true
 	}
 }
 
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	clock           clock.Clock
-	sender          rpc.TxnSender
-	generator       TxnIDGenerator
-	lockService     lockservice.LockService
-	timestampWaiter TimestampWaiter
+	clock                      clock.Clock
+	sender                     rpc.TxnSender
+	generator                  TxnIDGenerator
+	lockService                lockservice.LockService
+	timestampWaiter            TimestampWaiter
+	enableCNBasedConsistency   bool
+	enableSacrificingFreshness bool
 
 	mu struct {
 		sync.RWMutex
@@ -96,30 +127,20 @@ func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
+	ts, err := client.determineTxnSnapshot(ctx, minTS)
+	if err != nil {
+		return nil, err
+	}
+
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
-	now, _ := client.clock.Now()
-	// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
-	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
-	// conflicts due to clock uncertainty.
-	txnMeta.SnapshotTS = now
-	if client.timestampWaiter != nil {
-		minTS = client.adjustTimestamp(minTS)
-		ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
-		if err != nil {
-			return nil, err
-		}
-		util.LogTxnSnapshotTimestamp(
-			minTS,
-			ts)
-		txnMeta.SnapshotTS = ts
-		options = append(options,
-			WithUpdateLastCommitTSFunc(client.updateLastCommitTS))
-	}
+	txnMeta.SnapshotTS = ts
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
+
 	options = append(options,
 		WithTxnCNCoordinator(),
+		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
 	return newTxnOperator(
 		client.sender,
@@ -155,6 +176,32 @@ func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
 	if client.mu.latestCommitTS.Less(ts) {
 		client.mu.latestCommitTS = ts
 	}
+}
+
+func (client *txnClient) determineTxnSnapshot(
+	ctx context.Context,
+	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if !client.enableSacrificingFreshness {
+		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
+		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
+		// conflicts due to clock uncertainty.
+		now, _ := client.clock.Now()
+		return now, nil
+	}
+
+	if client.enableCNBasedConsistency {
+		minTS = client.adjustTimestamp(minTS)
+	}
+
+	ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
+	if err != nil {
+		return ts, err
+	}
+
+	util.LogTxnSnapshotTimestamp(
+		minTS,
+		ts)
+	return ts, nil
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
