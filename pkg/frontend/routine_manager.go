@@ -55,15 +55,9 @@ type AccountRoutineManager struct {
 	accountId2Routine map[int64]map[*Routine]bool
 }
 
-func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) error {
+func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) {
 	if tenantID == sysAccountID || rt != nil {
 		return nil
-	}
-
-	ar.killQueueMu.Lock()
-	defer ar.killQueueMu.Unlock()
-	if _, ok := ar.killIdQueue[tenantID]; ok {
-		return moerr.NewInternalError(ar.ctx, "account is being suspened or droped")
 	}
 
 	ar.accountRoutineMu.Lock()
@@ -72,8 +66,6 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) err
 		ar.accountId2Routine[tenantID] = make(map[*Routine]bool)
 	}
 	ar.accountId2Routine[tenantID][rt] = true
-
-	return nil
 }
 
 func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
@@ -432,24 +424,26 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	if len(ar.killIdQueue) != 0 {
 		for account := range ar.killIdQueue {
 			// kill all routine to this account
-			ar.accountRoutineMu.Lock()
-			if rtMap, ok := ar.accountId2Routine[account]; ok {
+			ar.accountRoutineMu.RLock()
+			accountId2RoutineMap := ar.accountId2Routine
+			ar.accountRoutineMu.UnRlock()
+			if rtMap, ok := accountId2RoutineMap[acccount]; ok {
 				for rt := range rtMap {
 					if rt != nil {
 						// kill connect of this routine
 						rt.killConnection(false)
 					}
 				}
-				// remove accountRoutineMap  for the account
-				delete(ar.accountId2Routine, account)
 			}
-			ar.accountRoutineMu.Unlock()
 		}
 		// clean kill queue
 		// ar.killIdQueue = make(map[int64]time.Time)
 		for toKillAccount, createAt := range ar.killIdQueue {
 			if time.Since(createAt) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
 				delete(ar.killIdQueue, toKillAccount)
+				ar.accountRoutineMu.Lock()
+				delete(ar.accountId2Routine, toKillAccount)
+				ar.accountRoutineMu.UnLock()
 			}
 		}
 	}
