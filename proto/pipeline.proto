@@ -99,8 +99,8 @@ message Deletion{
   uint64 Ts = 1;
   uint64 AffectedRows = 2;
   bool RemoteDelete = 3;
-  uint64 IBucket =4;
-  uint64 NBucket = 5;
+  uint32 IBucket =4;
+  uint32 NBucket = 5;
   // DeleteCtx
   bool CanTruncate = 6;
   repeated plan.ObjectRef DelRef = 7;

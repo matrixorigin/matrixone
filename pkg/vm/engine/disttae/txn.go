@@ -238,8 +238,13 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		bat:          bat,
 		dnStore:      dnStore,
 	})
-	// get uuid string
-	colexec.Srv.PutCnSegment(strings.Split(fileName, "_")[0], colexec.CnBlockIdType)
+
+	if uid, err := types.ParseUuid(strings.Split(fileName, "_")[0]); err != nil {
+		panic("fileName parse Uuid error")
+	} else {
+		// get uuid string
+		colexec.Srv.PutCnSegment(string(uid[:]), colexec.CnBlockIdType)
+	}
 	return nil
 }
 

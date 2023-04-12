@@ -40,7 +40,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		// here means the delete is over, we should start to do
 		// compaction here, but in the future, we will do this
 		// in deletion operator
-		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_ID)
+		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_Delete_ID)
 		return true, nil
 	}
 

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -49,6 +50,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.blockId_rowIdBatch = make(map[string]*batch.Batch)
 		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
 		ap.ctr.blockId_type = make(map[string]int8)
+		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 	}
 	return nil
 }
@@ -60,39 +62,41 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// last batch of block
 	if bat == nil {
-		// ToDo: CNBlock Compaction
+		if p.RemoteDelete {
+			// ToDo: CNBlock Compaction
+			// blkId,delta_metaLoc,type
+			resBat := batch.New(true, []string{
+				catalog.BlockMeta_Delete_ID,
+				catalog.BlockMeta_DeltaLoc,
+				catalog.BlockMeta_Type,
+				catalog.BlockMeta_Deletes_Length,
+			})
+			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
+			for blkid, bat := range p.ctr.blockId_rowIdBatch {
+				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				bytes, err := bat.MarshalBinary()
+				if err != nil {
+					return true, err
+				}
+				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
+			}
+			for blkid, bat := range p.ctr.blockId_metaLoc {
+				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				bytes, err := bat.MarshalBinary()
+				if err != nil {
+					return true, err
+				}
+				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(2), FlushMetaLoc, false, proc.GetMPool())
+			}
+			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
+			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
+			proc.SetInputBatch(resBat)
+		}
 
-		// blkId,delta_metaLoc,type
-		resBat := batch.New(true, []string{
-			catalog.BlockMeta_Delete_ID,
-			catalog.BlockMeta_DeltaLoc,
-			catalog.BlockMeta_Type,
-			catalog.BlockMeta_Deletes_Length,
-		})
-		resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
-		resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-		for blkid, bat := range p.ctr.blockId_rowIdBatch {
-			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-			bytes, err := bat.MarshalBinary()
-			if err != nil {
-				return true, err
-			}
-			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-			vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
-		}
-		for blkid, bat := range p.ctr.blockId_metaLoc {
-			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-			bytes, err := bat.MarshalBinary()
-			if err != nil {
-				return true, err
-			}
-			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-			vector.AppendFixed(resBat.GetVector(2), FlushMetaLoc, false, proc.GetMPool())
-		}
-		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
-		resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.batch_size, resBat.Length(), proc.GetMPool()))
-		proc.SetInputBatch(resBat)
 		return true, nil
 	}
 

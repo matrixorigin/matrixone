@@ -361,7 +361,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_batch: make(map[string]*batch.Batch),
 	}
 	// TxnWorkSpace SegmentName
-	colexec.Srv.PutCnSegment(id.ToString(), colexec.TxnWorkSpaceIdType)
+	colexec.Srv.PutCnSegment(string(id[:]), colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {

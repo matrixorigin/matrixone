@@ -59,7 +59,7 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold   uint64 = 10 * mpool.MB
+	DistributedThreshold   uint64 = 1 * mpool.KB
 	SingleLineSizeEstimate uint64 = 300 * mpool.B
 )
 
@@ -1603,11 +1603,12 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 		Op:  vm.Deletion,
 		Arg: arg,
 	}
-
 	for i := range rs {
 		// use distributed delete
 		arg.RemoteDelete = true
 		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		arg.IBucket = uint32(i)
+		arg.Nbucket = uint32(len(rs))
 		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil))
 	}
 	return c.newMergeScope(rs)

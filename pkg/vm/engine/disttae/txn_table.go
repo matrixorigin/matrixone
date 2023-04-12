@@ -471,8 +471,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	strs := strings.Split(name, "|")
-	blkId, typ_str := strs[0], strs[1]
+	blkId, typ_str := name[:len(name)-2], string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
 		return err
@@ -500,10 +499,11 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	if bat == nil {
+		return nil
 		// start to do compaction for cn blocks
 	}
 	// remoteDelete
-	if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.BlockMeta_Delete_ID {
+	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})

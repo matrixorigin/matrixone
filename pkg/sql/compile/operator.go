@@ -411,6 +411,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*deletion.Argument)
 		res.Arg = &deletion.Argument{
 			Ts:           t.Ts,
+			IBucket:      t.IBucket,
+			Nbucket:      t.Nbucket,
 			DeleteCtx:    t.DeleteCtx,
 			AffectedRows: t.AffectedRows,
 			Engine:       t.Engine,
@@ -1081,36 +1083,36 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 		Op:  vm.Merge,
 		Arg: &merge.Argument{},
 	})
-	// get cn plan Node for constructGroup
-	cn := new(plan.Node)
-	cn.ProjectList = []*plan.Expr{
-		{
-			Typ: &plan.Type{
-				Id:    int32(types.T_Rowid),
-				Width: types.T_Rowid.ToType().Width,
-				Scale: types.T_Rowid.ToType().Scale,
-			},
-		},
-	}
-	// get n planNode for constructGroup, for now,
-	// just support single table delete.
-	n := new(plan.Node)
-	n.GroupBy = []*plan.Expr{
-		{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 0,
-				},
-			},
-		},
-	}
-	groupArg := constructGroup(rs[currentIdx].Proc.Ctx, n, cn, currentIdx, len(ss), false, rs[currentIdx].Proc)
+	// // get cn plan Node for constructGroup
+	// cn := new(plan.Node)
+	// cn.ProjectList = []*plan.Expr{
+	// 	{
+	// 		Typ: &plan.Type{
+	// 			Id:    int32(types.T_Rowid),
+	// 			Width: types.T_Rowid.ToType().Width,
+	// 			Scale: types.T_Rowid.ToType().Scale,
+	// 		},
+	// 	},
+	// }
+	// // get n planNode for constructGroup, for now,
+	// // just support single table delete.
+	// n := new(plan.Node)
+	// n.GroupBy = []*plan.Expr{
+	// 	{
+	// 		Expr: &plan.Expr_Col{
+	// 			Col: &plan.ColRef{
+	// 				RelPos: 0,
+	// 				ColPos: 0,
+	// 			},
+	// 		},
+	// 	},
+	// }
+	// groupArg := constructGroup(rs[currentIdx].Proc.Ctx, n, cn, currentIdx, len(ss), false, rs[currentIdx].Proc)
 	// use group to do Bucket filter and RowId duplicate Filter
-	rs[currentIdx].appendInstruction(vm.Instruction{
-		Op:  vm.Group,
-		Arg: groupArg,
-	})
+	// rs[currentIdx].appendInstruction(vm.Instruction{
+	// 	Op:  vm.Group,
+	// 	Arg: groupArg,
+	// })
 }
 
 // This function do not setting funcId.

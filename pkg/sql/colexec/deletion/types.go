@@ -18,11 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,6 +37,7 @@ type container struct {
 	// blockId => rowId Batch
 	blockId_rowIdBatch map[string]*batch.Batch
 	blockId_metaLoc    map[string]*batch.Batch
+	blockId_bitmap     map[string]*nulls.Nulls
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -55,6 +58,8 @@ type Argument struct {
 	// mp[segmentName] = 1 => txnWorkSpace,mp[segmentName] = 2 => CN Block
 	SegmentMap   map[string]int32
 	RemoteDelete bool
+	IBucket      uint32
+	Nbucket      uint32
 	ctr          *container
 }
 
@@ -93,15 +98,31 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 	vs := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	var bitmap *nulls.Nulls
 	arg.ctr.deleted_length += uint32(len(vs))
 	for _, rowId := range vs {
 		blkid := rowId.GetBlockid()
-		str := (&blkid).String()
+		segid := rowId.GetSegid()
+		blkOffset := rowId.GetBlockOffset()
+		rowOffset := rowId.GetRowOffset()
+		if blkOffset%uint16(arg.Nbucket) != uint16(arg.IBucket) {
+			continue
+		}
+		str := string(blkid[:])
 		offsetFlag := false
-		if arg.SegmentMap[rowId.GetSegid().ToString()] == colexec.TxnWorkSpaceIdType {
+		if arg.ctr.blockId_bitmap[str] == nil {
+			arg.ctr.blockId_bitmap[str] = nulls.NewWithSize(int(options.DefaultBlockMaxRows))
+		}
+		bitmap = arg.ctr.blockId_bitmap[str]
+		if bitmap.Contains(uint64(rowOffset)) {
+			continue
+		} else {
+			bitmap.Np.Add(uint64(rowOffset))
+		}
+		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
 			arg.ctr.blockId_type[str] = RawBatchOffset
 			offsetFlag = true
-		} else if arg.SegmentMap[rowId.GetSegid().ToString()] == colexec.CnBlockIdType {
+		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
 			arg.ctr.blockId_type[str] = CNBlockOffset
 			offsetFlag = true
 		}
@@ -124,7 +145,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 			vector.AppendFixed(bat.GetVector(0), int64(offset), false, proc.GetMPool())
 		}
 		// add rowId size
-		if arg.SegmentMap[blkid.ObjectString()] == colexec.TxnWorkSpaceIdType {
+		if !offsetFlag {
 			continue
 		}
 		arg.ctr.batch_size += 24
