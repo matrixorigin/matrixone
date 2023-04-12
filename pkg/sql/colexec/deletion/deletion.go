@@ -48,7 +48,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr = new(container)
 		ap.ctr.blockId_rowIdBatch = make(map[string]*batch.Batch)
 		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
-		ap.ctr.blockId_SkipFlush = make(map[string]int8)
+		ap.ctr.blockId_type = make(map[string]int8)
 	}
 	return nil
 }
@@ -62,20 +62,16 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if bat == nil {
 		// ToDo: CNBlock Compaction
 
-		// blkId,metaLoc,type
+		// blkId,delta_metaLoc,type
 		resBat := batch.New(true, []string{
-			catalog.BlockMeta_ID,
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_Delete_ID,
+			catalog.BlockMeta_DeltaLoc,
 			catalog.BlockMeta_Type,
 			catalog.BlockMeta_Deletes_Length,
-			// catalog.BlockMetaOffset_Min,
-			// catalog.BlockMetaOffset_Max,
 		})
 		resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 		resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-		// resBat.SetVector(3, vector.NewVec(types.T_uint32.ToType()))
-		// resBat.SetVector(4, vector.NewVec(types.T_uint32.ToType()))
 		for blkid, bat := range p.ctr.blockId_rowIdBatch {
 			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
 			bytes, err := bat.MarshalBinary()
@@ -83,9 +79,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				return true, err
 			}
 			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-			vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_SkipFlush[blkid], false, proc.GetMPool())
-			// vector.AppendFixed(resBat.GetVector(3), p.ctr.blockId_min[blkid], false, proc.GetMPool())
-			// vector.AppendFixed(resBat.GetVector(4), p.ctr.blockId_max[blkid], false, proc.GetMPool())
+			vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
 		}
 		for blkid, bat := range p.ctr.blockId_metaLoc {
 			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())

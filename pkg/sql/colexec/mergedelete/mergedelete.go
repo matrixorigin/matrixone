@@ -47,12 +47,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	// 		blkId          		metaLoc                        type
+	// 		blkId          		deltaLoc                        type
 	// |-----------|-----------------------------------|----------------|
 	// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
-	// |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
+	// |  blk_id   |   batch.Marshal(int64 offset)    |  CNBlockOffset | CN Block
 	// |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
-	// |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
+	// |  blk_id   |   batch.Marshal(int64 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 	blkIds := vector.MustStrCol(bat.GetVector(0))
 	metaLocBats := vector.MustBytesCol(bat.GetVector(1))
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))

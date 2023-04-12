@@ -122,8 +122,29 @@ type Transaction struct {
 	// use to cache created table
 	createMap *sync.Map
 
-	// deleteOffsets is used to reuse memory
-	deleteOffsets []int64
+	cnBlockDeletsMap *CnBlockDeletsMap
+	blockId_batch    map[string]*batch.Batch
+}
+
+type CnBlockDeletsMap struct {
+	// used to store cn block's deleted rows
+	// blockId => deletedOffsets
+	mp map[string][]int64
+}
+
+func (cn_deletes_mp *CnBlockDeletsMap) PutCnBlockDeletes(blockId string, offsets []int64) {
+	cn_deletes_mp.mp[blockId] = append(cn_deletes_mp.mp[blockId], offsets...)
+}
+
+func (cn_deletes_mp *CnBlockDeletsMap) GetCnBlockDeletes(blockId string) []int64 {
+	res := cn_deletes_mp.mp[blockId]
+	offsets := make([]int64, len(res))
+	copy(offsets, res)
+	return offsets
+}
+
+func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
+	txn.cnBlockDeletsMap.PutCnBlockDeletes(blockId, offsets)
 }
 
 // Entry represents a delete/insert
@@ -208,8 +229,6 @@ type txnTable struct {
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	localTS timestamp.Timestamp
-
-	sels []int64
 }
 
 type column struct {

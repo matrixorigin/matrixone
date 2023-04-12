@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,6 +50,7 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
+	deletes_map     map[string][]int64
 }
 
 // BlockBatch is used to record the metaLoc info
@@ -169,7 +168,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				rbat.Vecs = append(rbat.Vecs, vec)
 			}
 			blkid := generateBlkId(p.currentFileName, uint16(p.blockBatch.idx))
-			deletes := colexec.Srv.GetCnBlockDeletes((&blkid).String())
+			deletes := p.deletes_map[(&blkid).String()]
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}

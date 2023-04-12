@@ -53,7 +53,6 @@ type Server struct {
 	currentFileOffset uint16
 	uuidCsChanMap     UuidCsChanMap
 	cnSegmentMap      CnSegmentMap
-	cnBlockDetetesMap CnBlockDeletsMap
 }
 
 type UuidCsChanMap struct {
@@ -68,11 +67,4 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[string]int32
-}
-
-type CnBlockDeletsMap struct {
-	sync.Mutex
-	// used to store cn block's deleted rows
-	// blockId => deletedOffsets
-	mp map[string][]int64
 }

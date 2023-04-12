@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -336,17 +336,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	id := common.NewSegmentid()
 	bytes := types.EncodeUuid(&id)
 	txn := &Transaction{
-		op:            op,
-		proc:          proc,
-		engine:        e,
-		readOnly:      true,
-		meta:          op.Txn(),
-		idGen:         e.idGen,
-		dnStores:      e.getDNServices(),
-		tableMap:      new(sync.Map),
-		databaseMap:   new(sync.Map),
-		createMap:     new(sync.Map),
-		deleteOffsets: make([]int64, options.DefaultBlockMaxRows),
+		op:          op,
+		proc:        proc,
+		engine:      e,
+		readOnly:    true,
+		meta:        op.Txn(),
+		idGen:       e.idGen,
+		dnStores:    e.getDNServices(),
+		tableMap:    new(sync.Map),
+		databaseMap: new(sync.Map),
+		createMap:   new(sync.Map),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -356,9 +355,13 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 		},
 		segId: id,
+		cnBlockDeletsMap: &CnBlockDeletsMap{
+			mp: map[string][]int64{},
+		},
+		blockId_batch: make(map[string]*batch.Batch),
 	}
 	// TxnWorkSpace SegmentName
-	colexec.Srv.PutCnSegment(common.NewObjectName(&id, 0), colexec.TxnWorkSpaceIdType)
+	colexec.Srv.PutCnSegment(id.ToString(), colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {

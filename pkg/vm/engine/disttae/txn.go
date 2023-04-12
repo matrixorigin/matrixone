@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -95,6 +96,7 @@ func (txn *Transaction) WriteBatch(
 	txn.readOnly = false
 	bat.Cnt = 1
 	if typ == INSERT {
+		txn.genBlock()
 		len := bat.Length()
 		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
@@ -105,6 +107,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+		txn.blockId_batch[txn.getCurrentBlockId()] = bat
 		txn.workspaceSize += uint64(bat.Size())
 	}
 	txn.Lock()
@@ -235,7 +238,8 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		bat:          bat,
 		dnStore:      dnStore,
 	})
-	colexec.Srv.PutCnSegment(fileName, colexec.CnBlockIdType)
+	// get uuid string
+	colexec.Srv.PutCnSegment(strings.Split(fileName, "_")[0], colexec.CnBlockIdType)
 	return nil
 }
 
@@ -307,6 +311,17 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	return txn.idGen.AllocateID(ctx)
+}
+
+func (txn *Transaction) genBlock() {
+	txn.rowId[4]++
+	txn.rowId[5] = 0
+}
+
+func (txn *Transaction) getCurrentBlockId() string {
+	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
+	blkId := rowId.GetBlockid()
+	return blkId.String()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {

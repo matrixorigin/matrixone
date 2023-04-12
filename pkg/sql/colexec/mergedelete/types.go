@@ -18,9 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Container struct {
-}
-
 type Argument struct {
 	AffectedRows uint64
 	// single table's delete

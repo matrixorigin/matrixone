@@ -15,8 +15,9 @@
 package catalog
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -128,6 +129,7 @@ const (
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
 	BlockMeta_ID              = "block_id"
+	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"

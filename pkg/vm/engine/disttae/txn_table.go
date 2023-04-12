@@ -29,13 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ engine.Relation = new(txnTable)
@@ -423,7 +424,11 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 
 	// Write S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
+		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
+		if err != nil {
+			return err
+		}
+		fileName := location.Name().String()
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
@@ -458,6 +463,13 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
+//	blkId(string)     deltaLoc(string)                   type(int)
+//
+// |-----------|-----------------------------------|----------------|
+// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
+// |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
+// |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
+// |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	strs := strings.Split(name, "|")
 	blkId, typ_str := strs[0], strs[1]
@@ -465,22 +477,23 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	if err != nil {
 		return err
 	}
-
 	switch typ {
 	case deletion.FlushMetaLoc:
-
+		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
+		CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
+		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.db.txn.dnStores[0]); err != nil {
+			return err
+		}
 	case deletion.CNBlockOffset:
-		u32_sels := vector.MustFixedCol[uint32](bat.GetVector(0))
-		if tbl.sels == nil {
-			tbl.sels = make([]int64, 0, len(u32_sels))
-		}
-		tbl.sels = tbl.sels[:0]
-		for i := 0; i < len(u32_sels); i++ {
-			tbl.sels = append(tbl.sels, int64(u32_sels[i]))
-		}
-		colexec.Srv.PutCnBlockDeletes(blkId, tbl.sels)
+		vs := vector.MustFixedCol[int64](bat.GetVector(0))
+		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
 	case deletion.RawRowIdBatch:
+		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	case deletion.RawBatchOffset:
+		vs := vector.MustFixedCol[int64](bat.GetVector(0))
+		entry_bat := tbl.db.txn.blockId_batch[blkId]
+		entry_bat.AntiShrink(vs)
 	}
 	return nil
 }
@@ -490,7 +503,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 		// start to do compaction for cn blocks
 	}
 	// remoteDelete
-	if bat.Attrs[0] != catalog.Row_ID {
+	if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.BlockMeta_Delete_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})
@@ -500,22 +513,24 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
-	// do preprocess, we  need to promise one batch contains one and same
-	// block's rowId
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
 	}
-
 	return tbl.writeDnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
+func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *batch.Batch {
 	ibat := batch.New(true, bat.Attrs)
 	for i := 0; i < len(ibat.Attrs); i++ {
 		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
 	}
-	ibat.Append(ctx, tbl.db.txn.proc.GetMPool(), bat)
+	ibat.Append(ctx, proc.GetMPool(), bat)
+	return ibat
+}
+
+func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
+	ibat := CopyBatch(ctx, tbl.db.txn.proc, bat)
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
 		return err
@@ -737,6 +752,7 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
+		deletes_map:     txn.cnBlockDeletsMap.mp,
 	}
 	readers[0] = partReader
 

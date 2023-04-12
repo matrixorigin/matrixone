@@ -38,7 +38,7 @@ type container struct {
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
-	blockId_SkipFlush map[string]int8
+	blockId_type map[string]int8
 	// blockId_min        map[string]uint32
 	// blockId_max        map[string]uint32
 	batch_size     uint32
@@ -86,6 +86,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for _, bat := range arg.ctr.blockId_rowIdBatch {
 		bat.Clean(proc.GetMPool())
 	}
+	for _, bat := range arg.ctr.blockId_metaLoc {
+		bat.Clean(proc.GetMPool())
+	}
 }
 
 func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
@@ -95,42 +98,30 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		blkid := rowId.GetBlockid()
 		str := (&blkid).String()
 		offsetFlag := false
-		if arg.SegmentMap[blkid.ObjectString()] == colexec.TxnWorkSpaceIdType {
-			arg.ctr.blockId_SkipFlush[str] = RawBatchOffset
+		if arg.SegmentMap[rowId.GetSegid().ToString()] == colexec.TxnWorkSpaceIdType {
+			arg.ctr.blockId_type[str] = RawBatchOffset
 			offsetFlag = true
-		} else if arg.SegmentMap[blkid.ObjectString()] == colexec.CnBlockIdType {
-			arg.ctr.blockId_SkipFlush[str] = CNBlockOffset
+		} else if arg.SegmentMap[rowId.GetSegid().ToString()] == colexec.CnBlockIdType {
+			arg.ctr.blockId_type[str] = CNBlockOffset
 			offsetFlag = true
 		}
 		if _, ok := arg.ctr.blockId_rowIdBatch[str]; !ok {
-			if arg.SegmentMap[blkid.ObjectString()] == 0 {
+			if !offsetFlag {
 				bat := batch.New(false, []string{catalog.Row_ID})
 				bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 				arg.ctr.blockId_rowIdBatch[str] = bat
 			} else {
 				bat := batch.New(false, []string{catalog.BlockMetaOffset})
-				bat.SetVector(0, vector.NewVec(types.T_uint32.ToType()))
+				bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
 				arg.ctr.blockId_rowIdBatch[str] = bat
 			}
 		}
-		// if _, ok := arg.ctr.blockId_min[str]; !ok {
-		// 	arg.ctr.blockId_min[str] = uint32(math.MaxUint32)
-		// }
-		// if _, ok := arg.ctr.blockId_max[str]; !ok {
-		// 	arg.ctr.blockId_max[str] = uint32(0)
-		// }
 		bat := arg.ctr.blockId_rowIdBatch[str]
 		offset := rowId.GetRowOffset()
-		// if offset > arg.ctr.blockId_max[str] {
-		// 	arg.ctr.blockId_max[str] = offset
-		// }
-		// if offset < arg.ctr.blockId_min[str] {
-		// 	arg.ctr.blockId_min[str] = offset
-		// }
 		if !offsetFlag {
 			vector.AppendFixed(bat.GetVector(0), rowId, false, proc.GetMPool())
 		} else {
-			vector.AppendFixed(bat.GetVector(0), offset, false, proc.GetMPool())
+			vector.AppendFixed(bat.GetVector(0), int64(offset), false, proc.GetMPool())
 		}
 		// add rowId size
 		if arg.SegmentMap[blkid.ObjectString()] == colexec.TxnWorkSpaceIdType {
@@ -160,7 +151,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 	blkids := make([]string, 0, len(ctr.blockId_rowIdBatch))
 	for blkid, bat := range ctr.blockId_rowIdBatch {
 		// don't flush cn block and RawBatch
-		if ctr.blockId_SkipFlush[blkid] != 0 {
+		if ctr.blockId_type[blkid] != 0 {
 			continue
 		}
 		err = s3writer.WriteBlock(bat)

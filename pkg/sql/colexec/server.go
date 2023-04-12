@@ -36,11 +36,10 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 		return Srv
 	}
 	Srv = &Server{
-		mp:                make(map[uint64]*process.WaitRegister),
-		hakeeper:          client,
-		uuidCsChanMap:     UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
-		cnSegmentMap:      CnSegmentMap{mp: make(map[string]int32)},
-		cnBlockDetetesMap: CnBlockDeletsMap{mp: make(map[string][]int64)},
+		mp:            make(map[uint64]*process.WaitRegister),
+		hakeeper:      client,
+		uuidCsChanMap: UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
+		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32)},
 	}
 	return Srv
 }
@@ -93,27 +92,6 @@ func (srv *Server) GetCnSegmentType(segmentName string) int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
 	return srv.cnSegmentMap.mp[segmentName]
-}
-
-func (srv *Server) PutCnBlockDeletes(blockId string, offsets []int64) {
-	srv.cnBlockDetetesMap.Lock()
-	defer srv.cnBlockDetetesMap.Unlock()
-	srv.cnBlockDetetesMap.mp[blockId] = append(srv.cnBlockDetetesMap.mp[blockId], offsets...)
-}
-
-func (srv *Server) GetCBlockDeletesMap() map[string][]int64 {
-	srv.cnBlockDetetesMap.Lock()
-	defer srv.cnBlockDetetesMap.Unlock()
-	return srv.cnBlockDetetesMap.mp
-}
-
-func (srv *Server) GetCnBlockDeletes(blockId string) []int64 {
-	srv.cnBlockDetetesMap.Lock()
-	defer srv.cnBlockDetetesMap.Unlock()
-	res := srv.cnBlockDetetesMap.mp[blockId]
-	offsets := make([]int64, len(res))
-	copy(offsets, res)
-	return offsets
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
