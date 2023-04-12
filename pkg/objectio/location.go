@@ -59,10 +59,6 @@ func (l Location) Name() ObjectName {
 	return ObjectName(l[:ObjectNameLen])
 }
 
-func (l Location) NameString() string {
-	return string(l[NameStringOff : NameStringOff+NameStringLen])
-}
-
 func (l Location) Extent() *Extent {
 	return (*Extent)(unsafe.Pointer(&l[ExtentOff]))
 }
@@ -86,7 +82,7 @@ func (l Location) String() string {
 	if len(l) != LocationLen {
 		return string(l)
 	}
-	return fmt.Sprintf("%v_%v_%d_%d", l.NameString(), l.Extent(), l.Rows(), l.ID())
+	return fmt.Sprintf("%v_%v_%d_%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
 }
 
 func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
