@@ -583,14 +583,6 @@ message Node {
 	}
 
 	enum JoinFlag {
-		//INNER = 0;
-		//OUTER = 1;
-		//SEMI = 2;
-		//ANTI = 4;
-		//SINGLE = 8;
-		//MARK = 16;
-		//APPLY = 32;
-
 		INNER	= 0;
 		LEFT	= 1;
 		RIGHT	= 2;
@@ -611,44 +603,60 @@ message Node {
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
+	repeated int32 children = 4;
 
-	repeated Expr project_list = 4;
-	repeated int32 children = 5;
+	// PROJECT
+	repeated Expr project_list = 5;
+
+	// JOIN
 	JoinFlag join_type = 6;
 	repeated Expr on_list = 7;
-	repeated Expr filter_list = 8;
-	repeated Expr group_by = 9;
-	repeated Expr grouping_set = 10;
-	repeated Expr agg_list = 11;
-	repeated OrderBySpec order_by = 12;
-	UpdateCtx update_ctx = 13;
-	WindowSpec win_spec = 14;
+	bool build_on_left = 8;
+
+	// FILTER
+	repeated Expr filter_list = 9;
+
+	// AGG
+	repeated Expr group_by = 10;
+	repeated Expr grouping_set = 11;
+	repeated Expr agg_list = 12;
+
+	// WINDOW
+	WindowSpec win_spec = 13;
+
+	// SORT
+	repeated OrderBySpec order_by = 14;
+
+	// LIMIT
 	Expr limit = 15;
 	Expr offset = 16;
-	TableDef table_def = 17;
-	repeated TableDef table_def_vec = 18;
-	ObjectRef obj_ref = 19;
-	RowsetData rowset_data = 20;
-	string extra_options = 21;
-	DeleteCtx delete_ctx = 22;
 
-	repeated int32 binding_tags = 23;
+	UpdateCtx update_ctx = 17;
+	TableDef table_def = 18;
+	repeated TableDef table_def_vec = 19;
+	ObjectRef obj_ref = 20;
+	RowsetData rowset_data = 21;
 
-    AnalyzeInfo analyze_info = 24;
+	string extra_options = 22;
+	DeleteCtx delete_ctx = 23;
 
-	repeated Expr tbl_func_expr_list = 25;
+	repeated int32 binding_tags = 24;
+
+    AnalyzeInfo analyze_info = 25;
+
+	repeated Expr tbl_func_expr_list = 26;
 
     // The pipeline will determine the parallelism by traversing the plan
     // when it is received. Then the build is built based on this information.
-    int32   parallelism = 26;
+    int32   parallelism = 27;
 
-	ClusterTable cluster_table = 27;
-	bool not_cacheable = 28;
-	InsertCtx insert_ctx = 29;
+	ClusterTable cluster_table = 28;
+	bool not_cacheable = 29;
+	InsertCtx insert_ctx = 30;
 
 	// used to connect two plans[steps]
-	int32 current_step = 30;
-	int32 source_step = 31;
+	int32 current_step = 31;
+	int32 source_step = 32;
 }
 
 message IdList {
