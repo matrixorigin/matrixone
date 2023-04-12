@@ -45,3 +45,7 @@ type = "distributed-tae"
 [cn.rpc]
 send-queue-size = 2
 busy-queue-size = 1
+
+[cn.txn]
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true
