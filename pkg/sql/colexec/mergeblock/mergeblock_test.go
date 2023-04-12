@@ -54,10 +54,7 @@ func TestMergeBlock(t *testing.T) {
 		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 1, 2}, nil),
-			testutil.MakeTextVector([]string{
-				string(loc1),
-				string(loc2),
-				string(loc3)}, nil),
+			testutil.MakeTextVector([]string{loc1.String(), loc2.String(), loc3.String()}, nil),
 		},
 		Zs: []int64{1, 1, 1},
 	}

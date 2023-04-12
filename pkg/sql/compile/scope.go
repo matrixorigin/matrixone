@@ -42,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -288,13 +290,30 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel := make(chan *[]int32)
+		channel32 := make(chan *[]int32)
+		channel8 := make(chan *[]uint8)
 		for i := range s.PreScopes {
-			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
-			arg.Channel = channel
-			arg.NumCPU = uint64(mcpu)
-			if i == 0 {
-				arg.Is_receiver = true
+			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
+			case *right.Argument:
+				arg.Channel = channel32
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
+
+			case *rightsemi.Argument:
+				arg.Channel = channel8
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
+
+			case *rightanti.Argument:
+				arg.Channel = channel8
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
 			}
 		}
 	}
@@ -305,7 +324,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 func (s *Scope) isRight() bool {
-	return s != nil && s.Instructions[0].Op == vm.Right
+	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
 
 func newParallelScope(s *Scope, ss []*Scope) *Scope {

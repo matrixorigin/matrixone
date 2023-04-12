@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,11 +32,11 @@ import (
 )
 
 func TestAdjustClient(t *testing.T) {
-	c := &txnClient{rt: runtime.DefaultRuntime()}
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.rt)
 }
 
 func TestNewTxn(t *testing.T) {
@@ -44,8 +45,11 @@ func TestNewTxn(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	c := NewTxnClient(rt, newTestTxnSender())
-	tx, err := c.New()
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
@@ -59,8 +63,11 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	c := NewTxnClient(rt, newTestTxnSender())
-	tx, err := c.New(WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)

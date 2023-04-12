@@ -186,7 +186,8 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(runtime.DefaultRuntime(), nil, txn.TxnMeta{})
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	newTxnOperator(nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -196,7 +197,8 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(runtime.DefaultRuntime(), newTestTxnSender(), txn.TxnMeta{})
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	newTxnOperator(newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -206,7 +208,8 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	newTxnOperator(runtime.DefaultRuntime(), newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -216,8 +219,8 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(
-		runtime.DefaultRuntime(),
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),
@@ -359,12 +362,14 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
-		tc2, err := newTxnOperatorWithSnapshot(tc.rt, tc.sender, v)
+		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
 
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
+		tc.option.updateLastCommitTSFunc = nil
+		tc2.option.updateLastCommitTSFunc = nil
 		assert.Equal(t, tc.option, tc2.option)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
@@ -416,14 +421,14 @@ func TestAddLockTable(t *testing.T) {
 }
 
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
-	ts := newTestTxnSender()
-	c := NewTxnClient(
-		runtime.DefaultRuntime(),
-		ts)
-	txn, err := c.New(options...)
-	assert.Nil(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	ts := newTestTxnSender()
+	c := NewTxnClient(ts)
+	txn, err := c.New(ctx, newTestTimestamp(0), options...)
+	assert.Nil(t, err)
 
 	tc(ctx, txn.(*txnOperator), ts)
 }

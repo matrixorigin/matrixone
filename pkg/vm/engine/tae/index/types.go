@@ -35,7 +35,6 @@ type KeysCtx struct {
 	Selects *roaring.Bitmap
 	// Select a continuous interval [Start, Start+Count) from keys
 	Start, Count int
-
 	// Whether need to verify Keys
 	NeedVerify bool
 }
@@ -50,10 +49,10 @@ type BatchResp struct {
 }
 
 type SecondaryIndex interface {
-	Insert(key any, offset uint32) (err error)
+	Insert(key []byte, offset uint32) (err error)
 	BatchInsert(keys *KeysCtx, startRow uint32) (err error)
 	Delete(key any) (old uint32, err error)
-	Search(key any) ([]uint32, error)
+	Search(key []byte) ([]uint32, error)
 	String() string
 	Size() int
 }
