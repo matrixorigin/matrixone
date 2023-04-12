@@ -241,7 +241,6 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
-
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 

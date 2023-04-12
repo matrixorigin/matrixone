@@ -506,22 +506,19 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if bat.Length() == 0 {
 		return nil
 	}
-	return tbl.writeDnPartition(bat)
+
+	return tbl.writeDnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeDnPartition(bat *batch.Batch) error {
-	bats, err := partitionDeleteBatch(tbl, bat)
-	if err != nil {
-		return err
+func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
+	ibat := batch.New(true, bat.Attrs)
+	for i := 0; i < len(ibat.Attrs); i++ {
+		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
 	}
-	for i := range bats {
-		if bats[i].Length() == 0 {
-			continue
-		}
-		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
-			return err
-		}
+	ibat.Append(ctx, tbl.db.txn.proc.GetMPool(), bat)
+	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
+		return err
 	}
 	return nil
 }

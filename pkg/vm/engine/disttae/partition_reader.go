@@ -196,12 +196,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					}
 				}
 			}
-			for j := 0; j < bat.Length(); j++ {
-				if _, ok := p.deletes[rowIds[j]]; ok {
-					continue
-				}
-				b.Zs = append(b.Zs, int64(bat.Zs[j]))
-			}
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}
