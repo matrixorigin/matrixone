@@ -15,10 +15,10 @@ create database db1;
 use db1;
 drop table if exists t;
 create table t(
-                  a int,
-                  b int,
-                  c int,
-                  primary key(a)
+a int,
+b int,
+c int,
+primary key(a)
 );
 show tables;
 Tables_in_db1
