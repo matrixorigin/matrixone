@@ -23,9 +23,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	RawRowIdBatch = iota
+	// remember that, for one block,
+	// when it sends the info to mergedeletes,
+	// either it's Compaction or not.
+	Compaction
+	CNBlockOffset
+	RawBatchOffset
+	FlushMetaLoc
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -34,16 +44,11 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	if ap.DeleteType == RemoteDelete {
+	if ap.RemoteDelete {
 		ap.ctr = new(container)
-		ap.ctr.mp = pipeline.ArrayMap{
-			Mp: make(map[string]*pipeline.Array),
-		}
-		attrs := []string{catalog.BlockMeta_ID, catalog.BlockMeta_Offsets}
-		blkDeleteBat := batch.New(true, attrs)
-		blkDeleteBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		blkDeleteBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-		ap.ctr.blkDeleteBat = blkDeleteBat
+		ap.ctr.blockId_rowIdBatch = make(map[string]*batch.Batch)
+		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
+		ap.ctr.blockId_SkipFlush = make(map[string]int8)
 	}
 	return nil
 }
@@ -55,13 +60,42 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// last batch of block
 	if bat == nil {
-		if p.DeleteType == LocalDelete {
-			attrs := []string{catalog.LocalDeleteRows}
-			localDeleteBat := batch.New(true, attrs)
-			localDeleteBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
-			vector.AppendFixed(localDeleteBat.GetVector(0), p.AffectedRows, false, proc.GetMPool())
-			proc.SetInputBatch(localDeleteBat)
+		// ToDo: CNBlock Compaction
+
+		// blkId,metaLoc,type
+		resBat := batch.New(true, []string{
+			catalog.BlockMeta_ID,
+			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_Type,
+			// catalog.BlockMetaOffset_Min,
+			// catalog.BlockMetaOffset_Max,
+		})
+		resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+		resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
+		// resBat.SetVector(3, vector.NewVec(types.T_uint32.ToType()))
+		// resBat.SetVector(4, vector.NewVec(types.T_uint32.ToType()))
+		for blkid, bat := range p.ctr.blockId_rowIdBatch {
+			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+			bytes, err := bat.MarshalBinary()
+			if err != nil {
+				return true, err
+			}
+			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+			vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_SkipFlush[blkid], false, proc.GetMPool())
+			// vector.AppendFixed(resBat.GetVector(3), p.ctr.blockId_min[blkid], false, proc.GetMPool())
+			// vector.AppendFixed(resBat.GetVector(4), p.ctr.blockId_max[blkid], false, proc.GetMPool())
 		}
+		for blkid, bat := range p.ctr.blockId_metaLoc {
+			vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+			bytes, err := bat.MarshalBinary()
+			if err != nil {
+				return true, err
+			}
+			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+			vector.AppendFixed(resBat.GetVector(2), FlushMetaLoc, false, proc.GetMPool())
+		}
+		proc.SetInputBatch(resBat)
 		return true, nil
 	}
 
@@ -71,31 +105,11 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	defer bat.Clean(proc.Mp())
-	if p.DeleteType == RemoteDelete {
-		// the logic will be used for next version's delete for cn bloc delete.
-		//  for now it's not useful
-
-		// // in the previous instruction, the
-		// // group will block all batch until
-		// // it gets all batches, so we will
-		// // get a batch which may contain multi
-		// // blocks' rowId.
-		// // just support single table detele for now.
-		// deleteVec := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
-		// p.ctr.blkDeleteBat.Clean(proc.GetMPool())
-		// for _, rowId := range deleteVec {
-		// 	blkid := rowId.GetBlockid()
-		// 	p.ctr.PutDeteteOffset((&blkid).String(), int32(rowId.GetRowOffset()))
-		// }
-		// proc.SetInputBatch(p.ctr.blkDeleteBat)
-		ibat := batch.New(true, bat.Attrs)
-		for j := range bat.Vecs {
-			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		}
-		if _, err := ibat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-			return false, err
-		}
-		proc.SetInputBatch(ibat)
+	if p.RemoteDelete {
+		// we will cache all rowId in memory,
+		// when the size is too large we will
+		// trigger write s3
+		p.SplitBatch(proc, bat)
 		return false, nil
 	}
 	var affectedRows uint64
@@ -138,7 +152,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if err != nil {
 		return false, err
 	}
-
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }

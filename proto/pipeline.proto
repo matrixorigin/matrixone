@@ -72,8 +72,6 @@ message Group {
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
-  map<string,int32> SegmentMap = 8;
-	int32 DeleteType = 9;
 }
 
 message Insert{
@@ -97,14 +95,10 @@ message Map{
   map<string, int32> mp = 1;
 }
 
-message ArrayMap{
-  map<string, Array> mp = 1;
-}
-
 message Deletion{
   uint64 Ts = 1;
   uint64 AffectedRows = 2;
-  int64 DeleteType = 3;
+  bool RemoteDelete = 3;
   uint64 IBucket =4;
   uint64 NBucket = 5;
   // DeleteCtx
@@ -117,6 +111,7 @@ message Deletion{
   repeated plan.TableDef OnSetTableDef = 12;
   repeated Map OnSetUpdateCol = 13;
   repeated Array OnSetIdx = 14;
+  map<string,int32> SegmentMap = 15;
 }
 
 message PreInsert {

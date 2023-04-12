@@ -610,7 +610,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Delete = &pipeline.Deletion{
 			Ts:           t.Ts,
 			AffectedRows: t.AffectedRows,
-			DeleteType:   int64(t.DeleteType),
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
 			// deleteCtx
 			CanTruncate:    t.DeleteCtx.CanTruncate,
 			DelRef:         t.DeleteCtx.DelRef,
@@ -675,15 +676,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
-			NeedEval:   t.NeedEval,
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Exprs:      t.Exprs,
-			Types:      convertToPlanTypes(t.Types),
-			Aggs:       convertToPipelineAggregates(t.Aggs),
-			MultiAggs:  convertPipelineMultiAggs(t.MultiAggs),
-			DeleteType: int32(t.DeleteType),
-			SegmentMap: t.SegmentMap,
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToPlanTypes(t.Types),
+			Aggs:      convertToPipelineAggregates(t.Aggs),
+			MultiAggs: convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -933,7 +932,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &deletion.Argument{
 			Ts:           t.Ts,
 			AffectedRows: t.AffectedRows,
-			DeleteType:   int(t.DeleteType),
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
 			DeleteCtx: &deletion.DeleteCtx{
 				CanTruncate:    t.CanTruncate,
 				DelRef:         t.DelRef,
@@ -1014,15 +1014,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			NeedEval:   t.NeedEval,
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Exprs:      t.Exprs,
-			Types:      convertToTypes(t.Types),
-			Aggs:       convertToAggregates(t.Aggs),
-			MultiAggs:  convertToMultiAggs(t.MultiAggs),
-			DeleteType: int(t.DeleteType),
-			SegmentMap: t.SegmentMap,
+			NeedEval:  t.NeedEval,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Exprs:     t.Exprs,
+			Types:     convertToTypes(t.Types),
+			Aggs:      convertToAggregates(t.Aggs),
+			MultiAggs: convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()

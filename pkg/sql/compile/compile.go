@@ -130,6 +130,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
+	fmt.Println(DebugShowScopes(c.scope))
 	if err != nil {
 		return err
 	}
@@ -498,7 +499,7 @@ func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
 		return false
 	}
 
-	if len(delCtx.OnSetUniqueSource) > 0 || len(delCtx.OnSetRef) > 0 {
+	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
 		return false
 	}
 
@@ -506,7 +507,7 @@ func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
 		return false
 	}
 
-	if len(delCtx.DelSource) > 0 {
+	if len(delCtx.DelSource) > 1 {
 		return false
 	}
 	return true
@@ -523,10 +524,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		// just use distributed deletion (write s3 delete just think about delete
 		// single table)
 		arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) {
-			if err != nil {
-				return nil, err
-			}
 			rs = c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1604,13 +1605,10 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 	}
 
 	for i := range rs {
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			arg.DeleteType = deletion.LocalDelete
-		} else {
-			// use distributed delete
-			arg.DeleteType = deletion.RemoteDelete
-		}
-		rs[i].Instructions = append(ss2[i].Instructions, dupInstruction(delete, nil))
+		// use distributed delete
+		arg.RemoteDelete = true
+		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil))
 	}
 	return c.newMergeScope(rs)
 }

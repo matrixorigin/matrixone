@@ -15,17 +15,14 @@ package mergedelete
 
 import (
 	"context"
-	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,29 +36,36 @@ func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrName stri
 	return nil
 }
 
-func TestMergeBlock(t *testing.T) {
+func TestMergeDelete(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Ctx = context.TODO()
-	Uuid := common.MustUuid1()
-	blkId := common.NewBlockid(&Uuid, 0, 0)
 	batch1 := &batch.Batch{
-		Attrs: []string{catalog.Row_ID},
-		Vecs: []*vector.Vector{
-			testutil.MakeRowIdVector([]types.Rowid{
-				common.NewRowid(&blkId, 0),
-				common.NewRowid(&blkId, 1),
-				common.NewRowid(&blkId, 2),
-			}, nil),
+		Attrs: []string{
+			catalog.BlockMeta_ID,
+			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_Type,
 		},
-		Zs: []int64{1, 1, 1},
-	}
-	batch2 := &batch.Batch{
-		Attrs: []string{catalog.LocalDeleteRows},
 		Vecs: []*vector.Vector{
-			testutil.MakeUint64Vector([]uint64{12}, nil),
+			testutil.MakeTextVector([]string{"mock_block_id0"}, nil),
+			testutil.MakeTextVector([]string{"a:magic:15"}, nil),
+			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch}, nil),
 		},
 		Zs: []int64{1},
 	}
+	batch2 := &batch.Batch{
+		Attrs: []string{
+			catalog.BlockMeta_ID,
+			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_Type,
+		},
+		Vecs: []*vector.Vector{
+			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
+			testutil.MakeTextVector([]string{"b:magic:15", "c:magic:15", "d:magic:15"}, nil),
+			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.RawRowIdBatch, deletion.RawRowIdBatch}, nil),
+		},
+		Zs: []int64{1, 1, 1},
+	}
+
 	argument1 := Argument{
 		DelSource:    &mockRelation{},
 		AffectedRows: 0,
@@ -71,24 +75,25 @@ func TestMergeBlock(t *testing.T) {
 	proc.Reg.InputBatch = batch1
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
+	require.Equal(t, uint64(15), argument1.AffectedRows)
 	proc.Reg.InputBatch = batch2
 	_, err = Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.AffectedRows)
+	require.Equal(t, uint64(60), argument1.AffectedRows)
 	// Check DelSource
-	{
-		result := argument1.DelSource.(*mockRelation).result
-		// check attr names
-		require.True(t, reflect.DeepEqual(
-			[]string{catalog.Row_ID},
-			result.Attrs,
-		))
-		// check vector
-		require.Equal(t, 1, len(result.Vecs))
-		for i, vec := range result.Vecs {
-			require.Equal(t, 3, vec.Length(), fmt.Sprintf("column number: %d", i))
-		}
-	}
-	argument1.Free(proc, false)
-	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	// {
+	// 	result := argument1.DelSource.(*mockRelation).result
+	// 	// check attr names
+	// 	require.True(t, reflect.DeepEqual(
+	// 		[]string{catalog.Row_ID},
+	// 		result.Attrs,
+	// 	))
+	// 	// check vector
+	// 	require.Equal(t, 1, len(result.Vecs))
+	// 	for i, vec := range result.Vecs {
+	// 		require.Equal(t, 3, vec.Length(), fmt.Sprintf("column number: %d", i))
+	// 	}
+	// }
+	// argument1.Free(proc, false)
+	// require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

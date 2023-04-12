@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -156,6 +157,7 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 		}
 		if end {
 			proc.Cancel()
+			fmt.Println("instructions: ", p.instructions)
 			p.cleanup(proc, false)
 			return end, nil
 		}

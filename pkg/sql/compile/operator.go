@@ -414,7 +414,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			DeleteCtx:    t.DeleteCtx,
 			AffectedRows: t.AffectedRows,
 			Engine:       t.Engine,
-			DeleteType:   t.DeleteType,
+			RemoteDelete: t.RemoteDelete,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -1025,7 +1025,6 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 // local deletion
 func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, uuids []uuid.UUID, c *Compile) {
 	arg := new(dispatch.Argument)
-	arg.FuncId = dispatch.SendToAllFunc
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
 	// local batch)
@@ -1037,7 +1036,7 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 	// use arg.RemoteRegs to know the uuid,
 	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
 	// So how to use this?
-	// the answer is that:
+	// the answer is below:
 	// when the remote Cn run the scope, if scope's RemoteReceivRegInfos
 	// is not empty, it will start to give a PrepareDoneNotifyMessage to
 	// tell the dispatcher it's prepared, and also to know,this messgae
@@ -1067,7 +1066,11 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 			})
 		}
 	}
-
+	if len(arg.RemoteRegs) == 0 {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	} else {
+		arg.FuncId = dispatch.SendToAllFunc
+	}
 	arg.LocalRegs = append(arg.LocalRegs, rs[currentIdx].Proc.Reg.MergeReceivers[0])
 	ss[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1075,7 +1078,8 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 	})
 	// add merge to recieve all batches
 	rs[currentIdx].appendInstruction(vm.Instruction{
-		Op: vm.Merge,
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
 	})
 	// get cn plan Node for constructGroup
 	cn := new(plan.Node)
@@ -1102,12 +1106,6 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 		},
 	}
 	groupArg := constructGroup(rs[currentIdx].Proc.Ctx, n, cn, currentIdx, len(ss), false, rs[currentIdx].Proc)
-	if isSameCN(rs[currentIdx].NodeInfo.Addr, c.addr) {
-		groupArg.DeleteType = deletion.LocalDelete
-	} else {
-		groupArg.DeleteType = deletion.RemoteDelete
-	}
-	groupArg.SegmentMap = colexec.Srv.GetCnSegmentMap()
 	// use group to do Bucket filter and RowId duplicate Filter
 	rs[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Group,

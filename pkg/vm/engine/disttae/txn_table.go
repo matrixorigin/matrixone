@@ -455,7 +455,19 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
+func (tbl *txnTable) EnhanceDelete(bat *batch.Batch) error {
+	//
+	return nil
+}
+
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	if bat == nil {
+		// start to do compaction for cn blocks
+	}
+	// remoteDelete
+	if bat.Attrs[0] == catalog.BlockMeta_ID {
+		return tbl.EnhanceDelete(bat)
+	}
 	bat.SetAttributes([]string{catalog.Row_ID})
 
 	packer, put := tbl.db.txn.engine.packerPool.Get()
@@ -463,11 +475,16 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
-
+	// do preprocess, we  need to promise one batch contains one and same
+	// block's rowId
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
 	}
+	return tbl.writeDnPartition(bat)
+}
+
+func (tbl *txnTable) writeDnPartition(bat *batch.Batch) error {
 	bats, err := partitionDeleteBatch(tbl, bat)
 	if err != nil {
 		return err

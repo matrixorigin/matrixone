@@ -20,11 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -229,31 +227,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	proc.SetInputBatch(&batch.Batch{})
-	if ap.DeleteType == deletion.RemoteDelete {
-		deleteVec := bat.GetVector(0)
-		rowId := vector.GetFixedAt[types.Rowid](deleteVec, 0)
-		// for the first delete func, we won't delete CNBlock remotely
-		// we will improve this in the future
-		if _, ok := ap.SegmentMap[rowId.GetObjectString()]; ok {
-			return false, nil
-		}
-	} else if ap.DeleteType == deletion.LocalDelete {
-		deleteVec := bat.GetVector(0)
-		rowId := vector.GetFixedAt[types.Rowid](deleteVec, 0)
-		// CN Block and txnWorkspace Delete will just be done locally.
-		if _, ok := ap.SegmentMap[rowId.GetObjectString()]; ok {
-			// remember here, we need to copy this batch now.
-			ibat := batch.New(true, bat.Attrs)
-			for j := range bat.Vecs {
-				ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-			}
-			if _, err := ibat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-				return false, err
-			}
-			proc.SetInputBatch(ibat)
-			return false, nil
-		}
-	}
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}

@@ -17,7 +17,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,21 +33,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
+		// here means the delete is over, we should start to do
+		// compaction here
+		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_ID)
 		return true, nil
 	}
 
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	// local deletes, the real delete take place in deletion,
-	// we just get the delete rows here
-	if bat.Attrs[0] == catalog.LocalDeleteRows {
-		rows := vector.GetFixedAt[uint64](bat.GetVector(0), 0)
-		ap.AffectedRows += rows
-		return false, nil
-	}
-	// remote deletes
-	err = ap.DelSource.Delete(proc.Ctx, bat, catalog.Row_ID)
+	// val, err := strconv.ParseUint(strings.Split(string(metaLocs[i]), ":")[2], 0, 64)
+	// blkId,metaLoc,type
+	err = ap.DelSource.Delete(proc.Ctx, bat, catalog.BlockMeta_ID)
 	if err != nil {
 		return false, err
 	}

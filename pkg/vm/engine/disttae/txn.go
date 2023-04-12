@@ -253,6 +253,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		}
 		blockId := rowids[0].GetBlockid()
 		colexec.Srv.PutCnBlockDeletes(blockId.String(), txn.deleteOffsets)
+		bat.CleanOnlyData()
 		return bat
 	}
 	min1 := uint32(math.MaxUint32)
