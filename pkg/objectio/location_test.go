@@ -39,9 +39,9 @@ func BenchmarkDecode(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			location.Name().Sid()
 			location.Name().Num()
-			location.NameString()
+			location.Name().String()
 			location.ID()
 		}
 	})
-	b.Log(location.NameString())
+	b.Log(location.Name().String())
 }
