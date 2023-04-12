@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -490,6 +492,7 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
+	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &service.LogtailResponseSegment{}
 	})
@@ -497,12 +500,13 @@ func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 		),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+		morpc.WithBackendLogger(logger),
 	)
 
 	c, err1 := morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(10000),
 		morpc.WithClientTag("cn-log-tail-client"),
+		morpc.WithClientLogger(logger),
 	)
 	if err1 != nil {
 		return nil, err1
