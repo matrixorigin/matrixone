@@ -16,11 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"math"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -330,14 +331,26 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		nil,
 		nil,
 	)
+
+	id := common.NewSegmentid()
+	bytes := types.EncodeUuid(&id)
+
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      e,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		rowId:       [2]uint64{math.MaxUint64, 0},
+		op:       op,
+		proc:     proc,
+		engine:   e,
+		readOnly: true,
+		meta:     op.Txn(),
+		idGen:    e.idGen,
+		rowId: [6]uint32{
+			types.DecodeUint32(bytes[0:4]),
+			types.DecodeUint32(bytes[4:8]),
+			types.DecodeUint32(bytes[8:12]),
+			types.DecodeUint32(bytes[12:16]),
+			0,
+			0,
+		},
+		segId:       id,
 		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),

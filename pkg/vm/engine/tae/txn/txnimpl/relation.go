@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -166,8 +167,8 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 }
 
 func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []dataio.Index,
-	metaLocs []string) error {
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
@@ -274,7 +275,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
 			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 			return
-		})
+		}, nil)
 	return
 }
 

@@ -27,8 +27,10 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 alter index c visible",
-		output: "alter table t1 alter index c visible",
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 	}
 )
 
@@ -652,10 +654,10 @@ var (
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -664,7 +666,7 @@ var (
 		input: "create table t (a int, b char, fulltext idx (a, b))",
 	}, {
 		input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
-		output: "create table t (a int, b char, primary key p1 using none (a, b))",
+		output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
@@ -2059,6 +2061,54 @@ var (
 			output: "alter table t1 alter index c invisible",
 		},
 		{
+			input:  "alter table t1 add constraint index (col3, col4)",
+			output: "alter table t1 add index (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint index zxxxxxx (col3, col4)",
+			output: "alter table t1 add index zxxxxxx (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key (col3, col4)",
+			output: "alter table t1 add unique key (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key zxxxxxx (col3, col4)",
+			output: "alter table t1 add unique key zxxxxxx (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		},
+		{
 			input: "create publication pub1 database db1",
 		},
 		{
@@ -2137,6 +2187,14 @@ var (
 		{
 			input:  "show table_size from mo_role from mo_catalog",
 			output: "show table size from mo_role from mo_catalog",
+		},
+		{
+			input:  "show roles",
+			output: "show roles",
+		},
+		{
+			input:  "show roles like '%dafgda_'",
+			output: "show roles like %dafgda_",
 		},
 		{
 			input:  "create procedure test1 (in param1 int) 'test test'",

@@ -199,8 +199,8 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_decimal64: {
 		types.T_float32, types.T_float64,
-		types.T_int64,
-		types.T_uint64,
+		types.T_int32, types.T_int64,
+		types.T_uint32, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -210,7 +210,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_decimal128: {
 		types.T_float32, types.T_float64,
 		types.T_int32, types.T_int64,
-		types.T_uint64,
+		types.T_uint32, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1256,9 +1256,15 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return decimal64ToFloat(ctx, source, rs, length, 64)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return decimal64ToSigned(ctx, source, rs, 32, length)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal64ToInt64(ctx, source, rs, length)
+		return decimal64ToSigned(ctx, source, rs, 64, length)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return decimal64ToUnsigned(ctx, source, rs, 32, length)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
@@ -1298,6 +1304,9 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return decimal128ToSigned(ctx, source, rs, 64, length)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return decimal128ToUnsigned(ctx, source, rs, 32, length)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal128ToUnsigned(ctx, source, rs, 64, length)
@@ -2619,10 +2628,10 @@ func timeToDecimal128(
 	return nil
 }
 
-func decimal64ToInt64(
+func decimal64ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[int64], length int) error {
+	to *vector.FunctionResult[T], bitSize int, length int) error {
 	var i uint64
 	l := uint64(length)
 	fromTyp := from.GetType()
@@ -2633,15 +2642,15 @@ func decimal64ToInt64(
 				return err
 			}
 		} else {
-			xStr := v.Format(fromTyp.Scale)
-			floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
-				return err
+				return moerr.NewOutOfRange(ctx,
+					fmt.Sprintf("int%d", bitSize),
+					"value '%v'", xStr)
 			}
-			if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
-				return moerr.NewOutOfRange(ctx, "int64", "value '%v'", xStr)
-			}
-			err = to.Append(int64(math.Round(floatRepresentation)), false)
+			err = to.Append(T(result), false)
 			if err != nil {
 				return err
 			}

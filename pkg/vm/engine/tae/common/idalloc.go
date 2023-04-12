@@ -15,7 +15,6 @@
 package common
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -40,8 +39,8 @@ func NewBlockid(segid *types.Uuid, fileOffset, blkOffset uint16) types.Blockid {
 	var id types.Blockid
 	size := types.UuidSize
 	copy(id[:size], segid[:])
-	binary.BigEndian.PutUint16(id[size:size+2], fileOffset)
-	binary.BigEndian.PutUint16(id[size+2:size+4], blkOffset)
+	copy(id[size:size+2], types.EncodeUint16(&fileOffset))
+	copy(id[size+2:size+4], types.EncodeUint16(&blkOffset))
 	return id
 }
 
@@ -49,7 +48,7 @@ func NewRowid(blkid *types.Blockid, offset uint32) types.Rowid {
 	var rowid types.Rowid
 	size := types.BlockidSize
 	copy(rowid[:size], blkid[:])
-	binary.BigEndian.PutUint32(rowid[size:size+4], offset)
+	copy(rowid[size:size+4], types.EncodeUint32(&offset))
 	return rowid
 }
 

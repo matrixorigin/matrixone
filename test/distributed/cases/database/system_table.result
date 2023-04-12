@@ -278,7 +278,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    YES        null
 table_schema    VARCHAR(5000)    YES        null
 table_name    VARCHAR(5000)    YES        null
-table_type    VARCHAR(18)    YES        null
+table_type    VARCHAR(14)    YES        null
 engine    VARCHAR(3)    YES        null
 version    BIGINT(0)    YES        null
 row_format    VARCHAR(10)    YES        null

@@ -58,7 +58,7 @@ func (art *simpleARTMap) Size() int { return art.tree.Size() }
 func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	chain := NewIndexMVCCChain()
 	chain.Insert(offset)
-	ikey := types.EncodeValue(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ.Oid)
 	old, _ := art.tree.Insert(ikey, chain)
 	if old != nil {
 		oldChain := old.(*IndexMVCCChain)
@@ -71,7 +71,7 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error) {
 	existence := make(map[any]bool)
 	op := func(v any, _ bool, i int) error {
-		encoded := types.EncodeValue(v, art.typ)
+		encoded := types.EncodeValue(v, art.typ.Oid)
 		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {
 				return ErrDuplicate
@@ -99,7 +99,7 @@ func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 }
 
 func (art *simpleARTMap) Search(key any) ([]uint32, error) {
-	ikey := types.EncodeValue(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ.Oid)
 	v, found := art.tree.Search(ikey)
 	if !found {
 		return nil, ErrNotFound

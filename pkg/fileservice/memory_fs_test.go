@@ -24,7 +24,7 @@ func TestMemoryFS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
-			fs, err := NewMemoryFS(name)
+			fs, err := NewMemoryFS(name, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -32,7 +32,7 @@ func TestMemoryFS(t *testing.T) {
 
 	t.Run("replaceable file service", func(t *testing.T) {
 		testReplaceableFileService(t, func() ReplaceableFileService {
-			fs, err := NewMemoryFS("memory")
+			fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -42,7 +42,7 @@ func TestMemoryFS(t *testing.T) {
 
 func BenchmarkMemoryFS(b *testing.B) {
 	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS("memory")
+		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
 		return fs
 	})

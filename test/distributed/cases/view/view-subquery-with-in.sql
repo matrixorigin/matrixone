@@ -8,18 +8,14 @@ SELECT 1 IN (SELECT 1);
 create view v1 as SELECT 1 IN (SELECT 1);
 select * from v1;
 drop view v1;
--- @bvt:issue#3307
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 create view v1 as SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 select * from v1;
 drop view v1;
--- @bvt:issue
--- @bvt:issue#3556
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
 create view v1 as SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
 select * from v1;
 drop view v1;
--- @bvt:issue
 SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c ORDER BY id);
 SELECT * FROM (SELECT 1) a  WHERE 1 IN (SELECT 1,1);
 SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
@@ -175,12 +171,10 @@ CREATE TABLE `c` (
 INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
 (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
 (5,2), (1,8), (7,0), (0,9), (9,5);
--- @bvt:issue#3307
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 create view v1 as SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 select * from v1;
 drop view v1;
--- @bvt:issue
 DROP TABLE IF EXISTS c;
 
 drop table if exists t1;

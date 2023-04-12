@@ -15,10 +15,10 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"

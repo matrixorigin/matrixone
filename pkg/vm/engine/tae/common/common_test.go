@@ -16,7 +16,6 @@ package common
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"testing"
 	"unsafe"
@@ -50,10 +49,10 @@ func TestWriteID(t *testing.T) {
 
 	var b bytes.Buffer
 
-	binary.Write(&b, binary.BigEndian, sid[:])
+	b.Write(sid[:])
 
 	var desid types.Uuid
-	binary.Read(&b, binary.BigEndian, desid[:])
+	b.Read(desid[:])
 
 	require.True(t, sid.Eq(desid))
 	require.Equal(t, sid.ToString(), desid.ToString())

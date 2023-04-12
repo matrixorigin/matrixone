@@ -51,3 +51,8 @@ with tmpt as (select substring(a,1,7) as a from t2) select * from tmpt, unnest(t
 select * from t2,unnest(substring(t2.a,1,7)) u;
 create view v3 as (select * from unnest(substring('{"a":1}...',1,7), '$') u);
 desc v3;
+drop table if exists t1;
+create table t1(a int,b json);
+insert into t1 values(1,'{"people":[{"name":"a1","address":"a2"},{"name":"b1","address":"b2"}]}');
+insert into t1 values(2,'{"people":[{"name":"c1","address":"c2"},{"name":"d1","address":"d2"}]}');
+select a,e.* from t1,unnest(t1.b,'$.people[0]') e where seq=0 and e.this=json_extract(t1.b,'$.people[0]');

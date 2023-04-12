@@ -404,7 +404,8 @@ func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err er
 	if !segmentEntry.IsActive() || (!segmentEntry.IsAppendable() && segmentEntry.IsSorted()) {
 		return moerr.GetOkStopCurrRecur()
 	}
-	// handle appendable segs and unsorted non-appendable segs(which was written by cn)
+	// handle appendable segs
+	// TODO Iter non appendable segs to delete all. Typical occasion is TPCC
 	s.segBuilder.resetForNewSeg()
 	return
 }

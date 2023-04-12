@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"hash/fnv"
 	"math"
 	"net"
@@ -37,7 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var (
@@ -45,9 +47,10 @@ var (
 	defaultMemoryLimit    = 1 << 40
 
 	supportServiceTypes = map[string]metadata.ServiceType{
-		metadata.ServiceType_CN.String():  metadata.ServiceType_CN,
-		metadata.ServiceType_DN.String():  metadata.ServiceType_DN,
-		metadata.ServiceType_LOG.String(): metadata.ServiceType_LOG,
+		metadata.ServiceType_CN.String():    metadata.ServiceType_CN,
+		metadata.ServiceType_DN.String():    metadata.ServiceType_DN,
+		metadata.ServiceType_LOG.String():   metadata.ServiceType_LOG,
+		metadata.ServiceType_PROXY.String(): metadata.ServiceType_PROXY,
 	}
 )
 
@@ -59,6 +62,8 @@ type LaunchConfig struct {
 	DNServiceConfigsFiles []string `toml:"dnservices"`
 	// CNServiceConfigsFiles log service config files
 	CNServiceConfigsFiles []string `toml:"cnservices"`
+	// CNServiceConfigsFiles log service config files
+	ProxyServiceConfigsFiles []string `toml:"proxy-services"`
 }
 
 // Config mo-service configuration
@@ -68,7 +73,7 @@ type Config struct {
 	// Log log config
 	Log logutil.LogConfig `toml:"log"`
 	// ServiceType service type, select the corresponding configuration to start the
-	// service according to the service type. [CN|DN|LOG]
+	// service according to the service type. [CN|DN|LOG|PROXY]
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
@@ -80,6 +85,8 @@ type Config struct {
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
 	CN cnservice.Config `toml:"cn"`
+	// ProxyConfig is the config of proxy.
+	ProxyConfig proxy.Config `toml:"proxy"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 
@@ -255,14 +262,20 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
 	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
+	return cfg
+}
+
+func (c *Config) getProxyConfig() proxy.Config {
+	cfg := c.ProxyConfig
+	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	return cfg
 }
 
 func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 	cfg := c.Observability
-	cfg.SetDefaultValues(Version)
+	cfg.SetDefaultValues(version.Version)
 	return cfg
 }
 

@@ -369,6 +369,10 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int) (view *model.ColumnView, e
 	}
 }
 
+func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
+	return nil
+}
+
 func (blk *txnSysBlock) GetColumnDataByName(attr string) (view *model.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(colIdx)

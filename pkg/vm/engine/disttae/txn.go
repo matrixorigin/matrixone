@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -242,8 +243,18 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	min1 := uint32(math.MaxUint32)
+	max1 := uint32(0)
 	for _, rowid := range rowids {
 		mp[rowid] = 0
+		rowOffset := rowid.GetRowOffset()
+		if rowOffset < (min1) {
+			min1 = rowOffset
+		}
+
+		if rowOffset > max1 {
+			max1 = rowOffset
+		}
 		// update workspace
 	}
 
@@ -253,6 +264,17 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
 			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
+			if len(vs) == 0 {
+				continue
+			}
+			if !vs[0].GetSegid().Eq(txn.segId) {
+				continue
+			}
+			min2 := vs[0].GetRowOffset()
+			max2 := vs[len(vs)-1].GetRowOffset()
+			if min1 > max2 || max1 < min2 {
+				continue
+			}
 			for k, v := range vs {
 				if _, ok := mp[v]; !ok {
 					sels = append(sels, int64(k))
@@ -284,7 +306,7 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
-	txn.rowId[1]++
+	txn.rowId[5]++
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 

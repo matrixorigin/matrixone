@@ -115,8 +115,8 @@ type Transaction struct {
 	idGen IDGenerator
 
 	// interim incremental rowid
-	rowId [2]uint64
-
+	rowId [6]uint32
+	segId types.Uuid
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database

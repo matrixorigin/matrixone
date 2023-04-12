@@ -113,11 +113,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return nil
 	}
 
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, txn, ctx)
+	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.TxnOperator, ctx)
 	if err != nil {
 		return err
 	}
@@ -128,12 +124,6 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 	}
 	err = relIndex.Write(ctx, indexMetaBatch)
 	if err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
-		return err
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -150,11 +140,7 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 		return err
 	}
 	tableId := relation.GetTableID(ctx)
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, txn, ctx)
+	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.TxnOperator, ctx)
 	if err != nil {
 		return err
 	}
@@ -173,12 +159,6 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 	}
 	err = relIndex.Write(ctx, indexMetaBatch)
 	if err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
-		return err
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -371,210 +351,3 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	return bat, nil
 }
-
-//// DeleteIndexMetadata :When dropping a table, delete all index metadata information of the table
-//func DeleteIndexMetadata(eg engine.Engine, ctx context.Context, relation engine.Relation, proc *process.Process) error {
-//	tableId := relation.GetTableID(ctx)
-//	tableDefs, err := relation.TableDefs(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	var ct *engine.ConstraintDef
-//	for _, def := range tableDefs {
-//		if constraintDef, ok := def.(*engine.ConstraintDef); ok {
-//			ct = constraintDef
-//			break
-//		}
-//	}
-//
-//	if ct == nil {
-//		return nil
-//	}
-//	hasIndex := false
-//	for _, constraint := range ct.Cts {
-//		if indexdef, ok := constraint.(*engine.IndexDef); ok && len(indexdef.Indexes) != 0 {
-//			hasIndex = true
-//			break
-//		}
-//		if _, ok := constraint.(*engine.PrimaryKeyDef); ok {
-//			hasIndex = true
-//			break
-//		}
-//	}
-//
-//	if !hasIndex {
-//		return nil
-//	}
-//
-//	txn, err := NewTxn(eg, proc, ctx)
-//	if err != nil {
-//		return err
-//	}
-//	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, txn, ctx)
-//	if err != nil {
-//		return err
-//	}
-//	indexMetaBatch, err := buildDeleteIndexBatch(tableId, relIndex, ctx, proc)
-//	if err != nil {
-//		return err
-//	}
-//	if indexMetaBatch.GetVector(0).Length() > 0 {
-//		err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
-//		if err != nil {
-//			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-//				return err2
-//			}
-//			return err
-//		}
-//	}
-//	if err = CommitTxn(eg, txn, ctx); err != nil {
-//		return err
-//	}
-//	return nil
-//}
-//
-//// When the drop index is executed, delete the metadata information of the corresponding index of the table
-//func DeleteOneIndexMetadata(eg engine.Engine, ctx context.Context, relation engine.Relation, indexName string, proc *process.Process) error {
-//	tableId := relation.GetTableID(ctx)
-//
-//	txn, err := NewTxn(eg, proc, ctx)
-//	if err != nil {
-//		return err
-//	}
-//
-//	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, txn, ctx)
-//	if err != nil {
-//		return err
-//	}
-//
-//	indexMetaBatch, err := buildDeleteSingleIndexBatch(tableId, indexName, relIndex, ctx, proc)
-//	if err != nil {
-//		return err
-//	}
-//
-//	if indexMetaBatch.GetVector(0).Length() > 0 {
-//		err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
-//		if err != nil {
-//			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-//				return err2
-//			}
-//			return err
-//		}
-//	}
-//	if err = CommitTxn(eg, txn, ctx); err != nil {
-//		return err
-//	}
-//	return nil
-//}
-//
-//func buildDeleteIndexBatch(tableId uint64, rel engine.Relation, ctx context.Context, proc *process.Process) (*batch.Batch, error) {
-//	var rds []engine.Reader
-//	ret, err := rel.Ranges(ctx, nil)
-//	if err != nil {
-//		panic(err)
-//	}
-//
-//	switch {
-//	case len(ret) == 0:
-//		rds, _ = rel.NewReader(ctx, 1, nil, nil)
-//	case len(ret) == 1 && len(ret[0]) == 0:
-//		rds, _ = rel.NewReader(ctx, 1, nil, nil)
-//	case len(ret[0]) == 0:
-//		rds0, _ := rel.NewReader(ctx, 1, nil, nil)
-//		rds1, _ := rel.NewReader(ctx, 1, nil, ret[1:])
-//		rds = append(rds, rds0...)
-//		rds = append(rds, rds1...)
-//	default:
-//		rds, _ = rel.NewReader(ctx, 1, nil, ret)
-//	}
-//
-//	retbat := batch.NewWithSize(1)
-//	vec_rowid := vector.NewVec(types.T_Rowid.ToType())
-//	retbat.Vecs[0] = vec_rowid
-//	for len(rds) > 0 {
-//		bat, err := rds[0].Read(ctx, []string{catalog.Row_ID, MO_INDEX_TABLE_ID}, nil, proc.Mp())
-//		if err != nil {
-//			bat.Clean(proc.Mp())
-//			return nil, err
-//		}
-//		if bat == nil {
-//			rds[0].Close()
-//			rds = rds[1:]
-//			continue
-//		}
-//		if len(bat.Vecs) != 2 {
-//			panic(moerr.NewInternalError(ctx, "drop all indexes of a table must return two columns batch of 'mo_indexes'"))
-//		}
-//		var rowIdx int64
-//		tableIdCols := vector.MustFixedCol[uint64](bat.Vecs[1])
-//		for rowIdx = 0; rowIdx < int64(bat.Length()); rowIdx++ {
-//			if tableIdCols[rowIdx] == tableId {
-//				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIdx]
-//				if err = vector.AppendFixed(retbat.GetVector(0), rowid, false, proc.Mp()); err != nil {
-//					panic(moerr.NewInternalError(ctx, err.Error()))
-//				}
-//			}
-//		}
-//		bat.Clean(proc.Mp())
-//		rds[0].Close()
-//		rds = rds[1:]
-//	}
-//	retbat.SetZs(retbat.GetVector(0).Length(), proc.Mp())
-//	return retbat, nil
-//}
-//
-//func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Relation, ctx context.Context, proc *process.Process) (*batch.Batch, error) {
-//	var rds []engine.Reader
-//	ret, err := rel.Ranges(ctx, nil)
-//	if err != nil {
-//		panic(err)
-//	}
-//	switch {
-//	case len(ret) == 0:
-//		rds, _ = rel.NewReader(ctx, 1, nil, nil)
-//	case len(ret) == 1 && len(ret[0]) == 0:
-//		rds, _ = rel.NewReader(ctx, 1, nil, nil)
-//	case len(ret[0]) == 0:
-//		rds0, _ := rel.NewReader(ctx, 1, nil, nil)
-//		rds1, _ := rel.NewReader(ctx, 1, nil, ret[1:])
-//		rds = append(rds, rds0...)
-//		rds = append(rds, rds1...)
-//	default:
-//		rds, _ = rel.NewReader(ctx, 1, nil, ret)
-//	}
-//
-//	retbat := batch.NewWithSize(1)
-//	vec_rowid := vector.NewVec(types.T_Rowid.ToType())
-//	retbat.Vecs[0] = vec_rowid
-//	for len(rds) > 0 {
-//		bat, err := rds[0].Read(ctx, []string{catalog.Row_ID, MO_INDEX_TABLE_ID, MO_INDEX_NAME}, nil, proc.Mp())
-//		if err != nil {
-//			bat.Clean(proc.Mp())
-//			return nil, err
-//		}
-//		if bat == nil {
-//			rds[0].Close()
-//			rds = rds[1:]
-//			continue
-//		}
-//		if len(bat.Vecs) != 3 {
-//			panic(moerr.NewInternalError(ctx, "drop a table index must return three columns batch of 'mo_indexes'"))
-//		}
-//		var rowIdx int64
-//		tableIdCols := vector.MustFixedCol[uint64](bat.Vecs[1])
-//		indexNameCols := vector.MustStrCol(bat.Vecs[2])
-//		for rowIdx = 0; rowIdx < int64(bat.Length()); rowIdx++ {
-//			if tableIdCols[rowIdx] == tableId && indexNameCols[rowIdx] == indexName {
-//				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIdx]
-//				if err = vector.AppendFixed(retbat.GetVector(0), rowid, false, proc.Mp()); err != nil {
-//					panic(moerr.NewInternalError(ctx, err.Error()))
-//				}
-//			}
-//		}
-//		bat.Clean(proc.Mp())
-//		rds[0].Close()
-//		rds = rds[1:]
-//	}
-//	retbat.SetZs(retbat.GetVector(0).Length(), proc.Mp())
-//	return retbat, nil
-//}

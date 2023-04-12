@@ -74,7 +74,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,10 +82,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
@@ -456,7 +454,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 	for _, node := range mvccNodes {
 		metaNode := node
-		if metaNode.BaseNode.MetaLoc != "" && !metaNode.IsAborted() {
+		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
@@ -464,12 +462,12 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	if n := len(mvccNodes); n > 0 {
 		newest := mvccNodes[n-1]
 		if e.IsAppendable() {
-			if newest.BaseNode.MetaLoc != "" {
+			if !newest.BaseNode.MetaLoc.IsEmpty() {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if newest.BaseNode.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
+			if !newest.BaseNode.DeltaLoc.IsEmpty() && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}
@@ -608,9 +606,9 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) (entries []*api.Entry, err error) {
+	fs fileservice.FileService) ([]*api.Entry, error) {
 	if metLoc == "" {
-		return
+		return nil, nil
 	}
 	now := time.Now()
 	defer func() {
@@ -619,34 +617,40 @@ func LoadCheckpointEntries(
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
 
-	readers := make([]dataio.Reader, len(locations))
-	readerMetas := make([][]objectio.BlockObject, len(locations))
+	readers := make([]*blockio.BlockReader, len(locations))
+	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
-		readers[i], err = blockio.NewCheckPointReader(fs, key)
-
-		err = blockio.PrefetchBlocksMeta(readers[i], nil)
+		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return
+			return nil, err
 		}
+		reader, err := blockio.NewObjectReader(fs, location)
+		if err != nil {
+			return nil, err
+		}
+		readers[i] = reader
+		err = blockio.PrefetchMeta(fs, location)
+		if err != nil {
+			return nil, err
+		}
+		objectLocations[i] = location
 	}
 
 	for i := range locations {
-		readerMetas[i], err = readers[i].LoadBlocksMeta(ctx, common.DefaultAllocator)
+		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
 		if err != nil {
-			return
+			return nil, err
 		}
-
-		pref := blockio.BuildPrefetch(readers[i], common.DefaultAllocator)
 		for idx, item := range checkpointDataRefer {
 			idxes := make([]uint16, len(item.attrs))
 			for col := range item.attrs {
 				idxes[col] = uint16(col)
 			}
-			pref.AddBlock(idxes, []uint32{readerMetas[i][idx].GetID()})
+			pref.AddBlock(idxes, []uint32{uint32(idx)})
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
-			return
+			return nil, err
 		}
 
 	}
@@ -655,16 +659,16 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, readerMetas[i][idx], readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
 			if err != nil {
-				return
+				return nil, err
 			}
 			data.bats[idx] = bat
 		}
 		datas[i] = data
 	}
 
-	entries = make([]*api.Entry, 0)
+	entries := make([]*api.Entry, 0)
 	for i := range locations {
 		data := datas[i]
 		ins, del, cnIns, err := data.GetTableData(tableID)
@@ -710,5 +714,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return
+	return entries, nil
 }

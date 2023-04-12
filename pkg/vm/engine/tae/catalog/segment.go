@@ -17,9 +17,11 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -279,11 +281,17 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	return
 }
 
+func (entry *SegmentEntry) GetNextObjectIndex() uint16 {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.nextObjectIdx
+}
+
 func (entry *SegmentEntry) CreateBlock(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory BlockDataFactory,
-	opts *common.CreateBlockOpt) (created *BlockEntry, err error) {
+	opts *objectio.CreateBlockOpt) (created *BlockEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id types.Blockid
@@ -295,6 +303,9 @@ func (entry *SegmentEntry) CreateBlock(
 	} else {
 		id = common.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
 		entry.nextObjectIdx += 1
+	}
+	if entry.nextObjectIdx == math.MaxUint16 {
+		panic("bad logic: full object offset")
 	}
 	if _, ok := entry.entries[id]; ok {
 		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))

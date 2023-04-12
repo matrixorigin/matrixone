@@ -17,6 +17,7 @@ package common
 import (
 	"fmt"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,6 +25,14 @@ import (
 
 type ClosedInterval struct {
 	Start, End uint64
+}
+
+const (
+	CloseIntervalSize int64 = int64(unsafe.Sizeof(ClosedInterval{}))
+)
+
+func EncodeCloseInterval(i *ClosedInterval) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(i)), CloseIntervalSize)
 }
 
 func (i *ClosedInterval) String() string {
