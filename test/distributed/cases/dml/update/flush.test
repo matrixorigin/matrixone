@@ -29,3 +29,23 @@ select * from t;
 commit;
 
 drop database if exists db1;
+
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3);
+
+begin;
+-- read, pull insert logtail
+select * from t;
+-- @session:id=1{
+-- @separator:table
+select mo_ctl('dn', 'flush', 'db1.t');
+select a from db1.t where a = 1;
+-- flush and pull meta logtail
+-- @session}
+-- read again
+select * from t;
+commit;

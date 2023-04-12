@@ -122,7 +122,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		partition:    item.Partition,
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
-		parts:        db.txn.engine.getPartitions(db.databaseId, item.Id).Snapshot(),
 	}
 	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, item.Id,
@@ -302,7 +301,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
-	tbl.parts = db.txn.engine.getPartitions(db.databaseId, tableId).Snapshot()
 	tbl.getTableDef()
 	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
@@ -310,13 +308,11 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 
 func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
-	parts := db.txn.engine.getPartitions(db.databaseId, id).Snapshot()
 	tbl := &txnTable{
 		db:           db,
 		tableId:      id,
 		tableName:    name,
 		defs:         defs,
-		parts:        parts,
 		primaryIdx:   -1,
 		clusterByIdx: -1,
 	}
