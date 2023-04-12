@@ -17,11 +17,12 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
@@ -36,10 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -400,16 +401,21 @@ func (h *Handle) prefetch(ctx context.Context,
 	//for loading deleted rowid.
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
-	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, req.DeltaLocs[0])
+	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
+	if err != nil {
+		return nil
+	}
+	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, loc)
 	if err != nil {
 		return nil
 	}
 	for _, key := range req.DeltaLocs {
-		_, id, _, _, err := blockio.DecodeLocation(key)
+		var location objectio.Location
+		location, err = blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return nil
+			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{id})
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -768,10 +774,18 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
+			locations := make([]objectio.Location, 0)
+			for _, metLoc := range req.MetaLocs {
+				location, err := blockio.EncodeLocationFromString(metLoc)
+				if err != nil {
+					return err
+				}
+				locations = append(locations, location)
+			}
 			err = tb.AddBlksWithMetaLoc(
 				ctx,
 				nil,
-				req.MetaLocs)
+				locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -805,26 +819,31 @@ func (h *Handle) HandleWrite(
 			nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		columnIdx := 0
-		var reader dataio.Reader
-		reader, err = blockio.NewObjectReader(
-			h.eng.GetTAE(nctx).Fs.Service, req.DeltaLocs[0])
-		if err != nil {
-			return
-		}
+		var reader *blockio.BlockReader
 		for _, key := range req.DeltaLocs {
-			var id uint32
-			_, id, _, _, err = blockio.DecodeLocation(key)
-			var bats []*batch.Batch
-			bats, err = reader.LoadColumns(
+			var location objectio.Location
+			location, err = blockio.EncodeLocationFromString(key)
+			if err != nil {
+				return err
+			}
+			if reader == nil {
+				reader, err = blockio.NewObjectReader(
+					h.eng.GetTAE(nctx).Fs.Service, location)
+				if err != nil {
+					return
+				}
+			}
+			var bat *batch.Batch
+			bat, err = reader.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
-				[]uint32{id},
+				location.ID(),
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+			vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
 
 			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
 			if err != nil {

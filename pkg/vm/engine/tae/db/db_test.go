@@ -15,6 +15,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"reflect"
@@ -23,12 +24,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -388,18 +391,19 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		name := blockio.EncodeObjectName()
-		writer, err := blockio.NewBlockWriter(dataBlk.GetFs().Service, name)
+		uuid, _ := types.BuildUuid()
+		name := objectio.BuildObjectName(uuid, 0)
+		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name)
 		assert.Nil(t, err)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc := blockio.EncodeLocation(
+			writer.GetName(),
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
-			blocks)
-		assert.Nil(t, err)
+			blocks[0].GetID())
 		blk.UpdateMetaLoc(metaLoc)
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)
@@ -612,9 +616,9 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	}
 	//compact blocks
 	var newBlockFp1 *common.ID
-	var metaLoc1 string
+	var metaLoc1 objectio.Location
 	var newBlockFp2 *common.ID
-	var metaLoc2 string
+	var metaLoc2 objectio.Location
 	{
 		txn, rel := getRelation(t, 0, db, "db", schema.Name)
 		it := rel.MakeBlockIt()
@@ -666,12 +670,12 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-		err := rel.AddBlksWithMetaLoc(nil, []string{metaLoc1})
+		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
 		assert.Nil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc2})
+		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc2})
 		assert.Nil(t, err)
 		err = rel.Append(bats[1])
 		assert.Nil(t, err)
@@ -692,7 +696,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc1, metaLoc2})
+		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1, metaLoc2})
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -707,8 +711,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 				return nil
 			}
 			metaLoc := blk.GetMetaLoc()
-			assert.True(t, metaLoc != "")
-			if metaLoc == metaLoc1 {
+			assert.True(t, !metaLoc.IsEmpty())
+			if bytes.Equal(metaLoc, metaLoc1) {
 				view, err := blk.GetColumnDataById(2)
 				assert.NoError(t, err)
 				defer view.Close()
@@ -3362,7 +3366,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(false)
 	assert.NoError(t, err)
-	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, "test_1")
+	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, objectio.Location("test_1"))
 	assert.NoError(t, txn.Commit())
 
 	txn, err = tae.StartTxn(nil)
@@ -3375,7 +3379,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	blk, err = seg.CreateBlock(false)
 	assert.NoError(t, err)
-	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, "test_2")
+	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, objectio.Location("test_2"))
 	rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, txn.Commit())
 
@@ -4128,10 +4132,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		err = task.OnExec()
 		assert.NoError(t, err)
-		assert.True(t, meta.GetMetaLoc() != "")
-		assert.True(t, meta.GetDeltaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		assert.True(t, !meta.GetMetaLoc().IsEmpty())
+		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
 		err = txn.Commit()
 		assert.Nil(t, err)
 		err = meta.GetSegment().RemoveEntry(meta)
@@ -4158,10 +4162,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		err = task.OnExec()
 		assert.NoError(t, err)
-		assert.True(t, meta.GetMetaLoc() != "")
-		assert.True(t, meta.GetDeltaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		assert.True(t, !meta.GetMetaLoc().IsEmpty())
+		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
 		err = txn.Commit()
 		assert.Nil(t, err)
 	}
@@ -4695,7 +4699,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	tae.bindSchema(schema)
 
 	bats := catalog.MockBatch(schema, 400*100).Split(100)
-	metalocs := make([]string, 0, 100)
+	metalocs := make([]objectio.Location, 0, 100)
 	// write only one segment
 	for i := 0; i < 1; i++ {
 		objName1 := common.NewSegmentid().ToString() + "-0"
@@ -4710,7 +4714,7 @@ func TestAlwaysUpdate(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
 		for _, blk := range blocks {
-			loc, err := blockio.EncodeLocation(blk.GetExtent(), 8192, blocks)
+			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), 8192, blocks[0].GetID())
 			assert.Nil(t, err)
 			metalocs = append(metalocs, loc)
 		}

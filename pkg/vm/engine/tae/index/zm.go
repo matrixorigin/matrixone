@@ -92,11 +92,17 @@ func (zm ZM) SetType(t types.T) {
 }
 
 func (zm ZM) GetMin() any {
+	if !zm.IsInited() {
+		return nil
+	}
 	buf := zm.GetMinBuf()
 	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMax() any {
+	if !zm.IsInited() {
+		return nil
+	}
 	buf := zm.GetMaxBuf()
 	return zm.getValue(buf)
 }

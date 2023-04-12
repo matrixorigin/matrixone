@@ -472,15 +472,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 
 func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
-	for i, u := range p.UuidsToRegIdx {
-		uid, err := uuid.FromBytes(u.GetUuid())
+	for i := range p.UuidsToRegIdx {
+		op := p.UuidsToRegIdx[i]
+		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
-			Idx:      int(u.GetIdx()),
+			Idx:      int(op.GetIdx()),
 			Uuid:     uid,
-			FromAddr: u.FromAddr,
+			FromAddr: op.FromAddr,
 		}
 	}
 	return nil
@@ -488,13 +489,16 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 
 func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
-	for i, u := range s.RemoteReceivRegInfos {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		uid, _ := op.Uuid.MarshalBinary()
 		ret[i] = &pipeline.UuidToRegIdx{
-			Idx:      int32(u.Idx),
-			Uuid:     u.Uuid[:],
-			FromAddr: u.FromAddr,
+			Idx:      int32(op.Idx),
+			Uuid:     uid,
+			FromAddr: op.FromAddr,
 		}
 	}
+
 	return ret
 }
 

@@ -877,7 +877,7 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 		if foreign {
 			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
-		return moerr.NewInvalidInput(ctx, "duplicate key name '%s'", name)
+		return moerr.NewDuplicateKey(ctx, name)
 	}
 	namesMap[nameLower] = true
 	return nil
@@ -1034,7 +1034,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 
-		indexDef.IndexName = indexInfo.Name
+		//indexDef.IndexName = indexInfo.Name
+		indexDef.IndexName = indexInfo.GetIndexName()
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
@@ -1075,7 +1076,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		if indexInfo.Name == "" {
+		if indexInfo.GetIndexName() == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 			nameCount[firstPart]++
 			count := nameCount[firstPart]
@@ -1085,7 +1086,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			indexDef.IndexName = indexName
 		} else {
-			indexDef.IndexName = indexInfo.Name
+			indexDef.IndexName = indexInfo.GetIndexName()
 		}
 		indexDef.IndexTableName = ""
 		indexDef.Parts = indexParts
@@ -1716,16 +1717,25 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.UniqueIndex:
-				indexName := def.Name
+				indexName := def.GetIndexName()
+				constrNames := map[string]bool{}
+				// Check not empty constraint name whether is duplicated.
 				for _, idx := range tableDef.Indexes {
-					if idx.IndexName == indexName {
-						return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-					}
+					nameLower := strings.ToLower(idx.IndexName)
+					constrNames[nameLower] = true
 				}
-				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
+				err := checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
+				if err != nil {
+					return nil, err
+				}
+				if len(indexName) == 0 {
+					// set empty constraint names(index and unique index)
+					setEmptyUniqueIndexName(constrNames, def)
+				}
+
+				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				var err error
 				if err = buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
@@ -1742,12 +1752,24 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.Index:
-				indexName := def.Name
+				indexName := def.GetIndexName()
+				constrNames := map[string]bool{}
+				// Check not empty constraint name whether is duplicated.
 				for _, idx := range tableDef.Indexes {
-					if idx.IndexName == indexName {
-						return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-					}
+					nameLower := strings.ToLower(idx.IndexName)
+					constrNames[nameLower] = true
 				}
+
+				err := checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
+				if err != nil {
+					return nil, err
+				}
+
+				if len(indexName) == 0 {
+					// set empty constraint names(index and unique index)
+					setEmptyIndexName(constrNames, def)
+				}
+
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
@@ -1907,7 +1929,7 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	refer := def.Refer
 	fkData := fkData{
 		Def: &plan.ForeignKeyDef{
-			Name:        def.Name,
+			Name:        def.ConstraintSymbol,
 			Cols:        make([]uint64, len(def.KeyParts)),
 			OnDelete:    getRefAction(refer.OnDelete),
 			OnUpdate:    getRefAction(refer.OnUpdate),

@@ -16,7 +16,8 @@ package blockio
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"path"
 	"testing"
 
@@ -38,9 +39,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
-	id := 1
-	name := fmt.Sprintf("%d.blk", id)
-
+	name := objectio.BuildObjectName(common.NewSegmentid(), 0)
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
@@ -48,7 +47,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
-	writer, _ := NewBlockWriter(service, name)
+	writer, _ := NewBlockWriterNew(service, name)
 
 	schema := catalog.MockSchemaAll(13, 2)
 	bats := catalog.MockBatch(schema, 40000*2).Split(2)
@@ -63,8 +62,8 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	colZoneMap := col.GetMeta().GetZoneMap()
-	zm := index.DecodeZM((colZoneMap.GetData().([]byte)))
+	colZoneMap := col.GetMeta().ZoneMap()
+	zm := index.DecodeZM(colZoneMap)
 
 	require.NoError(t, err)
 	res := zm.Contains(int32(500))
@@ -75,19 +74,23 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.False(t, res)
 
 	mp := mpool.MustNewZero()
-	metaloc, err := EncodeLocation(blocks[0].GetExtent(), 40000, blocks)
+	metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 	require.NoError(t, err)
 	reader, err := NewObjectReader(service, metaloc)
 	require.NoError(t, err)
 	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 	require.NoError(t, err)
-	require.Equal(t, uint32(80000), meta.Rows)
-	t.Log(meta.ColMetas[0].Ndv, meta.ColMetas[1].Ndv, meta.ColMetas[2].Ndv)
-	require.True(t, meta.ColMetas[2].Zm.Contains(int32(40000)))
-	require.False(t, meta.ColMetas[2].Zm.Contains(int32(100000)))
-	require.True(t, meta.Zms[0][2].Contains(int32(39999)))
-	require.False(t, meta.Zms[0][2].Contains(int32(40000)))
-	require.True(t, meta.Zms[1][2].Contains(int32(40000)))
-	require.True(t, meta.Zms[1][2].Contains(int32(79999)))
-	require.False(t, meta.Zms[1][2].Contains(int32(80000)))
+	header := meta.BlockHeader()
+	require.Equal(t, uint32(80000), header.Rows())
+	t.Log(meta.ObjectColumnMeta(0).Ndv(), meta.ObjectColumnMeta(1).Ndv(), meta.ObjectColumnMeta(2).Ndv())
+	zm = meta.ObjectColumnMeta(2).ZoneMap()
+	require.True(t, zm.Contains(int32(40000)))
+	require.False(t, zm.Contains(int32(100000)))
+	zm = meta.GetColumnMeta(2, 0).ZoneMap()
+	require.True(t, zm.Contains(int32(39999)))
+	require.False(t, zm.Contains(int32(40000)))
+	zm = meta.GetColumnMeta(2, 1).ZoneMap()
+	require.True(t, zm.Contains(int32(40000)))
+	require.True(t, zm.Contains(int32(79999)))
+	require.False(t, zm.Contains(int32(80000)))
 }
