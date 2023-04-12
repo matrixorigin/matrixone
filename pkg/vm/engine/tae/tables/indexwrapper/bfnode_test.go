@@ -15,22 +15,15 @@
 package indexwrapper
 
 import (
-	"context"
 	"fmt"
 	"path"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterIndex(t *testing.T) {
@@ -51,25 +44,6 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	objectWriter, err := objectio.NewObjectWriter(name, service)
 	assert.Nil(t, err)
-	/*fd*/ block, err := objectWriter.Write(bat)
+	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-
-	cType := common.Plain
-	typ := types.T_int32.ToType()
-	colIdx := uint16(0)
-	interIdx := uint16(0)
-
-	writer := blockio.NewBFWriter()
-	err = writer.Init(objectWriter, block, cType, colIdx, interIdx)
-	require.NoError(t, err)
-
-	keys := containers.MockVector2(typ, 1000, 0)
-	err = writer.AddValues(keys)
-	require.NoError(t, err)
-
-	err = writer.Finalize()
-	require.NoError(t, err)
-	blocks, err := objectWriter.WriteEnd(context.Background())
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(blocks))
 }

@@ -130,3 +130,57 @@ show index from t3;
 create unique index idx3 on t3(col2,col3);
 show index from t3;
 drop table t3;
+
+drop table if exists t4;
+CREATE TABLE t4(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+PRIMARY KEY(col1)
+);
+
+insert into t4 values(1, '1980-12-17','Abby', 21);
+insert into t4 values(2, '1981-02-20','Bob', 22);
+insert into t4 values(3, '1981-02-22','Carol', 23);
+insert into t4 values(4, '1981-04-02','Dora', 24);
+insert into t4 values(5, '1981-09-28','bcvdf', 25);
+insert into t4 values(6, '1981-05-01','green', 26);
+
+alter table t4 add constraint index (col3, col4);
+alter table t4 add constraint index wwwww (col3, col4);
+alter table t4 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3);
+show index from t4;
+alter table t4 add index zxxxxx(col3);
+show index from t4;
+alter table t4 add constraint idx_6dotkott2kjsp8v index (col3);
+alter table t4 add constraint idx_6dotkott2kjsp8v index (col4);
+show index from t4;
+drop table t4;
+
+drop table if exists t5;
+CREATE TABLE t5(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+PRIMARY KEY(col1)
+);
+
+insert into t5 values(1, '1980-12-17','Abby', 21);
+insert into t5 values(2, '1981-02-20','Bob', 22);
+insert into t5 values(3, '1981-02-22','Carol', 23);
+insert into t5 values(4, '1981-04-02','Dora', 24);
+insert into t5 values(5, '1981-09-28','bcvdf', 25);
+insert into t5 values(6, '1981-05-01','green', 26);
+
+alter table t5 add constraint unique key (col3, col4);
+alter table t5 add constraint unique key wwwww (col3, col4);
+alter table t5 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3);
+show index from t5;
+alter table t5 add unique key zxxxxx(col3);
+show index from t5;
+alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col3);
+alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col4);
+show index from t5;
+drop table t5;

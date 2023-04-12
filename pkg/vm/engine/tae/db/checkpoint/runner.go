@@ -24,15 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -462,8 +461,9 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
+	segmentid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(segmentid, 0)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
 		return err
 	}
@@ -471,7 +471,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	return
 }
@@ -485,8 +485,9 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
+	segmentid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(segmentid, 0)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
 		return
 	}
@@ -494,7 +495,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
@@ -798,7 +799,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	locs := make([]string, 0)
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
-		locs = append(locs, global.GetLocation())
+		locs = append(locs, global.GetLocation().String())
 		newStart = global.end.Next()
 		checkpointed = global.GetEnd()
 	}
@@ -832,7 +833,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				return
 			}
 			if e.HasOverlap(newStart, end) {
-				locs = append(locs, e.GetLocation())
+				locs = append(locs, e.GetLocation().String())
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -843,7 +844,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
-			locs = append(locs, e.GetLocation())
+			locs = append(locs, e.GetLocation().String())
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -869,7 +870,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			locations = strings.Join(locs, ";")
 			return
 		}
-		locs = append(locs, e.GetLocation())
+		locs = append(locs, e.GetLocation().String())
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}

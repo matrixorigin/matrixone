@@ -79,7 +79,7 @@ func newMessageSenderOnClient(
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
-		return sender, nil
+		return sender, err
 	}
 
 	sender.streamSender = streamSender
