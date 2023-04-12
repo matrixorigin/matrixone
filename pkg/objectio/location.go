@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"fmt"
 	"unsafe"
 
@@ -43,6 +44,15 @@ func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Locat
 	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
 	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
+}
+
+func ToObjectName(blkID types.Blockid) ObjectName {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+}
+
+func IsBlockInObject(blkID types.Blockid, objID ObjectName) bool {
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+	return bytes.Equal(buf, objID)
 }
 
 func (l Location) Name() ObjectName {
@@ -92,4 +102,8 @@ func (o ObjectName) Sid() types.Uuid {
 
 func (o ObjectName) Num() uint16 {
 	return types.DecodeUint16(o[types.UuidSize:FileNameLen])
+}
+
+func (o ObjectName) Equal(a ObjectName) bool {
+	return bytes.Equal(o, a)
 }
