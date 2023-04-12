@@ -26,7 +26,7 @@ create table t(
 show tables;
 alter user 'root' identified by '111';
 -- @session
--- @session:id=1&user=acc_idx:root&password=123456
+-- @session:id=2&user=acc_idx:root&password=111
 show tables;
 drop database db1;
 -- @session
