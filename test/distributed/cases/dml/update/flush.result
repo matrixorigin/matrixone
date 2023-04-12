@@ -31,9 +31,13 @@ delete from t where a = 2;
 insert into t values (6);
 delete from t where a = 3;
 begin;
-select mo_ctl('dn', 'flush', 'db1.t');
+insert into db1.t values (100); -- this row is invisible for begin
+select mo_ctl('dn', 'flush', 'db1.t'); -- flush
 mo_ctl(dn, flush, db1.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select a from db1.t where a = 1; -- pull
+a
+1
 select * from t;
 a
 1
@@ -41,10 +45,6 @@ a
 5
 6
 commit;
-drop database if exists db1;
-drop database if exists db1;
-create database db1;
-use db1;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3);
@@ -66,3 +66,4 @@ a
 2
 3
 commit;
+drop database if exists db1;

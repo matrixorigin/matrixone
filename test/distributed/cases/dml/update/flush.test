@@ -23,16 +23,17 @@ delete from t where a = 2;
 insert into t values (6);
 delete from t where a = 3;
 begin;
+-- @session:id=1{
+insert into db1.t values (100); -- this row is invisible for begin
 -- @separator:table
-select mo_ctl('dn', 'flush', 'db1.t');
+select mo_ctl('dn', 'flush', 'db1.t'); -- flush
+select a from db1.t where a = 1; -- pull
+-- @session}
+-- read case: appendable block + delete
 select * from t;
 commit;
 
-drop database if exists db1;
 
-drop database if exists db1;
-create database db1;
-use db1;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3);
@@ -49,3 +50,5 @@ select a from db1.t where a = 1;
 -- read again
 select * from t;
 commit;
+
+drop database if exists db1;
