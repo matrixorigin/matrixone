@@ -32,7 +32,8 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	var err error
 	var rows []uint32
-	_, err = idx.Search(int32(0))
+	val := int32(0)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.Error(t, err)
 
 	var vecs []containers.Vector
@@ -42,7 +43,8 @@ func TestARTIndexNumeric(t *testing.T) {
 		defer vec.Close()
 	}
 
-	_, err = idx.Search(int32(55))
+	val = int32(55)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.Error(t, err)
 
 	ctx := new(KeysCtx)
@@ -51,11 +53,13 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.BatchInsert(ctx, uint32(0))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(55))
+	val = int32(55)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), rows[0])
 
-	_, err = idx.Search(int32(100))
+	val = int32(100)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx = new(KeysCtx)
@@ -68,17 +72,24 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.BatchInsert(ctx, uint32(100))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(123))
+	val = int32(123)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(123), rows[0])
 
-	_, err = idx.Search(int32(233))
+	val = int32(233)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Insert(int32(55), uint32(55))
+	val = int32(55)
+	buf := types.EncodeInt32(&val)
+	bufval := make([]byte, len(buf))
+	copy(bufval, buf)
+	err = idx.Insert(bufval, uint32(55))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(55))
+	val = int32(55)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), rows[0])
 
