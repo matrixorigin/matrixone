@@ -193,7 +193,7 @@ func (bm BlockObject) ColumnMeta(idx uint16) ColumnMeta {
 }
 
 func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
-	offset := headerLen + idx*colMetaLen
+	offset := headerLen + uint32(idx)*colMetaLen
 	copy(bm[offset:offset+colMetaLen], col)
 }
 
