@@ -85,7 +85,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
-		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
@@ -105,7 +105,7 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 func (seg *localSegment) registerANode() {
 	meta := catalog.NewStandaloneBlock(
 		seg.entry,
-		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewANode(
@@ -246,7 +246,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
 	blkn := metaloc.ID()
-	sid := metaloc.Name().Sid()
+	sid := metaloc.Name().SegmentId()
 	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {

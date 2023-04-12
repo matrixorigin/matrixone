@@ -16,7 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 // Reader is a snapshot of all txn prepared between from and to.
@@ -27,8 +27,8 @@ type Reader struct {
 }
 
 // Merge all dirty table/segment/block into one dirty tree
-func (r *Reader) GetDirty() (tree *common.Tree, count int) {
-	tree = common.NewTree()
+func (r *Reader) GetDirty() (tree *model.Tree, count int) {
+	tree = model.NewTree()
 	op := func(row RowT) (moveOn bool) {
 		if memo := row.GetMemo(); memo.HasAnyTableDataChanges() {
 			tree.Merge(memo.GetDirty())
@@ -61,8 +61,8 @@ func (r *Reader) HasCatalogChanges() bool {
 // Merge all dirty table/segment/block of **a table** into one tree
 func (r *Reader) GetDirtyByTable(
 	dbID, id uint64,
-) (tree *common.TableTree) {
-	tree = common.NewTableTree(dbID, id)
+) (tree *model.TableTree) {
+	tree = model.NewTableTree(dbID, id)
 	op := func(row RowT) (moveOn bool) {
 		if memo := row.GetMemo(); memo.HasTableDataChanges(id) {
 			tree.Merge(memo.GetDirtyTableByID(id))
