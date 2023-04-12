@@ -41,7 +41,7 @@ func (o ObjectMeta) ObjectColumnMeta(idx uint16) ObjectColumnMeta {
 }
 
 func (o ObjectMeta) AddColumnMeta(idx uint16, col ObjectColumnMeta) {
-	offset := headerLen + idx*objectColumnMetaLen
+	offset := headerLen + uint32(idx)*objectColumnMetaLen
 	copy(o[offset:offset+objectColumnMetaLen], col)
 }
 
