@@ -246,7 +246,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
 	blkn := metaloc.ID()
-	sid := metaloc.Name().Sid()
+	sid := metaloc.Name().SegmentId()
 	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	SegmentidSize = types.UuidSize
+	SegmentIdSize = types.UuidSize
 )
 
 var emptySegmentId types.Uuid
@@ -39,7 +39,7 @@ func NewSegmentid() Segmentid {
 
 func NewBlockid(segid *Segmentid, fnum, blknum uint16) Blockid {
 	var id Blockid
-	size := SegmentidSize
+	size := SegmentIdSize
 	copy(id[:size], segid[:])
 	copy(id[size:size+2], types.EncodeUint16(&fnum))
 	copy(id[size+2:size+4], types.EncodeUint16(&blknum))
