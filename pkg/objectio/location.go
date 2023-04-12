@@ -46,15 +46,6 @@ func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Locat
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
-func ToObjectName(blkID types.Blockid) ObjectName {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
-}
-
-func IsBlockInObject(blkID types.Blockid, objID ObjectName) bool {
-	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
-	return bytes.Equal(buf, objID)
-}
-
 func (l Location) Name() ObjectName {
 	return ObjectName(l[:FileNameLen])
 }

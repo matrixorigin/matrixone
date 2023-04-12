@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,9 +54,19 @@ func NewRowid(blkid *Blockid, offset uint32) types.Rowid {
 	return rowid
 }
 
+func ToObjectName(blkID *Blockid) ObjectName {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+}
+
+func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+	return bytes.Equal(buf, *objID)
+}
+
 func IsEmptySegid(id *Segmentid) bool {
 	return bytes.Equal(id[:], emptySegmentId[:])
 }
+
 func IsEmptyBlkid(id *Blockid) bool {
 	return bytes.Equal(id[:], emptyBlockId[:])
 }

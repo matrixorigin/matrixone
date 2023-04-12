@@ -52,7 +52,7 @@ func BenchmarkCheckSame(b *testing.B) {
 	b.Run("is-same-obj", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			IsBlockInObject(blkID, fname)
+			IsBlockInObject(&blkID, &fname)
 		}
 	})
 	var segid Segmentid
