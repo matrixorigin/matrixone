@@ -57,7 +57,7 @@ type AccountRoutineManager struct {
 
 func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine) {
 	if tenantID == sysAccountID || rt != nil {
-		return nil
+		return
 	}
 
 	ar.accountRoutineMu.Lock()
@@ -440,8 +440,8 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			// kill all routine to this account
 			ar.accountRoutineMu.RLock()
 			accountId2RoutineMap := ar.accountId2Routine
-			ar.accountRoutineMu.UnRlock()
-			if rtMap, ok := accountId2RoutineMap[acccount]; ok {
+			ar.accountRoutineMu.RUnlock()
+			if rtMap, ok := accountId2RoutineMap[account]; ok {
 				for rt := range rtMap {
 					if rt != nil {
 						// kill connect of this routine
@@ -457,7 +457,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 				delete(ar.killIdQueue, toKillAccount)
 				ar.accountRoutineMu.Lock()
 				delete(ar.accountId2Routine, toKillAccount)
-				ar.accountRoutineMu.UnLock()
+				ar.accountRoutineMu.Unlock()
 			}
 		}
 	}
