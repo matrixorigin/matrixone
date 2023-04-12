@@ -24,13 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -40,7 +40,7 @@ type S3Writer struct {
 	sortIndex []int
 	pk        map[string]struct{}
 
-	writer  dataio.Writer
+	writer  *blockio.BlockWriter
 	lengths []uint64
 
 	metaLocBat *batch.Batch
@@ -463,12 +463,12 @@ func (w *S3Writer) generateWriter(proc *process.Process) error {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
 	id := common.NewSegmentid()
-	segId := common.NewObjectName(&id, 0)
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}
-	w.writer, err = blockio.NewBlockWriter(s3, segId)
+	name := objectio.BuildObjectName(id, 0)
+	w.writer, err = blockio.NewBlockWriterNew(s3, name)
 	if err != nil {
 		return err
 	}
@@ -533,14 +533,12 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process, idx int) error {
 		return err
 	}
 	for j := range blocks {
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc := blockio.EncodeLocation(
+			w.writer.GetName(),
 			blocks[j].GetExtent(),
 			uint32(w.lengths[j]),
-			blocks,
-		)
-		if err != nil {
-			return err
-		}
+			blocks[j].GetID(),
+		).String()
 
 		vector.AppendFixed(w.metaLocBat.Vecs[0], int16(idx), false, proc.GetMPool())
 		vector.AppendBytes(w.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())

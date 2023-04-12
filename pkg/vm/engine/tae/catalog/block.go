@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -69,8 +70,8 @@ func NewBlockEntryWithMeta(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory BlockDataFactory,
-	metaLoc string,
-	deltaLoc string) *BlockEntry {
+	metaLoc objectio.Location,
+	deltaLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -105,8 +106,8 @@ func NewStandaloneBlockWithLoc(
 	segment *SegmentEntry,
 	id types.Blockid,
 	ts types.TS,
-	metaLoc string,
-	delLoc string) *BlockEntry {
+	metaLoc objectio.Location,
+	delLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -285,44 +286,44 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 }
 
 func (entry *BlockEntry) HasPersistedData() bool {
-	return entry.GetMetaLoc() != ""
+	return !entry.GetMetaLoc().IsEmpty()
 }
-func (entry *BlockEntry) GetMetaLoc() string {
+func (entry *BlockEntry) GetMetaLoc() objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
 	if entry.GetLatestNodeLocked() == nil {
-		return ""
+		return nil
 	}
 	str := entry.GetLatestNodeLocked().BaseNode.MetaLoc
 	return str
 }
 func (entry *BlockEntry) HasPersistedDeltaData() bool {
-	return entry.GetDeltaLoc() != ""
+	return !entry.GetDeltaLoc().IsEmpty()
 }
-func (entry *BlockEntry) GetDeltaLoc() string {
+func (entry *BlockEntry) GetDeltaLoc() objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
 	if entry.GetLatestNodeLocked() == nil {
-		return ""
+		return nil
 	}
 	str := entry.GetLatestNodeLocked().BaseNode.DeltaLoc
 	return str
 }
 
-func (entry *BlockEntry) GetVisibleMetaLoc(txn txnif.TxnReader) string {
+func (entry *BlockEntry) GetVisibleMetaLoc(txn txnif.TxnReader) objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
 	str := entry.GetVisibleNode(txn).BaseNode.MetaLoc
 	return str
 }
-func (entry *BlockEntry) GetVisibleDeltaLoc(txn txnif.TxnReader) string {
+func (entry *BlockEntry) GetVisibleDeltaLoc(txn txnif.TxnReader) objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
 	str := entry.GetVisibleNode(txn).BaseNode.DeltaLoc
 	return str
 }
 
-func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc string) {
+func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc objectio.Location, deltaLoc objectio.Location) {
 	baseNode := &MetadataMVCCNode{
 		MetaLoc:  metaLoc,
 		DeltaLoc: deltaLoc,
@@ -337,7 +338,7 @@ func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc str
 	entry.Insert(node)
 }
 
-func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
+func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc objectio.Location, deltaLoc objectio.Location) {
 	baseNode := &MetadataMVCCNode{
 		MetaLoc:  metaLoc,
 		DeltaLoc: deltaLoc,
@@ -351,7 +352,7 @@ func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string
 	}
 	entry.Insert(node)
 }
-func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isNewNode bool, err error) {
+func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Location) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
@@ -365,7 +366,7 @@ func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isN
 		return
 	}
 	baseNode := &MetadataMVCCNode{
-		MetaLoc: metaloc,
+		MetaLoc: metaLoc,
 	}
 	var node *MVCCNode[*MetadataMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
@@ -373,7 +374,7 @@ func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isN
 	return
 }
 
-func (entry *BlockEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc string) (isNewNode bool, err error) {
+func (entry *BlockEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())

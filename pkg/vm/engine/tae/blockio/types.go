@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -49,12 +47,6 @@ func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
 }
 
-// EncodeObjectName Generate uuid as the file name of the block&segment
-func EncodeObjectName() (name string) {
-	name = uuid.NewString()
-	return name
-}
-
 func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	fileName := strings.Split(name, ".")
 	info := strings.Split(fileName[0], "_")
@@ -76,69 +68,62 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	objectSize := uint32(0)
 	for _, block := range blocks {
 		meta := block.GetMeta()
-		header := meta.GetHeader()
-		count := header.GetColumnCount()
+		count := meta.BlockHeader().ColumnCount()
 		for i := 0; i < int(count); i++ {
 			col, err := block.GetColumn(uint16(i))
 			if err != nil {
 				return 0, err
 			}
-			objectSize += col.GetMeta().GetLocation().Length()
+			objectSize += col.GetMeta().Location().Length()
 		}
 	}
 	return objectSize, nil
 }
 
-// EncodeLocation Generate a metaloc from an object file
-func EncodeLocation(
-	extent objectio.Extent,
-	rows uint32,
-	blocks []objectio.BlockObject) (string, error) {
-	size, err := GetObjectSizeWithBlocks(blocks)
-	if err != nil {
-		return "", err
+// EncodeLocationFromString Generate a metaloc from an info string
+func EncodeLocationFromString(info string) (objectio.Location, error) {
+	location := strings.Split(info, "_")
+	if len(location) < 8 {
+		panic(fmt.Sprintf("info: %v", info))
 	}
-	meta := blocks[0].GetMeta()
-	metaLen := blocks[0].GetExtent().Length()
-	name := meta.GetName()
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d:%d",
-		name,
-		blocks[0].GetExtent().Offset(),
-		metaLen,
-		metaLen,
-		extent.Id(),
-		rows,
-		size,
-	)
-	return metaLoc, nil
+	num, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	size, err := strconv.ParseUint(location[4], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	osize, err := strconv.ParseUint(location[5], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := strconv.ParseUint(location[6], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	id, err := strconv.ParseUint(location[7], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	uid, err := types.ParseUuid(location[0])
+	if err != nil {
+		return nil, err
+	}
+	name := objectio.BuildObjectName(uid, uint16(num))
+	return objectio.BuildLocation(name, extent, uint32(rows), uint32(id)), nil
 }
 
-func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
-	info := strings.Split(metaLoc, ":")
-	name = info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		return
-	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		return
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		return
-	}
-	num, err := strconv.ParseUint(location[3], 10, 32)
-	if err != nil {
-		return
-	}
-	id = uint32(num)
-	r, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return
-	}
-	rows = uint32(r)
-	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	return
+// EncodeLocation Generate a metaloc
+func EncodeLocation(
+	name objectio.ObjectName,
+	extent objectio.Extent,
+	rows uint32,
+	id uint32) objectio.Location {
+	return objectio.BuildLocation(name, extent, rows, id)
 }

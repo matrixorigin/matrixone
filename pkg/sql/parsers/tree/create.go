@@ -815,13 +815,17 @@ func NewIndexOption(k uint64, i IndexType, p string, c string, v VisibleType, e 
 
 type PrimaryKeyIndex struct {
 	tableDefImpl
-	KeyParts    []*KeyPart
-	Name        string
-	Empty       bool
-	IndexOption *IndexOption
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Empty            bool
+	IndexOption      *IndexOption
 }
 
 func (node *PrimaryKeyIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("primary key")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
@@ -856,14 +860,18 @@ func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Primar
 
 type Index struct {
 	tableDefImpl
-	IfNotExists bool
-	KeyParts    []*KeyPart
-	Name        string
-	KeyType     IndexType
-	IndexOption *IndexOption
+	IfNotExists      bool
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	KeyType          IndexType
+	IndexOption      *IndexOption
 }
 
 func (node *Index) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("index")
 	if node.IfNotExists {
 		ctx.WriteString(" if not exists")
@@ -891,6 +899,14 @@ func (node *Index) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Index) GetIndexName() string {
+	if len(node.Name) != 0 {
+		return node.Name
+	} else {
+		return node.ConstraintSymbol
+	}
+}
+
 func NewIndex(k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
 	return &Index{
 		KeyParts:    k,
@@ -902,13 +918,17 @@ func NewIndex(k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
 
 type UniqueIndex struct {
 	tableDefImpl
-	KeyParts    []*KeyPart
-	Name        string
-	Empty       bool
-	IndexOption *IndexOption
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Empty            bool
+	IndexOption      *IndexOption
 }
 
 func (node *UniqueIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("unique key")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
@@ -932,6 +952,14 @@ func (node *UniqueIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *UniqueIndex) GetIndexName() string {
+	if len(node.Name) != 0 {
+		return node.Name
+	} else {
+		return node.ConstraintSymbol
+	}
+}
+
 func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueIndex {
 	return &UniqueIndex{
 		KeyParts:    k,
@@ -943,14 +971,18 @@ func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueInde
 
 type ForeignKey struct {
 	tableDefImpl
-	IfNotExists bool
-	KeyParts    []*KeyPart
-	Name        string
-	Refer       *AttributeReference
-	Empty       bool
+	IfNotExists      bool
+	KeyParts         []*KeyPart
+	Name             string
+	ConstraintSymbol string
+	Refer            *AttributeReference
+	Empty            bool
 }
 
 func (node *ForeignKey) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("foreign key")
 	if node.IfNotExists {
 		ctx.WriteString(" if not exists")

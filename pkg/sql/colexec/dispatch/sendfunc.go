@@ -44,7 +44,7 @@ const (
 	SendToAnyFunc
 )
 
-// common sender: send to any LocalReceiver
+// common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
@@ -64,7 +64,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 	return false, nil
 }
 
-// common sender: send to any RemoteReceiver
+// common sender: send to all RemoteReceiver
 func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.prepared {
 		ap.waitRemoteRegsReady(proc)
@@ -130,6 +130,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 	}
 }
 
+// common sender: send to any RemoteReceiver
+// if the reg which you want to send to is closed
+// send it to next one.
 func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.prepared {
 		ap.waitRemoteRegsReady(proc)

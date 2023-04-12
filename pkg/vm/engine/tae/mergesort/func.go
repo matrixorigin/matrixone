@@ -47,9 +47,9 @@ func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []uint32) (ret
 	for i, v := range dataWithIdx.AsSlice() {
 		idx[i] = v.idx
 		if v.isNull {
-			col.Update(i, types.Null{})
+			col.Update(i, nil, true)
 		} else {
-			col.Update(i, v.data)
+			col.Update(i, v.data, false)
 		}
 	}
 

@@ -111,7 +111,7 @@ func (index *immutableIndex) Destroy() (err error) {
 func (index *immutableIndex) ReadFrom(
 	fs *objectio.ObjectFS,
 	id *common.ID,
-	location string,
+	location objectio.Location,
 	colDef *catalog.ColDef) (err error) {
 	id.Idx = uint16(colDef.Idx)
 	index.zmReader = NewZmReader(
