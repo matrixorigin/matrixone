@@ -72,6 +72,9 @@ const (
 	MO_SYSTEM    = "system"
 	MO_STATEMENT = "statement_info"
 
+	MO_SYSTEM_METRICS = "system_metrics"
+	MO_METRIC         = "metric"
+
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
