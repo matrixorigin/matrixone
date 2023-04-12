@@ -20,41 +20,40 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ZmReader struct {
-	metaKey string
+	metaKey objectio.Location
 	idx     uint16
-	reader  dataio.Reader
+	reader  *blockio.BlockReader
 	cache   atomic.Pointer[index.ZM]
 }
 
-func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
-	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
+func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *ZmReader {
+	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 	return &ZmReader{
-		metaKey: metaloc,
+		metaKey: metaLoc,
 		idx:     idx,
 		reader:  reader,
 	}
 }
 
-func (r *ZmReader) getZoneMap() (dataio.Index, error) {
-	zm := r.cache.Load()
-	if zm != nil {
-		return zm, nil
+func (r *ZmReader) getZoneMap() (*index.ZM, error) {
+	cached := r.cache.Load()
+	if cached != nil {
+		return cached, nil
 	}
-	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, r.metaKey.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	r.cache.Store(zmList[0][0].(*index.ZM))
-	return zmList[0][0], err
+	zm := zmList[0]
+	r.cache.Store(&zm)
+	return &zm, err
 }
 
 func (r *ZmReader) Contains(key any) bool {

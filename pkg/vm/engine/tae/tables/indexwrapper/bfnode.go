@@ -20,44 +20,42 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BfReader struct {
-	bfKey  string
+	bfKey  objectio.Location
 	idx    uint16
-	reader dataio.Reader
+	reader *blockio.BlockReader
 	typ    types.T
 }
 
 func NewBfReader(
 	id *common.ID,
 	typ types.T,
-	metaloc string,
+	metaLoc objectio.Location,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
+	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
 		idx:    id.Idx,
-		bfKey:  metaloc,
+		bfKey:  metaLoc,
 		reader: reader,
 		typ:    typ,
 	}
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	_, _, extent, _, _ := blockio.DecodeLocation(r.bfKey)
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{extent.Id()}, nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, r.bfKey.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	return bf[0], err
+	return bf, err
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {

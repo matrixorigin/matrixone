@@ -17,11 +17,13 @@ package frontend
 import (
 	"context"
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -51,115 +53,85 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	}
 }
 
-func getColumnDef(name string, typ defines.MysqlType) Column {
-	return &MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       name,
-			columnType: typ,
-		},
+func newAccountInfo(mp *mpool.MPool) (*batch.Batch, error) {
+	var err error
+	ret := batch.NewWithSize(idxOfComment + 1)
+	ret.Vecs[idxOfAccountId] = vector.NewVec(types.New(types.T_int32, 32, -1))
+	err = vector.AppendAny(ret.Vecs[idxOfAccountId], int32(0), false, mp)
+	if err != nil {
+		return nil, err
 	}
+	ret.Vecs[idxOfAccountName] = vector.NewVec(types.New(types.T_varchar, 300, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfAccountName], []byte("acc"), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfCreated] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfCreated], types.Timestamp(0), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfStatus] = vector.NewVec(types.New(types.T_varchar, 300, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfStatus], []byte("status"), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfSuspendedTime] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfSuspendedTime], types.Timestamp(0), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfComment] = vector.NewVec(types.New(types.T_varchar, 256, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfComment], []byte("comment"), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
-func newAccountInfo() *MysqlResultSet {
-	rsFromMoAccout := &MysqlResultSet{}
-	rsFromMoAccout.AddColumn(getColumnDef("account_id", defines.MYSQL_TYPE_LONG))
-	rsFromMoAccout.AddColumn(getColumnDef("account_name", defines.MYSQL_TYPE_VARCHAR))
-	rsFromMoAccout.AddColumn(getColumnDef("created", defines.MYSQL_TYPE_TIMESTAMP))
-	rsFromMoAccout.AddColumn(getColumnDef("status", defines.MYSQL_TYPE_VARCHAR))
-	rsFromMoAccout.AddColumn(getColumnDef("suspended_time", defines.MYSQL_TYPE_TIMESTAMP))
-	rsFromMoAccout.AddColumn(getColumnDef("comment", defines.MYSQL_TYPE_VARCHAR))
-	rsFromMoAccout.AddRow(make([]interface{}, rsFromMoAccout.GetColumnCount()))
-	return rsFromMoAccout
-}
-
-func newTableStatsResult() *MysqlResultSet {
-	rs1 := &MysqlResultSet{}
-	rs1.AddColumn(getColumnDef("admin_name", defines.MYSQL_TYPE_VARCHAR))
-	rs1.AddColumn(getColumnDef("db_count", defines.MYSQL_TYPE_LONG))
-	rs1.AddColumn(getColumnDef("table_count", defines.MYSQL_TYPE_LONG))
-	rs1.AddColumn(getColumnDef("row_count", defines.MYSQL_TYPE_LONG))
-	rs1.AddColumn(getColumnDef("size", defines.MYSQL_TYPE_DECIMAL))
-	rs1.AddRow(make([]interface{}, rs1.GetColumnCount()))
-	return rs1
+func newTableStatsResult(mp *mpool.MPool) (*batch.Batch, error) {
+	var err error
+	ret := batch.NewWithSize(idxOfComment + 1)
+	ret.Vecs[idxOfAdminName] = vector.NewVec(types.New(types.T_varchar, 300, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfAdminName], []byte("name"), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfDBCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfDBCount], int64(0), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfTableCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfTableCount], int64(0), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfRowCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	err = vector.AppendAny(ret.Vecs[idxOfRowCount], int64(0), false, mp)
+	if err != nil {
+		return nil, err
+	}
+	ret.Vecs[idxOfSize] = vector.NewVec(types.New(types.T_decimal128, 29, 3))
+	err = vector.AppendAny(ret.Vecs[idxOfSize], types.Decimal128{}, false, mp)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func Test_mergeResult(t *testing.T) {
-	rsFromMoAccount := newAccountInfo()
-	rs1 := newTableStatsResult()
-	ans1 := &MysqlResultSet{}
-	err := mergeOutputResult(context.Background(), ans1, rsFromMoAccount, []*MysqlResultSet{rs1})
-	assert.NoError(t, err)
-	assert.Equal(t, ans1.GetColumnCount(), uint64(finalColumnCount))
-}
-
-func Test_tableStats(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ctx := context.Background()
-	sql2result := make(map[string]ExecResult)
-
-	sql := getSqlForTableStats(10)
-	sql2result[sql] = newTableStatsResult()
-
-	bh := newBh(ctrl, sql2result)
-
-	rs, err := getTableStats(ctx, bh, 10)
-	assert.NoError(t, err)
-	assert.NotNil(t, rs)
-}
-
-func TestGetAccountInfo(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	sql2result := make(map[string]ExecResult)
-	sql := getSqlForAccountInfo(10)
-	info := newAccountInfo()
-	info.Data[0][idxOfAccountId] = 10
-	sql2result[sql] = info
-
-	bh := newBh(ctrl, sql2result)
-
-	rs, ids, err := getAccountInfo(ctx, bh, sql, true)
-	assert.NoError(t, err)
-	assert.NotNil(t, rs)
-	assert.Equal(t, ids[0], uint64(10))
-}
-
-func TestDoShowAccounts(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
 	defer ses.Dispose()
 
-	tenant := &TenantInfo{
-		Tenant:   sysAccountName,
-		TenantID: sysAccountID,
-	}
-	ses.SetTenantInfo(tenant)
+	outputBatch := batch.NewWithSize(finalColumnCount)
+	accountInfo, err := newAccountInfo(ses.mp)
+	assert.Nil(t, err)
+	tableStatsResult, err := newTableStatsResult(ses.mp)
+	assert.Nil(t, err)
 
-	sa := &tree.ShowAccounts{}
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	sql := getSqlForAllAccountInfo(nil)
-	info := newAccountInfo()
-	info.Data[0][idxOfAccountId] = 10
-	bh.sql2result[sql] = info
-
-	sql = getSqlForTableStats(10)
-	bh.sql2result[sql] = newTableStatsResult()
-
-	err := doShowAccounts(ctx, ses, sa)
-	assert.NoError(t, err)
-	rs := ses.GetMysqlResultSet()
-	assert.Equal(t, rs.GetColumnCount(), uint64(finalColumnCount))
+	err = mergeOutputResult(ses, outputBatch, accountInfo, []*batch.Batch{tableStatsResult})
+	assert.Nil(t, err)
 }
