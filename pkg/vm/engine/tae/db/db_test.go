@@ -2474,7 +2474,7 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bats[0].Vecs[3].Update(2, types.Null{})
+	bats[0].Vecs[3].Update(2, nil, true)
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()
@@ -3109,9 +3109,9 @@ func TestTruncateZonemap(t *testing.T) {
 	trickyMinv := mockBytes(0, 33)                                        // smaller than minv, not in mut index but in immut index
 	maxv := mockBytes(0xff, 35, Mod{0, 0x61}, Mod{1, 0x62}, Mod{2, 0x63}) // abc0xff0xff...
 	trickyMaxv := []byte("abd")                                           // bigger than maxv, not in mut index but in immut index
-	bat.Vecs[12].Update(8, maxv)
-	bat.Vecs[12].Update(11, minv)
-	bat.Vecs[12].Update(22, []byte("abcc"))
+	bat.Vecs[12].Update(8, maxv, false)
+	bat.Vecs[12].Update(11, minv, false)
+	bat.Vecs[12].Update(22, []byte("abcc"), false)
 	defer bat.Close()
 
 	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
@@ -4315,7 +4315,7 @@ func TestDelete4(t *testing.T) {
 	schema.SegmentMaxBlocks = 5
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
-	bat.Vecs[1].Update(0, uint32(0))
+	bat.Vecs[1].Update(0, uint32(0), false)
 	defer bat.Close()
 	tae.createRelAndAppend(bat, true)
 
@@ -4345,7 +4345,7 @@ func TestDelete4(t *testing.T) {
 			txn.Rollback()
 			return
 		}
-		cloneBat.Vecs[1].Update(0, newV)
+		cloneBat.Vecs[1].Update(0, newV, false)
 		if err := rel.Append(cloneBat); err != nil {
 			txn.Rollback()
 			return
@@ -4624,7 +4624,7 @@ func TestUpdate(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	bat.Vecs[2].Update(0, int32(0))
+	bat.Vecs[2].Update(0, int32(0), false)
 
 	tae.createRelAndAppend(bat, true)
 
@@ -4649,7 +4649,7 @@ func TestUpdate(t *testing.T) {
 		tuples := bat.CloneWindow(0, 1)
 		defer tuples.Close()
 		updatedV := v.(int32) + 1
-		tuples.Vecs[2].Update(0, updatedV)
+		tuples.Vecs[2].Update(0, updatedV, false)
 		err = rel.Append(tuples)
 		assert.NoError(t, err)
 
@@ -4749,7 +4749,7 @@ func TestAlwaysUpdate(t *testing.T) {
 				_ = txn.Rollback()
 				return
 			}
-			tuples.Vecs[3].Update(0, int64(x))
+			tuples.Vecs[3].Update(0, int64(x), false)
 			err = rel.Append(tuples)
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit())
