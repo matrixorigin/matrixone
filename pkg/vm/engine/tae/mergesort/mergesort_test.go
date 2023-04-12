@@ -46,8 +46,8 @@ func TestSort1(t *testing.T) {
 	// sort null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, nil)
-		vec.Update(rand.Intn(10), nil, false)
-		vec.Update(rand.Intn(10), nil, false)
+		vec.Update(rand.Intn(10), nil, true)
+		vec.Update(rand.Intn(10), nil, true)
 		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
 			vec2.Append(vec.Get(i))
