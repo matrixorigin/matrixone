@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -238,8 +239,8 @@ type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
-	MetaLoc    string
-	DeltaLoc   string
+	MetaLoc    objectio.Location
+	DeltaLoc   objectio.Location
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 }

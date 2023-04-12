@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,7 +47,6 @@ type ExParamConst struct {
 	CreateSql     string
 	Attrs         []string
 	Cols          []*plan.ColDef
-	OriginCols    []*plan.ColDef
 	FileList      []string
 	FileSize      []int64
 	FileOffset    [][2]int

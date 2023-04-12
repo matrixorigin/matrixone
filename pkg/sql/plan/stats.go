@@ -16,15 +16,16 @@ package plan
 
 import (
 	"context"
+	"math"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"sort"
-	"strings"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -184,13 +185,17 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
-	binding := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
 	}
-	s := sc.GetStatsInfoMap(binding.tableID)
-	return s.NdvMap[binding.cols[col.ColPos]]
+
+	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+		s := sc.GetStatsInfoMap(binding.tableID)
+		return s.NdvMap[binding.cols[col.ColPos]]
+	} else {
+		return -1
+	}
 }
 
 func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {
@@ -303,7 +308,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = math.Min(out1, out2) * 0.8
+				outcnt = out1 * out2 / tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -354,7 +359,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	ndvRate := (distinctValNum / blockNumTotal)
 	if distinctValNum <= 100 || ndvRate < 0.4 {
 		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 2) / coefficient
+		ndv = (distinctValNum + 4) / coefficient
 	} else {
 		// assume ndv is high
 		ndv = tableCnt * ndvRate * coefficient
@@ -635,6 +640,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 
+	case plan.Node_EXTERNAL_SCAN:
+		// no good method to estimate external table
+		node.Stats = &plan.Stats{
+			TableCnt:    1000000,
+			BlockNum:    100,
+			Outcnt:      1000000,
+			Cost:        1000000,
+			Selectivity: 1,
+		}
+
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
@@ -694,20 +709,6 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-func shouldSwapByStats(leftStats, rightStats *Stats) bool {
-	//left deep tree is preferred for pipeline
-	//if scan compare with join, scan should be 5% bigger than join, then we can swap
-	left := leftStats.Outcnt
-	if leftStats.TableCnt == 0 {
-		left *= 1.05
-	}
-	right := rightStats.Outcnt
-	if rightStats.TableCnt == 0 {
-		right *= 1.05
-	}
-	return left < right
-}
-
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) int32 {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
@@ -721,25 +722,41 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	rightChild := builder.qry.Nodes[node.Children[1]]
+	if rightChild.NodeType == plan.Node_FUNCTION_SCAN {
+		return nodeID
+	}
 
 	if node.JoinType == plan.Node_LEFT {
 		//right join does not support non equal join for now
-		if IsEquiJoin(node.OnList) && shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		//left join has a better performance than right join, so 1.3 is a threshold
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*1.3 < rightChild.Stats.Outcnt {
 			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_RIGHT
 		}
 		return nodeID
 	}
 	if node.JoinType == plan.Node_RIGHT {
 		//right join does not support non equal join for now
-		if !IsEquiJoin(node.OnList) || shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		//left join has a better performance than right join, so 1.3 is a threshold
+		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*1.3 {
 			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_LEFT
 		}
 		return nodeID
 	}
 	if node.JoinType == plan.Node_INNER {
-		if shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.Children = []int32{node.Children[1], node.Children[0]}
 		}
 	}
 	return nodeID
+}
+
+func compareStats(stats1, stats2 *Stats) bool {
+	// selectivity is first considered to reduce data
+	// when selectivity very close, we first join smaller table
+	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
+		return stats1.Selectivity < stats2.Selectivity
+	} else {
+		// todo we need to calculate ndv of outcnt here
+		return stats1.Outcnt < stats2.Outcnt
+	}
 }

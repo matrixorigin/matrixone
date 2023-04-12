@@ -301,6 +301,10 @@ type FrontendParameters struct {
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	// ProxyEnabled indicates that proxy module is enabled and something extra
+	// is needed, such as update the salt.
+	ProxyEnabled bool `toml:"proxy-enabled"`
+
 	KillRountinesInterval int `toml:"killRountinesInterval"`
 
 	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`

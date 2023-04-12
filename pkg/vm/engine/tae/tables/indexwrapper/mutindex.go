@@ -26,13 +26,13 @@ var _ Index = (*mutableIndex)(nil)
 
 type mutableIndex struct {
 	art     index.SecondaryIndex
-	zonemap *index.ZoneMap
+	zonemap *index.ZM
 }
 
-func NewPkMutableIndex(keyT types.Type) *mutableIndex {
+func NewPkMutableIndex(typ types.Type) *mutableIndex {
 	return &mutableIndex{
-		art:     index.NewSimpleARTMap(keyT),
-		zonemap: index.NewZoneMap(keyT),
+		art:     index.NewSimpleARTMap(typ),
+		zonemap: index.NewZM(typ.Oid),
 	}
 }
 
@@ -41,7 +41,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = idx.zonemap.BatchUpdate(keysCtx); err != nil {
+	if err = index.BatchUpdateZM(idx.zonemap, keysCtx.Keys); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
@@ -144,12 +144,12 @@ func (idx *mutableIndex) Close() error {
 var _ Index = (*nonPkMutIndex)(nil)
 
 type nonPkMutIndex struct {
-	zonemap *index.ZoneMap
+	zonemap *index.ZM
 }
 
-func NewMutableIndex(keyT types.Type) *nonPkMutIndex {
+func NewMutableIndex(typ types.Type) *nonPkMutIndex {
 	return &nonPkMutIndex{
-		zonemap: index.NewZoneMap(keyT),
+		zonemap: index.NewZM(typ.Oid),
 	}
 }
 
@@ -165,7 +165,7 @@ func (idx *nonPkMutIndex) Close() error {
 func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
 func (idx *nonPkMutIndex) String() string                     { return "nonpk" }
 func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
-	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
+	return TranslateError(index.BatchUpdateZM(idx.zonemap, keysCtx.Keys))
 }
 
 func (idx *nonPkMutIndex) Dedup(key any, _ func(uint32) error) (err error) {

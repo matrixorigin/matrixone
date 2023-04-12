@@ -155,11 +155,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 				tableTypes = blkTypes
 			} else {
 				for i := range blkVal {
-					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], dataTypes[i]) < 0 {
+					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], dataTypes[i].Oid) < 0 {
 						tableVal[i][0] = blkVal[i][0]
 					}
 
-					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], dataTypes[i]) > 0 {
+					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], dataTypes[i].Oid) > 0 {
 						tableVal[i][1] = blkVal[i][1]
 					}
 				}

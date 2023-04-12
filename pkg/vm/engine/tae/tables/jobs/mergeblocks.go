@@ -20,10 +20,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -211,6 +212,21 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		sortColDef = schema.PhyAddrKey
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
+
+	idxes := make([]uint16, 0)
+	for _, def := range schema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		idxes = append(idxes, uint16(def.Idx))
+	}
+	for _, block := range task.compacted {
+		err = block.Prefetch(idxes)
+		if err != nil {
+			return
+		}
+	}
+
 	for i, block := range task.compacted {
 		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
 			return
@@ -268,7 +284,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
 		blk, err = toSegEntry.CreateNonAppendableBlock(
-			new(common.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
+			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
 		}
@@ -312,8 +328,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	name := common.NewObjectName(&task.toSegEntry.ID, 0)
-	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
+	name := objectio.BuildObjectName(task.toSegEntry.ID, 0)
+	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
 	if err != nil {
 		return err
 	}
@@ -331,12 +347,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err != nil {
 		return err
 	}
-	var metaLoc string
+	var metaLoc objectio.Location
 	for i, block := range blocks {
-		metaLoc, err = blockio.EncodeLocation(block.GetExtent(), uint32(batchs[i].Length()), blocks)
-		if err != nil {
-			return
-		}
+		metaLoc = blockio.EncodeLocation(name, block.GetExtent(), uint32(batchs[i].Length()), block.GetID())
 		if err = blockHandles[i].UpdateMetaLoc(metaLoc); err != nil {
 			return err
 		}

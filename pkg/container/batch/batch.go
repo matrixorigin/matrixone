@@ -327,3 +327,11 @@ func (bat *Batch) AddCnt(cnt int) {
 func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
+
+func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
+	for i, vec := range bat.Vecs {
+		if vec == oldVec {
+			bat.SetVector(int32(i), newVec)
+		}
+	}
+}

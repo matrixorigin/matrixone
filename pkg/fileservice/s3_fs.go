@@ -72,9 +72,7 @@ func NewS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
-	memCacheCapacity int64,
-	diskCacheCapacity int64,
-	diskCachePath string,
+	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
 ) (*S3FS, error) {
@@ -93,11 +91,7 @@ func NewS3FS(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(
-			memCacheCapacity,
-			diskCacheCapacity,
-			diskCachePath,
-		); err != nil {
+		if err := fs.initCaches(cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -113,9 +107,7 @@ func NewS3FSOnMinio(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
-	memCacheCapacity int64,
-	diskCacheCapacity int64,
-	diskCachePath string,
+	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
 ) (*S3FS, error) {
@@ -135,11 +127,7 @@ func NewS3FSOnMinio(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(
-			memCacheCapacity,
-			diskCacheCapacity,
-			diskCachePath,
-		); err != nil {
+		if err := fs.initCaches(cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -147,36 +135,35 @@ func NewS3FSOnMinio(
 	return fs, nil
 }
 
-func (s *S3FS) initCaches(
-	memCacheCapacity int64,
-	diskCacheCapacity int64,
-	diskCachePath string,
-) error {
+func (s *S3FS) initCaches(config CacheConfig) error {
+	config.SetDefaults()
 
 	// memory cache
-	if memCacheCapacity == 0 {
-		memCacheCapacity = 512 << 20
+	if config.MemoryCapacity == 0 {
+		config.MemoryCapacity = 512 << 20
 	}
-	if memCacheCapacity > 0 {
+	if config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			WithLRU(memCacheCapacity),
+			WithLRU(int64(config.MemoryCapacity)),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
-			zap.Any("capacity", memCacheCapacity),
+			zap.Any("capacity", config.MemoryCapacity),
 		)
 	}
 
 	// disk cache
-	if diskCacheCapacity == 0 {
-		diskCacheCapacity = 8 << 30
+	if config.DiskCapacity == 0 {
+		config.DiskCapacity = 8 << 30
 	}
-	if diskCacheCapacity > 0 && diskCachePath != "" {
+	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
 		var err error
 		s.diskCache, err = NewDiskCache(
-			diskCachePath,
-			diskCacheCapacity,
+			config.DiskPath,
+			int64(config.DiskCapacity),
+			config.DiskMinEvictInterval.Duration,
+			config.DiskEvictTarget,
 			s.perfCounterSets,
 		)
 		if err != nil {
@@ -184,8 +171,7 @@ func (s *S3FS) initCaches(
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", s.name),
-			zap.Any("capacity", diskCacheCapacity),
-			zap.Any("path", diskCachePath),
+			zap.Any("config", config),
 		)
 	}
 

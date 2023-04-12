@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,7 @@ type Manager struct {
 	logtailCallback     atomic.Pointer[callback]
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
+	eventOnce           sync.Once
 }
 
 func NewManager(blockSize int, now func() types.TS) *Manager {
@@ -143,6 +145,10 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		to := txn.txn.GetPrepareTS()
 		from := mgr.previousSaveTS
 		mgr.previousSaveTS = to
+		// Send ts in order to initialize waterline of logtail service
+		mgr.eventOnce.Do(func() {
+			callback.call(from.ToTimestamp(), from.ToTimestamp())
+		})
 		callback.call(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
 	}
 }

@@ -123,7 +123,8 @@ func (c Config) NewServer(
 	address string,
 	logger *zap.Logger,
 	requestFactory func() Message,
-	responseReleaseFunc func(Message)) (RPCServer, error) {
+	responseReleaseFunc func(Message),
+	opts ...ServerOption) (RPCServer, error) {
 	var codecOpts []CodecOption
 	codecOpts = append(codecOpts,
 		WithCodecEnableChecksum(),
@@ -137,10 +138,7 @@ func (c Config) NewServer(
 		}
 		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
 	}
-	return NewRPCServer(
-		tag,
-		address,
-		NewMessageCodec(requestFactory, codecOpts...),
+	opts = append(opts,
 		WithServerLogger(logger.Named(tag)),
 		WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(RPCMessage)
@@ -148,6 +146,11 @@ func (c Config) NewServer(
 				responseReleaseFunc(m.Message)
 			}
 		})))
+	return NewRPCServer(
+		tag,
+		address,
+		NewMessageCodec(requestFactory, codecOpts...),
+		opts...)
 }
 
 func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {

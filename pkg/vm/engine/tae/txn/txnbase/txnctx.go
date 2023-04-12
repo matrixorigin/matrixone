@@ -15,7 +15,6 @@
 package txnbase
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -27,7 +26,7 @@ import (
 
 func IDToIDCtx(id uint64) []byte {
 	ctx := make([]byte, 8)
-	binary.BigEndian.PutUint64(ctx, id)
+	copy(ctx, types.EncodeUint64(&id))
 	return ctx
 }
 

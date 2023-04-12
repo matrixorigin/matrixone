@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,7 @@ func TestDiskCache(t *testing.T) {
 	ctx := context.Background()
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, nil)
+	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	// update
@@ -109,12 +110,12 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(dir, 1024, nil)
+	cache, err = NewDiskCache(dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(dir, 1024, nil)
+	cache, err = NewDiskCache(dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
@@ -127,7 +128,7 @@ func TestDiskCachePreload(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, nil)
+	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	// set content
@@ -212,7 +213,7 @@ func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, nil)
+	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	n := 128
@@ -243,7 +244,7 @@ func TestDiskCacheEviction(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 3, nil)
+	cache, err := NewDiskCache(dir, 3, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	n := 128
@@ -269,4 +270,35 @@ func TestDiskCacheEviction(t *testing.T) {
 
 	cache.evict(ctx)
 	assert.True(t, counterSet.FileService.Cache.Disk.Evict.Load() > 0)
+}
+
+func TestImmediatelyEviction(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	evictInterval := time.Hour * 1
+	cache, err := NewDiskCache(dir, 3, evictInterval, 0.8, nil)
+	assert.Nil(t, err)
+
+	err = cache.SetFileContent(ctx, "a", func(_ context.Context, vec *IOVector) error {
+		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	assert.Nil(t, err)
+
+	err = cache.SetFileContent(ctx, "b", func(_ context.Context, vec *IOVector) error {
+		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	assert.Nil(t, err)
+
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.EvictImmediately.Load())
 }

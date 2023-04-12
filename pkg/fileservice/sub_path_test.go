@@ -23,7 +23,7 @@ import (
 func TestSubPathFS(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
-			upstream, err := NewMemoryFS(name)
+			upstream, err := NewMemoryFS(name, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return SubPath(upstream, "foo")
 		})

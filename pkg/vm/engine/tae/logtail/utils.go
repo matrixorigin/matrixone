@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -452,22 +453,19 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, block objectio.BlockObject, reader dataio.Reader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint32, reader *blockio.BlockReader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
-	if block.GetExtent().End() == 0 {
-		return bat, nil
-	}
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, []uint32{block.GetID()}, nil)
+	ioResult, err := reader.LoadColumns(cxt, idxs, id, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, idx := range idxs {
-		pkgVec := ioResult[0].Vecs[i]
+		pkgVec := ioResult.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])
@@ -483,20 +481,19 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
-	reader dataio.Reader,
-	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
+	service fileservice.FileService,
+	key objectio.Location) (err error) {
+
+	pref, err := blockio.BuildPrefetch(service, key)
 	if err != nil {
 		return
 	}
-
-	pref := blockio.BuildPrefetch(reader, m)
 	for idx, item := range checkpointDataRefer {
 		idxes := make([]uint16, len(item.attrs))
 		for i := range item.attrs {
 			idxes[i] = uint16(i)
 		}
-		pref.AddBlock(idxes, []uint32{metas[idx].GetID()})
+		pref.AddBlock(idxes, []uint32{uint32(idx)})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -505,16 +502,12 @@ func (data *CheckpointData) PrefetchFrom(
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
-	reader dataio.Reader,
+	reader *blockio.BlockReader,
 	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
-	if err != nil {
-		return
-	}
 
 	for idx, item := range checkpointDataRefer {
 		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, metas[idx], reader)
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), reader)
 		if err != nil {
 			return
 		}
@@ -779,7 +772,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 			continue
 		}
 		metaNode := node
-		if metaNode.BaseNode.MetaLoc == "" || metaNode.Aborted {
+		if metaNode.BaseNode.MetaLoc.IsEmpty() || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
 				collector.data.bats[BLKDNMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&entry.ID))
 				collector.data.bats[BLKDNMetaDeleteIDX].GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())

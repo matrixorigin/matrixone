@@ -16,13 +16,13 @@ package entry
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -58,7 +58,6 @@ type Info struct {
 	TxnId       string
 	Checkpoints []*CkpRanges
 	Uncommits   string
-	// PrepareEntryLsn uint64
 
 	GroupLSN uint64
 
@@ -70,11 +69,11 @@ func NewEmptyInfo() *Info {
 	return &Info{}
 }
 func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, info.Group); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&info.Group)); err != nil {
 		return
 	}
 	n += 4
-	if err = binary.Write(w, binary.BigEndian, info.GroupLSN); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&info.GroupLSN)); err != nil {
 		return
 	}
 	n += 8
@@ -87,17 +86,17 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if err = binary.Write(w, binary.BigEndian, info.TargetLsn); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
 	n += 8
 	length := uint64(len(info.Checkpoints))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	for _, ckps := range info.Checkpoints {
-		if err = binary.Write(w, binary.BigEndian, ckps.Group); err != nil {
+		if _, err = w.Write(types.EncodeUint32(&ckps.Group)); err != nil {
 			return
 		}
 		n += 4
@@ -108,27 +107,27 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += n2
 		cmdLength := uint64(len(ckps.Command))
-		if err = binary.Write(w, binary.BigEndian, cmdLength); err != nil {
+		if _, err = w.Write(types.EncodeUint64(&cmdLength)); err != nil {
 			return
 		}
 		n += 8
 		for lsn, cmd := range ckps.Command {
-			if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+			if _, err = w.Write(types.EncodeUint64(&lsn)); err != nil {
 				return
 			}
-			n += 4
+			n += 8
 			cmdIdxLength := uint32(len(cmd.CommandIds))
-			if err = binary.Write(w, binary.BigEndian, cmdIdxLength); err != nil {
+			if _, err = w.Write(types.EncodeUint32(&cmdIdxLength)); err != nil {
 				return
 			}
 			n += 4
 			for _, id := range cmd.CommandIds {
-				if err = binary.Write(w, binary.BigEndian, id); err != nil {
+				if _, err = w.Write(types.EncodeUint32(&id)); err != nil {
 					return
 				}
 				n += 4
 			}
-			if err = binary.Write(w, binary.BigEndian, cmd.Size); err != nil {
+			if _, err = w.Write(types.EncodeUint32(&cmd.Size)); err != nil {
 				return
 			}
 			n += 4
@@ -145,11 +144,11 @@ func (info *Info) Marshal() (buf []byte, err error) {
 	return
 }
 func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &info.Group); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&info.Group)); err != nil {
 		return
 	}
 	n += 4
-	if err = binary.Read(r, binary.BigEndian, &info.GroupLSN); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&info.GroupLSN)); err != nil {
 		return
 	}
 	n += 8
@@ -162,19 +161,19 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	if err = binary.Read(r, binary.BigEndian, &info.TargetLsn); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
 	n += 8
 	length := uint64(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&length)); err != nil {
 		return
 	}
 	n += 8
 	info.Checkpoints = make([]*CkpRanges, length)
 	for i := 0; i < int(length); i++ {
 		ckps := &CkpRanges{}
-		if err = binary.Read(r, binary.BigEndian, &ckps.Group); err != nil {
+		if _, err = r.Read(types.EncodeUint32(&ckps.Group)); err != nil {
 			return
 		}
 		n += 4
@@ -186,31 +185,31 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += n2
 		cmdLength := uint64(0)
-		if err = binary.Read(r, binary.BigEndian, &cmdLength); err != nil {
+		if _, err = r.Read(types.EncodeUint64(&cmdLength)); err != nil {
 			return
 		}
 		n += 8
 		ckps.Command = make(map[uint64]CommandInfo)
 		for i := 0; i < int(cmdLength); i++ {
 			lsn := uint64(0)
-			if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+			if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
 				return
 			}
 			n += 8
 			cmd := &CommandInfo{}
 			cmdIdxLength := uint32(0)
-			if err = binary.Read(r, binary.BigEndian, &cmdIdxLength); err != nil {
+			if _, err = r.Read(types.EncodeUint32(&cmdIdxLength)); err != nil {
 				return
 			}
 			n += 4
 			cmd.CommandIds = make([]uint32, cmdIdxLength)
 			for i := 0; i < int(cmdIdxLength); i++ {
-				if err = binary.Read(r, binary.BigEndian, &cmd.CommandIds[i]); err != nil {
+				if _, err = r.Read(types.EncodeUint32(&cmd.CommandIds[i])); err != nil {
 					return
 				}
 				n += 4
 			}
-			if err = binary.Read(r, binary.BigEndian, &cmd.Size); err != nil {
+			if _, err = r.Read(types.EncodeUint32(&cmd.Size)); err != nil {
 				return
 			}
 			n += 4

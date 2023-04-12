@@ -164,7 +164,7 @@ col4 INT NOT NULL,
 PRIMARY KEY (col1),
 unique key col2 (col3)
 );
-invalid input: duplicate key name 'col2'
+duplicate key name 'col2'
 drop table t1;
 no such table create_table.t1
 drop table if exists t1;
@@ -177,7 +177,7 @@ PRIMARY KEY (col1),
 unique key idx_sp1 (col2),
 unique key idx_sp1 (col3)
 );
-invalid input: duplicate key name 'idx_sp1'
+duplicate key name 'idx_sp1'
 drop table t1;
 no such table create_table.t1
 drop table if exists t1;
@@ -190,7 +190,7 @@ PRIMARY KEY (col1),
 unique key idx_sp1 (col2),
 key idx_sp1 (col3)
 );
-invalid input: duplicate key name 'idx_sp1'
+duplicate key name 'idx_sp1'
 drop table t1;
 no such table create_table.t1
 drop table if exists t1;
@@ -202,7 +202,7 @@ col4 INT NOT NULL,
 PRIMARY KEY (col1),
 KEY col2 (col3)
 );
-invalid input: duplicate key name 'col2'
+duplicate key name 'col2'
 drop table t1;
 no such table create_table.t1
 drop table if exists t1;

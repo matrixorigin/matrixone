@@ -79,7 +79,7 @@ func (m CNService) DebugString() string {
 	for k, v := range m.Labels {
 		buf.WriteString(k)
 		buf.WriteString("=")
-		buf.WriteString(v)
+		buf.WriteString(v.String())
 		buf.WriteString(" ")
 	}
 	buf.WriteString("]")
@@ -103,7 +103,7 @@ func (m DNService) DebugString() string {
 	for k, v := range m.Labels {
 		buf.WriteString(k)
 		buf.WriteString("=")
-		buf.WriteString(v)
+		buf.WriteString(v.String())
 		buf.WriteString(" ")
 	}
 	buf.WriteString("]")

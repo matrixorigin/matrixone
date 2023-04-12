@@ -19,8 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -178,8 +179,8 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []dataio.Index,
-	metaLoc []string,
+	zm []objectio.ZoneMap,
+	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
@@ -197,7 +198,7 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
-func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -208,7 +209,7 @@ func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string)
 	return db.UpdateMetaLoc(id, metaLoc)
 }
 
-func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -523,7 +524,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -564,14 +565,14 @@ func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
-	if store.cmdMgr.GetCSN() == 0 {
-		return
-	}
-	for _, db := range store.dbs {
-		if err = db.ApplyRollback(); err != nil {
-			break
+	if store.cmdMgr.GetCSN() != 0 {
+		for _, db := range store.dbs {
+			if err = db.ApplyRollback(); err != nil {
+				break
+			}
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -597,6 +598,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 			break
 		}
 	}
+	store.CleanUp()
 	return
 }
 
@@ -691,3 +693,9 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
+
+func (store *txnStore) CleanUp() {
+	for _, db := range store.dbs {
+		db.CleanUp()
+	}
+}

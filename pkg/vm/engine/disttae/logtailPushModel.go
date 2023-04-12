@@ -16,11 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -357,10 +357,6 @@ func (client *pushClient) unusedTableGCTicker() {
 	}()
 }
 
-// to ensure we can pass the SCA for unused code.
-var pushClientDemo pushClient
-var _ = pushClientDemo.unsubscribeTable
-
 type subscribeID struct {
 	db  uint64
 	tbl uint64
@@ -485,6 +481,7 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
+	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &service.LogtailResponseSegment{}
 	})
@@ -492,12 +489,13 @@ func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 		),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+		morpc.WithBackendLogger(logger),
 	)
 
 	c, err1 := morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(10000),
 		morpc.WithClientTag("cn-log-tail-client"),
+		morpc.WithClientLogger(logger),
 	)
 	if err1 != nil {
 		return nil, err1
@@ -639,22 +637,38 @@ func distributeUpdateResponse(
 	response *logtail.UpdateResponse,
 	recRoutines []routineController) error {
 	list := response.GetLogtailList()
-	logList(list).Sort()
 
-	// after sort, the smaller tblId, the smaller the index.
-	var index int
-	for index = 0; index < len(list); index++ {
-		table := list[index].Table
-		notDistribute := ifShouldNotDistribute(table.DbId, table.TbId)
-		if !notDistribute {
-			break
-		}
-		if err := e.consumeUpdateLogTail(ctx, list[index], false); err != nil {
-			return err
+	// loops for mo_database, mo_tables, mo_columns.
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_DATABASE_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
 		}
 	}
-	for ; index < len(list); index++ {
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_TABLES_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
+		}
+	}
+	for i := 0; i < len(list); i++ {
+		table := list[i].Table
+		if table.TbId == catalog.MO_COLUMNS_ID {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
+				return err
+			}
+		}
+	}
+
+	for index := 0; index < len(list); index++ {
 		table := list[index].Table
+		if ifShouldNotDistribute(table.DbId, table.TbId) {
+			continue
+		}
 		recIndex := table.TbId % parallelNums
 		recRoutines[recIndex].sendTableLogTail(list[index])
 	}
@@ -890,25 +904,4 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		}
 	}
 	return nil
-}
-
-type logList []logtail.TableLogtail
-
-func (ls logList) Len() int { return len(ls) }
-func (ls logList) Less(i, j int) bool {
-	if ls[i].Ts.Less(*ls[j].Ts) {
-		return true
-	}
-	if ls[i].Ts.Equal(*ls[j].Ts) {
-		return compareTableIdLess(ls[i].Table.TbId, ls[j].Table.TbId)
-	}
-	return false
-}
-func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
-func (ls logList) Sort() {
-	sort.Sort(ls)
-}
-
-func compareTableIdLess(i1, i2 uint64) bool {
-	return i1 < i2
 }

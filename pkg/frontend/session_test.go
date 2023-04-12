@@ -627,9 +627,6 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
-		hkd := tcc.GetHideKeyDef("abc", "t1")
-		convey.So(hkd, convey.ShouldBeNil)
-
 		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
 		convey.So(stats, convey.ShouldBeNil)
 	})

@@ -4,12 +4,8 @@
 -- @desc:test for [in] subquery with constant operand
 -- @label:bvt
 SELECT 1 IN (SELECT 1);
--- @bvt:issue#3307
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
--- @bvt:issue
--- @bvt:issue#3556
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
--- @bvt:issue
 SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c ORDER BY id);
 SELECT * FROM (SELECT 1) a  WHERE 1 IN (SELECT 1,1);
 SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
@@ -103,9 +99,7 @@ CREATE TABLE `c` (
 INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
 (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
 (5,2), (1,8), (7,0), (0,9), (9,5);
--- @bvt:issue#3307
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
--- @bvt:issue
 DROP TABLE IF EXISTS c;
 
 drop table if exists t1;
@@ -342,13 +336,11 @@ PRIMARY KEY (pk)
 );
 INSERT INTO t1 VALUES (1, 1, 7, '2001-11-04 19:07:55.051133');
 CREATE TABLE t2(field1 INT, field2 INT);
--- @bvt:issue#3307
 SELECT * FROM t2 WHERE (field1, field2) IN (
   SELECT MAX(col_datetime_key), col_int_key
   FROM t1
   WHERE col_int_key > col_int_nokey
   GROUP BY col_int_key);
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;

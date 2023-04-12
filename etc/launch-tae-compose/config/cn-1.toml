@@ -28,6 +28,8 @@ key-prefix = "server/data"
 memory-capacity = "512MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
+disk-min-evict-interval = "7m"
+disk-evict-target = 0.8
 
 [[fileservice]]
 backend = "MINIO"

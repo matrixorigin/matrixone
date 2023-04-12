@@ -316,6 +316,20 @@ func logDeadLockFound(
 	}
 }
 
+func logAbortDeadLock(
+	serviceID string,
+	txn pb.WaitTxn,
+	activeTxn *activeTxn) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("abort dead lock txn",
+			serviceIDField(serviceID),
+			zap.String("wait-txn", txn.DebugString()),
+			txnField(activeTxn),
+			zap.Stringer("block", activeTxn.blockedWaiter))
+	}
+}
+
 func logCheckDeadLockFailed(
 	serviceID string,
 	waitingTxn, txn pb.WaitTxn,
@@ -573,12 +587,14 @@ func logWaiterContactPool(
 
 func logWaiterClose(
 	serviceID string,
-	w *waiter) {
+	w *waiter,
+	err error) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter close",
 			serviceIDField(serviceID),
-			zap.Stringer("waiter", w))
+			zap.Stringer("waiter", w),
+			zap.Error(err))
 	}
 }
 

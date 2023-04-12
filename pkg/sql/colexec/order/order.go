@@ -86,12 +86,13 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.NeedDup() {
-			nvec, err := bat.Vecs[i].Dup(proc.Mp())
+			oldVec := bat.Vecs[i]
+			nvec, err := oldVec.Dup(proc.Mp())
 			if err != nil {
 				return false, err
 			}
-			bat.SetVector(int32(i), nvec)
-
+			bat.ReplaceVector(oldVec, nvec)
+			oldVec.Free(proc.Mp())
 		}
 	}
 
