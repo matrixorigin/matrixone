@@ -56,14 +56,24 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, err
 	}
 
+	var query *Query
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
+		query, err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		// if table have parent table. add left join to query
 		if len(tableDef.Fkeys) > 0 {
-
+			err = appendJoinNodeForParentFkCheck(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, 0)
+			if err != nil {
+				return nil, err
+			}
 		}
-		buildInsertPlans(builder, bindCtx, objRef, tableDef)
+		buildInsertPlans(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	/**
@@ -125,6 +135,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}, err
 	**/
 	return &Plan{
-		Plan: &plan.Plan_Query{},
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
 	}, err
 }

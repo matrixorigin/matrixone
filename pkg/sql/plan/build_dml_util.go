@@ -16,31 +16,86 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildInsertPlans(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef) error {
-	// if table have parent table. add left join to query & append filter node after query
+func buildInsertPlans(
+	builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef,
+	lastNodeId int32) (*Query, error) {
+	//@see https://github.com/matrixorigin/docs/blob/main/tech-notes/sql/design/plan2/refactor_iud.md
+
+	// if table have parent table. append filter node after query
 	if len(tableDef.Fkeys) > 0 {
 		//
+
+		// todo need tag, pos
+		rowIdTyp := types.T_Rowid.ToType()
+		for i, fkey := range tableDef.Fkeys {
+			colExpr := &plan.Expr{
+				Typ: makePlan2Type(&rowIdTyp),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,            //todo :tag
+						ColPos: int32(i + 2), //todo :idx
+					},
+				},
+			}
+			nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{colExpr})
+			if err != nil {
+				return nil, err
+			}
+			filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{nullCheckExpr, makePlan2StringConstExprWithType("")})
+			if err != nil {
+				return nil, err
+			}
+
+			filterNode := &Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeId},
+				FilterList: []*plan.Expr{filterExpr},
+			}
+			lastNodeId = builder.appendNode(filterNode, bindCtx)
+		}
 	}
 
+	sinkNode := &Node{
+		NodeType: plan.Node_SINK,
+		Children: []int32{lastNodeId},
+	}
+	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+
+	//append to steps
+	sourceStep := builder.appendStep(lastNodeId)
+
+	// append plan for the hidden tables of unique keys
 	for _, indexdef := range tableDef.Indexes {
 		if indexdef.Unique {
 			idxRef := &plan.ObjectRef{
 				SchemaName: builder.compCtx.DefaultDatabase(),
 				ObjName:    indexdef.IndexTableName,
 			}
-			//把
+			err := makeInsertPlan(builder, bindCtx, []int32{}, int32(2), idxRef, sourceStep)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	return nil
+	// append plan for insert origin table
+	err := makeInsertPlan(builder, bindCtx, []int32{}, int32(2), objRef, sourceStep)
+	if err != nil {
+		return nil, err
+	}
+
+	query, err := builder.createQuery()
+	return query, err
 }
 
-func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo) error {
-	return nil
+func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo) (*Query, error) {
+	return nil, nil
 }
 
 func buildDeletePlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo) error {
@@ -48,24 +103,18 @@ func buildDeletePlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSele
 	return nil
 }
 
-func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef) error {
+func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32, tableIdx int) error {
 	parentIdx := make(map[string]int32)
-	for _, fk := range tableDef.Fkeys {
-		// in update statement. only add left join logic when update the column in foreign key
-		if info.typ == "update" {
-			updateRefColumn := false
-			for _, colId := range fk.Cols {
-				updateName := id2name[colId]
-				if _, ok := info.tblInfo.updateKeys[rewriteIdx][updateName]; ok {
-					updateRefColumn = true
-					break
-				}
-			}
-			if !updateRefColumn {
-				continue
-			}
-		}
+	typMap := make(map[string]*plan.Type)
+	id2name := make(map[uint64]string)
+	// oldColPosMap := info.tblInfo.oldColPosMap[rewriteIdx]
+	newColPosMap := info.tblInfo.newColPosMap[tableIdx]
+	for _, col := range tableDef.Cols {
+		typMap[col.Name] = col.Typ
+		id2name[col.ColId] = col.Name
+	}
 
+	for _, fk := range tableDef.Fkeys {
 		// insert statement, we will alsways check parent ref
 		for _, colId := range fk.Cols {
 			updateName := id2name[colId]
@@ -84,7 +133,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		// append table scan node
 		joinCtx := NewBindContext(builder, bindCtx)
-
 		rightCtx := NewBindContext(builder, joinCtx)
 		astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
 		rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
@@ -93,7 +141,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 		rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 		baseNodeTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
-		// needRecursionCall := false
 
 		// build join conds
 		joinConds := make([]*Expr, len(fk.Cols))
@@ -160,14 +207,15 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	info.parentIdx = append(info.parentIdx, parentIdx)
+	return nil
 }
 
 // makeInsertPlan  build insert plan for one table
 // sink_scan -> preinsert -> sink
 //
 //	-> sink_scan -> lock -> filter -> insert  //do insert
-//	-> sink_scan -> group_by -> filter  //check pk is unique in rows
-//	-> sink_scan -> join -> filter	// check pk is uniue in rows & snapshot
+//	-> sink_scan -> group_by -> filter  //check if pk is unique in rows
+//	-> sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 func makeInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32, pkIdx int32, objRef *ObjectRef, sourceStep int32) error {
 	// make plan:sink_scan -> preinsert -> sink
 	{
@@ -216,8 +264,9 @@ func makeInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32, pk
 		builder.appendStep(lastNodeId)
 	}
 
-	// todo: make plan: -> sink_scan -> group_by -> filter  //check pk is unique in rows
-	// todo: make plan: -> sink_scan -> join -> filter	// check pk is uniue in rows & snapshot
+	// todo: make plan: -> sink_scan -> group_by -> filter  //check if pk is unique in rows
+
+	// todo: make plan: -> sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 
 	return nil
 }
