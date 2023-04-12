@@ -709,20 +709,6 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-func shouldSwapByStats(leftStats, rightStats *Stats) bool {
-	//left deep tree is preferred for pipeline
-	//if scan compare with join, scan should be 5% bigger than join, then we can swap
-	left := leftStats.Outcnt
-	if leftStats.TableCnt == 0 {
-		left *= 1.05
-	}
-	right := rightStats.Outcnt
-	if rightStats.TableCnt == 0 {
-		right *= 1.05
-	}
-	return left < right
-}
-
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) int32 {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
@@ -742,20 +728,22 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	if node.JoinType == plan.Node_LEFT {
 		//right join does not support non equal join for now
-		if IsEquiJoin(node.OnList) && shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		//left join has a better performance than right join, so 1.3 is a threshold
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*1.3 < rightChild.Stats.Outcnt {
 			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_RIGHT
 		}
 		return nodeID
 	}
 	if node.JoinType == plan.Node_RIGHT {
 		//right join does not support non equal join for now
-		if !IsEquiJoin(node.OnList) || shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		//left join has a better performance than right join, so 1.3 is a threshold
+		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*1.3 {
 			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_LEFT
 		}
 		return nodeID
 	}
 	if node.JoinType == plan.Node_INNER {
-		if shouldSwapByStats(leftChild.Stats, rightChild.Stats) {
+		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.Children = []int32{node.Children[1], node.Children[0]}
 		}
 	}
