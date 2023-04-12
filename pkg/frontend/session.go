@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -576,7 +577,7 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 func (ses *Session) GetBackgroundHandlerWithBatchFetcher(ctx context.Context) *BackgroundHandler {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ses.GetConnectContext(), ctx, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, ses.autoIncrCacheManager),
+		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables),
 	}
 	bh.ses.SetOutputCallback(batchFetcher)
 	return bh
