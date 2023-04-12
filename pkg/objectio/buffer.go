@@ -39,7 +39,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 			FilePath: name,
 		},
 	}
-	buffer.vector.Entries = make([]fileservice.IOEntry, 3)
+	buffer.vector.Entries = make([]fileservice.IOEntry, 0)
 	return buffer
 }
 
