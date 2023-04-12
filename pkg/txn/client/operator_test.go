@@ -368,6 +368,8 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
+		tc.option.updateLastCommitTSFunc = nil
+		tc2.option.updateLastCommitTSFunc = nil
 		assert.Equal(t, tc.option, tc2.option)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
