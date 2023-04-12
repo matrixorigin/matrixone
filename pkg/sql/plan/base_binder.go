@@ -677,7 +677,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "ifnull function need two args", len(astArgs))
 		}
-		elseExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
+		elseExpr := astArgs[0]
 		thenExpr := astArgs[1]
 		whenExpr := tree.NewIsNullExpr(astArgs[0])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
@@ -789,7 +789,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	switch name {
-	case "+", "-", "*", "/":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde":
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}

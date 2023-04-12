@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,8 +56,9 @@ func benchmarkFileService(b *testing.B, newFS func() FileService) {
 			offset = int64(0)
 			for _, part := range parts2 {
 				readVector.Entries = append(readVector.Entries, IOEntry{
-					Offset: offset,
-					Size:   int64(len(part)),
+					Offset:        offset,
+					Size:          int64(len(part)),
+					WriterForRead: io.Discard,
 				})
 				offset += int64(len(part))
 			}

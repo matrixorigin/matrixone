@@ -60,6 +60,7 @@ type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
 type IndexDef = plan.IndexDef
+type SubscriptionMeta = plan.SubscriptionMeta
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -78,8 +79,6 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (string, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
-	// get the definition of hide key
-	GetHideKeyDef(dbName string, tableName string) *ColDef
 	// get estimated stats by table & expr
 	Stats(obj *ObjectRef, e *Expr) *Stats
 	// get origin sql string of the root
@@ -100,6 +99,11 @@ type CompilerContext interface {
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
 	GetStatsCache() *StatsCache
+	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
+	CheckSubscriptionValid(subName, accName string, pubName string) error
+	SetQueryingSubscription(meta *SubscriptionMeta)
+	GetQueryingSubscription() *SubscriptionMeta
+	IsPublishing(dbName string) (bool, error)
 }
 
 type Optimizer interface {
@@ -301,7 +305,9 @@ type Binding struct {
 	tag            int32
 	nodeId         int32
 	table          string
+	tableID        uint64
 	cols           []string
+	colIsHidden    []bool
 	types          []*plan.Type
 	refCnts        []uint
 	colIdByName    map[string]int32

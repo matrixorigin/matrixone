@@ -113,6 +113,8 @@ type CreateDatabaseReq struct {
 	ID         ID
 	AccessInfo AccessInfo
 	Name       string
+	Typ        string
+	CreateSql  string
 }
 
 type CreateDatabaseResp struct {
@@ -125,8 +127,10 @@ type OpenDatabaseReq struct {
 }
 
 type OpenDatabaseResp struct {
-	ID   ID
-	Name string
+	ID        ID
+	Name      string
+	DatTyp    string
+	CreateSql string
 }
 
 type GetDatabasesReq struct {

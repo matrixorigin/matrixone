@@ -1,0 +1,46 @@
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop table if exists t5;
+drop table if exists t6;
+drop table if exists t7;
+drop table if exists t8;
+drop table if exists t9;
+drop table if exists t10;
+drop table if exists t11;
+create table t1(a int,b int) partition by hash(a) partitions 2;
+create table t2(a int,b int) partition by hash(a) partitions 2 (partition x, partition y);
+create table t3(a int,b int) partition by hash(a) partitions 3 (partition x, partition y);
+invalid input: Wrong number of partitions defined
+create table t4(a int,b int) partition by key(a) partitions 2;
+create table t5(a int,b int) partition by key() partitions 2;
+invalid input: Field in list of fields for partition function not found in table
+create table t6(a int primary key ,b int) partition by key(a) partitions 2;
+create table t7(a int primary key ,b int) partition by key(b) partitions 2;
+invalid input: partition key is not part of primary key
+create table t8(a int,b int,primary key (a,b)) partition by key(b) partitions 2;
+create table t9(a int unique key ,b int) partition by key(a) partitions 2;
+create table t10(a int,b int) partition by key(a) partitions 2 (partition x, partition y);
+create table t11(a int,b int) partition by key(a) partitions 3 (partition x, partition y);
+invalid input: Wrong number of partitions defined
+show tables;
+Tables_in_partition2
+t1
+t2
+t4
+t6
+t8
+t9
+t10
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop table if exists t5;
+drop table if exists t6;
+drop table if exists t7;
+drop table if exists t8;
+drop table if exists t9;
+drop table if exists t10;
+drop table if exists t11;

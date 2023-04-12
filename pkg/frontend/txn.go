@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -23,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
 )
 
 type TxnHandler struct {
@@ -85,6 +87,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
+	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 
 	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
@@ -277,6 +280,7 @@ func (th *TxnHandler) CommitTxn() error {
 			th.ResetTxnCtx()
 			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
+		ses.updateLastCommitTS(txnOp.Txn().CommitTS)
 	}
 	th.SetTxnOperatorInvalid()
 	th.ResetTxnCtx()

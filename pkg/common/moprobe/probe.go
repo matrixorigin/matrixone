@@ -49,10 +49,52 @@
 
 package moprobe
 
-//go:noinline
-func DisttaePartitionInsert(tag, v1 int64) {
+import (
+	"context"
+	gotrace "runtime/trace"
+	"unsafe"
+)
+
+type RegionType int64
+
+const (
+	GenericRegion RegionType = iota
+	PartitionStateHandleInsert
+	PartitionStateHandleDel
+	PartitionStateHandleMetaInsert
+	SubscriptionPullLogTail
+	RegionTypeMax
+)
+
+var regionTypeStr = [RegionTypeMax]string{
+	"",
+	"partiton state insert",
+	"partiton state del",
+	"partiton state metainsert",
+	"subsciption pull logtail",
+}
+
+func WithRegion(ctx context.Context, rt RegionType, fn func()) {
+	WithArgAndFn(ctx, rt, 0, 0, fn)
+}
+
+func WithArg(ctx context.Context, rt RegionType, arg1, arg2 int64) {
+	WithArgAndFn(ctx, rt, arg1, arg2, nil)
+}
+
+func WithArgAndFn(ctx context.Context, rt RegionType, arg1, arg2 int64, fn func()) {
+	tag := uintptr(unsafe.Pointer(&ctx))
+	withTwoArg(tag, rt, arg1, arg2)
+	if fn != nil {
+		gotrace.WithRegion(ctx, regionTypeStr[rt], fn)
+		withTwoArgRet(tag, rt, arg1, arg2)
+	}
 }
 
 //go:noinline
-func DisttaePartitionInsertRet(tag, v1 int64) {
+func withTwoArg(tag uintptr, rt RegionType, v1, v2 int64) {
+}
+
+//go:noinline
+func withTwoArgRet(tag uintptr, rt RegionType, v1, v2 int64) {
 }

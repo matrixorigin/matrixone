@@ -82,12 +82,12 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		if width != 32 && width != 0 {
 			return uint32(width)
 		}
-		return 32
+		return 23
 	case MYSQL_TYPE_DOUBLE:
 		if width != 64 && width != 0 {
 			return uint32(width)
 		}
-		return 64
+		return 53
 	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3
 	case MYSQL_TYPE_DATE:
@@ -183,9 +183,15 @@ type BgKey struct{}
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}
 
-type AutoIncrCaches struct {
+/*
+The autoIncrCacheManager is initialized with a starting CN.
+The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.
+The logic to manipulate the cache is in auto_incr.go
+*/
+type AutoIncrCacheManager struct {
 	Mu             *sync.Mutex
 	AutoIncrCaches map[string]AutoIncrCache
+	MaxSize        uint64
 }
 
 type AutoIncrCache struct {

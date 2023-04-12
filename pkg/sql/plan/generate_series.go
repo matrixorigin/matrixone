@@ -20,7 +20,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+var (
+	GSColDefs = [3][]*plan.ColDef{}
+)
+
+func init() {
+	retTyp := types.T_int64.ToType()
+	GSColDefs[0] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
+	retTyp = types.T_datetime.ToType()
+	GSColDefs[1] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
+	retTyp = types.T_varchar.ToType()
+	GSColDefs[2] = []*plan.ColDef{
+		{
+			Name: "result",
+			Typ:  makePlan2Type(&retTyp),
+		},
+	}
+}
+
 func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) int32 {
+	var retsIdx int
+	if types.IsInteger(types.T(exprs[0].Typ.Id)) {
+		retsIdx = 0
+	} else if types.IsDateRelate(types.T(exprs[0].Typ.Id)) {
+		retsIdx = 1
+	} else {
+		retsIdx = 2
+	}
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -30,14 +66,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			TblFunc: &plan.TableFunction{
 				Name: "generate_series",
 			},
-			Cols: []*plan.ColDef{{
-				Name: "result",
-				Typ: &plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
-			},
-			},
+			Cols: GSColDefs[retsIdx],
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		Children:        []int32{childId},

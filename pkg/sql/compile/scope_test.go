@@ -83,10 +83,10 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		if c.scope.Instructions[len(c.scope.Instructions)-1].Op == vm.Output {
-			c.scope.Instructions = c.scope.Instructions[:len(c.scope.Instructions)-1]
+		if c.scope[0].Instructions[len(c.scope[0].Instructions)-1].Op == vm.Output {
+			c.scope[0].Instructions = c.scope[0].Instructions[:len(c.scope[0].Instructions)-1]
 		}
-		return c.scope
+		return c.scope[0]
 	}
 
 	result := make([]*Scope, len(testCases))

@@ -109,9 +109,10 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				}
 				cmds[i].Defs = append(cmds[i].Defs, c)
 			}
-			if len(cmds[i].Partition) > 0 {
+			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
 				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partition: cmds[i].Partition,
+					Partitioned: cmds[i].Partitioned,
+					Partition:   cmds[i].Partition,
 				})
 			}
 			pro := new(engine.PropertiesDef)
@@ -140,8 +141,8 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
 		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
-		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
-		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+		infos[i].MetaLoc = row[BLOCKMETA_METALOC_IDX].([]byte)
+		infos[i].DeltaLoc = row[BLOCKMETA_DELTALOC_IDX].([]byte)
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
 		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
 	}
@@ -158,6 +159,7 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 		cmds[i].AccountId = row[MO_DATABASE_ACCOUNT_ID_IDX].(uint32)
 		cmds[i].CreatedTime = row[MO_DATABASE_CREATED_TIME_IDX].(types.Timestamp)
 		cmds[i].CreateSql = string(row[MO_DATABASE_CREATESQL_IDX].([]byte))
+		cmds[i].DatTyp = string(row[MO_DATABASE_DAT_TYPE_IDX].([]byte))
 	}
 	return cmds
 }
@@ -183,7 +185,8 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
-		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
+		cmds[i].Partitioned = row[MO_TABLES_PARTITIONED_IDX].(int8)
+		cmds[i].Partition = string(row[MO_TABLES_PARTITION_INFO_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))

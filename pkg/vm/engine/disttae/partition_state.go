@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"net/http"
 	"runtime/trace"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,6 +47,10 @@ type PartitionState struct {
 	Blocks       *btree.BTreeG[BlockEntry]
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	Checkpoints  []string
+
+	// noData indicates whether to retain data batch
+	// for primary key dedup, reading data is not required
+	noData bool
 }
 
 // RowEntry represents a version of a row
@@ -120,11 +126,12 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 	return p.RowEntryID < than.RowEntryID
 }
 
-func NewPartitionState() *PartitionState {
+func NewPartitionState(noData bool) *PartitionState {
 	opts := btree.Options{
-		Degree: 64,
+		Degree: 4,
 	}
 	return &PartitionState{
+		noData:       noData,
 		Rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
 		Blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		PrimaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
@@ -139,6 +146,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
 		Checkpoints:  checkpoints,
+		noData:       p.noData,
 	}
 }
 
@@ -225,7 +233,7 @@ func (p *PartitionState) HandleRowsInsert(
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -240,8 +248,10 @@ func (p *PartitionState) HandleRowsInsert(
 				numInserted++
 			}
 
-			entry.Batch = batch
-			entry.Offset = int64(i)
+			if !p.noData {
+				entry.Batch = batch
+				entry.Offset = int64(i)
+			}
 			if i < len(primaryKeys) {
 				entry.PrimaryIndexBytes = primaryKeys[i]
 			}
@@ -284,7 +294,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	}
 
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -299,8 +309,10 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			}
 
 			entry.Deleted = true
-			entry.Batch = batch
-			entry.Offset = int64(i)
+			if !p.noData {
+				entry.Batch = batch
+				entry.Offset = int64(i)
+			}
 
 			p.Rows.Set(entry)
 		})
@@ -321,14 +333,14 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
 	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
 	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[6]))
+	metaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
+	deltaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[6]))
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
 			pivot := BlockEntry{
 				BlockInfo: catalog.BlockInfo{
@@ -341,10 +353,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				numInserted++
 			}
 
-			if location := metaLocationVector[i]; location != "" {
+			if location := objectio.Location(metaLocationVector[i]); !location.IsEmpty() {
 				entry.MetaLoc = location
 			}
-			if location := deltaLocationVector[i]; location != "" {
+			if location := objectio.Location(deltaLocationVector[i]); !location.IsEmpty() {
 				entry.DeltaLoc = location
 			}
 			if id := segmentIDVector[i]; common.IsEmptySegid(&id) {

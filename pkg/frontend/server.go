@@ -22,6 +22,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -65,9 +66,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
+func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *MOServer {
 	codec := NewSqlCodec()
-	rm, err := NewRoutineManager(ctx, pu)
+	rm, err := NewRoutineManager(ctx, pu, aicm)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}

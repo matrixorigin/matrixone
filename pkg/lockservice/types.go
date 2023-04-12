@@ -48,9 +48,13 @@ type LockStorage interface {
 	// Len returns number of the locks in the storage
 	Len() int
 	// Delete delete lock from the storage
-	Delete(key []byte)
+	Delete(key []byte) (Lock, bool)
 	// Seek returns the first KV Pair that is >= the given key
 	Seek(key []byte) ([]byte, Lock, bool)
+	// Prev returns the first KV Pair that is < the given key
+	Prev(key []byte) ([]byte, Lock, bool)
+	// Range range in [start, end)
+	Range(start []byte, end []byte, fn func([]byte, Lock) bool)
 	// Iter iter all values
 	Iter(func([]byte, Lock) bool)
 	// Clear clear the lock

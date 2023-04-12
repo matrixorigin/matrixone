@@ -284,3 +284,9 @@ null
 10:14:08
 00:57:09
 11:59:42
+select cast('02 10:11:12' as time);
+cast(02 10:11:12 as time(26))
+58:11:12
+select cast('255 10:11:12' as time);
+cast(255 10:11:12 as time(26))
+6130:11:12

@@ -30,19 +30,19 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TxnCompilerContext struct {
 	dbName               string
-	QryTyp               QueryType
 	txnHandler           *TxnHandler
 	ses                  *Session
 	proc                 *process.Process
 	buildAlterView       bool
 	dbOfView, nameOfView string
+	sub                  *plan.SubscriptionMeta
 	mu                   sync.Mutex
 }
 
@@ -55,7 +55,7 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
-	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+	return &TxnCompilerContext{txnHandler: txn, dbName: db}
 }
 
 func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -70,12 +70,6 @@ func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
-}
-
-func (tcc *TxnCompilerContext) GetQueryType() QueryType {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.QryTyp
 }
 
 func (tcc *TxnCompilerContext) SetSession(ses *Session) {
@@ -100,12 +94,6 @@ func (tcc *TxnCompilerContext) GetUserName() string {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.ses.GetUserName()
-}
-
-func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
@@ -151,7 +139,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 }
 
 func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false)
 	if err != nil {
 		return 0, err
 	}
@@ -160,11 +148,12 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 		return 0, err
 	}
 	ses := tcc.GetSession()
-	database, err := tcc.GetTxnHandler().GetStorage().Database(ses.GetRequestContext(), dbName, txn)
+	ctx := ses.GetRequestContext()
+	database, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
 	if err != nil {
 		return 0, err
 	}
-	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ses.GetRequestContext()), 10, 64)
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
 		return 0, moerr.NewInternalError(ses.GetRequestContext(), "The databaseid of '%s' is not a valid number", dbName)
 	}
@@ -172,8 +161,8 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 }
 
 // getRelation returns the context (maybe updated) and the relation
-func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (context.Context, engine.Relation, error) {
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub *plan.SubscriptionMeta) (context.Context, engine.Relation, error) {
+	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -186,6 +175,10 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		if account != nil && account.GetTenantID() != sysAccountID {
 			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
 		}
+	}
+	if sub != nil {
+		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
+		dbName = sub.DbName
 	}
 
 	txn, err := tcc.GetTxnHandler().GetTxn()
@@ -235,14 +228,22 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 	return table, err
 }
 
-func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
+func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool) (string, *plan.SubscriptionMeta, error) {
 	if len(dbName) == 0 {
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", moerr.NewNoDB(tcc.GetContext())
+		return "", nil, moerr.NewNoDB(tcc.GetContext())
 	}
-	return dbName, nil
+	var sub *plan.SubscriptionMeta
+	var err error
+	if checkSub && !util.DbIsSystemDb(dbName) {
+		sub, err = tcc.GetSubscriptionMeta(dbName)
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	return dbName, sub, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -255,19 +256,19 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
-	return tcc.getTableDef(txnCtx, table, dbName, tableName)
+	return tcc.getTableDef(txnCtx, table, dbName, tableName, nil)
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil, nil
 	}
-	ctx, table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return nil, nil
 	}
-	return tcc.getTableDef(ctx, table, dbName, tableName)
+	return tcc.getTableDef(ctx, table, dbName, tableName, sub)
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (string, error) {
@@ -375,7 +376,7 @@ handleFailed:
 	return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 }
 
-func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string, sub *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
 	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -387,13 +388,20 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
-	var CompositePkey *plan2.ColDef = nil
 	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			col := &plan2.ColDef{
@@ -415,7 +423,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			}
 			// Is it a composite primary key
 			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				CompositePkey = col
 				continue
 			}
 			if attr.Attr.ClusterBy {
@@ -464,12 +471,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Value: commnetDef.Comment,
 			})
 		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			p := &plan2.PartitionByDef{}
-			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-			if err != nil {
-				return nil, nil
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, nil
+				}
+				partitionInfo = p
 			}
-			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
@@ -482,49 +491,38 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		})
 	}
 
-	if tcc.GetQueryType() != TXN_DEFAULT {
-		hideKeys, err := table.GetHideKeys(ctx)
-		if err != nil {
-			return nil, nil
-		}
-		hideKey := hideKeys[0]
-		cols = append(cols, &plan2.ColDef{
-			Name: hideKey.Name,
-			Typ: &plan2.Type{
-				Id:    int32(hideKey.Type.Oid),
-				Width: hideKey.Type.Width,
-				Scale: hideKey.Type.Scale,
-			},
-			Primary: hideKey.Primary,
-		})
+	rowIdCol := plan2.MakeRowIdColDef()
+	cols = append(cols, rowIdCol)
+	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	}
+	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
+		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
 	}
 
 	//convert
 	obj := &plan2.ObjectRef{
-		SchemaName: dbName,
-		ObjName:    tableName,
-	}
-	originCols := make([]*plan2.ColDef, len(cols))
-	for i, col := range cols {
-		originCols[i] = plan2.DeepCopyColDef(col)
+		SchemaName:       dbName,
+		ObjName:          tableName,
+		SubscriptionName: subscriptionName,
+		PubAccountId:     pubAccountId,
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:         tableId,
-		Name:          tableName,
-		Cols:          cols,
-		Defs:          defs,
-		TableType:     TableType,
-		Createsql:     Createsql,
-		Pkey:          primarykey,
-		CompositePkey: CompositePkey,
-		ViewSql:       viewSql,
-		Partition:     partitionInfo,
-		Fkeys:         foreignKeys,
-		RefChildTbls:  refChildTbls,
-		ClusterBy:     clusterByDef,
-		OriginCols:    originCols,
-		Indexes:       indexes,
+		TblId:     tableId,
+		Name:      tableName,
+		Cols:      cols,
+		Defs:      defs,
+		TableType: TableType,
+		Createsql: Createsql,
+		Pkey:      primarykey,
+		//CompositePkey: CompositePkey,
+		ViewSql:      viewSql,
+		Partition:    partitionInfo,
+		Fkeys:        foreignKeys,
+		RefChildTbls: refChildTbls,
+		ClusterBy:    clusterByDef,
+		Indexes:      indexes,
 	}
 	return obj, tableDef
 }
@@ -611,11 +609,11 @@ handleFailed:
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil
 	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName)
+	ctx, relation, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return nil
 	}
@@ -643,46 +641,25 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName)
-	if err != nil {
-		return nil
-	}
-
-	hideKeys, err := relation.GetHideKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(hideKeys) == 0 {
-		return nil
-	}
-	hideKey := hideKeys[0]
-
-	hideDef := &plan2.ColDef{
-		Name: hideKey.Name,
-		Typ: &plan2.Type{
-			Id:    int32(hideKey.Type.Oid),
-			Width: hideKey.Type.Width,
-			Scale: hideKey.Type.Scale,
-		},
-		Primary: hideKey.Primary,
-	}
-	return hideDef
-}
-
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
 
 	dbName := obj.GetSchemaName()
-	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	checkSub := true
+	if obj.PubAccountId != -1 {
+		checkSub = false
+	}
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
 	if err != nil {
 		return
 	}
+	if !checkSub {
+		sub = &plan.SubscriptionMeta{
+			AccountId: obj.PubAccountId,
+			DbName:    dbName,
+		}
+	}
 	tableName := obj.GetObjName()
-	ctx, table, err := tcc.getRelation(dbName, tableName)
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return
 	}
@@ -741,4 +718,36 @@ func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.proc = proc
+}
+
+func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, err
+	}
+	sub, err := getSubscriptionMeta(tcc.GetContext(), dbName, tcc.GetSession(), txn)
+	if err != nil {
+		return nil, err
+	}
+	return sub, nil
+}
+
+func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
+	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName)
+	return err
+}
+
+func (tcc *TxnCompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.sub = meta
+}
+func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.sub
+}
+
+func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
+	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
 }

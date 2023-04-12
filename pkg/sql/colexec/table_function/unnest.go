@@ -170,8 +170,8 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
-	for i := range arg.Rets {
-		rbat.Vecs[i] = vector.NewVec(dupType(arg.Rets[i].Typ))
+	for i := range arg.retSchema {
+		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
 	}
 
 	if jsonVec.IsConst() {

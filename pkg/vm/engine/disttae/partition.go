@@ -28,7 +28,7 @@ func NewPartition() *Partition {
 	ret := &Partition{
 		lock: lock,
 	}
-	ret.state.Store(NewPartitionState())
+	ret.state.Store(NewPartitionState(false))
 	return ret
 }
 

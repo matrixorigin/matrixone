@@ -16,7 +16,6 @@ package model
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -30,12 +29,10 @@ type ColumnView struct {
 	LogIndexes []*wal.Index
 }
 
-func NewColumnView(ts types.TS, colIdx int) *ColumnView {
+func NewColumnView(colIdx int) *ColumnView {
 	return &ColumnView{
-		BaseView: &BaseView{
-			Ts: ts,
-		},
-		ColIdx: colIdx,
+		BaseView: &BaseView{},
+		ColIdx:   colIdx,
 	}
 }
 

@@ -58,27 +58,138 @@ var _ partitionBuilder = &keyPartitionBuilder{}
 var _ partitionBuilder = &rangePartitionBuilder{}
 var _ partitionBuilder = &listPartitionBuilder{}
 
-// buildPartitionColumns COLUMNS partitioning enables the use of multiple columns in partitioning keys
-func buildPartitionColumns(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
+// getValidPartitionCount checks the subpartition and adjust the number of the partition
+func getValidPartitionCount(ctx context.Context, needPartitionDefs bool, partitionSyntaxDef *tree.PartitionOption) (uint64, error) {
+	var err error
+	//step 1 : reject subpartition
+	if partitionSyntaxDef.SubPartBy != nil {
+		return 0, moerr.NewInvalidInput(ctx, "subpartition is unsupported")
+	}
+
+	if needPartitionDefs && len(partitionSyntaxDef.Partitions) == 0 {
+		if _, ok := partitionSyntaxDef.PartBy.PType.(*tree.ListType); ok {
+			return 0, moerr.NewInvalidInput(ctx, "For LIST partitions each partition must be defined")
+		} else {
+			return 0, moerr.NewInvalidInput(ctx, "each partition must be defined")
+		}
+	}
+
+	//step 2: verify the partition number [1,1024]
+	partitionCount := partitionSyntaxDef.PartBy.Num
+	/*
+		"partitionCount = 0" only occurs when the PARTITIONS clause is missed.
+	*/
+	if partitionCount <= 0 {
+		if len(partitionSyntaxDef.Partitions) == 0 {
+			//if there is no partition definition, the default number for the partitionCount is 1.
+			partitionCount = 1
+		} else {
+			//if there are at lease one partition definitions, the default number for the partitionsNums
+			//is designated as the number of the partition definitions.
+			partitionCount = uint64(len(partitionSyntaxDef.Partitions))
+		}
+	} else if len(partitionSyntaxDef.Partitions) != 0 && partitionCount != uint64(len(partitionSyntaxDef.Partitions)) {
+		//if partition definitions exists in the syntax, but the count of it is different from
+		//the one in PARTITIONS clause, it is wrong.
+		return 0, moerr.NewInvalidInput(ctx, "Wrong number of partitions defined")
+	}
+	// check partition number
+	if err = checkPartitionCount(ctx, nil, int(partitionCount)); err != nil {
+		return 0, err
+	}
+	return partitionCount, err
+}
+
+// buildPartitionColumns enables the use of multiple columns in partitioning keys
+func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
+	var err error
 	columnsExpr := make([]*plan.Expr, len(columnList))
 	partitionColumns := make([]string, len(columnList))
 
 	// partition COLUMNS does not accept expressions, only names of columns.
 	for i, column := range columnList {
-		colExpr, err := partitionBinder.BindColRef(column, 0, true)
+		columnsExpr[i], err = partitionBinder.BindColRef(column, 0, true)
 		if err != nil {
-			return moerr.NewParseError(partitionBinder.GetContext(), "build partition columns")
+			return err
 		}
-		columnsExpr[i] = colExpr
+		// The permitted data types are shown in the following list:
+		// All integer types
+		// DATE and DATETIME
+		// CHAR, VARCHAR, BINARY, and VARBINARY
+		// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
+		t := types.T(columnsExpr[i].Typ.Id)
+		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
+			return moerr.NewSyntaxError(ctx,
+				"column %s type %s is not allowed in partition clause", tree.String(column, dialect.MYSQL), t.String())
+		}
 		partitionColumns[i] = tree.String(column, dialect.MYSQL)
-	}
-	// check whether the columns partitioning type is legal
-	if err := checkColumnsPartitionType(partitionBinder, partitionColumns, columnsExpr); err != nil {
-		return err
 	}
 	partitionDef.PartitionColumns = &plan.PartitionColumns{
 		Columns:          columnsExpr,
 		PartitionColumns: partitionColumns,
+	}
+	return nil
+}
+
+// buildPartitionDefs constructs the partitions
+func buildPartitionDefs(ctx context.Context,
+	partitionDef *plan.PartitionByDef, syntaxDefs []*tree.Partition) error {
+	if len(syntaxDefs) != 0 && len(syntaxDefs) != int(partitionDef.PartitionNum) {
+		return moerr.NewInvalidInput(ctx, "Wrong number of partitions defined")
+	}
+	dedup := make(map[string]bool)
+	if len(syntaxDefs) == 0 {
+		//complement partition defs missing in syntax
+		for i := 0; i < int(partitionDef.PartitionNum); i++ {
+			name := fmt.Sprintf("p%d", i)
+			if _, ok := dedup[name]; ok {
+				return moerr.NewInvalidInput(ctx, "duplicate partition name %s", name)
+			}
+			dedup[name] = true
+			pi := &plan.PartitionItem{
+				PartitionName:   name,
+				OrdinalPosition: uint32(i + 1),
+			}
+			partitionDef.Partitions = append(partitionDef.Partitions, pi)
+		}
+	} else {
+		//process defs in syntax
+		for i := 0; i < len(syntaxDefs); i++ {
+			name := string(syntaxDefs[i].Name)
+			if _, ok := dedup[name]; ok {
+				return moerr.NewInvalidInput(ctx, "duplicate partition name %s", name)
+			}
+			dedup[name] = true
+
+			//get COMMENT option only
+			comment := ""
+			for _, option := range syntaxDefs[i].Options {
+				if commentOpt, ok := option.(*tree.TableOptionComment); ok {
+					comment = commentOpt.Comment
+				}
+			}
+
+			pi := &plan.PartitionItem{
+				PartitionName:   name,
+				OrdinalPosition: uint32(i + 1),
+				Comment:         comment,
+			}
+			partitionDef.Partitions = append(partitionDef.Partitions, pi)
+		}
+	}
+
+	return nil
+}
+
+func checkPartitionIntegrity(ctx context.Context, partitionBinder *PartitionBinder, tableDef *TableDef, partitionDef *plan.PartitionByDef) error {
+	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {
+		return err
+	}
+	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
+		return err
+	}
+	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
+		return err
 	}
 	return nil
 }
@@ -350,24 +461,9 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 	return caseWhenExpr, nil
 }
 
-// The permitted data types are shown in the following list:
-// All integer types
-// DATE and DATETIME
-// CHAR, VARCHAR, BINARY, and VARBINARY
-// See https://dev.mysql.com/doc/mysql-partitioning-excerpt/5.7/en/partitioning-columns.html
-func checkColumnsPartitionType(partitionBinder *PartitionBinder, columnNames []string, columnPlanExprs []*plan.Expr) error {
-	for i, planexpr := range columnPlanExprs {
-		t := types.T(planexpr.Typ.Id)
-		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
-			return moerr.NewSyntaxError(partitionBinder.GetContext(), "type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
-		}
-	}
-	return nil
-}
-
 // check partition expression type (const?, integer?)
 func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef, partitionDef *plan.PartitionByDef) error {
-	if partitionDef.PartitionExpr != nil {
+	if partitionDef.PartitionExpr != nil && partitionDef.PartitionExpr.Expr != nil {
 		expr := partitionDef.PartitionExpr.Expr
 		// expr must return a constant integer value
 		//!!!NOTE!!!
@@ -406,8 +502,10 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		if dup, dupName := stringSliceToMap(partitionDef.PartitionColumns.PartitionColumns, partitionKeys); dup {
 			return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
 		}
-	} else {
+	} else if partitionDef.PartitionExpr.Expr != nil {
 		extractColFromExpr(nameByColRef, partitionDef.PartitionExpr.Expr, partitionKeys)
+	} else {
+		return moerr.NewInvalidInput(ctx, "both COLUMNS and EXPR in PARTITION BY are invalid")
 	}
 
 	//do nothing
@@ -415,9 +513,7 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		return nil
 	}
 
-	hasPrimaryKey := false
 	if tableDef.Pkey != nil {
-		hasPrimaryKey = true
 		pKeys := make(map[string]int)
 		if dup, dupName := stringSliceToMap(tableDef.Pkey.Names, pKeys); dup {
 			return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
@@ -427,11 +523,9 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		}
 	}
 
-	hasUniqueKey := false
 	if tableDef.Indexes != nil {
 		for _, indexDef := range tableDef.Indexes {
 			if indexDef.Unique {
-				hasUniqueKey = true
 				uniqueKeys := make(map[string]int)
 				if dup, dupName := stringSliceToMap(indexDef.Parts, uniqueKeys); dup {
 					return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
@@ -440,12 +534,6 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 					return moerr.NewInvalidInput(ctx, "partition key is not part of unique key")
 				}
 			}
-		}
-	}
-
-	if partitionDef.Type == plan.PartitionType_KEY {
-		if partitionDef.PartitionColumns != nil && len(partitionDef.PartitionColumns.Columns) == 0 && !hasUniqueKey && !hasPrimaryKey {
-			return moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
 		}
 	}
 

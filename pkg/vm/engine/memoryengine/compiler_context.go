@@ -16,6 +16,8 @@ package memoryengine
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 type CompilerContext struct {
@@ -32,6 +33,26 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	//TODO implement me
+	return nil
 }
 
 func (e *Engine) NewCompilerContext(
@@ -63,6 +84,10 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 
 func (*CompilerContext) GetStatsCache() *plan.StatsCache {
 	return nil
+}
+
+func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return nil, nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
@@ -98,19 +123,6 @@ func (c *CompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 
 func (c *CompilerContext) DefaultDatabase() string {
 	return c.defaultDB
-}
-
-func (c *CompilerContext) GetHideKeyDef(dbName string, tableName string) *plan.ColDef {
-	attrs, err := c.getTableAttrs(dbName, tableName)
-	if err != nil {
-		panic(err)
-	}
-	for i, attr := range attrs {
-		if attr.IsHidden {
-			return engineAttrToPlanColDef(i, attr)
-		}
-	}
-	return nil
 }
 
 func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (defs []*plan.ColDef) {

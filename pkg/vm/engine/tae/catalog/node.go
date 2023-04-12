@@ -19,20 +19,20 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type nodeList[T any] struct {
 	common.SSLLNode
 	getter       func(uint64) *common.GenericDLNode[T]
-	visibilityFn func(*common.GenericDLNode[T], types.TS) (bool, bool)
+	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool)
 	rwlocker     *sync.RWMutex
 	name         string
 }
 
 func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
-	visibilityFn func(*common.GenericDLNode[T], types.TS) (bool, bool),
+	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool),
 	rwlocker *sync.RWMutex,
 	name string) *nodeList[T] {
 	return &nodeList[T]{
@@ -134,11 +134,11 @@ func (n *nodeList[T]) GetNode() *common.GenericDLNode[T] {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList[T]) TxnGetNodeLocked(ts types.TS) (
+func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader) (
 	dn *common.GenericDLNode[T], err error) {
 	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
-		visible, dropped := n.visibilityFn(dlNode, ts)
+		visible, dropped := n.visibilityFn(dlNode, txn)
 		if !visible {
 			return true
 		}

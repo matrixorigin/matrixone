@@ -76,6 +76,7 @@ type Block interface {
 	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int) (*model.BlockView, error)
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int) (*model.ColumnView, error)
+	Prefetch(idxes []uint16) error
 	GetMeta() any
 	GetBufMgr() base.INodeManager
 
@@ -92,7 +93,7 @@ type Block interface {
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
-	//	metaLoc string, rowmask *roaring.Bitmap, precommit bool) error
+	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)

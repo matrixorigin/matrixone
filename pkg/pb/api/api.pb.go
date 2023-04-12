@@ -424,9 +424,6 @@ func (m *SyncLogTailResp) GetCommands() []*Entry {
 
 // How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
 type PrecommitWriteCmd struct {
-	//uint32 user_id = 1;
-	//uint32 role_id = 2;
-	//uint32 account_id = 3;
 	EntryList            []*Entry `protobuf:"bytes,1,rep,name=entry_list,json=entryList,proto3" json:"entry_list,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

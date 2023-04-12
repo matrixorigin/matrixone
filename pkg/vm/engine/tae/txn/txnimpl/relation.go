@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -85,7 +86,7 @@ func (it *txnRelationIt) Next() {
 			entry.RUnlock()
 			continue
 		}
-		valid, err = entry.IsVisible(it.txnDB.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -166,8 +167,8 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 }
 
 func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []dataio.Index,
-	metaLocs []string) error {
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
@@ -242,7 +243,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 				return err
 			}
 		}
-		vec := containers.MakeVector(def.Type, def.Nullable())
+		vec := containers.MakeVector(def.Type)
 		vec.Append(colVal)
 		bat.AddVector(def.Name, vec)
 	}
@@ -268,11 +269,13 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = keys.ForeachShallow(func(key any, _ bool, _ int) (err error) {
-		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
-		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
-		return
-	}, nil)
+	err = containers.ForeachVectorWindow(
+		keys, 0, keys.Length(),
+		func(rid types.Rowid, _ bool, _ int) (err error) {
+			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
+			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
+			return
+		}, nil)
 	return
 }
 

@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"math"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -146,9 +148,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:          txn,
-		databaseName: name,
-		databaseId:   key.Id,
+		txn:               txn,
+		databaseName:      name,
+		databaseId:        key.Id,
+		databaseType:      key.Typ,
+		databaseCreateSql: key.CreateSql,
 	}, nil
 }
 
@@ -325,15 +329,28 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op,
 		e.fs,
 		nil,
+		nil,
 	)
+
+	id := common.NewSegmentid()
+	bytes := types.EncodeUuid(&id)
+
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      e,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		rowId:       [2]uint64{math.MaxUint64, 0},
+		op:       op,
+		proc:     proc,
+		engine:   e,
+		readOnly: true,
+		meta:     op.Txn(),
+		idGen:    e.idGen,
+		rowId: [6]uint32{
+			types.DecodeUint32(bytes[0:4]),
+			types.DecodeUint32(bytes[4:8]),
+			types.DecodeUint32(bytes[8:12]),
+			types.DecodeUint32(bytes[12:16]),
+			0,
+			0,
+		},
+		segId:       id,
 		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
@@ -343,7 +360,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
-		if err := e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+		if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
 		}
@@ -525,4 +542,20 @@ func (e *Engine) getDNServices() []DNStore {
 			return true
 		})
 	return values
+}
+
+func (e *Engine) cleanMemoryTable() {
+	e.Lock()
+	e.partitions = make(map[[2]uint64]Partitions)
+	e.Unlock()
+}
+
+func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
+	e.Lock()
+	// XXX it's probably not a good way to do that.
+	// after we set it to empty, actually this part of memory was not immediately released.
+	// maybe a very old transaction still using that.
+	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
+	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

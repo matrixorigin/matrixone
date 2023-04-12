@@ -120,6 +120,8 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		txnOperator: txnOperator,
 		id:          resp.ID,
 		name:        resp.Name,
+		typ:         resp.DatTyp,
+		createSql:   resp.CreateSql,
 	}
 
 	return db, nil

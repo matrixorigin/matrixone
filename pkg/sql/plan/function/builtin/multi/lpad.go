@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,7 +25,7 @@ import (
 func Lpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVec, tgtLenVec, padVec := ivecs[0], ivecs[1], ivecs[2]
 
-	rtyp := types.T_varchar.ToType()
+	rtyp := *srcVec.GetType()
 	if srcVec.IsConstNull() || tgtLenVec.IsConstNull() || padVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, srcVec.Length(), proc.Mp()), nil
 	}

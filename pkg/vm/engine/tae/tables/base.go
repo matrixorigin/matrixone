@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -143,10 +143,11 @@ func (blk *baseBlock) GetFs() *objectio.ObjectFS    { return blk.fs }
 func (blk *baseBlock) GetID() *common.ID            { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
+	txn txnif.TxnReader,
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(view.Ts, false, rwlocker)
+	n, err := chain.CollectDeletesLocked(txn, false, rwlocker)
 	if err != nil {
 		return
 	}
@@ -166,27 +167,23 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		return
 	}
 	location := blk.meta.GetMetaLoc()
-	if location == "" {
+	if location.IsEmpty() {
 		return
 	}
 	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
 	if err != nil {
 		return
 	}
-	_, id, _, _, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return
-	}
 	bat, err := reader.LoadColumns(
 		context.Background(),
 		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
-		[]uint32{id},
+		location.ID(),
 		nil,
 	)
 	if err != nil {
 		return
 	}
-	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], false)
+	vec = containers.NewVectorWithSharedMemory(bat.Vecs[0])
 	return
 }
 
@@ -198,7 +195,6 @@ func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
 			bat.Close()
 		}
 	}()
-
 	var vec containers.Vector
 	for i, col := range schema.ColDefs {
 		vec, err = blk.LoadPersistedColumnData(i)
@@ -224,7 +220,7 @@ func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
-	if location == "" {
+	if location.IsEmpty() {
 		return
 	}
 	return LoadPersistedDeletes(
@@ -234,6 +230,7 @@ func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) 
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
+	txn txnif.TxnReader,
 	view *model.BaseView) (err error) {
 	deletes, err := blk.LoadPersistedDeletes()
 	if deletes == nil || err != nil {
@@ -245,7 +242,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 			continue
 		}
 		commitTS := deletes.Vecs[1].Get(i).(types.TS)
-		if commitTS.Greater(view.Ts) {
+		if commitTS.Greater(txn.GetStartTS()) {
 			continue
 		}
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
@@ -258,16 +255,27 @@ func (blk *baseBlock) FillPersistedDeletes(
 	return nil
 }
 
+func (blk *baseBlock) Prefetch(idxes []uint16) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		return nil
+	} else {
+		key := blk.meta.GetMetaLoc()
+		return blockio.Prefetch(idxes, []uint32{key.ID()}, blk.fs.Service, key)
+	}
+}
+
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	pnode *persistedNode,
-	ts types.TS,
+	txn txnif.TxnReader,
 	colIdxs []int,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	data, err := blk.LoadPersistedData()
 	if err != nil {
 		return nil, err
 	}
-	view = model.NewBlockView(ts)
+	view = model.NewBlockView()
 	for _, colIdx := range colIdxs {
 		view.SetData(colIdx, data.Vecs[colIdx])
 	}
@@ -282,13 +290,13 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
 		return
 	}
 
 	blk.RLock()
 	defer blk.RUnlock()
-	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	if view.BaseView.DeleteMask != nil {
 		for _, colIdx := range colIdxs {
 			vec := data.Vecs[colIdx]
@@ -301,10 +309,10 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 
 func (blk *baseBlock) ResolvePersistedColumnData(
 	pnode *persistedNode,
-	ts types.TS,
+	txn txnif.TxnReader,
 	colIdx int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(ts, colIdx)
+	view = model.NewColumnView(colIdx)
 	vec, err := blk.LoadPersistedColumnData(colIdx)
 	if err != nil {
 		return
@@ -321,13 +329,13 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
 		return
 	}
 
 	blk.RLock()
 	defer blk.RUnlock()
-	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	if view.BaseView.DeleteMask != nil {
 		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
 		vec.Close()
@@ -337,12 +345,13 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 
 func (blk *baseBlock) PersistedBatchDedup(
 	pnode *persistedNode,
-	ts types.TS,
+	txn txnif.TxnReader,
+	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	dedupClosure func(
 		containers.Vector,
-		types.TS,
+		txnif.TxnReader,
 		*roaring.Bitmap,
 		*catalog.ColDef,
 	) func(any, bool, int) error) (err error) {
@@ -356,7 +365,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	def := blk.meta.GetSchema().GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
 		pnode,
-		ts,
+		txn,
 		def.Idx,
 		false)
 	if err != nil {
@@ -370,23 +379,23 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), ts, view.DeleteMask, def)
+	dedupFn := dedupClosure(view.GetData(), txn, view.DeleteMask, def)
 	err = keys.ForeachShallow(dedupFn, sels)
 	return
 }
 
 func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
-	ts types.TS,
+	txn txnif.TxnReader,
 	row, col int,
 	skipMemory bool) (v any, err error) {
-	view := model.NewColumnView(ts, col)
-	if err = blk.FillPersistedDeletes(view.BaseView); err != nil {
+	view := model.NewColumnView(col)
+	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
 		return
 	}
 	if !skipMemory {
 		blk.RLock()
-		err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+		err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 		blk.RUnlock()
 		if err != nil {
 			return
@@ -396,7 +405,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, ts, col, true)
+	view2, err := blk.ResolvePersistedColumnData(pnode, txn, col, true)
 	if err != nil {
 		return
 	}
@@ -452,7 +461,7 @@ func (blk *baseBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes 
 }
 
 func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
-	view = model.NewBlockView(endTs)
+	view = model.NewBlockView()
 	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
@@ -546,14 +555,10 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 func (blk *baseBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
 	metaLoc := blk.meta.GetMetaLoc()
-	if metaLoc == "" {
+	if metaLoc.IsEmpty() {
 		return rows
 	}
-	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
-	if err != nil {
-		panic(err)
-	}
-	fileRows := uint64(meta.GetRows())
+	fileRows := uint64(metaLoc.Rows())
 	if rows > fileRows {
 		return rows
 	}

@@ -366,6 +366,8 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 		return newResultFunc[types.TS](v, mp)
 	case types.T_Rowid:
 		return newResultFunc[types.Rowid](v, mp)
+	case types.T_Blockid:
+		return newResultFunc[types.Blockid](v, mp)
 	case types.T_uuid:
 		return newResultFunc[types.Uuid](v, mp)
 	}

@@ -137,3 +137,11 @@ col1    col2    col3    col4
 23    22    55    2
 24    66    77    1
 25    99    88    1
+drop table indup;
+create table t1(a int primary key, b int, c int);
+insert into t1 values (1,1,1),(2,2,2);
+insert into t1 values (1,9,1),(11,8,2) on duplicate key update a=a+10, c=10;
+select * from t1 order by a;
+a    b    c
+2    2    2
+21    1    10

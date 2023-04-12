@@ -128,3 +128,65 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 	}
 }
+
+func ExtractFromTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	left, right := vectors[0], vectors[1]
+	rtyp := types.T_varchar.ToType()
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustFixedCol[types.Time](right)
+	switch {
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
+	case left.IsConst() && right.IsConst():
+		var rvals [1]string
+		unit := leftValues[0]
+		_, err := extract.ExtractFromTime(unit, rightValues, rvals[:])
+		if err != nil {
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
+		}
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), left.Length(), proc.Mp()), nil
+	case left.IsConst() && !right.IsConst():
+		rvals := make([]string, len(rightValues))
+		unit := leftValues[0]
+		rvals, err := extract.ExtractFromTime(unit, rightValues, rvals)
+		if err != nil {
+			return nil, err
+		}
+		rvec := vector.NewVec(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+		return rvec, nil
+	default:
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
+	}
+}
+
+func ExtractFromVarchar(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	left, right := vectors[0], vectors[1]
+	rtyp := types.T_varchar.ToType()
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
+	switch {
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
+	case left.IsConst() && right.IsConst():
+		var rvals [1]string
+		unit := leftValues[0]
+		_, err := extract.ExtractFromString(unit, rightValues, rvals[:], vectors[1].GetType().Scale)
+		if err != nil {
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
+		}
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), left.Length(), proc.Mp()), nil
+	case left.IsConst() && !right.IsConst():
+		rvals := make([]string, len(rightValues))
+		unit := leftValues[0]
+		rvals, err := extract.ExtractFromString(unit, rightValues, rvals, vectors[1].GetType().Scale)
+		if err != nil {
+			return nil, err
+		}
+		rvec := vector.NewVec(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+		return rvec, nil
+	default:
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
+	}
+}

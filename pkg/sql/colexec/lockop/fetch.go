@@ -15,12 +15,14 @@
 package lockop
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -482,11 +484,15 @@ func fetchDecimal128Rows(
 		return [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		16,
-		fn)
+		fn,
+		func(v1, v2 types.Decimal128) int {
+			return v1.Compare(v2)
+		},
+	)
 }
 
 func fetchUUIDRows(
@@ -506,7 +512,7 @@ func fetchUUIDRows(
 		return [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		16,
@@ -514,7 +520,11 @@ func fetchUUIDRows(
 			parker.Reset()
 			parker.EncodeStringType(v[:])
 			return parker.Bytes()
-		})
+		},
+		func(v1, v2 types.Uuid) int {
+			return bytes.Compare(v1[:], v2[:])
+		},
+	)
 }
 
 func fetchVarlenaRows(
@@ -543,9 +553,20 @@ func fetchVarlenaRows(
 	}
 	size := n * int(tp.Width)
 	if size > max {
+		v := data[0].GetByteSlice(area)
+		min, max := v, v
+		for i := 1; i < n; i++ {
+			v = data[i].GetByteSlice(area)
+			if bytes.Compare(v, min) < 0 {
+				min = v
+			}
+			if bytes.Compare(v, max) > 0 {
+				max = v
+			}
+		}
 		return [][]byte{
-				fn(data[0].GetByteSlice(area)),
-				fn(data[n-1].GetByteSlice(area))},
+				fn(min),
+				fn(max)},
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
@@ -555,11 +576,33 @@ func fetchVarlenaRows(
 	return rows, lock.Granularity_Row
 }
 
-func fetchFixedRows[T any](
+func fetchFixedRows[T constraints.Ordered](
 	vec *vector.Vector,
 	max int,
 	typeSize int,
 	fn func(v T) []byte) ([][]byte, lock.Granularity) {
+	return fetchFixedRowsWithCompare(
+		vec,
+		max,
+		typeSize,
+		fn,
+		func(v1, v2 T) int {
+			if v1 < v2 {
+				return -1
+			} else if v1 > v2 {
+				return 1
+			}
+			return 0
+		},
+	)
+}
+
+func fetchFixedRowsWithCompare[T any](
+	vec *vector.Vector,
+	max int,
+	typeSize int,
+	fn func(v T) []byte,
+	compare func(a, b T) int) ([][]byte, lock.Granularity) {
 	n := vec.Length()
 	values := vector.MustFixedCol[T](vec)
 	if n == 1 {
@@ -569,9 +612,18 @@ func fetchFixedRows[T any](
 	}
 	size := n * typeSize
 	if size > max {
+		min, max := values[0], values[0]
+		for _, v := range values[1:] {
+			if compare(v, min) < 0 {
+				min = v
+			}
+			if compare(v, max) > 0 {
+				max = v
+			}
+		}
 		return [][]byte{
-				fn(values[0]),
-				fn(values[n-1])},
+				fn(min),
+				fn(max)},
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)

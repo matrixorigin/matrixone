@@ -16,13 +16,11 @@ package model
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BaseView struct {
-	Ts         types.TS
 	DeleteMask *roaring.Bitmap
 }
 
@@ -32,12 +30,10 @@ type BlockView struct {
 	DeleteLogIndexes []*wal.Index
 }
 
-func NewBlockView(ts types.TS) *BlockView {
+func NewBlockView() *BlockView {
 	return &BlockView{
-		BaseView: &BaseView{
-			Ts: ts,
-		},
-		Columns: make(map[int]*ColumnView),
+		BaseView: &BaseView{},
+		Columns:  make(map[int]*ColumnView),
 	}
 }
 
@@ -59,7 +55,7 @@ func (view *BlockView) GetColumnData(i int) containers.Vector {
 func (view *BlockView) SetData(i int, data containers.Vector) {
 	col := view.Columns[i]
 	if col == nil {
-		col = NewColumnView(view.Ts, i)
+		col = NewColumnView(i)
 		view.Columns[i] = col
 	}
 	col.SetData(data)
@@ -68,7 +64,7 @@ func (view *BlockView) SetData(i int, data containers.Vector) {
 func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]any) {
 	col := view.Columns[i]
 	if col == nil {
-		col = NewColumnView(view.Ts, i)
+		col = NewColumnView(i)
 		view.Columns[i] = col
 	}
 	col.UpdateMask = mask
@@ -78,7 +74,7 @@ func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]a
 func (view *BlockView) SetLogIndexes(i int, indexes []*wal.Index) {
 	col := view.Columns[i]
 	if col == nil {
-		col = NewColumnView(view.Ts, i)
+		col = NewColumnView(i)
 		view.Columns[i] = col
 	}
 	col.LogIndexes = indexes

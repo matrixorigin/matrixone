@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -53,7 +54,7 @@ func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -88,7 +89,7 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -134,7 +135,7 @@ func (it *segmentIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
@@ -195,7 +196,7 @@ func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
 
-func (seg *txnSegment) CreateNonAppendableBlock(opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (seg *txnSegment) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID(), opts)
 }
 

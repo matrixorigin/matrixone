@@ -97,6 +97,14 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start, snapshot
 	return txn
 }
 
+func MockTxnReaderWithStartTS(startTS types.TS) *Txn {
+	return &Txn{
+		TxnCtx: &TxnCtx{
+			StartTS: startTS,
+		},
+	}
+}
+
 func NewPersistedTxn(
 	mgr *TxnManager,
 	ctx *TxnCtx,
@@ -251,7 +259,8 @@ func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
-	return txn.doCommit(false)
+	err = txn.doCommit(false)
+	return
 }
 
 // CommitInRecovery is called during recovery
@@ -391,11 +400,11 @@ func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
 	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
-func (txn *Txn) CreateDatabase(name, createSql string) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabase(name, createSql, datTyp string) (db handle.Database, err error) {
 	return
 }
 
-func (txn *Txn) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
 	return
 }
 

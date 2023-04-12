@@ -67,8 +67,10 @@ type DatabaseItem struct {
 	Ts        timestamp.Timestamp
 
 	// database value
-	Id    uint64
-	Rowid types.Rowid
+	Id        uint64
+	Rowid     types.Rowid
+	Typ       string
+	CreateSql string
 
 	// Mark if it is a delete
 	deleted bool
@@ -88,12 +90,13 @@ type TableItem struct {
 	Rowid    types.Rowid
 
 	// table def
-	Kind       string
-	ViewDef    string
-	Constraint []byte
-	Comment    string
-	Partition  string
-	CreateSql  string
+	Kind        string
+	ViewDef     string
+	Constraint  []byte
+	Comment     string
+	Partitioned int8
+	Partition   string
+	CreateSql   string
 
 	// primary index
 	PrimaryIdx int

@@ -105,6 +105,7 @@ type CreateDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
 	CreateSql  string
+	DatTyp     string
 	//Global unique, allocated by CN .
 	DatabaseId uint64
 }

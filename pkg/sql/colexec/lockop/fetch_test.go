@@ -43,7 +43,8 @@ func TestFetchBoolRows(t *testing.T) {
 }
 
 func TestFetchInt8Rows(t *testing.T) {
-	values := []int8{0, 1}
+	values := []int8{1, 0}
+	expectRangeValues := []int8{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_int8, 0, 0),
@@ -51,7 +52,7 @@ func TestFetchInt8Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]int8{math.MinInt8, math.MaxInt8},
 		func(packer *types.Packer, v int8) {
 			packer.EncodeInt8(v)
@@ -60,7 +61,8 @@ func TestFetchInt8Rows(t *testing.T) {
 }
 
 func TestFetchInt16Rows(t *testing.T) {
-	values := []int16{0, 1}
+	values := []int16{1, 0}
+	expectRangeValues := []int16{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_int16, 0, 0),
@@ -68,7 +70,7 @@ func TestFetchInt16Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]int16{math.MinInt16, math.MaxInt16},
 		func(packer *types.Packer, v int16) {
 			packer.EncodeInt16(v)
@@ -77,7 +79,8 @@ func TestFetchInt16Rows(t *testing.T) {
 }
 
 func TestFetchInt32Rows(t *testing.T) {
-	values := []int32{0, 1}
+	values := []int32{1, 0}
+	expectRangeValues := []int32{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_int32, 0, 0),
@@ -85,7 +88,7 @@ func TestFetchInt32Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]int32{math.MinInt32, math.MaxInt32},
 		func(packer *types.Packer, v int32) {
 			packer.EncodeInt32(v)
@@ -94,7 +97,8 @@ func TestFetchInt32Rows(t *testing.T) {
 }
 
 func TestFetchInt64Rows(t *testing.T) {
-	values := []int64{0, 1}
+	values := []int64{1, 0}
+	expectRangeValues := []int64{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_int64, 0, 0),
@@ -102,7 +106,7 @@ func TestFetchInt64Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]int64{math.MinInt64, math.MaxInt64},
 		func(packer *types.Packer, v int64) {
 			packer.EncodeInt64(v)
@@ -111,7 +115,8 @@ func TestFetchInt64Rows(t *testing.T) {
 }
 
 func TestFetchUint8Rows(t *testing.T) {
-	values := []uint8{0, 1}
+	values := []uint8{1, 0}
+	expectRangeValues := []uint8{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_uint8, 0, 0),
@@ -119,7 +124,7 @@ func TestFetchUint8Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]uint8{0, math.MaxUint8},
 		func(packer *types.Packer, v uint8) {
 			packer.EncodeUint8(v)
@@ -128,7 +133,8 @@ func TestFetchUint8Rows(t *testing.T) {
 }
 
 func TestFetchUint16Rows(t *testing.T) {
-	values := []uint16{0, 1}
+	values := []uint16{1, 0}
+	expectRangeValues := []uint16{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_uint16, 0, 0),
@@ -136,7 +142,7 @@ func TestFetchUint16Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]uint16{0, math.MaxUint16},
 		func(packer *types.Packer, v uint16) {
 			packer.EncodeUint16(v)
@@ -145,7 +151,8 @@ func TestFetchUint16Rows(t *testing.T) {
 }
 
 func TestFetchUint32Rows(t *testing.T) {
-	values := []uint32{0, 1}
+	values := []uint32{1, 0}
+	expectRangeValues := []uint32{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_uint32, 0, 0),
@@ -153,7 +160,7 @@ func TestFetchUint32Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]uint32{0, math.MaxUint32},
 		func(packer *types.Packer, v uint32) {
 			packer.EncodeUint32(v)
@@ -162,7 +169,8 @@ func TestFetchUint32Rows(t *testing.T) {
 }
 
 func TestFetchUint64Rows(t *testing.T) {
-	values := []uint64{0, 1}
+	values := []uint64{1, 0}
+	expectRangeValues := []uint64{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_uint64, 0, 0),
@@ -170,7 +178,7 @@ func TestFetchUint64Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]uint64{0, math.MaxUint64},
 		func(packer *types.Packer, v uint64) {
 			packer.EncodeUint64(v)
@@ -179,7 +187,8 @@ func TestFetchUint64Rows(t *testing.T) {
 }
 
 func TestFetchFloat32Rows(t *testing.T) {
-	values := []float32{0.0, 0.1}
+	values := []float32{0.1, 0.0}
+	expectRangeValues := []float32{0.0, 0.1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_float32, 0, 0),
@@ -187,7 +196,7 @@ func TestFetchFloat32Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
@@ -196,7 +205,8 @@ func TestFetchFloat32Rows(t *testing.T) {
 }
 
 func TestFetchFloat64Rows(t *testing.T) {
-	values := []float64{0.0, 0.1}
+	values := []float64{0.1, 0.0}
+	expectRangeValues := []float64{0.0, 0.1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_float64, 0, 0),
@@ -204,7 +214,7 @@ func TestFetchFloat64Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
@@ -213,7 +223,8 @@ func TestFetchFloat64Rows(t *testing.T) {
 }
 
 func TestFetchDateRows(t *testing.T) {
-	values := []types.Date{0, 1}
+	values := []types.Date{1, 0}
+	expectRangeValues := []types.Date{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_date, 0, 0),
@@ -221,7 +232,7 @@ func TestFetchDateRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Date{math.MinInt32, math.MaxInt32},
 		func(packer *types.Packer, v types.Date) {
 			packer.EncodeDate(v)
@@ -230,7 +241,8 @@ func TestFetchDateRows(t *testing.T) {
 }
 
 func TestFetchTimeRows(t *testing.T) {
-	values := []types.Time{0, 1}
+	values := []types.Time{1, 0}
+	expectRangeValues := []types.Time{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_time, 0, 0),
@@ -238,7 +250,7 @@ func TestFetchTimeRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Time{math.MinInt64, math.MaxInt64},
 		func(packer *types.Packer, v types.Time) {
 			packer.EncodeTime(v)
@@ -247,7 +259,8 @@ func TestFetchTimeRows(t *testing.T) {
 }
 
 func TestFetchDateTimeRows(t *testing.T) {
-	values := []types.Datetime{0, 1}
+	values := []types.Datetime{1, 0}
+	expectRangeValues := []types.Datetime{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_datetime, 0, 0),
@@ -255,7 +268,7 @@ func TestFetchDateTimeRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Datetime{math.MinInt64, math.MaxInt64},
 		func(packer *types.Packer, v types.Datetime) {
 			packer.EncodeDatetime(v)
@@ -264,7 +277,8 @@ func TestFetchDateTimeRows(t *testing.T) {
 }
 
 func TestFetchTimestampRows(t *testing.T) {
-	values := []types.Timestamp{0, 1}
+	values := []types.Timestamp{1, 0}
+	expectRangeValues := []types.Timestamp{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_timestamp, 0, 0),
@@ -272,7 +286,7 @@ func TestFetchTimestampRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Timestamp{math.MinInt64, math.MaxInt64},
 		func(packer *types.Packer, v types.Timestamp) {
 			packer.EncodeTimestamp(v)
@@ -281,7 +295,8 @@ func TestFetchTimestampRows(t *testing.T) {
 }
 
 func TestFetchDecimal64Rows(t *testing.T) {
-	values := []types.Decimal64{0, 1}
+	values := []types.Decimal64{1, 0}
+	expectRangeValues := []types.Decimal64{0, 1}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_decimal64, 0, 0),
@@ -289,7 +304,7 @@ func TestFetchDecimal64Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Decimal64{0, math.MaxUint64},
 		func(packer *types.Packer, v types.Decimal64) {
 			packer.EncodeDecimal64(v)
@@ -298,7 +313,8 @@ func TestFetchDecimal64Rows(t *testing.T) {
 }
 
 func TestFetchDecimal128Rows(t *testing.T) {
-	values := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
+	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}}
+	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_decimal128, 0, 0),
@@ -306,7 +322,7 @@ func TestFetchDecimal128Rows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: math.MaxUint64, B64_127: math.MaxUint64}},
 		func(packer *types.Packer, v types.Decimal128) {
 			packer.EncodeDecimal128(v)
@@ -315,7 +331,8 @@ func TestFetchDecimal128Rows(t *testing.T) {
 }
 
 func TestFetchUUIDRows(t *testing.T) {
-	values := []types.Uuid{[16]byte{}, [16]byte{1}}
+	values := []types.Uuid{[16]byte{1}, [16]byte{}}
+	expectRangeValues := []types.Uuid{[16]byte{}, [16]byte{1}}
 	runFetchRowsTest(
 		t,
 		types.New(types.T_uuid, 0, 0),
@@ -323,7 +340,7 @@ func TestFetchUUIDRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[]types.Uuid{minUUID, maxUUID},
 		func(packer *types.Packer, v types.Uuid) {
 			packer.EncodeStringType(v[:])
@@ -332,7 +349,8 @@ func TestFetchUUIDRows(t *testing.T) {
 }
 
 func TestFetchCharRows(t *testing.T) {
-	values := [][]byte{{0}, {1}}
+	values := [][]byte{{1}, {0}}
+	expectRangeValues := [][]byte{{0}, {1}}
 	runFetchBytesRowsTest(
 		t,
 		types.New(types.T_char, 2, 0),
@@ -340,7 +358,7 @@ func TestFetchCharRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)
@@ -349,7 +367,8 @@ func TestFetchCharRows(t *testing.T) {
 }
 
 func TestFetchVarcharRows(t *testing.T) {
-	values := [][]byte{{0}, {1}}
+	values := [][]byte{{1}, {0}}
+	expectRangeValues := [][]byte{{0}, {1}}
 	runFetchBytesRowsTest(
 		t,
 		types.New(types.T_varchar, 2, 0),
@@ -357,7 +376,7 @@ func TestFetchVarcharRows(t *testing.T) {
 		values,
 		lock.Granularity_Row,
 		values,
-		values,
+		expectRangeValues,
 		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)

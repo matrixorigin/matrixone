@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -140,11 +141,16 @@ func (n *node) GetColumnDataByIds([]int) (*model.BlockView, error) {
 }
 
 func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(n.table.store.txn.GetStartTS(), idx)
+	view = model.NewColumnView(idx)
 	vec, err := n.LoadPersistedColumnData(idx)
 	if err != nil {
 		return
 	}
 	view.SetData(vec)
 	return
+}
+
+func (n *node) Prefetch(idxes []uint16) error {
+	key := n.meta.GetMetaLoc()
+	return blockio.Prefetch(idxes, []uint32{key.ID()}, n.fs.Service, key)
 }

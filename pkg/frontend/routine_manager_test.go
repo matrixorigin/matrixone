@@ -23,6 +23,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +37,10 @@ func create_test_server() *MOServer {
 
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	return NewMOServer(moServerCtx, address, pu)
+
+	// A mock autoincrcache manager.
+	aicm := &defines.AutoIncrCacheManager{}
+	return NewMOServer(moServerCtx, address, pu, aicm)
 }
 
 func Test_Closed(t *testing.T) {

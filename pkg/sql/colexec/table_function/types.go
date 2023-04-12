@@ -21,11 +21,12 @@ import (
 )
 
 type Argument struct {
-	Rets   []*plan.ColDef
-	Args   []*plan.Expr
-	Attrs  []string
-	Params []byte
-	Name   string
+	Rets      []*plan.ColDef
+	Args      []*plan.Expr
+	Attrs     []string
+	Params    []byte
+	Name      string
+	retSchema []types.Type
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

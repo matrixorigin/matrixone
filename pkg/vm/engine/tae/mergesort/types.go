@@ -32,9 +32,10 @@ func boolLess(a, b bool) bool                   { return !a && b }
 func ltTypeLess[T Lter[T]](a, b T) bool         { return a.Lt(b) }
 
 // it seems that go has no const generic type, handle these types respectively
-func tsLess(a, b types.TS) bool       { return bytes.Compare(a[:], b[:]) < 0 }
-func rowidLess(a, b types.Rowid) bool { return bytes.Compare(a[:], b[:]) < 0 }
-func bytesLess(a, b []byte) bool      { return bytes.Compare(a, b) < 0 }
+func tsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
+func rowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
+func blockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
+func bytesLess(a, b []byte) bool          { return bytes.Compare(a, b) < 0 }
 
 const nullFirst = true
 

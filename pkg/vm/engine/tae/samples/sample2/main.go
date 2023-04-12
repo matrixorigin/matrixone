@@ -62,7 +62,7 @@ func main() {
 	batchRows := schema.BlockMaxRows * 1 / 2 * batchCnt
 	{
 		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.CreateDatabase(dbName, "")
+		db, _ := txn.CreateDatabase(dbName, "", "")
 		_, _ = db.CreateRelation(schema)
 		if err := txn.Commit(); err != nil {
 			panic(err)

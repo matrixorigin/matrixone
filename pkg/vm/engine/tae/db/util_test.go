@@ -57,12 +57,7 @@ func TestAOT2(t *testing.T) {
 	schema := catalog.MockSchemaAll(14, 3)
 	factory := func(_ *containers.Batch) *model.BatchBlock {
 		id := common.NextGlobalSeqNum()
-		return model.NewBatchBlock(
-			id,
-			schema.Attrs(),
-			schema.Types(),
-			schema.Nullables(),
-			containers.Options{})
+		return model.NewBatchBlock(id, schema.Attrs(), schema.Types(), containers.Options{})
 	}
 	aot := model.NewAOT(
 		10,

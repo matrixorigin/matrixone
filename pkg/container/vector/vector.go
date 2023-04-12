@@ -493,6 +493,8 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 		return NewConstFixed(v.typ, v.col.([]types.TS)[row], length, mp)
 	case types.T_Rowid:
 		return NewConstFixed(v.typ, v.col.([]types.Rowid)[row], length, mp)
+	case types.T_Blockid:
+		return NewConstFixed(v.typ, v.col.([]types.Blockid)[row], length, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
 	}
@@ -602,6 +604,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.TS](v, sels, negate)
 	case types.T_Rowid:
 		shrinkFixed[types.Rowid](v, sels, negate)
+	case types.T_Blockid:
+		shrinkFixed[types.Blockid](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -656,6 +660,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.TS](v, sels, mp)
 	case types.T_Rowid:
 		shuffleFixed[types.Rowid](v, sels, mp)
+	case types.T_Blockid:
+		shuffleFixed[types.Blockid](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -808,6 +814,11 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_Rowid:
 		return func(v, w *Vector, sel int64) error {
 			ws := MustFixedCol[types.Rowid](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_Blockid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Blockid](w)
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
@@ -1089,6 +1100,8 @@ func (v *Vector) String() string {
 		return vecToString[types.TS](v)
 	case types.T_Rowid:
 		return vecToString[types.Rowid](v)
+	case types.T_Blockid:
+		return vecToString[types.Blockid](v)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCol(v)
 		if len(col) == 1 {
@@ -1195,6 +1208,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.TS), false, mp)
 	case types.T_Rowid:
 		return appendOneFixed(vec, val.(types.Rowid), false, mp)
+	case types.T_Blockid:
+		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
@@ -1479,6 +1494,27 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 		}
 	}
 	return fmt.Sprintf("%v-%s", col, v.nsp)
+}
+
+// Window returns a "window" into the Vec.
+// It selects a half-open range (i.e.[start, end)).
+// The returned object is NOT allowed to be modified (
+// TODO: Nulls are deep copied.
+func (v *Vector) Window(start, end int) (*Vector, error) {
+	w := NewVec(v.typ)
+	if start == end {
+		return w, nil
+	}
+	w.nsp = nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
+	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
+	w.length = end - start
+	w.setupColFromData()
+	if v.typ.IsString() {
+		w.area = v.area
+	}
+	w.cantFreeData = true
+	w.cantFreeArea = true
+	return w, nil
 }
 
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.

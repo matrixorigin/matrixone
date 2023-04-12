@@ -218,7 +218,12 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partitioned
+		if err := vector.AppendFixed(bat.Vecs[idx], tbl.partitioned, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_PARTITION_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition_info
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tbl.partition), false, m); err != nil {
 			return nil, err
 		}

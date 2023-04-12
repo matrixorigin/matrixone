@@ -17,6 +17,8 @@ package cnservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -56,6 +58,10 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 	colexec.Srv = colexec.NewServer(hakeeper)
+
+	// start I/O pipeline
+	blockio.Start()
+
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,

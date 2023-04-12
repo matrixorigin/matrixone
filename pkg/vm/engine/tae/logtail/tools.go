@@ -110,17 +110,16 @@ func bytesToRowID(bs []byte) types.Rowid {
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
+	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType()))
+	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType()))
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
-	nullables := schema.AllNullables()
 	for i, attr := range attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
+		bat.AddVector(attr, containers.MakeVector(typs[i]))
 	}
 	return bat
 }

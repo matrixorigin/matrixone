@@ -16,11 +16,11 @@ package updates
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -160,49 +160,42 @@ func (c *UpdateCmd) GetType() int16 { return c.cmdType }
 
 func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	if _, err = w.Write(types.EncodeInt16(&c.cmdType)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dbid); err != nil {
+	if _, err = w.Write(types.EncodeUint64(&c.dbid)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.TableID); err != nil {
+	n += 14
+	if _, err = w.Write(common.EncodeID(c.dest)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, c.dest.BlockID); err != nil {
-		return
-	}
+	n += common.IDSize
 	switch c.GetType() {
 	case txnbase.CmdDelete:
 		sn, err = c.delete.WriteTo(w)
 	case txnbase.CmdAppend:
 		sn, err = c.append.WriteTo(w)
 	}
-	n += sn + 2 + 4
+	n += sn
 	return
 }
 
 func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+	// if _, err = r.Read(types.EncodeInt16(&c.cmdType)); err != nil {
+	// 	return
+	// }
+	if _, err = r.Read(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &c.dbid); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&c.dbid)); err != nil {
 		return
 	}
 	c.dest = &common.ID{}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.TableID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.SegmentID); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &c.dest.BlockID); err != nil {
+	if _, err = r.Read(common.EncodeID(c.dest)); err != nil {
 		return
 	}
 	switch c.GetType() {
@@ -211,7 +204,7 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	case txnbase.CmdAppend:
 		n, err = c.append.ReadFrom(r)
 	}
-	n += 4
+	n += 12 + common.IDSize
 	return
 }
 

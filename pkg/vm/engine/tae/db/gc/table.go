@@ -23,12 +23,11 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -124,22 +123,21 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
-		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		id := common.ID{
 			SegmentID: sid,
 			TableID:   tid,
 			BlockID:   blkID,
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
-		t.addBlock(id, name)
+		t.addBlock(id, metaLoc.Name().String())
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
-		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 
 		id := common.ID{
 			SegmentID: sid,
@@ -147,8 +145,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   blkID.GetBlockid(),
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
-		t.deleteBlock(id, name)
+		t.deleteBlock(id, metaLoc.Name().String())
 	}
 	_, _, _, del, delTxn = data.GetTblBatchs()
 	for i := 0; i < del.Length(); i++ {
@@ -249,17 +246,17 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 func (t *GCTable) collectData(files []string) []*containers.Batch {
 	bats := t.makeBatchWithGCTable()
 	for i, attr := range BlockSchemaAttr {
-		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
-		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], false))
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
+		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
 	}
 	for i, attr := range DropTableSchemaAttr {
-		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], false))
+		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i]))
 	}
 	for i, attr := range DropDBSchemaAtt {
-		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i], false))
+		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i]))
 	}
 	for i, attr := range DeleteFileSchemaAtt {
-		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i], false))
+		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i]))
 	}
 	for did, entry := range t.dbs {
 		if entry.drop {
@@ -301,27 +298,23 @@ func (t *GCTable) replayData(ctx context.Context,
 	attrs []string,
 	types []types.Type,
 	bats []*containers.Batch,
-	bs []objectio.BlockObject) error {
+	bs []objectio.BlockObject,
+	reader *blockio.BlockReader) error {
+	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
-		col, err := bs[typ].GetColumn(uint16(i))
-		if err != nil {
-			return err
-		}
-		colData, err := col.GetData(ctx, common.DefaultAllocator)
-		if err != nil {
-			return err
-		}
-		pkgVec := vector.NewVec(types[i])
-		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
-		copy(v, colData.Entries[0].Object.([]byte))
-		if err = pkgVec.UnmarshalBinary(v); err != nil {
-			return err
-		}
+		idxes[i] = uint16(i)
+	}
+	mobat, err := reader.LoadColumns(ctx, idxes, bs[typ].GetID(), common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	for i := range attrs {
+		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(types[i], false)
+			vec = containers.MakeVector(types[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, false)
+			vec = containers.NewVectorWithSharedMemory(pkgVec)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
@@ -370,6 +363,10 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	return blocks, err
 }
 
+func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
+	return blockio.PrefetchFile(fs.Service, size, name)
+}
+
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
 	reader, err := blockio.NewFileReader(fs.Service, name)
@@ -382,23 +379,23 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTable()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropTable, DropTableSchemaAttr, DropTableSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DropDB, DropDBSchemaAtt, DropDBSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs)
+	err = t.replayData(ctx, DeleteFile, DeleteFileSchemaAtt, DeleteFileSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
 	}

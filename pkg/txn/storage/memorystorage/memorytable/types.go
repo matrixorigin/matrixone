@@ -227,6 +227,8 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.(types.TS)
 	case types.T_Rowid:
 		_, ok = v.(types.Rowid)
+	case types.T_Blockid:
+		_, ok = v.(types.Blockid)
 	default:
 		panic(fmt.Sprintf("fixme: %v", typ))
 	}

@@ -81,7 +81,7 @@ func TestShowDatabaseNames(t *testing.T) {
 
 	{
 		txn, _ := tae.StartTxn(nil)
-		_, err := txn.CreateDatabase("db1", "")
+		_, err := txn.CreateDatabase("db1", "", "")
 		assert.Nil(t, err)
 		names := txn.DatabaseNames()
 		assert.Equal(t, 2, len(names))
@@ -93,7 +93,7 @@ func TestShowDatabaseNames(t *testing.T) {
 		names := txn.DatabaseNames()
 		assert.Equal(t, 2, len(names))
 		assert.Equal(t, "db1", names[1])
-		_, err := txn.CreateDatabase("db2", "")
+		_, err := txn.CreateDatabase("db2", "", "")
 		assert.Nil(t, err)
 		names = txn.DatabaseNames()
 		t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -105,14 +105,14 @@ func TestShowDatabaseNames(t *testing.T) {
 			names := txn.DatabaseNames()
 			assert.Equal(t, 2, len(names))
 			assert.Equal(t, "db1", names[1])
-			_, err := txn.CreateDatabase("db2", "")
+			_, err := txn.CreateDatabase("db2", "", "")
 			assert.NotNil(t, err)
 			err = txn.Rollback()
 			assert.Nil(t, err)
 		}
 		{
 			txn, _ := tae.StartTxn(nil)
-			_, err := txn.CreateDatabase("db3", "")
+			_, err := txn.CreateDatabase("db3", "", "")
 			assert.Nil(t, err)
 			names := txn.DatabaseNames()
 			assert.Equal(t, "db1", names[1])
@@ -150,7 +150,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13, 12)
-	db, err := txn.CreateDatabase("db", "")
+	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)

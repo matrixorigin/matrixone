@@ -28,49 +28,55 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newTxnTableForTest(
+	mp *mpool.MPool,
+) *txnTable {
+	engine := &Engine{
+		packerPool: fileservice.NewPool(
+			128,
+			func() *types.Packer {
+				return types.NewPacker(mp)
+			},
+			func(packer *types.Packer) {
+				packer.Reset()
+			},
+			func(packer *types.Packer) {
+				packer.FreeMem()
+			},
+		),
+	}
+	var dnStore DNStore
+	txn := &Transaction{
+		engine:   engine,
+		dnStores: []DNStore{dnStore},
+	}
+	db := &txnDatabase{
+		txn: txn,
+	}
+	table := &txnTable{
+		db:         db,
+		primaryIdx: 0,
+	}
+	return table
+}
+
+func makeBatchForTest(
+	mp *mpool.MPool,
+	ints ...int64,
+) *batch.Batch {
+	bat := batch.New(false, []string{"a"})
+	vec := vector.NewVec(types.T_int64.ToType())
+	for _, n := range ints {
+		vector.AppendFixed(vec, n, false, mp)
+	}
+	bat.SetVector(0, vec)
+	bat.SetZs(len(ints), mp)
+	return bat
+}
+
 func TestPrimaryKeyCheck(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-
-	newTable := func() *txnTable {
-		engine := &Engine{
-			packerPool: fileservice.NewPool(
-				128,
-				func() *types.Packer {
-					return types.NewPacker(mp)
-				},
-				func(packer *types.Packer) {
-					packer.Reset()
-				},
-				func(packer *types.Packer) {
-					packer.FreeMem()
-				},
-			),
-		}
-		var dnStore DNStore
-		txn := &Transaction{
-			engine:   engine,
-			dnStores: []DNStore{dnStore},
-		}
-		db := &txnDatabase{
-			txn: txn,
-		}
-		table := &txnTable{
-			db: db,
-		}
-		return table
-	}
-
-	makeBatch := func(ints ...int64) *batch.Batch {
-		bat := batch.New(false, []string{"a"})
-		vec := vector.NewVec(types.T_int64.ToType())
-		for _, n := range ints {
-			vector.AppendFixed(vec, n, false, mp)
-		}
-		bat.SetVector(0, vec)
-		bat.SetZs(len(ints), mp)
-		return bat
-	}
 
 	getRowIDsBatch := func(table *txnTable) *batch.Batch {
 		bat := batch.New(false, []string{catalog.Row_ID})
@@ -92,42 +98,42 @@ func TestPrimaryKeyCheck(t *testing.T) {
 		return bat
 	}
 
-	table := newTable()
+	table := newTxnTableForTest(mp)
 
 	// insert
 	err := table.Write(
 		ctx,
-		makeBatch(1),
+		makeBatchForTest(mp, 1),
 	)
 	assert.Nil(t, err)
 
 	// insert duplicated
 	err = table.Write(
 		ctx,
-		makeBatch(1),
+		makeBatchForTest(mp, 1),
 	)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
 	// insert no duplicated
 	err = table.Write(
 		ctx,
-		makeBatch(2, 3),
+		makeBatchForTest(mp, 2, 3),
 	)
 	assert.Nil(t, err)
 
 	// duplicated in same batch
 	err = table.Write(
 		ctx,
-		makeBatch(4, 4),
+		makeBatchForTest(mp, 4, 4),
 	)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
-	table = newTable()
+	table = newTxnTableForTest(mp)
 
 	// insert, delete then insert
 	err = table.Write(
 		ctx,
-		makeBatch(1),
+		makeBatchForTest(mp, 1),
 	)
 	assert.Nil(t, err)
 	err = table.Delete(
@@ -138,8 +144,21 @@ func TestPrimaryKeyCheck(t *testing.T) {
 	assert.Nil(t, err)
 	err = table.Write(
 		ctx,
-		makeBatch(5),
+		makeBatchForTest(mp, 5),
 	)
 	assert.Nil(t, err)
 
+}
+
+func BenchmarkTxnTableInsert(b *testing.B) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	table := newTxnTableForTest(mp)
+	for i, max := int64(0), int64(b.N); i < max; i++ {
+		err := table.Write(
+			ctx,
+			makeBatchForTest(mp, i),
+		)
+		assert.Nil(b, err)
+	}
 }

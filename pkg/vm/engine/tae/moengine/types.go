@@ -17,9 +17,10 @@ package moengine
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,7 +64,7 @@ type Relation interface {
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add non-appendable blocks on S3 into txn's workspace.
-	AddBlksWithMetaLoc(ctx context.Context, zm []dataio.Index, metaloc []string) error
+	AddBlksWithMetaLoc(ctx context.Context, zm []objectio.ZoneMap, metaloc []objectio.Location) error
 
 	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error
@@ -100,8 +101,8 @@ type Engine interface {
 	DropDatabase(ctx context.Context, databaseName string, txn Txn) error
 	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
-	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
-	CreateDatabaseWithID(ctx context.Context, databaseName, createSql string, id uint64, txn Txn) error
+	CreateDatabase(ctx context.Context, databaseName, datTyp string, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName, createSql, datTyp string, id uint64, txn Txn) error
 
 	// DatabaseNames returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
@@ -121,6 +122,7 @@ type TxnEngine interface {
 	engine.Engine
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
+	StartTxnWithNow(info []byte) (txn Txn, err error)
 	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
 	GetTxnByID(id []byte) (txn Txn, err error)
 	Close() error

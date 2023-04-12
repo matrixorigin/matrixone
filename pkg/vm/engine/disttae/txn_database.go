@@ -118,6 +118,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		relKind:      item.Kind,
 		viewdef:      item.ViewDef,
 		comment:      item.Comment,
+		partitioned:  item.Partitioned,
 		partition:    item.Partition,
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
@@ -215,6 +216,14 @@ func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
 	return strconv.FormatUint(db.databaseId, 10)
 }
 
+func (db *txnDatabase) GetCreateSql(ctx context.Context) string {
+	return db.databaseCreateSql
+}
+
+func (db *txnDatabase) IsSubscription(ctx context.Context) bool {
+	return db.databaseType == catalog.SystemDBTypeSubscription
+}
+
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	accountId, userId, roleId := getAccessInfo(ctx)
 	tableId, err := db.txn.allocateID(ctx)
@@ -241,6 +250,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 			case *engine.ViewDef:
 				tbl.viewdef = defVal.View
 			case *engine.PartitionDef:
+				tbl.partitioned = defVal.Partitioned
 				tbl.partition = defVal.Partition
 			case *engine.ConstraintDef:
 				tbl.constraint, err = defVal.MarshalBinary()

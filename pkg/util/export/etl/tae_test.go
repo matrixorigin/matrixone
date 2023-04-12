@@ -16,12 +16,14 @@ package etl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -94,7 +96,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// read index
 	for _, bbs := range r.bs {
 		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
+			r.idxs, bbs.GetExtent().Id(), mp)
 		require.Nil(t, err)
 	}
 
@@ -293,7 +295,7 @@ func TestTaeReadFile(t *testing.T) {
 	// read index
 	for _, bbs := range r.bs {
 		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
+			r.idxs, bbs.GetExtent().Id(), mp)
 		require.Nil(t, err)
 	}
 
@@ -352,7 +354,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 		// read index
 		for _, bbs := range r.bs {
 			_, err = r.blockReader.LoadZoneMaps(context.Background(),
-				r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
+				r.idxs, bbs.GetExtent().Id(), mp)
 			require.Nil(t, err)
 		}
 
@@ -385,4 +387,20 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 		t.Logf("cnt: %v", itemsCnt)
 	}
 	t.Logf("cnt: %v", itemsCnt)
+}
+
+func TestTAEWriter_writeEmpty(t *testing.T) {
+	cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
+	ctx := context.TODO()
+	tbl := motrace.SingleStatementTable
+	fs := testutil.NewFS()
+	filePath := cfg.LogsFilePathFactory("sys", tbl, time.Now())
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.Nil(t, err)
+	writer := NewTAEWriter(ctx, tbl, mp, filePath, fs)
+	_, err = writer.FlushAndClose()
+	require.NotNil(t, err)
+	var e *moerr.Error
+	require.True(t, errors.As(err, &e))
+	require.Equal(t, moerr.ErrEmptyRange, e.ErrorCode())
 }

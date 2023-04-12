@@ -48,11 +48,7 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	schema := block.meta.GetSchema()
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
-	impl.data = containers.BuildBatch(
-		schema.AllNames(),
-		schema.AllTypes(),
-		schema.AllNullables(),
-		opts)
+	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	impl.initIndexes(schema)
 	impl.OnZeroCB = impl.close
 	return impl

@@ -52,8 +52,10 @@ func TestClose(t *testing.T) {
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 	tables := map[uint64]lockTable{
-		1: newLocalLockTable(pb.LockTable{Table: 1}, nil, runtime.DefaultRuntime().Clock()),
-		2: newLocalLockTable(pb.LockTable{Table: 2}, nil, runtime.DefaultRuntime().Clock()),
+		1: newLocalLockTable(pb.LockTable{Table: 1}, nil,
+			nil, runtime.DefaultRuntime().Clock()),
+		2: newLocalLockTable(pb.LockTable{Table: 2}, nil,
+			nil, runtime.DefaultRuntime().Clock()),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()

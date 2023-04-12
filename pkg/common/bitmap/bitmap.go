@@ -265,7 +265,8 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 }
 
 func (n *Bitmap) IsSame(m *Bitmap) bool {
-	if n.len != m.len || len(m.data) != len(n.data) {
+	//if n.len != m.len ||
+	if len(m.data) != len(n.data) {
 		return false
 	}
 	for i := 0; i < len(n.data); i++ {

@@ -19,13 +19,7 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
-
-
--- @bvt:issue#7520
-show column_number from PROCESSLIST;
--- @bvt:issue
-
-
+show column_number from processlist;
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;
@@ -211,12 +205,7 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
-
-
--- @bvt:issue#7520
-show column_number from PROCESSLIST;
--- @bvt:issue
-
+show column_number from processlist;
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;

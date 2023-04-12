@@ -27,70 +27,81 @@ type listPartitionBuilder struct {
 
 // buildListPartitiion handle List Partitioning and List columns partitioning
 func (lpb *listPartitionBuilder) build(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
-	partitionOp := stmt.PartitionOption
-	partitionType := partitionOp.PartBy.PType.(*tree.ListType)
-
-	partitionNum := len(partitionOp.Partitions)
-	if partitionOp.PartBy.Num != 0 && uint64(partitionNum) != partitionOp.PartBy.Num {
-		return moerr.NewParseError(partitionBinder.GetContext(), "build list partition")
+	partitionSyntaxDef := stmt.PartitionOption
+	partitionCount, err := getValidPartitionCount(ctx, true, partitionSyntaxDef)
+	if err != nil {
+		return err
 	}
+	partitionType := partitionSyntaxDef.PartBy.PType.(*tree.ListType)
 
-	partitionInfo := &plan.PartitionByDef{
-		IsSubPartition: partitionOp.PartBy.IsSubPartition,
-		Partitions:     make([]*plan.PartitionItem, partitionNum),
-		PartitionNum:   uint64(partitionNum),
+	partitionDef := &plan.PartitionByDef{
+		IsSubPartition: partitionSyntaxDef.PartBy.IsSubPartition,
+		Partitions:     make([]*plan.PartitionItem, partitionCount),
+		PartitionNum:   partitionCount,
 	}
 
 	if len(partitionType.ColumnList) == 0 {
-		partitionInfo.Type = plan.PartitionType_LIST
+		//PARTITION BY LIST(expr)
+		partitionDef.Type = plan.PartitionType_LIST
 		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
 		if err != nil {
 			return err
 		}
-		partitionInfo.PartitionExpr = &plan.PartitionExpr{
+		partitionDef.PartitionExpr = &plan.PartitionExpr{
 			Expr:    planExpr,
 			ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
 		}
 	} else {
-		partitionInfo.Type = plan.PartitionType_LIST_COLUMNS
-		err := buildPartitionColumns(partitionBinder, partitionInfo, partitionType.ColumnList)
+		//PARTITION BY LIST COLUMNS(col1,col2,...)
+		partitionDef.Type = plan.PartitionType_LIST_COLUMNS
+		err = buildPartitionColumns(ctx, partitionBinder, partitionDef, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}
 	}
 
-	err := lpb.buildPartitionDefs(ctx, partitionBinder, partitionInfo, partitionOp.Partitions)
+	err = lpb.buildPartitionDefs(ctx, partitionBinder, partitionDef, partitionSyntaxDef.Partitions)
 	if err != nil {
 		return err
 	}
 
-	err = lpb.checkPartitionIntegrity(ctx, partitionBinder, tableDef, partitionInfo)
+	err = lpb.checkPartitionIntegrity(ctx, partitionBinder, tableDef, partitionDef)
 	if err != nil {
 		return err
 	}
 
-	err = lpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionInfo)
+	err = lpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionDef)
 	if err != nil {
 		return err
 	}
 
-	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
-	tableDef.Partition = partitionInfo
+	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
+	tableDef.Partition = partitionDef
 	return nil
 }
 
-func (lpb *listPartitionBuilder) buildPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, defs []*tree.Partition) (err error) {
-	for i, partition := range defs {
+func (lpb *listPartitionBuilder) buildPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, syntaxDefs []*tree.Partition) (err error) {
+	dedup := make(map[string]int)
+	for i, partition := range syntaxDefs {
+		name := string(partition.Name)
+		if _, ok := dedup[name]; ok {
+			return moerr.NewInvalidInput(ctx, "duplicate partition name %s", name)
+		}
+		dedup[name] = 0
 		partitionItem := &plan.PartitionItem{
-			PartitionName:   string(partition.Name),
+			PartitionName:   name,
 			OrdinalPosition: uint32(i + 1),
 		}
 
 		if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
+			valueList := valuesIn.ValueList
+			if len(valueList) == 0 {
+				return moerr.NewInvalidInput(ctx, "there is no value in value list")
+			}
 			binder := NewPartitionBinder(nil, nil)
-			inValues := make([]*plan.Expr, len(valuesIn.ValueList))
+			inValues := make([]*plan.Expr, len(valueList))
 
-			for j, value := range valuesIn.ValueList {
+			for j, value := range valueList {
 				tuple, err := binder.BindExpr(value, 0, false)
 				if err != nil {
 					return err
@@ -100,11 +111,11 @@ func (lpb *listPartitionBuilder) buildPartitionDefs(ctx context.Context, partiti
 			partitionItem.InValues = inValues
 			partitionItem.Description = tree.String(valuesIn, dialect.MYSQL)
 		} else {
-			return moerr.NewInternalError(partitionBinder.GetContext(), "LIST PARTITIONING can only use VALUES IN definition")
+			return moerr.NewInternalError(ctx, "LIST PARTITIONING can only use VALUES IN definition")
 		}
 		partitionDef.Partitions[i] = partitionItem
 	}
-	return buildListPartitionItem(partitionBinder, partitionDef, defs)
+	return buildListPartitionItem(partitionBinder, partitionDef, syntaxDefs)
 }
 
 func (lpb *listPartitionBuilder) checkPartitionIntegrity(ctx context.Context, partitionBinder *PartitionBinder, tableDef *TableDef, partitionDef *plan.PartitionByDef) error {

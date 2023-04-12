@@ -52,6 +52,11 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
+	if *withProxy {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -134,6 +139,30 @@ func startCNServiceCluster(
 			return err
 		}
 	}
+	return nil
+}
+
+func startProxyServiceCluster(
+	ctx context.Context,
+	files []string,
+	stopper *stopper.Stopper,
+	perfCounterSet *perfcounter.CounterSet,
+) error {
+	if len(files) == 0 {
+		return moerr.NewBadConfig(context.Background(), "Proxy service config not set")
+	}
+
+	var cfg *Config
+	for _, file := range files {
+		cfg = &Config{}
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return err
+		}
+		if err := startService(ctx, cfg, stopper, perfCounterSet); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

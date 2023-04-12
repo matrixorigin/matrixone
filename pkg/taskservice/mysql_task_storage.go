@@ -235,7 +235,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if err != nil {
 		return 0, err
 	}
-	exec, err := stmt.Exec(vals...)
+	exec, err := stmt.ExecContext(ctx, vals...)
 	if err != nil {
 		dup, err := removeDuplicateTasks(err, tasks)
 		if err != nil {
@@ -311,7 +311,12 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 				return err
 			}
 
-			exec, err := tx.ExecContext(ctx, update,
+			prepare, err := tx.PrepareContext(ctx, update)
+			if err != nil {
+				return err
+			}
+
+			exec, err := prepare.ExecContext(ctx,
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),

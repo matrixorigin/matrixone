@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
@@ -161,14 +160,6 @@ func IsNull(v any) bool {
 	return ok
 }
 
-// TAE's own hash ...  Sigh.
-func Hash(v any, typ Type) (uint64, error) {
-	data := EncodeValue(v, typ)
-	xx := xxhash.Sum64(data)
-	return xx, nil
-}
-
-// Why don't we just do
 // var v T
 func DefaultVal[T any]() T {
 	var v T
@@ -320,16 +311,6 @@ func MockColTypes(colCnt int) (ct []Type) {
 	return
 }
 
-func BuildRowid(a, b int64) (ret Rowid) {
-	copy(ret[0:8], EncodeInt64(&a))
-	copy(ret[0:8], EncodeInt64(&b))
-	return
-}
-
 func CompareTSTSAligned(a, b TS) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
-}
-
-func CompareRowidRowidAligned(a, b Rowid) int64 {
 	return int64(bytes.Compare(a[:], b[:]))
 }

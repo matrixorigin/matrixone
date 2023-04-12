@@ -23,39 +23,11 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
-
-const (
-	defaultUsername        = "dump"
-	defaultPassword        = "111"
-	defaultHost            = "127.0.0.1"
-	defaultPort            = 6001
-	defaultNetBufferLength = mpool.MB
-	minNetBufferLength     = mpool.KB * 16
-	maxNetBufferLength     = mpool.MB * 16
-	timeout                = 10 * time.Second
-)
-
-var (
-	conn *sql.DB
-)
-
-type Column struct {
-	Name string
-	Type string
-}
-
-type Table struct {
-	Name string
-	Kind string
-}
-
-type Tables []Table
 
 func (t *Tables) String() string {
 	return fmt.Sprint(*t)
@@ -74,6 +46,7 @@ func main() {
 		createDb                           string
 		createTable                        []string
 		err                                error
+		toCsv, localInfile                 bool
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -88,6 +61,9 @@ func main() {
 		}
 		if err == nil {
 			fmt.Fprintf(os.Stdout, "/* MODUMP SUCCESS, COST %v */\n", time.Since(dumpStart))
+			if toCsv {
+				fmt.Fprintf(os.Stdout, "/* !!!MUST KEEP FILE IN CURRENT DIRECTORY, OR YOU SHOULD CHANGE THE PATH IN LOAD DATA STMT!!! */ \n")
+			}
 		}
 	}()
 
@@ -99,6 +75,8 @@ func main() {
 	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
 	flag.Var(&tables, "tbl", "tableNameList, default all")
+	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
+	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
 	flag.Parse()
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
@@ -132,7 +110,7 @@ func main() {
 		return
 	}
 	if len(tables) == 0 { //dump all tables
-		createDb, err = getCreateDB(database)
+		createDb, err = getCreateDB(ctx, database)
 		if err != nil {
 			return
 		}
@@ -162,7 +140,7 @@ func main() {
 		case catalog.SystemOrdinaryRel:
 			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 			showCreateTable(create, false)
-			err = showInsert(database, tbl.Name, bufPool, netBufferLength)
+			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
 			if err != nil {
 				return
 			}
@@ -175,6 +153,7 @@ func main() {
 			showCreateTable(create, true)
 		default:
 			err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
+			return
 		}
 	}
 }
@@ -227,14 +206,15 @@ func getTables(db string, tables Tables) (Tables, error) {
 	return tables, nil
 }
 
-func getCreateDB(db string) (string, error) {
+func getCreateDB(ctx context.Context, db string) (string, error) {
 	r := conn.QueryRow("show create database `" + db + "`")
 	var create string
 	err := r.Scan(&db, &create)
 	if err != nil {
 		return "", err
 	}
-	return create, nil
+	// What if it is a subscription database?
+	return create, err
 }
 
 func getCreateTable(db, tbl string) (string, error) {
@@ -247,27 +227,8 @@ func getCreateTable(db, tbl string) (string, error) {
 	return create, nil
 }
 
-func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) error {
-	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "`")
-	if err != nil {
-		return err
-	}
-	colTypes, err := r.ColumnTypes()
-	if err != nil {
-		return err
-	}
-	cols := make([]*Column, 0, len(colTypes))
-	for _, col := range colTypes {
-		var c Column
-		c.Name = col.Name()
-		c.Type = col.DatabaseTypeName()
-		cols = append(cols, &c)
-	}
-	args := make([]any, 0, len(cols))
-	for range cols {
-		var v sql.RawBytes
-		args = append(args, &v)
-	}
+func showInsert(r *sql.Rows, args []any, cols []*Column, tbl string, bufPool *sync.Pool, netBufferLength int) error {
+	var err error
 	buf := bufPool.Get().(*bytes.Buffer)
 	curBuf := bufPool.Get().(*bytes.Buffer)
 	buf.Grow(netBufferLength)
@@ -331,6 +292,71 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 	return nil
 }
 
+func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, localInfile bool) error {
+	fname := fmt.Sprintf("%s_%s.%s", db, tbl, "csv")
+	pwd := os.Getenv("PWD")
+	f, err := os.Create(fname)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for r.Next() {
+		err = r.Scan(args...)
+		if err != nil {
+			return err
+		}
+		for i, v := range args {
+			dt, format := convertValue2(v, cols[i].Type)
+			_, err = fmt.Fprintf(f, format, dt)
+			if err != nil {
+				return err
+			}
+			ch := '\t'
+			if i == len(args)-1 {
+				ch = '\n'
+			}
+			_, err = fmt.Fprintf(f, "%c", ch)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if localInfile {
+		fmt.Printf("LOAD DATA LOCAL INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
+	} else {
+		fmt.Printf("LOAD DATA INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
+	}
+	return nil
+}
+
+func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, toCsv bool, localInfile bool) error {
+	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "`")
+	if err != nil {
+		return err
+	}
+	colTypes, err := r.ColumnTypes()
+	if err != nil {
+		return err
+	}
+	cols := make([]*Column, 0, len(colTypes))
+	for _, col := range colTypes {
+		var c Column
+		c.Name = col.Name()
+		c.Type = col.DatabaseTypeName()
+		cols = append(cols, &c)
+	}
+	args := make([]any, 0, len(cols))
+	for range cols {
+		var v sql.RawBytes
+		args = append(args, &v)
+	}
+	if !toCsv {
+		return showInsert(r, args, cols, tbl, bufPool, netBufferLength)
+	}
+	return showLoad(r, args, cols, db, tbl, localInfile)
+}
+
 func convertValue(v any, typ string) string {
 	ret := *(v.(*sql.RawBytes))
 	if ret == nil {
@@ -350,5 +376,23 @@ func convertValue(v any, typ string) string {
 		return string(ret)
 	default:
 		return "'" + strings.Replace(string(ret), "'", "\\'", -1) + "'"
+	}
+}
+
+func convertValue2(v any, typ string) (sql.RawBytes, string) {
+	ret := *(v.(*sql.RawBytes))
+	if ret == nil {
+		return nullBytes, defaultFmt
+	}
+	typ = strings.ToLower(typ)
+	switch typ {
+	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "double", "bool", "boolean", "", "float":
+		// why empty string in column type?
+		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
+		return ret, defaultFmt
+	case "json":
+		return ret, jsonFmt
+	default:
+		return ret, quoteFmt
 	}
 }

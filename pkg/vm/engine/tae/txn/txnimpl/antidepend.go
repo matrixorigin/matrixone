@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
+func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
@@ -130,12 +130,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry.MetaBaseEntry, ts)
+	return readWriteConfilictCheck(entry.BaseEntryImpl, ts)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, block := range checker.readSet {
-		if err = readWriteConfilictCheck(block.MetaBaseEntry, ts); err != nil {
+		if err = readWriteConfilictCheck(block.BaseEntryImpl, ts); err != nil {
 			return
 		}
 	}

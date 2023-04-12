@@ -65,10 +65,10 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		continueC := make(chan struct{})
-		v := uint32(0)
+		v := atomic.Uint32{}
 		wait := time.Millisecond * 200
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			n := atomic.AddUint32(&v, 1)
+			n := v.Add(1)
 			if n == 2 {
 				defer close(c) // second task close the chan
 			}
@@ -86,11 +86,11 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 		case <-c:
 			assert.Fail(t, "must block")
 		case <-time.After(wait):
-			assert.Equal(t, uint32(1), atomic.LoadUint32(&v))
+			assert.Equal(t, uint32(1), v.Load())
 			close(continueC) // second task can be run
 		}
 		<-c
-		assert.Equal(t, uint32(2), atomic.LoadUint32(&v))
+		assert.Equal(t, uint32(2), v.Load())
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
@@ -99,9 +99,9 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		completeC := make(chan struct{})
-		n := uint32(0)
+		n := atomic.Uint32{}
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			if atomic.AddUint32(&n, 1) == 2 {
+			if n.Add(1) == 2 {
 				close(c)
 			}
 			<-completeC
@@ -121,9 +121,9 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 func TestRunTaskWithRetry(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
-		n := uint32(0)
+		n := atomic.Uint32{}
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			if atomic.AddUint32(&n, 1) == 1 {
+			if n.Add(1) == 1 {
 				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			close(c)
@@ -134,7 +134,7 @@ func TestRunTaskWithRetry(t *testing.T) {
 		mustAddTestTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
-		assert.Equal(t, uint32(2), n)
+		assert.Equal(t, uint32(2), n.Load())
 	}, WithRunnerParallelism(2),
 		WithRunnerHeartbeatInterval(time.Millisecond),
 		WithRunnerFetchInterval(time.Millisecond))
@@ -143,10 +143,10 @@ func TestRunTaskWithRetry(t *testing.T) {
 func TestRunTaskWithDisableRetry(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
-		n := uint32(0)
+		n := atomic.Uint32{}
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			close(c)
-			if atomic.AddUint32(&n, 1) == 1 {
+			if n.Add(1) == 1 {
 				return moerr.NewInternalError(context.TODO(), "error")
 			}
 			return nil

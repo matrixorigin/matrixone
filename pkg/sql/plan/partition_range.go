@@ -55,7 +55,7 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
-		err := buildPartitionColumns(partitionBinder, partitionInfo, partitionType.ColumnList)
+		err := buildPartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}

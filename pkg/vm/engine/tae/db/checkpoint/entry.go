@@ -24,11 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointEntry struct {
@@ -36,7 +35,7 @@ type CheckpointEntry struct {
 	start, end types.TS
 	state      State
 	entryType  EntryType
-	location   string
+	location   objectio.Location
 }
 
 func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -69,13 +68,13 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
 	return e.end.LessEq(ts)
 }
-func (e *CheckpointEntry) SetLocation(location string) {
+func (e *CheckpointEntry) SetLocation(location objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
 	e.location = location
 }
 
-func (e *CheckpointEntry) GetLocation() string {
+func (e *CheckpointEntry) GetLocation() objectio.Location {
 	e.RLock()
 	defer e.RUnlock()
 	return e.location
@@ -131,7 +130,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -139,7 +138,10 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(ctx, reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
+		return
+	}
+	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -148,12 +150,27 @@ func (e *CheckpointEntry) Replay(
 	applyDuration = time.Since(t0)
 	return
 }
-func (e *CheckpointEntry) Read(
+
+func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
-	scheduler tasks.JobScheduler,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	data = logtail.NewCheckpointData()
+	if err = data.PrefetchFrom(
+		ctx,
+		fs.Service,
+		e.location,
+	); err != nil {
+		return
+	}
+	return
+}
+
+func (e *CheckpointEntry) Read(
+	ctx context.Context,
+	fs *objectio.ObjectFS,
+) (data *logtail.CheckpointData, err error) {
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -162,7 +179,6 @@ func (e *CheckpointEntry) Read(
 	if err = data.ReadFrom(
 		ctx,
 		reader,
-		scheduler,
 		common.DefaultAllocator,
 	); err != nil {
 		return
@@ -170,13 +186,16 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(context.Background(), reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.PrefetchFrom(context.Background(), fs.Service, e.location); err != nil {
+		return
+	}
+	if err = data.ReadFrom(context.Background(), reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)
@@ -191,10 +210,7 @@ func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	fileName, _, err := blockio.DecodeLocationToMetas(e.location)
+	err := fs.Delete(e.location.Name().String())
 	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
-	if err != nil {
-		return err
-	}
-	return fs.Delete(fileName)
+	return err
 }

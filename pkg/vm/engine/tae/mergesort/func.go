@@ -73,7 +73,7 @@ func Merge[T any](
 	}
 
 	for i := range toLayout {
-		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
+		ret[i] = containers.MakeVector(col[0].GetType())
 	}
 
 	nBlk := len(col)
@@ -113,7 +113,7 @@ func Merge[T any](
 }
 
 func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
-	ret := containers.MakeVector(col.GetType(), col.Nullable())
+	ret := containers.MakeVector(col.GetType())
 	for _, j := range idx {
 		ret.Append(col.Get(int(j)))
 	}
@@ -127,7 +127,7 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
+		ret[i] = containers.MakeVector(col[0].GetType())
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
 			ret[i].Append(col[s].Get(cursors[s]))
@@ -152,7 +152,7 @@ func Reshape(column []containers.Vector, fromLayout, toLayout []uint32) (ret []c
 	fromIdx := 0
 	fromOffset := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(column[0].GetType(), column[0].Nullable())
+		ret[i] = containers.MakeVector(column[0].GetType())
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
 			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)

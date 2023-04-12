@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -92,6 +93,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
 
 	msg, ok := message.(*pipeline.Message)
@@ -101,7 +103,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
@@ -166,12 +168,12 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		}
 		defer func() {
 			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.S3.DeleteMulti.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil
@@ -470,15 +472,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 
 func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
-	for i, u := range p.UuidsToRegIdx {
-		uid, err := uuid.FromBytes(u.GetUuid())
+	for i := range p.UuidsToRegIdx {
+		op := p.UuidsToRegIdx[i]
+		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
-			Idx:      int(u.GetIdx()),
+			Idx:      int(op.GetIdx()),
 			Uuid:     uid,
-			FromAddr: u.FromAddr,
+			FromAddr: op.FromAddr,
 		}
 	}
 	return nil
@@ -486,13 +489,16 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 
 func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
-	for i, u := range s.RemoteReceivRegInfos {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		uid, _ := op.Uuid.MarshalBinary()
 		ret[i] = &pipeline.UuidToRegIdx{
-			Idx:      int32(u.Idx),
-			Uuid:     u.Uuid[:],
-			FromAddr: u.FromAddr,
+			Idx:      int32(op.Idx),
+			Uuid:     uid,
+			FromAddr: op.FromAddr,
 		}
 	}
+
 	return ret
 }
 
@@ -1155,7 +1161,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 					CreateSql:     t.CreateSql,
 					Name2ColIndex: name2ColIndex,
 					FileList:      t.FileList,
-					OriginCols:    t.OriginCols,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1356,13 +1361,15 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
-		if err != nil {
+		oldVec := bat.Vecs[i]
+		vec, err1 := oldVec.Dup(mp)
+		if err1 != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)
 			}
-			return nil, err
+			return nil, err1
 		}
+		bat.ReplaceVector(oldVec, vec)
 	}
 	// allocated memory of aggVec from mPool.
 	for i, ag := range bat.Aggs {

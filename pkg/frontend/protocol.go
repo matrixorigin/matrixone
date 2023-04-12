@@ -173,15 +173,23 @@ type Protocol interface {
 
 	GetCapability() uint32
 
+	GetConnectAttrs() map[string]string
+
 	IsTlsEstablished() bool
 
 	SetTlsEstablished()
 
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 
+	Authenticate(ctx context.Context) error
+
 	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
 	Quit()
+
+	incDebugCount(int)
+
+	resetDebugCount() []uint64
 }
 
 type ProtocolImpl struct {
@@ -208,6 +216,23 @@ type ProtocolImpl struct {
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
 	sequenceId atomic.Uint32
+
+	//for debug
+	debugCount [16]uint64
+}
+
+func (pi *ProtocolImpl) incDebugCount(i int) {
+	if i >= 0 && i < len(pi.debugCount) {
+		atomic.AddUint64(&pi.debugCount[i], 1)
+	}
+}
+
+func (pi *ProtocolImpl) resetDebugCount() []uint64 {
+	ret := make([]uint64, len(pi.debugCount))
+	for i := 0; i < len(pi.debugCount); i++ {
+		ret[i] = atomic.LoadUint64(&pi.debugCount[i])
+	}
+	return ret
 }
 
 func (pi *ProtocolImpl) setQuit(b bool) bool {
@@ -239,6 +264,13 @@ func (pi *ProtocolImpl) GetSalt() []byte {
 	pi.m.Lock()
 	defer pi.m.Unlock()
 	return pi.salt
+}
+
+// SetSalt updates the salt value. This happens with proxy mode enabled.
+func (pi *ProtocolImpl) SetSalt(s []byte) {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	pi.salt = s
 }
 
 func (pi *ProtocolImpl) IsEstablished() bool {
@@ -407,6 +439,10 @@ func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bo
 	return false, nil
 }
 
+func (fp *FakeProtocol) Authenticate(ctx context.Context) error {
+	return nil
+}
+
 func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
 	return fp.ioses
 }
@@ -420,6 +456,10 @@ func (fp *FakeProtocol) GetSequenceId() uint8 {
 }
 
 func (fp *FakeProtocol) SetSequenceID(value uint8) {
+}
+
+func (fp *FakeProtocol) GetConnectAttrs() map[string]string {
+	return nil
 }
 
 func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
@@ -505,5 +545,11 @@ func (fp *FakeProtocol) SetUserName(s string) {
 func (fp *FakeProtocol) Quit() {}
 
 func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (fp *FakeProtocol) incDebugCount(int) {}
+
+func (fp *FakeProtocol) resetDebugCount() []uint64 {
 	return nil
 }

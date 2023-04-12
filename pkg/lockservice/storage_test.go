@@ -98,6 +98,26 @@ func TestSeek(t *testing.T) {
 	}
 }
 
+func TestPrev(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory()
+
+			k1 := []byte("k1")
+			k2 := []byte("k2")
+			s.Add(k1, Lock{})
+			s.Add(k2, Lock{})
+
+			v, _, ok := s.Prev(k2)
+			assert.True(t, ok)
+			assert.Equal(t, k1, v)
+
+			_, _, ok = s.Prev(k1)
+			assert.False(t, ok)
+		})
+	}
+}
+
 func BenchmarkAdd(b *testing.B) {
 	for name, factory := range storages {
 		b.Run(name, func(b *testing.B) {

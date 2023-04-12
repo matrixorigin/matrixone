@@ -204,7 +204,7 @@ func Test_hash_buildPartitionDefs(t *testing.T) {
 		{
 			sql: "create table a(col1 int) partition by hash(col1) (partition x1, partition x2);",
 			def: &plan.PartitionByDef{
-				PartitionNum: 4,
+				PartitionNum: 2,
 			},
 			wantErr: false,
 		},
@@ -225,7 +225,7 @@ func Test_hash_buildPartitionDefs(t *testing.T) {
 		{
 			sql: "create table a(col1 int) partition by hash(col1) (partition x1, partition x1);",
 			def: &plan.PartitionByDef{
-				PartitionNum: 2,
+				PartitionNum: 4,
 			},
 			wantErr: true,
 		},
@@ -238,7 +238,7 @@ func Test_hash_buildPartitionDefs(t *testing.T) {
 		require.Nil(t, err)
 		syntaxDefs := one.(*tree.CreateTable).PartitionOption.Partitions
 		err = hpb.buildPartitionDefs(context.TODO(), nil, k.def, syntaxDefs)
-
+		fmt.Println(k.sql)
 		if !k.wantErr {
 			require.Nil(t, err)
 			require.LessOrEqual(t, len(syntaxDefs), int(k.def.PartitionNum))

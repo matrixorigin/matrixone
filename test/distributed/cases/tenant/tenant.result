@@ -18,6 +18,7 @@ account_id    relname    relkind
 0    mo_role    r
 0    mo_role_grant    r
 0    mo_role_privs    r
+0    mo_stored_procedure    r
 0    mo_tables    r
 0    mo_user    r
 0    mo_user_defined_function    r

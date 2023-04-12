@@ -368,6 +368,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 			}
 		} else {
 			if rowSkip == nil {
+				// XXX should we free the fromVec here ?
 				toVec, err = fromVec.Dup(proc.Mp())
 				if err != nil {
 					return nil, err
@@ -376,7 +377,10 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 				toVec = vector.NewVec(*fromVec.GetType())
 				for j := 0; j < fromVec.Length(); j++ {
 					if !rowSkip[j] {
-						toVec.UnionOne(fromVec, int64(j), proc.Mp())
+						err = toVec.UnionOne(fromVec, int64(j), proc.Mp())
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			}
@@ -398,7 +402,9 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 		Attrs:              make([]string, 0, len(tableDef.Cols)),
 		IdxList:            make([]int32, 0, len(tableDef.Cols)),
 	}
-	if tableDef.CompositePkey != nil {
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		info.hasCompositePkey = true
 		info.compositePkeyParts = tableDef.Pkey.Names
 	}

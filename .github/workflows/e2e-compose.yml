@@ -158,5 +158,5 @@ jobs:
         with:
           name: e2e_docker-compose
           path: |
-             ${{ github.workspace }}/docker-compose-log
+             ${{ github.workspace }}/multi-cn-docker-compose-log
           retention-days: 7

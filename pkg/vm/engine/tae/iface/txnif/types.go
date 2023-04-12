@@ -18,7 +18,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -68,7 +68,7 @@ type TxnReader interface {
 	GetLSN() uint64
 	GetMemo() *TxnMemo
 
-	SameTxn(startTs types.TS) bool
+	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
 }
@@ -77,8 +77,8 @@ type TxnHandle interface {
 	BindAccessInfo(tenantID, userID, roleID uint32)
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
@@ -158,19 +158,31 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
-type MVCCNode interface {
-	String() string
+type BaseNode[T any] interface {
+	Update(o T)
+	CloneData() T
+	CloneAll() T
+}
 
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
+type MVCCNode[T any] interface {
+	BaseMVCCNode
+	BaseNode[T]
+}
+
+type BaseMVCCNode interface {
+	String() string
+	IsNil() bool
+
+	IsVisibleByTS(ts types.TS) (visible bool)
+	IsVisible(txn TxnReader) (visible bool)
+	CheckConflict(txn TxnReader) error
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
 	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
-	IsSameTxn(ts types.TS) bool
+	IsSameTxn(txn TxnReader) bool
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool
@@ -192,18 +204,16 @@ type MVCCNode interface {
 
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
 }
 type AppendNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
-	MVCCNode
+	BaseMVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -227,7 +237,7 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
-		zm []dataio.Index, metaLocs []string) error
+		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
@@ -240,8 +250,8 @@ type TxnStore interface {
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 	GetRelationByID(dbId uint64, tid uint64) (handle.Relation, error)
 
-	CreateDatabase(name, createSql string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql string, id uint64) (handle.Database, error)
+	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
+	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
@@ -253,11 +263,11 @@ type TxnStore interface {
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
-	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
-	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error)
+	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error)
+	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 

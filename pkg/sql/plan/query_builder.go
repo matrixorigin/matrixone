@@ -58,21 +58,21 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 	}
 }
 
-func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32) error {
+func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32) error {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		mapId := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
-		if ids, ok := colMap[mapId]; ok {
+		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
+		if ids, ok := colMap[mapID]; ok {
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
-			ne.Col.Name = builder.nameByColRef[mapId]
+			ne.Col.Name = builder.nameByColRef[mapID]
 		} else {
-			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapId, colMap)
+			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapID, colMap)
 		}
 
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
-			err := builder.remapExpr(arg, colMap)
+			err := builder.remapColRefForExpr(arg, colMap)
 			if err != nil {
 				return err
 			}
@@ -91,6 +91,17 @@ func (m *ColRefRemapping) addColRef(colRef [2]int32) {
 	m.localToGlobal = append(m.localToGlobal, colRef)
 }
 
+func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
+	node := builder.qry.Nodes[nodeId]
+	newNode := DeepCopyNode(node)
+	newNode.Children = make([]int32, 0, len(node.Children))
+	for _, child := range node.Children {
+		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
+	}
+	newNodeId := builder.appendNode(newNode, ctx)
+	return newNodeId
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int32]int) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -99,7 +110,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -116,8 +127,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
-			CompositePkey: node.TableDef.CompositePkey,
-			OriginCols:    node.TableDef.OriginCols,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -140,7 +149,122 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for _, expr := range node.FilterList {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, internalRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i, col := range node.TableDef.Cols {
+			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
+				continue
+			}
+
+			remapping.addColRef(internalRemapping.localToGlobal[i])
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(node.TableDef.Cols) == 0 {
+				globalRef := [2]int32{tag, 0}
+				remapping.addColRef(globalRef)
+
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
+			} else {
+				remapping.addColRef(internalRemapping.localToGlobal[0])
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: node.TableDef.Cols[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+						},
+					},
+				})
+			}
+		}
+		childId := node.Children[0]
+		childNode := builder.qry.Nodes[childId]
+
+		if childNode.NodeType == plan.Node_VALUE_SCAN {
+			break
+		}
+		for _, expr := range node.TblFuncExprList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+		childMap, err := builder.remapAllColRefs(childId, colRefCnt)
+
+		if err != nil {
+			return nil, err
+		}
+
+		for _, expr := range node.TblFuncExprList {
+			decreaseRefCnt(expr, colRefCnt)
+			err = builder.remapColRefForExpr(expr, childMap.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
+		internalRemapping := &ColRefRemapping{
+			globalToLocal: make(map[[2]int32][2]int32),
+		}
+
+		tag := node.BindingTags[0]
+		newTableDef := &plan.TableDef{
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
+			TableType:     node.TableDef.TableType,
+		}
+
+		for i, col := range node.TableDef.Cols {
+			globalRef := [2]int32{tag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			internalRemapping.addColRef(globalRef)
+
+			newTableDef.Cols = append(newTableDef.Cols, col)
+		}
+
+		if len(newTableDef.Cols) == 0 {
+			internalRemapping.addColRef([2]int32{tag, 0})
+			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+		}
+
+		node.TableDef = newTableDef
+
+		for _, expr := range node.FilterList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -195,18 +319,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		if node.NodeType == plan.Node_FUNCTION_SCAN {
-			childId := node.Children[0]
-			childNode := builder.qry.Nodes[childId]
-			if childNode.NodeType != plan.Node_PROJECT {
-				break
-			}
-			_, err := builder.remapAllColRefs(childId, colRefCnt)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 		plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
@@ -251,7 +363,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for _, expr := range node.ProjectList {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, internalMap)
+			err := builder.remapColRefForExpr(expr, internalMap)
 			if err != nil {
 				return nil, err
 			}
@@ -286,7 +398,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for _, expr := range node.OnList {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, internalMap)
+			err := builder.remapColRefForExpr(expr, internalMap)
 			if err != nil {
 				return nil, err
 			}
@@ -386,7 +498,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for idx, expr := range node.GroupBy {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, childRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -413,7 +525,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		groupSize := int32(len(node.GroupBy))
 		for idx, expr := range node.AggList {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, childRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -481,7 +593,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for _, orderBy := range node.OrderBy {
 			decreaseRefCnt(orderBy.Expr, colRefCnt)
-			err := builder.remapExpr(orderBy.Expr, childRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(orderBy.Expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -535,7 +647,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		for _, expr := range node.FilterList {
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, childRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -606,7 +718,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		for _, needed := range neededProj {
 			expr := node.ProjectList[needed]
 			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, childRemapping.globalToLocal)
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -706,22 +818,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
-	for i, rootId := range builder.qry.Steps {
-		rootId, _ = builder.pushdownFilters(rootId, nil, false)
-		ReCalcNodeStats(rootId, builder, true)
-		rootId = builder.determineJoinOrder(rootId)
-		SortFilterListByStats(builder.GetContext(), rootId, builder)
-		rootId = builder.pushdownSemiAntiJoins(rootId)
-		builder.qry.Steps[i] = rootId
-
+	for i, rootID := range builder.qry.Steps {
+		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		colRefCnt := make(map[[2]int32]int)
-		rootNode := builder.qry.Nodes[rootId]
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		ReCalcNodeStats(rootID, builder, true, true)
+		rootID = builder.aggPushDown(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.determineJoinOrder(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.aggPullup(rootID, rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.pushdownSemiAntiJoins(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.applySwapRuleByStats(rootID, true)
+		SortFilterListByStats(builder.GetContext(), rootID, builder)
+		builder.qry.Steps[i] = rootID
+
+		colRefCnt = make(map[[2]int32]int)
+		rootNode := builder.qry.Nodes[rootID]
 		resultTag := rootNode.BindingTags[0]
 		for i := range rootNode.ProjectList {
 			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
 		}
 
-		_, err := builder.remapAllColRefs(rootId, colRefCnt)
+		_, err := builder.remapAllColRefs(rootID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
@@ -920,15 +1041,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// build UNION/MINUS node one by one
-	lastNodeId := newNodes[0]
+	lastNodeID := newNodes[0]
 	for i := 1; i < len(newNodes); i++ {
 		utIdx := i - 1
 		lastTag = builder.genNewTag()
-		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
-		lastNodeId = builder.appendNode(&plan.Node{
+		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    newUnionType[utIdx],
-			Children:    []int32{lastNodeId, newNodes[i]},
+			Children:    []int32{lastNodeID, newNodes[i]},
 			BindingTags: []int32{lastTag},
 			ProjectList: getProjectList(leftNodeTag, lastTag),
 		}, ctx)
@@ -957,10 +1078,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
 	// append a project node
-	lastNodeId = builder.appendNode(&plan.Node{
+	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: ctx.projects,
-		Children:    []int32{lastNodeId},
+		Children:    []int32{lastNodeID},
 		BindingTags: []int32{ctx.projectTag},
 	}, ctx)
 
@@ -997,16 +1118,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			orderBys = append(orderBys, orderBy)
 		}
 
-		lastNodeId = builder.appendNode(&plan.Node{
+		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
-			Children: []int32{lastNodeId},
+			Children: []int32{lastNodeID},
 			OrderBy:  orderBys,
 		}, ctx)
 	}
 
 	// append limit
 	if astLimit != nil {
-		node := builder.qry.Nodes[lastNodeId]
+		node := builder.qry.Nodes[lastNodeID]
 
 		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
@@ -1030,7 +1151,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// append result PROJECT node
-	if builder.qry.Nodes[lastNodeId].NodeType != plan.Node_PROJECT {
+	if builder.qry.Nodes[lastNodeID].NodeType != plan.Node_PROJECT {
 		for i := 0; i < len(ctx.projects); i++ {
 			ctx.results = append(ctx.results, &plan.Expr{
 				Typ: ctx.projects[i].Typ,
@@ -1044,10 +1165,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}
 		ctx.resultTag = builder.genNewTag()
 
-		lastNodeId = builder.appendNode(&plan.Node{
+		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
 			ProjectList: ctx.results,
-			Children:    []int32{lastNodeId},
+			Children:    []int32{lastNodeID},
 			BindingTags: []int32{ctx.resultTag},
 		}, ctx)
 	} else {
@@ -1059,7 +1180,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 	}
 
-	return lastNodeId, nil
+	return lastNodeID, nil
 }
 
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
@@ -1482,6 +1603,14 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
+
+			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					if c.I64Val < 0 {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
+					}
+				}
+			}
 		}
 		if astLimit.Count != nil {
 			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
@@ -1491,6 +1620,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
 				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					if c.I64Val < 0 {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
+					}
 					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
@@ -1631,13 +1763,13 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
-	ReCalcNodeStats(nodeID, builder, false)
+	ReCalcNodeStats(nodeID, builder, false, true)
 	return nodeID
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx)
+		return builder.buildTable(stmt[0], ctx, -1, nil)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -1680,7 +1812,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	// return leftChildID, err
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeID int32, err error) {
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
@@ -1822,7 +1954,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						maskedCTEs[name] = nil
 					}
 				}
-
+				defaultDatabase := viewData.DefaultDatabase
+				if obj.PubAccountId != -1 {
+					defaultDatabase = obj.SubscriptionName
+				}
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
@@ -1831,7 +1966,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 						},
 						Stmt: viewStmt.AsSource,
 					},
-					defaultDatabase: viewData.DefaultDatabase,
+					defaultDatabase: defaultDatabase,
 					maskedCTEs:      maskedCTEs,
 				}
 
@@ -1841,7 +1976,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				})
-				return builder.buildTable(newTableName, ctx)
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
 
@@ -1855,7 +1990,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx)
+			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
@@ -1863,10 +1998,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		if tbl.Id() == "result_scan" {
 			return builder.buildResultScan(tbl, ctx)
 		}
-		return builder.buildTableFunction(tbl, ctx)
+		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx)
+		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
@@ -1875,7 +2010,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			}
 		}
 
-		nodeID, err = builder.buildTable(tbl.Expr, ctx)
+		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 		if err != nil {
 			return
 		}
@@ -1887,55 +2022,62 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
-		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
-			// add account filter for system table scan
+
+		if midNode.NodeType == plan.Node_TABLE_SCAN {
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
-			currentAccountId := builder.compCtx.GetAccountId()
-			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
-				if err != nil {
-					return 0, err
+			currentAccountID := builder.compCtx.GetAccountId()
+			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
+				currentAccountID = uint32(sub.AccountId)
+				builder.qry.Nodes[nodeID].NotCacheable = true
+			}
+			if currentAccountID != catalog.System_Account {
+				// add account filter for system table scan
+				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
+					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
+					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
+					ctx.binder = NewWhereBinder(builder, ctx)
+					left := &tree.UnresolvedName{
+						NumParts: 1,
+						Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
+					}
+					currentAccountID := builder.compCtx.GetAccountId()
+					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountID)), strconv.Itoa(int(currentAccountID)), false)
+					right.ValType = tree.P_uint64
+					//account_id = the accountId of the non-sys account
+					accountFilter := &tree.ComparisonExpr{
+						Op:    tree.EQUAL,
+						Left:  left,
+						Right: right,
+					}
+					accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
-				ctx.binder = NewWhereBinder(builder, ctx)
-				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-			} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-				ctx.binder = NewWhereBinder(builder, ctx)
-				left := &tree.UnresolvedName{
-					NumParts: 1,
-					Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
-				}
-				currentAccountId := builder.compCtx.GetAccountId()
-				right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
-				right.ValType = tree.P_uint64
-				//account_id = the accountId of the non-sys account
-				accountFilter := &tree.ComparisonExpr{
-					Op:    tree.EQUAL,
-					Left:  left,
-					Right: right,
-				}
-				accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
-				if err != nil {
-					return 0, err
-				}
-				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return
@@ -1959,6 +2101,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	node := builder.qry.Nodes[nodeID]
 
 	var cols []string
+	var colIsHidden []bool
 	var types []*plan.Type
 	var binding *Binding
 	var table string
@@ -1985,8 +2128,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
-		cols = make([]string, len(node.TableDef.Cols))
-		types = make([]*plan.Type, len(node.TableDef.Cols))
+		colLength := len(node.TableDef.Cols)
+		cols = make([]string, colLength)
+		colIsHidden = make([]bool, colLength)
+		types = make([]*plan.Type, colLength)
 
 		tag := node.BindingTags[0]
 
@@ -1996,12 +2141,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col.Name
 			}
+			colIsHidden[i] = col.Hidden
 			types[i] = col.Typ
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -2024,8 +2170,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxError(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
-		cols = make([]string, len(headings))
-		types = make([]*plan.Type, len(headings))
+		colLength := len(headings)
+		cols = make([]string, colLength)
+		colIsHidden = make([]bool, colLength)
+		types = make([]*plan.Type, colLength)
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -2034,12 +2182,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = strings.ToLower(col)
 			}
 			types[i] = projects[i].Typ
-
+			colIsHidden[i] = false
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types, false)
+		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)
@@ -2078,25 +2226,22 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	if aliasedTblExpr, ok := tbl.Right.(*tree.AliasedTableExpr); ok {
-		if tblFn, ok2 := aliasedTblExpr.Expr.(*tree.TableFunction); ok2 {
-			err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
-			if err != nil {
-				return 0, err
-			}
-		}
-	}
-
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
+	}
+
+	if builder.qry.Nodes[rightChildID].NodeType == plan.Node_FUNCTION_SCAN {
+		if joinType != plan.Node_INNER {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "table function can only be used in a inner join")
+		}
 	}
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
@@ -2136,7 +2281,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			leftCols := make(map[string]any)
 			for _, binding := range leftCtx.bindings {
-				for _, col := range binding.cols {
+				for i, col := range binding.cols {
+					if binding.colIsHidden[i] {
+						continue
+					}
 					leftCols[col] = nil
 				}
 			}
@@ -2164,377 +2312,24 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
-	node := builder.qry.Nodes[nodeID]
-
-	var canPushdown, cantPushdown []*plan.Expr
-
-	switch node.NodeType {
-	case plan.Node_AGG:
-		groupTag := node.BindingTags[0]
-		aggregateTag := node.BindingTags[1]
-
-		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) {
-				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
-			} else {
-				cantPushdown = append(cantPushdown, filter)
-			}
-		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-
-		node.Children[0] = childID
-
-	case plan.Node_FILTER:
-		canPushdown = filters
-		for _, filter := range node.FilterList {
-			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
-		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			node.Children[0] = childID
-			node.FilterList = cantPushdownChild
-		} else {
-			nodeID = childID
-		}
-
-	case plan.Node_JOIN:
-		leftTags := make(map[int32]*Binding)
-		for _, tag := range builder.enumerateTags(node.Children[0]) {
-			leftTags[tag] = nil
-		}
-
-		rightTags := make(map[int32]*Binding)
-		for _, tag := range builder.enumerateTags(node.Children[1]) {
-			rightTags[tag] = nil
-		}
-
-		var markTag int32
-		if node.JoinType == plan.Node_MARK {
-			markTag = node.BindingTags[0]
-		}
-
-		if node.JoinType == plan.Node_INNER {
-			for _, cond := range node.OnList {
-				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
-			}
-
-			node.OnList = nil
-		}
-
-		var leftPushdown, rightPushdown []*plan.Expr
-		var turnInner bool
-
-		joinSides := make([]int8, len(filters))
-
-		for i, filter := range filters {
-			canTurnInner := true
-
-			joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
-			if f, ok := filter.Expr.(*plan.Expr_F); ok {
-				for _, arg := range f.F.Args {
-					if getJoinSide(arg, leftTags, rightTags, markTag) == JoinSideBoth {
-						canTurnInner = false
-						break
-					}
-				}
-			}
-
-			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
-			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
-			if canTurnInner && leftOrRightJoin {
-				for _, cond := range node.OnList {
-					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
-				}
-
-				node.JoinType = plan.Node_INNER
-				node.OnList = nil
-				turnInner = true
-
-				break
-			}
-
-			// TODO: FULL OUTER join should be handled here. However we don't have FULL OUTER join now.
-		}
-
-		if turnInner {
-			joinSides = make([]int8, len(filters))
-
-			for i, filter := range filters {
-				joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
-			}
-		} else if node.JoinType == plan.Node_LEFT {
-			var newOnList []*plan.Expr
-			for _, cond := range node.OnList {
-				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
-				for _, conjElem := range conj {
-					side := getJoinSide(conjElem, leftTags, rightTags, markTag)
-					if side&JoinSideLeft == 0 {
-						rightPushdown = append(rightPushdown, conjElem)
-					} else {
-						newOnList = append(newOnList, conjElem)
-					}
-				}
-			}
-
-			node.OnList = newOnList
-		}
-
-		if !separateNonEquiConds {
-			var extraFilters []*plan.Expr
-			for i, filter := range filters {
-				if joinSides[i] != JoinSideBoth {
-					continue
-				}
-				switch exprImpl := filter.Expr.(type) {
-				case *plan.Expr_F:
-					if exprImpl.F.Func.ObjName == "or" {
-						keys := checkDNF(filter)
-						for _, key := range keys {
-							extraFilter := walkThroughDNF(builder.GetContext(), filter, key)
-							if extraFilter != nil {
-								extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
-								joinSides = append(joinSides, getJoinSide(extraFilter, leftTags, rightTags, markTag))
-							}
-						}
-					}
-				}
-			}
-			filters = append(filters, extraFilters...)
-		}
-
-		for i, filter := range filters {
-			switch joinSides[i] {
-			case JoinSideNone:
-				if c, ok := filter.Expr.(*plan.Expr_C); ok {
-					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
-						if c.Bval {
-							break
-						}
-					}
-				}
-
-				switch node.JoinType {
-				case plan.Node_INNER:
-					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
-					rightPushdown = append(rightPushdown, filter)
-
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
-					leftPushdown = append(leftPushdown, filter)
-
-				default:
-					cantPushdown = append(cantPushdown, filter)
-				}
-
-			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER && node.JoinType != plan.Node_RIGHT {
-					leftPushdown = append(leftPushdown, filter)
-				} else {
-					cantPushdown = append(cantPushdown, filter)
-				}
-
-			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
-					rightPushdown = append(rightPushdown, filter)
-				} else {
-					cantPushdown = append(cantPushdown, filter)
-				}
-
-			case JoinSideBoth:
-				if node.JoinType == plan.Node_INNER {
-					if separateNonEquiConds {
-						if f, ok := filter.Expr.(*plan.Expr_F); ok {
-							if f.F.Func.ObjName == "=" {
-								if getJoinSide(f.F.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
-									if getJoinSide(f.F.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
-										node.OnList = append(node.OnList, filter)
-										break
-									}
-								}
-							}
-						}
-					} else {
-						node.OnList = append(node.OnList, filter)
-						break
-					}
-				}
-
-				cantPushdown = append(cantPushdown, filter)
-
-			case JoinSideMark:
-				if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
-					if tryMark.Col.RelPos == node.BindingTags[0] {
-						node.JoinType = plan.Node_SEMI
-						node.BindingTags = nil
-						break
-					}
-				} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
-					if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
-						arg := fExpr.F.Args[0]
-						if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
-							if tryMark.Col.RelPos == node.BindingTags[0] {
-								node.JoinType = plan.Node_ANTI
-								node.BindingTags = nil
-								break
-							}
-						}
-					}
-				}
-
-				cantPushdown = append(cantPushdown, filter)
-
-			default:
-				cantPushdown = append(cantPushdown, filter)
-			}
-		}
-
-		if node.JoinType == plan.Node_INNER {
-			//only inner join can deduce new predicate
-			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList), separateNonEquiConds)
-		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-
-		node.Children[0] = childID
-
-		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], rightPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[1]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-
-		node.Children[1] = childID
-
-	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		leftChild := builder.qry.Nodes[node.Children[0]]
-		rightChild := builder.qry.Nodes[node.Children[1]]
-		var canPushDownRight []*plan.Expr
-
-		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
-			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
-		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-		node.Children[0] = childID
-
-		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight, separateNonEquiConds)
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[1]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-		node.Children[1] = childID
-
-	case plan.Node_PROJECT:
-		child := builder.qry.Nodes[node.Children[0]]
-		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
-			cantPushdown = filters
-			break
-		}
-
-		projectTag := node.BindingTags[0]
-
-		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefs(filter, projectTag, node.ProjectList))
-		}
-
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
-
-		node.Children[0] = childID
-
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_FUNCTION_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-		childId := node.Children[0]
-		childId, err := builder.pushdownFilters(childId, nil, separateNonEquiConds)
-		if err != nil {
-			return 0, err
-		}
-		node.Children[0] = childId
-
-	default:
-		if len(node.Children) > 0 {
-			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
-
-			if len(cantPushdownChild) > 0 {
-				childID = builder.appendNode(&plan.Node{
-					NodeType:   plan.Node_FILTER,
-					Children:   []int32{node.Children[0]},
-					FilterList: cantPushdownChild,
-				}, nil)
-			}
-
-			node.Children[0] = childID
-		} else {
-			cantPushdown = filters
-		}
-	}
-
-	return nodeID, cantPushdown
-}
-
-func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (int32, error) {
 	var (
-		childId int32 = -1
+		childId int32
 		err     error
 		nodeId  int32
 	)
-	if tbl.SelectStmt != nil {
-		childId, err = builder.buildSelect(tbl.SelectStmt, ctx, false)
-		if err != nil {
-			return 0, err
-		}
-	}
-	if childId == -1 {
+
+	if preNodeId == -1 {
 		scanNode := &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
 		}
 		childId = builder.appendNode(scanNode, ctx)
+		ctx.binder = NewTableBinder(builder, ctx)
+	} else {
+		ctx.binder = NewTableBinder(builder, leftCtx)
+		childId = builder.copyNode(ctx, preNodeId)
 	}
-	ctx.binder = NewTableBinder(builder, ctx)
+
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
 	for _, v := range tbl.Func.Exprs {
 		curExpr, err := ctx.binder.BindExpr(v, 0, false)
@@ -2556,7 +2351,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
-	clearBinding(ctx)
 	return nodeId, err
 }
 
@@ -2565,4 +2359,39 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
+	switch node.NodeType {
+	case plan.Node_FUNCTION_SCAN:
+		if onlyContainsTag(expr, node.BindingTags[0]) {
+			return true
+		}
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+		return onlyContainsTag(expr, node.BindingTags[0])
+	case plan.Node_JOIN:
+		if containsTag(expr, builder.qry.Nodes[node.Children[0]].BindingTags[0]) && containsTag(expr, builder.qry.Nodes[node.Children[1]].BindingTags[0]) {
+			return true
+		}
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		for _, childId := range node.Children {
+			if builder.checkExprCanPushdown(expr, builder.qry.Nodes[childId]) {
+				return true
+			}
+		}
+		return false
+	}
 }

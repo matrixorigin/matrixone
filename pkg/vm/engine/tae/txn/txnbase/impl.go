@@ -115,6 +115,7 @@ func (txn *Txn) rollback2PC() (err error) {
 
 func (txn *Txn) commit2PC(inRecovery bool) (err error) {
 	state := txn.GetTxnState(false)
+	txn.Mgr.OnCommitTxn(txn)
 
 	switch state {
 	//It's a 2PC transaction running on Coordinator

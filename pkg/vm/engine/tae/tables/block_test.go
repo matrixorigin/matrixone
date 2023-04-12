@@ -61,7 +61,7 @@ func TestGetActiveRow(t *testing.T) {
 	an2.End = ts1
 
 	// index uint8(1)-0,1
-	vec := containers.MakeVector(types.T_int8.ToType(), false)
+	vec := containers.MakeVector(types.T_int8.ToType())
 	vec.Append(int8(1))
 	vec.Append(int8(1))
 	idx := indexwrapper.NewPkMutableIndex(types.T_int8.ToType())
@@ -75,14 +75,14 @@ func TestGetActiveRow(t *testing.T) {
 
 	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)
-	row, err := blk.getInMemoryRowByFilter(node, ts2, handle.NewEQFilter(int8(1)))
+	row, err := blk.getInMemoryRowByFilter(node, updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(1), row)
 
 	//abort appendnode2
 	an2.Aborted = true
 
-	row, err = blk.getInMemoryRowByFilter(node, ts2, handle.NewEQFilter(int8(1)))
+	row, err = blk.getInMemoryRowByFilter(node, updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)))
 	// row, err = blk.GetActiveRow(int8(1), ts2)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(0), row)

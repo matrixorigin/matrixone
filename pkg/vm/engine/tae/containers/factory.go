@@ -18,73 +18,69 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func MakeVector(typ types.Type, nullable bool, opts ...Options) (vec Vector) {
+func MakeVector(typ types.Type, opts ...Options) (vec Vector) {
 	switch typ.Oid {
 	case types.T_any:
-		vec = NewVector[any](typ, nullable, opts...)
+		vec = NewVector[any](typ, opts...)
 	case types.T_bool:
-		vec = NewVector[bool](typ, nullable, opts...)
+		vec = NewVector[bool](typ, opts...)
 	case types.T_int8:
-		vec = NewVector[int8](typ, nullable, opts...)
+		vec = NewVector[int8](typ, opts...)
 	case types.T_int16:
-		vec = NewVector[int16](typ, nullable, opts...)
+		vec = NewVector[int16](typ, opts...)
 	case types.T_int32:
-		vec = NewVector[int32](typ, nullable, opts...)
+		vec = NewVector[int32](typ, opts...)
 	case types.T_int64:
-		vec = NewVector[int64](typ, nullable, opts...)
+		vec = NewVector[int64](typ, opts...)
 	case types.T_uint8:
-		vec = NewVector[uint8](typ, nullable, opts...)
+		vec = NewVector[uint8](typ, opts...)
 	case types.T_uint16:
-		vec = NewVector[uint16](typ, nullable, opts...)
+		vec = NewVector[uint16](typ, opts...)
 	case types.T_uint32:
-		vec = NewVector[uint32](typ, nullable, opts...)
+		vec = NewVector[uint32](typ, opts...)
 	case types.T_uint64:
-		vec = NewVector[uint64](typ, nullable, opts...)
+		vec = NewVector[uint64](typ, opts...)
 	case types.T_decimal64:
-		vec = NewVector[types.Decimal64](typ, nullable, opts...)
+		vec = NewVector[types.Decimal64](typ, opts...)
 	case types.T_decimal128:
-		vec = NewVector[types.Decimal128](typ, nullable, opts...)
+		vec = NewVector[types.Decimal128](typ, opts...)
 	case types.T_uuid:
-		vec = NewVector[types.Uuid](typ, nullable, opts...)
+		vec = NewVector[types.Uuid](typ, opts...)
 	case types.T_float32:
-		vec = NewVector[float32](typ, nullable, opts...)
+		vec = NewVector[float32](typ, opts...)
 	case types.T_float64:
-		vec = NewVector[float64](typ, nullable, opts...)
+		vec = NewVector[float64](typ, opts...)
 	case types.T_date:
-		vec = NewVector[types.Date](typ, nullable, opts...)
+		vec = NewVector[types.Date](typ, opts...)
 	case types.T_timestamp:
-		vec = NewVector[types.Timestamp](typ, nullable, opts...)
+		vec = NewVector[types.Timestamp](typ, opts...)
 	case types.T_datetime:
-		vec = NewVector[types.Datetime](typ, nullable, opts...)
+		vec = NewVector[types.Datetime](typ, opts...)
 	case types.T_time:
-		vec = NewVector[types.Time](typ, nullable, opts...)
+		vec = NewVector[types.Time](typ, opts...)
 	case types.T_TS:
-		vec = NewVector[types.TS](typ, nullable, opts...)
+		vec = NewVector[types.TS](typ, opts...)
 	case types.T_Rowid:
-		vec = NewVector[types.Rowid](typ, nullable, opts...)
+		vec = NewVector[types.Rowid](typ, opts...)
 	case types.T_Blockid:
-		vec = NewVector[types.Blockid](typ, nullable, opts...)
+		vec = NewVector[types.Blockid](typ, opts...)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		vec = NewVector[[]byte](typ, nullable, opts...)
+		vec = NewVector[[]byte](typ, opts...)
 	default:
 		panic("not support")
 	}
 	return
 }
 
-func BuildBatch(
-	attrs []string,
-	colTypes []types.Type,
-	nullables []bool,
-	opts Options) *Batch {
+func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
 	bat := &Batch{
 		Attrs:   make([]string, 0, len(attrs)),
 		nameidx: make(map[string]int, len(attrs)),
 		Vecs:    make([]Vector, 0, len(attrs)),
 	}
 	for i, attr := range attrs {
-		vec := MakeVector(colTypes[i], nullables[i], opts)
+		vec := MakeVector(colTypes[i], opts)
 		bat.AddVector(attr, vec)
 	}
 	return bat

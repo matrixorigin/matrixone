@@ -16,13 +16,11 @@ package txnimpl
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -89,13 +87,15 @@ func (c *AppendCmd) VerboseString() string {
 func (c *AppendCmd) Close()         { c.ComposedCmd.Close() }
 func (c *AppendCmd) GetType() int16 { return CmdAppend }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint32(len(c.Infos))); err != nil {
+	length := uint32(len(c.Infos))
+	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	var sn int64
@@ -111,7 +111,8 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	if err = binary.Write(w, binary.BigEndian, c.Node.GetTxn().GetPrepareTS()); err != nil {
+	ts := c.Node.GetTxn().GetPrepareTS()
+	if _, err = w.Write(ts[:]); err != nil {
 		return
 	}
 	n += 16
@@ -119,18 +120,18 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
 	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	if _, err = r.Read(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	var sn int64
 	n = 8
 	c.Infos = make([]*appendInfo, length)
 	for i := 0; i < int(length); i++ {
-		c.Infos[i] = &appendInfo{dest: &common.ID{}}
+		c.Infos[i] = &appendInfo{}
 		if sn, err = c.Infos[i].ReadFrom(r); err != nil {
 			return
 		}
@@ -142,7 +143,7 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	if err = binary.Read(r, binary.BigEndian, &c.Ts); err != nil {
+	if _, err = r.Read(c.Ts[:]); err != nil {
 		return
 	}
 	n += 16

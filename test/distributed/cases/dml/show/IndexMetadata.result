@@ -1,0 +1,174 @@
+DROP DATABASE IF EXISTS test;
+CREATE DATABASE test;
+USE test;
+drop table if exists T1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into t1 values(1,"Abby", 24);
+insert into t1 values(2,"Bob", 25);
+insert into t1 values(3,"Carol", 23);
+insert into t1 values(4,"Dora", 29);
+create unique index Idx on t1(name);
+select * from t1;
+id    name    age
+1    Abby    24
+2    Bob    25
+3    Carol    23
+4    Dora    29
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
+t1    0    idx    1    name    A    0    NULL    NULL    YES                YES    NULL
+drop table t1;
+drop table if exists t2;
+create table t2 (
+col1 bigint primary key,
+col2 varchar(25),
+col3 float,
+col4 varchar(50)
+);
+create unique index Idx on t2(col2) comment 'create varchar index';
+insert into t2 values(1,"Abby", 24,'zbcvdf');
+insert into t2 values(2,"Bob", 25,'zbcvdf');
+insert into t2 values(3,"Carol", 23,'zbcvdf');
+insert into t2 values(4,"Dora", 29,'zbcvdf');
+select * from t2;
+col1    col2    col3    col4
+1    Abby    24.0    zbcvdf
+2    Bob    25.0    zbcvdf
+3    Carol    23.0    zbcvdf
+4    Dora    29.0    zbcvdf
+show index from t2;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t2    0    idx    1    col2    A    0    NULL    NULL    YES            create varchar index    YES    NULL
+drop table t2;
+drop table if exists t3;
+create table t3(a int, b int, unique key(a) comment 'a');
+create unique index x ON t3(a) comment 'x';
+create index xx ON t3(a) comment 'xx';
+show create table t3;
+Table    Create Table
+t3    CREATE TABLE `t3` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`) COMMENT 'a',\nUNIQUE KEY `x` (`a`) COMMENT 'x',\nKEY `xx` (`a`) COMMENT 'xx'\n)
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t3    0    a    1    a    A    0    NULL    NULL    YES            a    YES    NULL
+t3    0    x    1    a    A    0    NULL    NULL    YES            x    YES    NULL
+t3    1    xx    1    a    A    0    NULL    NULL    YES            xx    YES    NULL
+alter table t3 drop index xx;
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t3    0    a    1    a    A    0    NULL    NULL    YES            a    YES    NULL
+t3    0    x    1    a    A    0    NULL    NULL    YES            x    YES    NULL
+drop table t3;
+drop table if exists t4;
+create table t4 (
+col1 bigint primary key,
+col2 varchar(25),
+col3 float,
+col4 varchar(50)
+);
+create unique index idx on t4(col2,col3);
+insert into t4 values(1,"Abby", 24,'zbcvdf');
+insert into t4 values(2,"Bob", 25,'zbcvdf');
+insert into t4 values(3,"Carol", 23,'zbcvdf');
+insert into t4 values(4,"Dora", 29,'zbcvdf');
+select * from t4;
+col1    col2    col3    col4
+1    Abby    24.0    zbcvdf
+2    Bob    25.0    zbcvdf
+3    Carol    23.0    zbcvdf
+4    Dora    29.0    zbcvdf
+show index from t4;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+t4    0    idx    1    col2    A    0    NULL    NULL    YES                YES    NULL
+t4    0    idx    2    col3    A    0    NULL    NULL    YES                YES    NULL
+drop table t4;
+drop table if exists t5;
+create table t5(a int, b int, unique key(a) comment 'a');
+show index from t5;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t5    0    a    1    a    A    0    NULL    NULL    YES            a    YES    NULL
+drop table t5;
+drop table if exists t6;
+create table t6(a int, b int, unique key(a));
+create index b on t6(b);
+show index from t6;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t6    0    a    1    a    A    0    NULL    NULL    YES                YES    NULL
+t6    1    b    1    b    A    0    NULL    NULL    YES                YES    NULL
+drop index b on t6;
+show index from t6;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t6    0    a    1    a    A    0    NULL    NULL    YES                YES    NULL
+drop table t6;
+drop table if exists t7;
+create table t7(a int, b int);
+create index x ON t7(a) comment 'x';
+show index from t7;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t7    1    x    1    a    A    0    NULL    NULL    YES            x    YES    NULL
+drop table t7;
+drop table if exists t8;
+create table t8(a int, b int, key(a) comment 'a');
+show index from t8;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t8    1    a    1    a    A    0    NULL    NULL    YES            a    YES    NULL
+drop table t8;
+drop table if exists t9;
+create table t9(
+col1 int unsigned,
+col2 varchar(15),
+col3 varchar(10),
+col4 int unsigned,
+col5 date,
+col6 decimal(7,2),
+col7 decimal(7,2),
+col8 int unsigned,
+unique index(col1,col2,col3,col6)
+);
+INSERT INTO t9 VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+INSERT INTO t9 VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
+create unique index idx_1 on t9(col1,col2,col3,col6);
+select * from t9;
+col1    col2    col3    col4    col5    col6    col7    col8
+7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+show index from t9;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t9    0    col1    1    col1    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    2    col2    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    3    col3    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    4    col6    A    0    NULL    NULL    YES                YES    NULL
+t9    0    idx_1    1    col1    A    0    NULL    NULL    YES                YES    NULL
+t9    0    idx_1    2    col2    A    0    NULL    NULL    YES                YES    NULL
+t9    0    idx_1    3    col3    A    0    NULL    NULL    YES                YES    NULL
+t9    0    idx_1    4    col6    A    0    NULL    NULL    YES                YES    NULL
+alter table t9 drop index idx_1;
+show index from t9;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t9    0    col1    1    col1    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    2    col2    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    3    col3    A    0    NULL    NULL    YES                YES    NULL
+t9    0    col1    4    col6    A    0    NULL    NULL    YES                YES    NULL
+drop table t9;
+drop table if exists t10;
+create table t10(a int,b binary,c char,d varchar(20));
+create index index01 on t10(a,b,C);
+show index from t10;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t10    1    index01    1    a    A    0    NULL    NULL    YES                YES    NULL
+t10    1    index01    2    b    A    0    NULL    NULL    YES                YES    NULL
+t10    1    index01    3    c    A    0    NULL    NULL    YES                YES    NULL
+drop table t10;
+drop table if exists t11;
+create table t11(col1 int not null, col2 varchar(100), col3 bigint);
+create index ABc on t11(COL1);
+show index from t11;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t11    1    abc    1    col1    A    0    NULL    NULL                    YES    NULL
+alter table t11 drop index ABc;
+show index from t11;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+drop table t11;
+DROP DATABASE test;

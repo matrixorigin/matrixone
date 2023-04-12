@@ -377,7 +377,7 @@ drop database iso_db_02;
 commit;
 w-w conflict
 create table iso_table_0001(a int);
-ExpectedEOB
+not connect to a database
 commit;
 use iso_db_02;
 invalid database iso_db_02

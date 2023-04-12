@@ -71,6 +71,10 @@ func (l Lock) isLockRangeEnd() bool {
 	return l.value&flagLockRangeEnd != 0
 }
 
+func (l Lock) isLockRangeStart() bool {
+	return l.value&flagLockRangeStart != 0
+}
+
 func (l Lock) getLockMode() pb.LockMode {
 	if l.value&flagLockExclusiveMode != 0 {
 		return pb.LockMode_Exclusive

@@ -20,15 +20,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type metaFile struct {
@@ -73,7 +74,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
-	nullables := CheckpointSchema.Nullables()
 	t0 := time.Now()
 	for i := range colNames {
 		if len(bats) == 0 {
@@ -81,9 +81,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
+			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i], nullables[i])
+			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}
@@ -97,17 +97,13 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 	}()
 
-	jobScheduler := tasks.NewParallelJobScheduler(200)
-	defer jobScheduler.Stop()
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
-	var wg sync.WaitGroup
-	readfn := func(i int) {
-		defer wg.Done()
+	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		metaloc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
 		typ := ET_Global
 		if isIncremental {
@@ -121,21 +117,37 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			entryType: typ,
 		}
 		var err2 error
-		if datas[i], err2 = checkpointEntry.Read(ctx, jobScheduler, r.fs); err2 != nil {
-			logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-			emptyFileMu.Lock()
-			emptyFile = append(emptyFile, checkpointEntry)
-			emptyFileMu.Unlock()
+		if prefetch {
+			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+			}
 		} else {
-			entries[i] = checkpointEntry
+			if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
+				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+				emptyFileMu.Lock()
+				emptyFile = append(emptyFile, checkpointEntry)
+				emptyFileMu.Unlock()
+			} else {
+				entries[i] = checkpointEntry
+			}
 		}
 	}
-	wg.Add(bat.Length())
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		go readfn(i)
+		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+
+		err = blockio.PrefetchMeta(r.fs.Service, metaLoc)
+		if err != nil {
+			return
+		}
 	}
-	wg.Wait()
+
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, true)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, false)
+	}
 	readDuration += time.Since(t0)
 	if err != nil {
 		return

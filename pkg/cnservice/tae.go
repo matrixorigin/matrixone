@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -74,6 +75,8 @@ func initTAE(
 	opts.CheckpointCfg.MinCount = cfg.Engine.MinCount
 	opts.CheckpointCfg.IncrementalInterval = cfg.Engine.IncrementalInterval.Duration
 	opts.CheckpointCfg.GlobalMinCount = cfg.Engine.GlobalMinCount
+
+	blockio.Start()
 
 	tae, err := db.Open(targetDir+"/tae", opts)
 	if err != nil {

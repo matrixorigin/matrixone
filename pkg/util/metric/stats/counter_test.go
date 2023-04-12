@@ -51,6 +51,27 @@ func TestCounterSwapW(t *testing.T) {
 	assert.Equal(t, int64(6), c.Load())
 }
 
+func TestCounterLoadW(t *testing.T) {
+	c := Counter{}
+
+	c.Add(1)
+	assert.Equal(t, int64(1), c.Load())
+	assert.Equal(t, int64(1), c.LoadW())
+
+	c.Add(1)
+	assert.Equal(t, int64(2), c.Load())
+	assert.Equal(t, int64(2), c.LoadW())
+
+	assert.Equal(t, int64(2), c.SwapW(0))
+
+	assert.Equal(t, int64(2), c.Load())
+	assert.Equal(t, int64(0), c.LoadW())
+
+	c.Add(1)
+	assert.Equal(t, int64(3), c.Load())
+	assert.Equal(t, int64(1), c.LoadW())
+}
+
 func BenchmarkAdd(b *testing.B) {
 	b.Run("atomic.Int64", func(b *testing.B) {
 		c := atomic.Int64{}

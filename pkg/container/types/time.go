@@ -100,6 +100,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 	strs := strings.Split(s, ".")
 	timeString := strs[0]
 	isNegative := false
+	day := uint64(0)
 
 	// handle date&time part
 	// If the input string have date, make sure it is valid.
@@ -120,6 +121,15 @@ func ParseTime(s string, scale int32) (Time, error) {
 		if s[0] == '-' {
 			isNegative = true
 			timeString = timeString[1:]
+		}
+
+		timeParts := strings.Split(s, " ")
+		if len(timeParts) > 1 {
+			day, _ = strconv.ParseUint(timeParts[0], 10, 64)
+			if day > MaxHourInTime/maxHourInDay {
+				return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
+			}
+			timeString = timeParts[1]
 		}
 	}
 
@@ -203,7 +213,11 @@ func ParseTime(s string, scale int32) (Time, error) {
 		}
 	}
 
-	return TimeFromClock(isNegative, hour, uint8(minute), uint8(sec+uint64(carry)), msec), nil
+	if day > MaxHourInTime/maxHourInDay-hour {
+		return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
+	}
+
+	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec+uint64(carry)), msec), nil
 }
 
 // Numeric 112233/112233.4444 should be treate like string and then
@@ -392,5 +406,11 @@ func ValidTime(h, m, s uint64) bool {
 
 func isDateType(s string) bool {
 	strArr := strings.Split(s, " ")
-	return len(strArr) > 1
+	if len(strArr) > 1 {
+		if _, err := strconv.ParseUint(strArr[0], 10, 64); err != nil {
+			return true
+		}
+	}
+
+	return false
 }

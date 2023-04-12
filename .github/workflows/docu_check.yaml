@@ -12,20 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'pull_request_target' }}
     steps:
-      - uses: guguducken/pull-issue-reviewer@v0.1.0
+      - uses: guguducken/pull-issue-reviewer@v0.3.0
         with:
           token_action: ${{ secrets.TOKEN_ACTION }}
           uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
-          id_label: "5138861359"
+          name_label: "doc influence"
           reviewers: "lacrimosaprinz,dengn"
           mentions: "Prinz,DengNan"
   issue_close_check:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'issues' }}
     steps:
-      - uses: guguducken/pull-issue-reviewer@issue_close_check
+      - uses: guguducken/pull-issue-reviewer@issue_close_check_with_name
         with:
           token_action: ${{ secrets.TOKEN_ACTION }}
           uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
-          id_label: "5138861359"
+          name_label: "doc influence"
           mentions: "Prinz,DengNan"

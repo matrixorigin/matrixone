@@ -115,3 +115,11 @@ func (db *txnSysDB) TruncateByID(id uint64, newTableId uint64) (rel handle.Relat
 	}
 	return db.txnDatabase.TruncateByID(id, newTableId)
 }
+
+func (db *txnSysDB) IsSubscription() bool {
+	return db.txnDatabase.IsSubscription()
+}
+
+func (db *txnSysDB) GetCreateSql() string {
+	return db.txnDatabase.GetCreateSql()
+}

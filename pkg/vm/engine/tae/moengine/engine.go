@@ -95,31 +95,34 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
 	createSql := "todosql"
+	datType := ""
 	if ctx != nil {
 		createSql, _ = ctx.Value(defines.SqlKey{}).(string)
+		datType, _ = ctx.Value(defines.DatTypKey{}).(string)
 	}
-	_, err = txn.CreateDatabase(name, createSql)
+	_, err = txn.CreateDatabase(name, createSql, datType)
 	return
 }
 
-func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle Txn) (err error) {
+func (e *txnEngine) CreateDatabase(ctx context.Context, name, datTyp string, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name, "todosql")
+
+	_, err = txn.CreateDatabase(name, "todosql", datTyp)
 	return
 }
 
 func (e *txnEngine) CreateDatabaseWithID(ctx context.Context,
-	name, createSql string, id uint64, txnHandle Txn) (err error) {
+	name, createSql, datTyp string, id uint64, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabaseWithID(name, createSql, id)
+	_, err = txn.CreateDatabaseWithID(name, createSql, datTyp, id)
 	return
 }
 
@@ -217,6 +220,10 @@ func (e *txnEngine) Nodes() (engine.Nodes, error) {
 
 func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
 	return e.impl.StartTxn(info)
+}
+
+func (e *txnEngine) StartTxnWithNow(info []byte) (txn Txn, err error) {
+	return e.impl.StartTxnWithNow(info)
 }
 
 func (e *txnEngine) GetTxnByID(id []byte) (txn Txn, err error) {
