@@ -55,11 +55,11 @@ func NewRowid(blkid *Blockid, offset uint32) types.Rowid {
 }
 
 func ToObjectName(blkID *Blockid) ObjectName {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
 }
 
 func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {
-	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), FileNameLen)
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
 	return bytes.Equal(buf, *objID)
 }
 

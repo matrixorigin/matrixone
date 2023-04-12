@@ -5949,3 +5949,31 @@ func TestMarshalPartioned(t *testing.T) {
 	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
 	assert.Equal(t, int8(1), partioned)
 }
+
+func TestDedup2(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	count := 50
+	data := catalog.MockBatch(schema, count)
+	datas := data.Split(count)
+
+	tae.createRelAndAppend(datas[0], true)
+
+	for i := 1; i < count; i++ {
+		tae.DoAppend(datas[i])
+		txn, rel := tae.getRelation()
+		for j := 0; j <= i; j++ {
+			err := rel.Append(datas[j])
+			assert.Error(t, err)
+		}
+		assert.NoError(t, txn.Commit())
+	}
+}

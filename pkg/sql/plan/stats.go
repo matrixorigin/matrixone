@@ -709,45 +709,53 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) int32 {
+// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
+const kLeftRightRatio = 1.3
+
+func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
-		for i, child := range node.Children {
-			node.Children[i] = builder.applySwapRuleByStats(child, recursive)
+		for _, child := range node.Children {
+			builder.applySwapRuleByStats(child, recursive)
 		}
 	}
 	if node.NodeType != plan.Node_JOIN {
-		return nodeID
+		return
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	rightChild := builder.qry.Nodes[node.Children[1]]
 	if rightChild.NodeType == plan.Node_FUNCTION_SCAN {
-		return nodeID
+		return
 	}
 
-	if node.JoinType == plan.Node_LEFT {
+	switch node.JoinType {
+	case plan.Node_LEFT:
 		//right join does not support non equal join for now
-		//left join has a better performance than right join, so 1.3 is a threshold
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*1.3 < rightChild.Stats.Outcnt {
-			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_RIGHT
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+			node.JoinType = plan.Node_RIGHT
 		}
-		return nodeID
-	}
-	if node.JoinType == plan.Node_RIGHT {
+
+	case plan.Node_RIGHT:
 		//right join does not support non equal join for now
-		//left join has a better performance than right join, so 1.3 is a threshold
-		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*1.3 {
-			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_LEFT
+		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*kLeftRightRatio {
+			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+			node.JoinType = plan.Node_LEFT
 		}
-		return nodeID
-	}
-	if node.JoinType == plan.Node_INNER {
+
+	case plan.Node_INNER:
 		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
-			node.Children = []int32{node.Children[1], node.Children[0]}
+			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+
+		}
+
+	case plan.Node_SEMI, plan.Node_ANTI:
+		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+			//node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+			node.BuildOnLeft = true
 		}
 	}
-	return nodeID
 }
 
 func compareStats(stats1, stats2 *Stats) bool {
