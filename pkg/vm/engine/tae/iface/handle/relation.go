@@ -47,7 +47,7 @@ type Relation interface {
 	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, error)
 	GetValueByFilter(filter *Filter, col int) (any, error)
-	UpdateByFilter(filter *Filter, col uint16, v any) error
+	UpdateByFilter(filter *Filter, col uint16, v any, isNull bool) error
 	DeleteByFilter(filter *Filter) error
 
 	BatchDedup(col containers.Vector) error

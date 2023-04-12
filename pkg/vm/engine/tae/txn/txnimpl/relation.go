@@ -222,7 +222,7 @@ func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, e
 	return
 }
 
-func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {
+func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
 	id, row, err := h.table.GetByFilter(filter)
 	if err != nil {
 		return
@@ -238,17 +238,14 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		if int(col) == def.Idx {
 			colVal = v
 		} else {
+			//TODO: Should I add isNull flag here as well?
 			colVal, err = h.table.GetValue(id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
 		}
 		vec := containers.MakeVector(def.Type)
-		if types.IsNull(colVal) {
-			vec.Append(colVal, true)
-		} else {
-			vec.Append(colVal, false)
-		}
+		vec.Append(colVal, isNull)
 
 		bat.AddVector(def.Name, vec)
 	}

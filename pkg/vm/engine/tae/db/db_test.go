@@ -260,7 +260,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
 		}
 	}
-	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv)
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, false)
 	assert.NoError(t, err)
 
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
@@ -545,7 +545,7 @@ func TestCompactBlock1(t *testing.T) {
 			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			assert.Nil(t, err)
 			f2 := handle.NewEQFilter(v.(int32) + 1)
-			err = rel.UpdateByFilter(f2, 3, int64(99))
+			err = rel.UpdateByFilter(f2, 3, int64(99), false)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
@@ -1843,7 +1843,7 @@ func TestScan2(t *testing.T) {
 	pkv = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(8)
 	filter = handle.NewEQFilter(pkv)
 	updateV := int64(999)
-	err = rel.UpdateByFilter(filter, 3, updateV)
+	err = rel.UpdateByFilter(filter, 3, updateV, false)
 	assert.NoError(t, err)
 
 	v, err := rel.GetValueByFilter(filter, 3)
@@ -1970,7 +1970,7 @@ func TestUpdateByFilter(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
-	err := rel.UpdateByFilter(filter, 2, int32(2222))
+	err := rel.UpdateByFilter(filter, 2, int32(2222), false)
 	assert.NoError(t, err)
 
 	id, row, err := rel.GetByFilter(filter)
@@ -1982,7 +1982,7 @@ func TestUpdateByFilter(t *testing.T) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
 
-	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333))
+	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333), false)
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
@@ -2145,12 +2145,12 @@ func TestSnapshotIsolation1(t *testing.T) {
 
 	// Step 3
 	txn2, rel2 := getDefaultRelation(t, tae, schema.Name)
-	err := rel2.UpdateByFilter(filter, 3, int64(2222))
+	err := rel2.UpdateByFilter(filter, 3, int64(2222), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn2.Commit())
 
 	// Step 4
-	err = rel1.UpdateByFilter(filter, 3, int64(1111))
+	err = rel1.UpdateByFilter(filter, 3, int64(1111), false)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
@@ -2164,7 +2164,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 
 	// Step 6
 	txn3, rel3 := getDefaultRelation(t, tae, schema.Name)
-	err = rel3.UpdateByFilter(filter, 3, int64(3333))
+	err = rel3.UpdateByFilter(filter, 3, int64(3333), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn3.Commit())
 
@@ -2505,7 +2505,7 @@ func TestNull1(t *testing.T) {
 
 	v0_4 := getSingleSortKeyValue(bats[0], schema, 4)
 	filter_4 := handle.NewEQFilter(v0_4)
-	err = rel.UpdateByFilter(filter_4, 3, types.Null{})
+	err = rel.UpdateByFilter(filter_4, 3, nil, true)
 	assert.NoError(t, err)
 	uv, err := rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
@@ -2539,7 +2539,7 @@ func TestNull1(t *testing.T) {
 
 	v0_1 := getSingleSortKeyValue(bats[0], schema, 1)
 	filter0_1 := handle.NewEQFilter(v0_1)
-	err = rel.UpdateByFilter(filter0_1, 12, types.Null{})
+	err = rel.UpdateByFilter(filter0_1, 12, nil, true)
 	assert.NoError(t, err)
 	uv0_1, err := rel.GetValueByFilter(filter0_1, 12)
 	assert.NoError(t, err)
@@ -3150,7 +3150,7 @@ func TestTruncateZonemap(t *testing.T) {
 
 	// 3 NonAppendable Blocks
 	txn, rel = tae.getRelation()
-	rel.UpdateByFilter(handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35))
+	rel.UpdateByFilter(handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35), false)
 	assert.NoError(t, txn.Commit())
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)

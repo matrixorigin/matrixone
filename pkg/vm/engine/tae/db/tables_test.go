@@ -335,17 +335,17 @@ func TestTxn6(t *testing.T) {
 		filter.Op = handle.FilterEq
 		filter.Val = int32(5)
 
-		err := rel.UpdateByFilter(filter, uint16(3), int64(33))
+		err := rel.UpdateByFilter(filter, uint16(3), int64(33), false)
 		assert.NoError(t, err)
 
-		err = rel.UpdateByFilter(filter, uint16(3), int64(44))
+		err = rel.UpdateByFilter(filter, uint16(3), int64(44), false)
 		assert.NoError(t, err)
 		v, err := rel.GetValueByFilter(filter, 3)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(44), v)
 
 		filter.Val = int32(6)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(77))
+		err = rel.UpdateByFilter(filter, uint16(3), int64(77), false)
 		assert.NoError(t, err)
 
 		err = rel.DeleteByFilter(filter)
@@ -365,16 +365,16 @@ func TestTxn6(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotEqual(t, int64(44), v)
 
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55))
+			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
 
 			filter.Val = int32(7)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(88))
+			err = rel.UpdateByFilter(filter, uint16(3), int64(88), false)
 			assert.NoError(t, err)
 
 			// Update row that has uncommitted delete -- FAIL
 			filter.Val = int32(6)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55))
+			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
 			_, err = rel.GetValueByFilter(filter, 3)
 			assert.NoError(t, err)
@@ -382,7 +382,7 @@ func TestTxn6(t *testing.T) {
 			assert.NoError(t, err)
 		}
 		filter.Val = int32(7)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(99))
+		err = rel.UpdateByFilter(filter, uint16(3), int64(99), false)
 		assert.NoError(t, err)
 
 		assert.NoError(t, txn.Commit())

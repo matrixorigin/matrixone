@@ -85,8 +85,10 @@ func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteTyp
 }
 func (rel *TxnRelation) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) { return }
 func (rel *TxnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error)   { return }
-func (rel *TxnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error)  { return }
-func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error)                     { return }
+func (rel *TxnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+	return
+}
+func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error) { return }
 func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }

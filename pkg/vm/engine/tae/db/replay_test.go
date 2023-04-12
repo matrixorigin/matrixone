@@ -323,7 +323,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(10000), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	filter := handle.NewEQFilter(int32(5))
-	err = rel.UpdateByFilter(filter, uint16(0), int32(33))
+	err = rel.UpdateByFilter(filter, uint16(0), int32(33), false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -410,7 +410,7 @@ func TestReplay2(t *testing.T) {
 	filter := handle.NewEQFilter(int32(1500))
 	id, row, err := rel.GetByFilter(filter)
 	assert.Nil(t, err)
-	err = rel.UpdateByFilter(filter, uint16(0), int32(33))
+	err = rel.UpdateByFilter(filter, uint16(0), int32(33), false)
 	assert.Nil(t, err)
 
 	err = rel.RangeDelete(id, row+1, row+100, handle.DT_Normal)
@@ -537,7 +537,7 @@ func TestReplay3(t *testing.T) {
 	err = tbl.Append(bat)
 	assert.Nil(t, err)
 	for i := 0; i < 100; i++ {
-		err = tbl.UpdateByFilter(filter, 0, int32(33))
+		err = tbl.UpdateByFilter(filter, 0, int32(33), false)
 		assert.NoError(t, err)
 		err = tbl.Append(bat)
 		assert.Error(t, err)
@@ -550,7 +550,7 @@ func TestReplay3(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		txn, rel := tae.getRelation()
-		err = rel.UpdateByFilter(filter, 0, int32(33))
+		err = rel.UpdateByFilter(filter, 0, int32(33), false)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 
@@ -1151,7 +1151,7 @@ func TestReplay9(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
-	err := rel.UpdateByFilter(filter, 2, int32(999))
+	err := rel.UpdateByFilter(filter, 2, int32(999), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
@@ -1181,7 +1181,7 @@ func TestReplay9(t *testing.T) {
 	txn, rel = tae.getRelation()
 	v2 := getSingleSortKeyValue(bats[0], schema, 4)
 	filter2 := handle.NewEQFilter(v2)
-	err = rel.UpdateByFilter(filter2, 1, int16(199))
+	err = rel.UpdateByFilter(filter2, 1, int16(199), false)
 	assert.NoError(t, err)
 	actv, err = rel.GetValueByFilter(filter2, 1)
 	assert.NoError(t, err)
@@ -1206,7 +1206,7 @@ func TestReplay9(t *testing.T) {
 	txn, rel = tae.getRelation()
 	v3 := getSingleSortKeyValue(bats[1], schema, 3)
 	filter3 := handle.NewEQFilter(v3)
-	err = rel.UpdateByFilter(filter3, 5, uint16(88))
+	err = rel.UpdateByFilter(filter3, 5, uint16(88), false)
 	assert.NoError(t, err)
 	actv, err = rel.GetValueByFilter(filter3, 5)
 	assert.NoError(t, err)
