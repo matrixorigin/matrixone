@@ -441,7 +441,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-		} else if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
+		} else {
 			childProjList = builder.qry.Nodes[rightID].ProjectList
 			for i, globalRef := range rightRemapping.localToGlobal {
 				if colRefCnt[globalRef] == 0 {
@@ -831,9 +831,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
-		rootID = builder.applySwapRuleByStats(rootID, true)
+		builder.applySwapRuleByStats(rootID, true)
 		SortFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
+
+		// XXX: This will be removed soon, after merging implementation of all join operators
+		builder.swapJoinBuildSide(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
