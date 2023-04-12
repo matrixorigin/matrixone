@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashbuild
+package rightsemi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -26,6 +26,8 @@ import (
 
 const (
 	Build = iota
+	Probe
+	SendLast
 	End
 )
 
@@ -37,31 +39,30 @@ type evalVector struct {
 type container struct {
 	state int
 
-	hasNull bool
-
-	sels [][]int32
+	inBuckets []uint8
 
 	bat *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	mp *hashmap.JoinMap
 
-	nullSels []int32
+	matched []uint8
 }
 
 type Argument struct {
-	ctr *container
-	// need to generate a push-down filter expression
-	NeedExpr    bool
-	NeedHashMap bool
-	Ibucket     uint64
-	Nbucket     uint64
-	Typs        []types.Type
-	Conditions  []*plan.Expr
+	ctr        *container
+	Ibucket    uint64
+	Nbucket    uint64
+	Result     []int32
+	Right_typs []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
 
-	IsRight bool
+	Is_receiver bool
+	Channel     chan *[]uint8
+	NumCPU      uint64
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -70,9 +71,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)
-		if !arg.NeedHashMap {
-			ctr.cleanHashMap()
-		}
+		ctr.cleanHashMap()
 	}
 }
 
@@ -83,18 +82,18 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
+}
+
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
 			ctr.evecs[i].vec.Free(mp)
 			ctr.evecs[i].vec = nil
 		}
-	}
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.mp != nil {
-		ctr.mp.Free()
-		ctr.mp = nil
 	}
 }
