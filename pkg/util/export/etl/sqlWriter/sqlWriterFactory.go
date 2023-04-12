@@ -32,8 +32,14 @@ func SetSQLWriterDBUser(userName string, password string) {
 	}
 	sqlWriterDBUser.Store(user)
 }
-func GetSQLWriterDBUser() *DBUser {
-	return sqlWriterDBUser.Load().(*DBUser)
+func GetSQLWriterDBUser() (*DBUser, error) {
+	dbUser := sqlWriterDBUser.Load()
+	if dbUser == nil {
+		return nil, errNotReady
+	} else {
+		return sqlWriterDBUser.Load().(*DBUser), nil
+
+	}
 }
 
 func SetSQLWriterDBAddressFunc(f func(context.Context) (string, error)) {

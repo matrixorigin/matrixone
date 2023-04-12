@@ -44,6 +44,15 @@ func SplitTableAndColumn(name string) (string, string) {
 	return schema, xs[len(xs)-1]
 }
 
+func TableIsLoggingTable(dbName string, tableName string) bool {
+	if tableName == "statement_info" && dbName == "system" {
+		return true
+	} else if tableName == "metric" && dbName == "system_metrics" {
+		return true
+	}
+	return false
+}
+
 // TableIsClusterTable check the table type is cluster table
 func TableIsClusterTable(tableType string) bool {
 	return tableType == catalog.SystemClusterRel
@@ -101,6 +110,16 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	right := tree.NewParenExpr(andExpr)
 	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
+}
+
+func BuildSysStatementInfoFilter(curAccountId uint64) tree.Expr {
+	// left is: account_id = cur_accountId
+	// left := makeAccountIdEqualAst(curAccountId)
+
+	relkindEqualAst := makeStringEqualAst("account_id", "a1")
+
+	return tree.NewAndExpr(relkindEqualAst, relkindEqualAst)
+	//return left
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:

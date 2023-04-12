@@ -1811,6 +1811,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
+	// Allow the general accounts to access statement_info
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
 	if n.ObjRef.PubAccountId != -1 {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
 	}
