@@ -88,7 +88,7 @@ func TestMerge1(t *testing.T) {
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i), vec.IsNull(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
@@ -121,7 +121,7 @@ func TestMerge1(t *testing.T) {
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i), vec.IsNull(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
