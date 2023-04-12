@@ -42,3 +42,27 @@ a
 6
 commit;
 drop database if exists db1;
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3);
+begin;
+select * from t;
+a
+1
+2
+3
+select mo_ctl('dn', 'flush', 'db1.t');
+mo_ctl(dn, flush, db1.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select a from db1.t where a = 1;
+a
+1
+select * from t;
+a
+1
+2
+3
+commit;
