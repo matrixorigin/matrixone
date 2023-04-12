@@ -28,7 +28,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_int32.ToType()
-	idx := NewSimpleARTMap(typ)
+	idx := NewSimpleARTMap()
 
 	var err error
 	var rows []uint32
@@ -99,7 +99,7 @@ func TestArtIndexString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_varchar.ToType()
-	idx := NewSimpleARTMap(typ)
+	idx := NewSimpleARTMap()
 
 	var err error
 	var rows []uint32
@@ -146,7 +146,7 @@ func TestArtIndexString(t *testing.T) {
 }
 
 func BenchmarkArt(b *testing.B) {
-	tr := NewSimpleARTMap(types.T_char.ToType())
+	tr := NewSimpleARTMap()
 	b.Run("tree-insert", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

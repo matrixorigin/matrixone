@@ -17,7 +17,6 @@ package index
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
@@ -46,7 +45,7 @@ type simpleARTMap struct {
 	tree art.Tree
 }
 
-func NewSimpleARTMap(typ types.Type) *simpleARTMap {
+func NewSimpleARTMap() *simpleARTMap {
 	return &simpleARTMap{
 		tree: art.New(),
 	}
