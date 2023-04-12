@@ -425,6 +425,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		stmt.Format(fmtCtx)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -432,7 +434,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
+				Value: fmtCtx.String(),
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
