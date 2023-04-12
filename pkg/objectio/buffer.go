@@ -39,7 +39,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 			FilePath: name,
 		},
 	}
-	buffer.vector.Entries = make([]fileservice.IOEntry, 0)
+	buffer.vector.Entries = make([]fileservice.IOEntry, 3)
 	return buffer
 }
 
@@ -56,6 +56,21 @@ func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error
 		Data:   buf,
 	}
 	b.vector.Entries = append(b.vector.Entries, entry)
+	return int(offset), len(buf), nil
+}
+
+func (b *ObjectBuffer) WriteWithIndex(buf []byte, index uint32) (int, int, error) {
+	offset := int64(0)
+	if len(b.vector.Entries) > 0 {
+		offset = b.vector.Entries[index-1].Offset +
+			b.vector.Entries[index-1].Size
+	}
+	entry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(buf)),
+		Data:   buf,
+	}
+	b.vector.Entries[index] = entry
 	return int(offset), len(buf), nil
 }
 

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-const ExtentSize = 16
 const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
 
 type ObjectMeta []byte

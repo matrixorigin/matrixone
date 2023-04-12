@@ -90,6 +90,10 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
+	alg, err := strconv.ParseUint(location[2], 10, 32)
+	if err != nil {
+		return nil, err
+	}
 	offset, err := strconv.ParseUint(location[3], 10, 32)
 	if err != nil {
 		return nil, err
@@ -110,7 +114,7 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(uint8(alg), uint32(offset), uint32(size), uint32(osize))
 	uid, err := types.ParseUuid(location[0])
 	if err != nil {
 		return nil, err

@@ -19,23 +19,25 @@ import (
 	"unsafe"
 )
 
+const ExtentSize = 13
+
 type Extent struct {
-	id         uint32
+	alg        uint8
 	offset     uint32
 	length     uint32
 	originSize uint32
 }
 
-func NewExtent(id, offset, length, originSize uint32) Extent {
+func NewExtent(alg uint8, offset, length, originSize uint32) Extent {
 	return Extent{
-		id:         id,
+		alg:        alg,
 		offset:     offset,
 		length:     length,
 		originSize: originSize,
 	}
 }
 
-func (ex Extent) Id() uint32 { return ex.id }
+func (ex Extent) Alg() uint8 { return ex.alg }
 
 func (ex Extent) End() uint32 { return ex.offset + ex.length }
 
@@ -49,13 +51,9 @@ func (ex Extent) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&ex)), ExtentSize)
 }
 func (ex *Extent) Unmarshal(data []byte) {
-	e := *(*Extent)(unsafe.Pointer(&data[0]))
-	ex.id = e.id
-	ex.offset = e.offset
-	ex.length = e.length
-	ex.originSize = e.originSize
+	ex = (*Extent)(unsafe.Pointer(&data[0]))
 }
 
 func (ex Extent) String() string {
-	return fmt.Sprintf("%d_%d_%d_%d", ex.id, ex.offset, ex.length, ex.originSize)
+	return fmt.Sprintf("%d_%d_%d_%d", ex.alg, ex.offset, ex.length, ex.originSize)
 }

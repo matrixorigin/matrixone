@@ -77,7 +77,7 @@ func (w *ObjectWriter) WriteHeader() error {
 	header.Write(types.EncodeFixed(h.magic))
 	header.Write(types.EncodeFixed(h.version))
 	header.Write(make([]byte, 22))
-	_, _, err = w.buffer.Write(header.Bytes())
+	_, _, err = w.buffer.WriteWithIndex(header.Bytes(), 0)
 	return err
 }
 
@@ -93,7 +93,6 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if ext, err = w.buffer.WriteWithCompress(buf); err != nil {
 			return nil, err
 		}
-		ext.id = block.GetID()
 		block.ColumnMeta(uint16(i)).setLocation(ext)
 		block.ColumnMeta(uint16(i)).setAlg(compress.Lz4)
 		block.ColumnMeta(uint16(i)).setType(uint8(vec.GetType().Oid))
@@ -145,15 +144,8 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	// write block meta
 	metabuf := &bytes.Buffer{}
-	for i, block := range w.blocks {
-		var n int
-		meta := block.MarshalMeta()
-		if err != nil {
-			return nil, err
-		}
-		if n, err = metabuf.Write(meta); err != nil {
-			return nil, err
-		}
+	for i, meta := range w.blocks {
+		n := len(meta)
 		blockIndex.SetBlockMetaPos(uint32(i), uint32(start), uint32(start+n))
 		start += n
 	}
@@ -163,16 +155,24 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
 	// begin write
-	start, n, err := w.buffer.Write(objectMeta)
+	start, n, err := w.buffer.WriteWithIndex(objectMeta, 1)
 	if err != nil {
 		return nil, err
 	}
 	length += n
-	_, n, err = w.buffer.Write(blockIndex)
+	_, n, err = w.buffer.WriteWithIndex(blockIndex, 2)
 	if err != nil {
 		return nil, err
 	}
 	length += n
+	for _, meta := range w.blocks {
+		for i := uint16(0); i < meta.GetColumnCount(); i++ {
+			location := meta.ColumnMeta(i).Location()
+			offset := location.offset + uint32(length)
+			location.offset = offset
+			meta.ColumnMeta(i).setLocation(location)
+		}
+	}
 	_, n, err = w.buffer.Write(metabuf.Bytes())
 	if err != nil {
 		return nil, err
@@ -200,7 +200,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for i := range w.blocks {
 		header := w.blocks[i].BlockHeader()
 		extent := &Extent{
-			id:         uint32(i),
 			offset:     uint32(start),
 			length:     uint32(length),
 			originSize: uint32(length),
