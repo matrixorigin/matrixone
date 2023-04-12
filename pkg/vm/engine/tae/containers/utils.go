@@ -273,6 +273,10 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
+func ForeachVector(vec Vector, op any, sel *roaring.Bitmap) (err error) {
+	return ForeachVectorWindow(vec, 0, vec.Length(), op, sel)
+}
+
 func ForeachVectorWindow(
 	vec Vector,
 	start, length int,
