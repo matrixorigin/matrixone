@@ -565,3 +565,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	return nodeID, cantPushdown
 }
+
+func (builder *QueryBuilder) swapJoinBuildSide(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+
+	for _, child := range node.Children {
+		builder.swapJoinBuildSide(child)
+	}
+
+	// XXX: This function will be eliminated entirely, so don't care about the defective logic below.
+	if node.BuildOnLeft && IsEquiJoin(node.OnList) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
+}
