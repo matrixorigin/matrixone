@@ -572,7 +572,7 @@ func (blk *ablock) inMemoryBatchDedup(
 
 	def := blk.meta.GetSchema().GetSingleSortKey()
 	v := mnode.GetValueByRow(int(dupRow), def.Idx)
-	entry := common.TypeStringValue(keys.GetType(), v)
+	entry := common.TypeStringValue(keys.GetType(), v, false)
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 

@@ -835,7 +835,7 @@ func (tbl *txnTable) updateLocalState(
 					ctx,
 					common.TypeStringValue(
 						*primaryKeyVector.GetType(),
-						memorytable.VectorAt(primaryKeyVector, idx).Value,
+						memorytable.VectorAt(primaryKeyVector, idx).Value, false,
 					),
 					bat.Attrs[tbl.primaryIdx+1],
 				)
