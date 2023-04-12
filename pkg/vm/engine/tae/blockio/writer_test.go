@@ -16,10 +16,11 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -93,4 +94,14 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
+}
+
+func TestMergeDeleteRows(t *testing.T) {
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, nil), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows(nil, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{2, 3, 7, 8, 9}, []int64{1, 2, 3}), []int64{1, 2, 3, 7, 8, 9})
+	require.Equal(t, mergeDeleteRows([]int64{2}, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{3}), []int64{1, 2, 3})
 }

@@ -1091,29 +1091,29 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
-	isEq := plan2.IsEquiJoin(n.OnList)
+	isEq := plan2.IsEquiJoin(node.OnList)
 
-	right_typs := make([]types.Type, len(right.ProjectList))
+	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		right_typs[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(expr.Typ)
 	}
 
-	left_typs := make([]types.Type, len(left.ProjectList))
+	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		left_typs[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(expr.Typ)
 	}
 
-	switch n.JoinType {
+	switch node.JoinType {
 	case plan.Node_INNER:
 		rs = c.newBroadcastJoinScopeList(ss, children)
-		if len(n.OnList) == 0 {
+		if len(node.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Idx: c.anal.curr,
-					Arg: constructProduct(n, right_typs, c.proc),
+					Arg: constructProduct(node, rightTyps, c.proc),
 				})
 			}
 		} else {
@@ -1122,31 +1122,45 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Idx: c.anal.curr,
-						Arg: constructJoin(n, right_typs, c.proc),
+						Arg: constructJoin(node, rightTyps, c.proc),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
-						Arg: constructLoopJoin(n, right_typs, c.proc),
+						Arg: constructLoopJoin(node, rightTyps, c.proc),
 					})
 				}
 			}
 		}
 	case plan.Node_SEMI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
-		for i := range rs {
-			if isEq {
-				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Semi,
-					Idx: c.anal.curr,
-					Arg: constructSemi(n, right_typs, c.proc),
-				})
+		if isEq {
+			if node.BuildOnLeft {
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				for i := range rs {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.RightSemi,
+						Idx: c.anal.curr,
+						Arg: constructRightSemi(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+					})
+				}
 			} else {
+				rs = c.newBroadcastJoinScopeList(ss, children)
+				for i := range rs {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Semi,
+						Idx: c.anal.curr,
+						Arg: constructSemi(node, rightTyps, c.proc),
+					})
+				}
+			}
+		} else {
+			rs = c.newBroadcastJoinScopeList(ss, children)
+			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
-					Arg: constructLoopSemi(n, right_typs, c.proc),
+					Arg: constructLoopSemi(node, rightTyps, c.proc),
 				})
 			}
 		}
@@ -1157,13 +1171,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Left,
 					Idx: c.anal.curr,
-					Arg: constructLeft(n, right_typs, c.proc),
+					Arg: constructLeft(node, rightTyps, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopLeft,
 					Idx: c.anal.curr,
-					Arg: constructLoopLeft(n, right_typs, c.proc),
+					Arg: constructLoopLeft(node, rightTyps, c.proc),
 				})
 			}
 		}
@@ -1174,7 +1188,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
 					Idx: c.anal.curr,
-					Arg: constructRight(n, left_typs, right_typs, uint64(i), uint64(len(rs)), c.proc),
+					Arg: constructRight(node, leftTyps, rightTyps, uint64(i), uint64(len(rs)), c.proc),
 				})
 			}
 		} else {
@@ -1187,31 +1201,44 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Single,
 					Idx: c.anal.curr,
-					Arg: constructSingle(n, right_typs, c.proc),
+					Arg: constructSingle(node, rightTyps, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(n, c.proc),
+					Arg: constructLoopSingle(node, c.proc),
 				})
 			}
 		}
 	case plan.Node_ANTI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
-		_, conds := extraJoinConditions(n.OnList)
-		for i := range rs {
-			if isEq && len(conds) == 1 {
-				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Anti,
-					Idx: c.anal.curr,
-					Arg: constructAnti(n, right_typs, c.proc),
-				})
+		if isEq {
+			if node.BuildOnLeft {
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				for i := range rs {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.RightAnti,
+						Idx: c.anal.curr,
+						Arg: constructRightAnti(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+					})
+				}
 			} else {
+				rs = c.newBroadcastJoinScopeList(ss, children)
+				for i := range rs {
+					rs[i].appendInstruction(vm.Instruction{
+						Op:  vm.Anti,
+						Idx: c.anal.curr,
+						Arg: constructAnti(node, rightTyps, c.proc),
+					})
+				}
+			}
+		} else {
+			rs = c.newBroadcastJoinScopeList(ss, children)
+			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
-					Arg: constructLoopAnti(n, right_typs, c.proc),
+					Arg: constructLoopAnti(node, rightTyps, c.proc),
 				})
 			}
 		}
@@ -1228,12 +1255,12 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.LoopMark,
 				Idx: c.anal.curr,
-				Arg: constructLoopMark(n, right_typs, c.proc),
+				Arg: constructLoopMark(node, rightTyps, c.proc),
 			})
 			//}
 		}
 	default:
-		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", n.JoinType)))
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", node.JoinType)))
 	}
 	return rs
 }
@@ -1851,7 +1878,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Addr: c.addr,
 				Rel:  rel,
-				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
 		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
@@ -1869,7 +1896,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Addr: c.addr,
 				Rel:  rel,
-				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
 		nodes[0].Data = append(nodes[0].Data, ranges...)
@@ -1886,7 +1913,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
 						Rel:  rel,
-						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
@@ -1905,7 +1932,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 					nodes = append(nodes, engine.Node{
 						Rel:  rel,
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
 
