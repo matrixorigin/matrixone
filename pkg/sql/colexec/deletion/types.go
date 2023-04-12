@@ -41,7 +41,8 @@ type container struct {
 	blockId_SkipFlush map[string]int8
 	// blockId_min        map[string]uint32
 	// blockId_max        map[string]uint32
-	batch_size uint32
+	batch_size     uint32
+	deleted_length uint32
 }
 
 type Argument struct {
@@ -89,6 +90,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 	vs := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	arg.ctr.deleted_length += uint32(len(vs))
 	for _, rowId := range vs {
 		blkid := rowId.GetBlockid()
 		str := (&blkid).String()

@@ -208,6 +208,8 @@ type txnTable struct {
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	localTS timestamp.Timestamp
+
+	sels []int64
 }
 
 type column struct {

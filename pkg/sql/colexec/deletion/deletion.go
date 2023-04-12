@@ -67,6 +67,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			catalog.BlockMeta_ID,
 			catalog.BlockMeta_MetaLoc,
 			catalog.BlockMeta_Type,
+			catalog.BlockMeta_Deletes_Length,
 			// catalog.BlockMetaOffset_Min,
 			// catalog.BlockMetaOffset_Max,
 		})
@@ -95,6 +96,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
 			vector.AppendFixed(resBat.GetVector(2), FlushMetaLoc, false, proc.GetMPool())
 		}
+		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
+		resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.batch_size, resBat.Length(), proc.GetMPool()))
 		proc.SetInputBatch(resBat)
 		return true, nil
 	}

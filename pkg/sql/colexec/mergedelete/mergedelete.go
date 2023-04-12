@@ -15,8 +15,11 @@ package mergedelete
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,11 +33,13 @@ func Prepare(proc *process.Process, arg any) error {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	var err error
+	var name string
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		// here means the delete is over, we should start to do
-		// compaction here
+		// compaction here, but in the future, we will do this
+		// in deletion operator
 		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_ID)
 		return true, nil
 	}
@@ -42,12 +47,27 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	// val, err := strconv.ParseUint(strings.Split(string(metaLocs[i]), ":")[2], 0, 64)
-	// blkId,metaLoc,type
-	err = ap.DelSource.Delete(proc.Ctx, bat, catalog.BlockMeta_ID)
-	if err != nil {
-		return false, err
+	// 		blkId          		metaLoc                        type
+	// |-----------|-----------------------------------|----------------|
+	// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
+	// |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
+	// |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
+	// |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
+	blkIds := vector.MustStrCol(bat.GetVector(0))
+	metaLocBats := vector.MustBytesCol(bat.GetVector(1))
+	typs := vector.MustFixedCol[int8](bat.GetVector(2))
+	for i := 0; i < bat.Length(); i++ {
+		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+		bat := &batch.Batch{}
+		if err := bat.UnmarshalBinary([]byte(metaLocBats[i])); err != nil {
+			return false, err
+		}
+		err = ap.DelSource.Delete(proc.Ctx, bat, name)
+		if err != nil {
+			return false, err
+		}
 	}
-	ap.AffectedRows += uint64(bat.Length())
+	// and there are another attr used to record how many rows are deleted
+	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(3), 0))
 	return false, nil
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -455,8 +458,30 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *txnTable) EnhanceDelete(bat *batch.Batch) error {
-	//
+func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
+	strs := strings.Split(name, "|")
+	blkId, typ_str := strs[0], strs[1]
+	typ, err := strconv.ParseInt(typ_str, 10, 64)
+	if err != nil {
+		return err
+	}
+
+	switch typ {
+	case deletion.FlushMetaLoc:
+
+	case deletion.CNBlockOffset:
+		u32_sels := vector.MustFixedCol[uint32](bat.GetVector(0))
+		if tbl.sels == nil {
+			tbl.sels = make([]int64, 0, len(u32_sels))
+		}
+		tbl.sels = tbl.sels[:0]
+		for i := 0; i < len(u32_sels); i++ {
+			tbl.sels = append(tbl.sels, int64(u32_sels[i]))
+		}
+		colexec.Srv.PutCnBlockDeletes(blkId, tbl.sels)
+	case deletion.RawRowIdBatch:
+	case deletion.RawBatchOffset:
+	}
 	return nil
 }
 
@@ -465,8 +490,8 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 		// start to do compaction for cn blocks
 	}
 	// remoteDelete
-	if bat.Attrs[0] == catalog.BlockMeta_ID {
-		return tbl.EnhanceDelete(bat)
+	if bat.Attrs[0] != catalog.Row_ID {
+		return tbl.EnhanceDelete(bat, name)
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})
 
