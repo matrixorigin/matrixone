@@ -258,6 +258,31 @@ func (arg *Argument) AddLockTarget(
 	return arg
 }
 
+// AddLockTargetWithPartition add lock targets for partition tables. Our partitioned table implementation
+// has each partition as a separate table. So when modifying data, these rows may belong to different
+// partitions. For lock op does not care about the logic of data and partition mapping calculation, the
+// caller needs to tell the lock op.
+//
+// tableIDs: the set of ids of the sub-tables of the parition to which the data of the current operation is
+// attributed after calculation.
+//
+// partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
+func (arg *Argument) AddLockTargetWithPartition(
+	tableIDs []uint64,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	refreshTimestampIndexInBatch int32,
+	partitionTableIDMappingInBatch int32) *Argument {
+	arg.targets = append(arg.targets, lockTarget{
+		partitionTableIDs:              tableIDs,
+		primaryColumnIndexInBatch:      primaryColumnIndexInBatch,
+		primaryColumnType:              primaryColumnType,
+		refreshTimestampIndexInBatch:   refreshTimestampIndexInBatch,
+		partitionTableIDMappingInBatch: partitionTableIDMappingInBatch,
+	})
+	return arg
+}
+
 // Free free mem
 func (arg *Argument) Free(
 	proc *process.Process,

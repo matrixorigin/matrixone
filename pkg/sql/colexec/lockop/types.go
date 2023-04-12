@@ -54,4 +54,7 @@ type lockTarget struct {
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
 	fetcher                      FetchLockRowsFunc
+
+	partitionTableIDs              []uint64
+	partitionTableIDMappingInBatch int32
 }
