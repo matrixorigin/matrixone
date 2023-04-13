@@ -62,7 +62,9 @@ func (view *ColumnView) Eval(clear bool) (err error) {
 	it := view.UpdateMask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		view.data.Update(int(row), view.UpdateVals[row])
+		// Note: Passing isNull = false is OK here. UpdateMask is not needed any more
+		// https://github.com/matrixorigin/matrixone/pull/8956#discussion_r1163487884
+		view.data.Update(int(row), view.UpdateVals[row], false)
 	}
 	if clear {
 		view.UpdateMask = nil

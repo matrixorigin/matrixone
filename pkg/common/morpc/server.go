@@ -283,6 +283,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			}
 		}
 
+		defer cs.cleanSend()
 		for {
 			select {
 			case <-ctx.Done():
@@ -452,6 +453,7 @@ func (cs *clientSession) Close() error {
 	}
 	close(cs.closedC)
 	cs.cleanSend()
+	close(cs.c)
 	cs.mu.closed = true
 	for _, c := range cs.mu.caches {
 		c.cache.Close()
@@ -463,10 +465,12 @@ func (cs *clientSession) Close() error {
 func (cs *clientSession) cleanSend() {
 	for {
 		select {
-		case f := <-cs.c:
+		case f, ok := <-cs.c:
+			if !ok {
+				return
+			}
 			f.messageSended(backendClosed)
 		default:
-			close(cs.c)
 			return
 		}
 	}
