@@ -1913,34 +1913,24 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nodes, nil
 	}
 
+	if isPartitionTable {
+		rel = nil
+	}
+
 	// In fact, the first element of Ranges is always a memory table.
 	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
-			if isPartitionTable {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Mcpu: 1,
-				})
-			} else {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: 1,
-				})
-			}
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: 1,
+			})
 		} else {
-			if isPartitionTable {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-				})
-			} else {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-				})
-			}
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+			})
 		}
 		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
 		ranges = ranges[1:]
@@ -1954,18 +1944,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 	if len(c.cnList) == 1 {
 		if len(nodes) == 0 {
-			if isPartitionTable {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-				})
-			} else {
-				nodes = append(nodes, engine.Node{
-					Addr: c.addr,
-					Rel:  rel,
-					Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-				})
-			}
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+			})
 		}
 		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
@@ -1978,72 +1961,40 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		if i+step >= len(ranges) {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
-					if isPartitionTable {
-						nodes = append(nodes, engine.Node{
-							Addr: c.addr,
-							Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-						})
-					} else {
-						nodes = append(nodes, engine.Node{
-							Addr: c.addr,
-							Rel:  rel,
-							Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-						})
-					}
+					nodes = append(nodes, engine.Node{
+						Addr: c.addr,
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
 			} else {
-				if isPartitionTable {
-					nodes = append(nodes, engine.Node{
-						Id:   c.cnList[j].Id,
-						Addr: c.cnList[j].Addr,
-						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i:],
-					})
-				} else {
-					nodes = append(nodes, engine.Node{
-						Rel:  rel,
-						Id:   c.cnList[j].Id,
-						Addr: c.cnList[j].Addr,
-						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i:],
-					})
-				}
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i:],
+				})
 			}
 		} else {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
-					if isPartitionTable {
-						nodes = append(nodes, engine.Node{
-							Addr: c.addr,
-							Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-						})
-					} else {
-						nodes = append(nodes, engine.Node{
-							Rel:  rel,
-							Addr: c.addr,
-							Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-						})
-					}
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
-				if isPartitionTable {
-					nodes = append(nodes, engine.Node{
-						Id:   c.cnList[j].Id,
-						Addr: c.cnList[j].Addr,
-						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i : i+step],
-					})
-				} else {
-					nodes = append(nodes, engine.Node{
-						Rel:  rel,
-						Id:   c.cnList[j].Id,
-						Addr: c.cnList[j].Addr,
-						Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-						Data: ranges[i : i+step],
-					})
-				}
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i : i+step],
+				})
 			}
 		}
 	}
