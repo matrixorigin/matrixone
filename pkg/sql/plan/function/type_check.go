@@ -151,8 +151,8 @@ func initTypeCheckRelated() {
 		{
 			typ := types.T_datetime
 			for i := range numbers {
-				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{numbers[i], typ, types.T_int64, types.T_int64})
-				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, numbers[i], types.T_int64, types.T_int64})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{numbers[i], typ, types.T_decimal64, types.T_decimal64})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, numbers[i], types.T_decimal64, types.T_decimal64})
 			}
 			for i := range decimals {
 				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{decimals[i], typ, decimals[i], decimals[i]})
@@ -294,8 +294,8 @@ func initTypeCheckRelated() {
 		{
 			typ := types.T_datetime
 			for i := range numbers {
-				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], typ, types.T_int64, types.T_int64})
-				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{typ, numbers[i], types.T_int64, types.T_int64})
+				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], typ, types.T_decimal64, types.T_decimal64})
+				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{typ, numbers[i], types.T_decimal64, types.T_decimal64})
 			}
 			for i := range decimals {
 				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{decimals[i], typ, decimals[i], decimals[i]})
