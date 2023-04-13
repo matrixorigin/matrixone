@@ -36,6 +36,9 @@ select account_name, version from mo_account where account_name = 'acc1';
 account_name   version
 acc_idx       0
 alter account acc1 suspend;
+select account_name, version from mo_account where account_name = 'acc1';
+account_name   version
+acc_idx       0
 alter account acc1 open;
 select account_name, version from mo_account where account_name = 'acc1';
 account_name   version
