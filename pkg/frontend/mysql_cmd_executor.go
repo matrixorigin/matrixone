@@ -1127,8 +1127,8 @@ func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUs
 	return doDropUser(ctx, mce.GetSession(), du)
 }
 
-func (mec *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
-	return doAlterUser(ctx, mec.GetSession(), au)
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+	return doAlterUser(ctx, mce.GetSession(), au)
 }
 
 // handleCreateRole creates the new role
