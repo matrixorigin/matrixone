@@ -260,7 +260,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
 		}
 	}
-	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, false)
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, bats[0].Vecs[updateColIdx].IsNull(5))
 	assert.NoError(t, err)
 
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
