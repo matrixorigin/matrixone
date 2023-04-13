@@ -439,18 +439,18 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := blockio.NewBlockWriter(r.fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.fs.Service)
 	if err != nil {
 		return err
 	}
 	mobat := batch.New(true, bat.Attrs)
 	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+	if _, err = writer.Write(mobat); err != nil {
 		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, _, err = writer.Sync(context.Background())
+	_, err = writer.WriteEnd(context.Background())
 	return
 }
 

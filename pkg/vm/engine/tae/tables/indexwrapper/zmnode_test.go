@@ -52,7 +52,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := objectio.NewObjectWriter(name, service)
+	objectWriter, err := objectio.NewObjectWriterSpecial(name, service)
 	assert.Nil(t, err)
 	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)

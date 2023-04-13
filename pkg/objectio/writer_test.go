@@ -73,7 +73,7 @@ func TestNewObjectWriter(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -173,7 +173,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	for y := 0; y < 1; y++ {
 		fd, err := objectWriter.Write(bat)
@@ -241,7 +241,7 @@ func TestNewObjectReader(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)

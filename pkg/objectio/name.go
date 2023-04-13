@@ -64,3 +64,37 @@ func MockLocation(name ObjectName) Location {
 func (o ObjectName) Equal(a ObjectName) bool {
 	return bytes.Equal(o, a)
 }
+
+var NameQueryResult ObjectName
+var NameCheckPoint ObjectName
+var NameDiskCleaner ObjectName
+var NameETL ObjectName
+var NameNormal ObjectName
+
+func init() {
+	copy(NameQueryResult[:], "Query_ResultXXXX")
+	copy(NameCheckPoint[:], "CheckPoint_MetaX")
+	copy(NameDiskCleaner[:], "Disk_CleanerXXXX")
+	copy(NameETL[:], "Writer_ETLXXXXXX")
+	copy(NameNormal[:], "Writer_NormalXXX")
+}
+
+func BuildQueryResultName() ObjectName {
+	return NameQueryResult
+}
+
+func BuildCheckpointName() ObjectName {
+	return NameCheckPoint
+}
+
+func BuildDiskCleanerName() ObjectName {
+	return NameDiskCleaner
+}
+
+func BuildETLName() ObjectName {
+	return NameETL
+}
+
+func BuildNormalName() ObjectName {
+	return NameNormal
+}

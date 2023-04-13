@@ -37,7 +37,7 @@ type ObjectWriter struct {
 	totalRow uint32
 	colmeta  []ObjectColumnMeta
 	buffer   *ObjectBuffer
-	nameStr  string
+	fileName string
 	lastId   uint32
 	name     ObjectName
 }
@@ -48,29 +48,58 @@ type blockData struct {
 	bloomFilter map[uint16][]byte
 }
 
-func NewObjectWriter(name string, fs fileservice.FileService) (*ObjectWriter, error) {
-	object := NewObject(name, fs)
+type WriterType int8
+
+const (
+	WriterNormal = iota
+	WriterCheckpoint
+	WriterQueryResult
+	WriterGC
+	WriterETL
+)
+
+func NewObjectWriterSpecial(wt WriterType, fileName string, fs fileservice.FileService) (*ObjectWriter, error) {
+	var name ObjectName
+	object := NewObject(fileName, fs)
+	switch wt {
+	case WriterNormal:
+		name = BuildNormalName()
+		break
+	case WriterCheckpoint:
+		name = BuildCheckpointName()
+		break
+	case WriterQueryResult:
+		name = BuildQueryResultName()
+		break
+	case WriterGC:
+		name = BuildDiskCleanerName()
+		break
+	case WriterETL:
+		name = BuildETLName()
+		break
+	}
 	writer := &ObjectWriter{
-		nameStr: name,
-		object:  object,
-		buffer:  NewObjectBuffer(name),
-		blocks:  make([]blockData, 0),
-		lastId:  0,
+		fileName: fileName,
+		name:     name,
+		object:   object,
+		buffer:   NewObjectBuffer(fileName),
+		blocks:   make([]blockData, 0),
+		lastId:   0,
 	}
 	err := writer.WriteHeader()
 	return writer, err
 }
 
-func NewObjectWriterNew(name ObjectName, fs fileservice.FileService) (*ObjectWriter, error) {
-	nameStr := name.String()
-	object := NewObject(nameStr, fs)
+func NewObjectWriter(name ObjectName, fs fileservice.FileService) (*ObjectWriter, error) {
+	fileName := name.String()
+	object := NewObject(fileName, fs)
 	writer := &ObjectWriter{
-		nameStr: nameStr,
-		name:    name,
-		object:  object,
-		buffer:  NewObjectBuffer(nameStr),
-		blocks:  make([]blockData, 0),
-		lastId:  0,
+		fileName: fileName,
+		name:     name,
+		object:   object,
+		buffer:   NewObjectBuffer(fileName),
+		blocks:   make([]blockData, 0),
+		lastId:   0,
 	}
 	err := writer.WriteHeader()
 	return writer, err
@@ -248,7 +277,7 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		if err = w.object.fs.Delete(ctx, w.nameStr); err != nil {
+		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err
 		}
 		return w.object.fs.Write(ctx, w.buffer.GetData())

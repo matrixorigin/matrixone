@@ -101,7 +101,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	fs := ses.GetParameterUnit().FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
-	writer, err := objectio.NewObjectWriter(path, fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func saveQueryResultMeta(ses *Session) error {
 		return err
 	}
 	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
-	metaWriter, err := objectio.NewObjectWriter(metaPath, fs)
+	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {
 		return err
 	}
