@@ -27,5 +27,4 @@ show tables;
 alter user 'root' identified by '111';
 drop database db1;
 -- @session
--- @session:id=2&user=acc_idx:root&password=111
 drop account acc_idx;
