@@ -35,7 +35,7 @@ type TxnClientCreateOption func(*txnClient)
 type TxnClient interface {
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(options ...TxnOption) (TxnOperator, error)
+	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
@@ -115,4 +115,20 @@ func SetupRuntimeTxnOptions(
 	iso txn.TxnIsolation) {
 	rt.SetGlobalVariables(runtime.TxnIsolation, iso)
 	rt.SetGlobalVariables(runtime.TxnMode, m)
+}
+
+// TimestampWaiter is used to wait for the timestamp to reach a specified timestamp.
+// In the Push mode of LogTail's Event, the DN pushes the logtail to the subscribed
+// CN once a transaction has been Committed. So there is a actual wait (last push commit
+// ts >= start ts). This is unfriendly to TP, so we can lose some freshness and use the
+// latest commit ts received from the current DN pushg as the start ts of the transaction,
+// which eliminates this physical wait.
+type TimestampWaiter interface {
+	// GetTimestamp get the latest commit ts as snapshot ts of the new txn. It will keep
+	// blocking if latest commit timestamp received from DN is less than the given value.
+	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+	// NotifyLatestCommitTS notify the latest timestamp that received from DN
+	NotifyLatestCommitTS(timestamp.Timestamp)
+	// Close close the timestamp waiter
+	Close()
 }

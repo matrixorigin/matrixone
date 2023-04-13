@@ -58,7 +58,7 @@ func DedupOp[T comparable](
 	vals := vs.([]T)
 	for _, v := range vals {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v)
+			entry := common.TypeStringValue(t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 	}
@@ -78,7 +78,7 @@ func InsertOp[T comparable](
 		set := make(map[T]bool)
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				entry := common.TypeStringValue(t, v)
+				entry := common.TypeStringValue(t, v, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			set[v] = true
@@ -87,7 +87,7 @@ func InsertOp[T comparable](
 	}
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v)
+			entry := common.TypeStringValue(t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 		tree[v] = fromRow
@@ -102,11 +102,11 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
-			vec.Append([]byte(k.(string)))
+			vec.Append([]byte(k.(string)), false)
 		}
 	default:
 		for k := range idx.tree {
-			vec.Append(k)
+			vec.Append(k, false)
 		}
 	}
 	return vec
@@ -123,7 +123,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
-			vec.Append([]byte(k.(string)))
+			vec.Append([]byte(k.(string)), false)
 		}
 	default:
 		for k := range idx.tree {
@@ -131,7 +131,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
-			vec.Append(k)
+			vec.Append(k, false)
 		}
 	}
 	if vec.Length() > 0 {
@@ -250,7 +250,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			for i := start; i < start+count; i++ {
 				v := string(vs.Get(i).([]byte))
 				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(colType, []byte(v))
+					entry := common.TypeStringValue(colType, []byte(v), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, attr)
 				}
 				set[v] = true
@@ -260,7 +260,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		for i := start; i < start+count; i++ {
 			v := string(vs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v))
+				entry := common.TypeStringValue(colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			idx.tree[v] = row
@@ -344,7 +344,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v))
+				entry := common.TypeStringValue(colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 		}

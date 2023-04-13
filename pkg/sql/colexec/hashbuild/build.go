@@ -167,28 +167,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-/*
-func (ctr *container) indexBuild() error {
-	// e.g. original data = ["a", "b", "a", "c", "b", "c", "a", "a"]
-	//      => dictionary = ["a"->1, "b"->2, "c"->3]
-	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
-	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
-	ctr.sels = make([][]int32, index.MaxLowCardinality)
-	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
-	for k, v := range poses {
-		if v == 0 {
-			continue
-		}
-		bucket := int(v) - 1
-		if len(ctr.sels[bucket]) == 0 {
-			ctr.sels[bucket] = make([]int32, 0, 64)
-		}
-		ctr.sels[bucket] = append(ctr.sels[bucket], int32(k))
-	}
-	return nil
-}
-*/
-
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)

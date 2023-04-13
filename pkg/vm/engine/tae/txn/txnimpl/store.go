@@ -232,7 +232,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, err error) {
+func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
