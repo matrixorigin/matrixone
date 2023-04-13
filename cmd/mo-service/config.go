@@ -360,6 +360,8 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.DN.UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID
+	case metadata.ServiceType_PROXY:
+		return c.ProxyConfig.UUID
 	}
 	panic("impossible")
 }
