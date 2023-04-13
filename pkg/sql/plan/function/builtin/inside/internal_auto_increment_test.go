@@ -56,7 +56,7 @@ func TestInternalAutoIncrement(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -165,7 +165,7 @@ func Test_newTxn(t *testing.T) {
 	require.NotNil(t, err)
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	proc.TxnClient = txnClient
 	_, err = newTxn(eng, proc, proc.Ctx)
 	require.Nil(t, err)

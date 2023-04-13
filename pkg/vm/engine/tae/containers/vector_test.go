@@ -38,13 +38,13 @@ func TestVectorShallowForeach(t *testing.T) {
 		vec := MakeVector(typ, opt)
 		for i := 0; i < 10; i++ {
 			if i%2 == 0 {
-				vec.Append(types.Null{})
+				vec.Append(nil, true)
 			} else {
 				switch typ.Oid {
 				case types.T_int32:
-					vec.Append(int32(i))
+					vec.Append(int32(i), false)
 				case types.T_char:
-					vec.Append([]byte("test null"))
+					vec.Append([]byte("test null"), false)
 				}
 			}
 		}
@@ -68,9 +68,9 @@ func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
 	vec := MakeVector(types.T_int32.ToType(), opt)
-	vec.Append(int32(12))
-	vec.Append(int32(32))
-	vec.AppendMany(int32(1), int32(100))
+	vec.Append(int32(12), false)
+	vec.Append(int32(32), false)
+	vec.AppendMany([]any{int32(1), int32(100)}, []bool{false, false})
 	assert.Equal(t, 4, vec.Length())
 	assert.Equal(t, int32(12), vec.Get(0).(int32))
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
@@ -97,12 +97,12 @@ func TestVector2(t *testing.T) {
 	t.Log(vec.String())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
-		vec.Append(int64(i))
+		vec.Append(int64(i), false)
 	}
 	t.Log(time.Since(now))
 	assert.Equal(t, 10, vec.Length())
 	assert.False(t, vec.HasNull())
-	vec.Append(types.Null{})
+	vec.Append(nil, true)
 	assert.Equal(t, 11, vec.Length())
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
@@ -151,7 +151,7 @@ func TestVector3(t *testing.T) {
 	opts := withAllocator(Options{})
 	vec1 := MakeVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
-		vec1.Append(int32(i))
+		vec1.Append(int32(i), false)
 	}
 
 	w := new(bytes.Buffer)
@@ -306,7 +306,7 @@ func TestVector7(t *testing.T) {
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
 		if nullable {
-			vec.Append(types.Null{})
+			vec.Append(nil, true)
 		}
 		vec2 := MockVector(typ, 10, false, nil)
 		vec3 := MakeVector(typ)
@@ -349,28 +349,28 @@ func TestVector8(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vec := MakeVector(types.T_int32.ToType())
 	defer vec.Close()
-	vec.Append(int32(0))
-	vec.Append(int32(1))
-	vec.Append(int32(2))
-	vec.Append(types.Null{})
-	vec.Append(int32(4))
-	vec.Append(int32(5))
-	assert.True(t, types.IsNull(vec.Get(3)))
+	vec.Append(int32(0), false)
+	vec.Append(int32(1), false)
+	vec.Append(int32(2), false)
+	vec.Append(nil, true)
+	vec.Append(int32(4), false)
+	vec.Append(int32(5), false)
+	assert.True(t, vec.IsNull(3))
 	vec.Delete(1)
-	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, vec.IsNull(2))
 	vec.Delete(3)
-	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, vec.IsNull(2))
 	vec.Update(1, nil, true)
-	assert.True(t, types.IsNull(vec.Get(1)))
-	assert.True(t, types.IsNull(vec.Get(2)))
-	vec.Append(types.Null{})
-	assert.True(t, types.IsNull(vec.Get(1)))
-	assert.True(t, types.IsNull(vec.Get(2)))
-	assert.True(t, types.IsNull(vec.Get(4)))
+	assert.True(t, vec.IsNull(1))
+	assert.True(t, vec.IsNull(2))
+	vec.Append(nil, true)
+	assert.True(t, vec.IsNull(1))
+	assert.True(t, vec.IsNull(2))
+	assert.True(t, vec.IsNull(4))
 	vec.Compact(roaring.BitmapOf(0, 2))
 	assert.Equal(t, 3, vec.Length())
-	assert.True(t, types.IsNull(vec.Get(0)))
-	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, vec.IsNull(0))
+	assert.True(t, vec.IsNull(2))
 	t.Log(vec.String())
 }
 
@@ -378,11 +378,11 @@ func TestVector9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), opts)
-	vec.Append([]byte("h1"))
-	vec.Append([]byte("h22"))
-	vec.Append([]byte("h333"))
-	vec.Append(types.Null{})
-	vec.Append([]byte("h4444"))
+	vec.Append([]byte("h1"), false)
+	vec.Append([]byte("h22"), false)
+	vec.Append([]byte("h333"), false)
+	vec.Append(nil, true)
+	vec.Append([]byte("h4444"), false)
 
 	cloned := vec.CloneWindow(2, 2)
 	assert.Equal(t, 2, cloned.Length())
@@ -398,7 +398,7 @@ func TestCompact(t *testing.T) {
 	opts := withAllocator(Options{})
 	vec := MakeVector(types.T_varchar.ToType(), opts)
 
-	vec.Append(types.Null{})
+	vec.Append(nil, true)
 	t.Log(vec.String())
 	deletes := roaring.BitmapOf(0)
 	//{null}
@@ -406,28 +406,28 @@ func TestCompact(t *testing.T) {
 	//{}
 	assert.Equal(t, 0, vec.Length())
 
-	vec.Append(types.Null{})
-	vec.Append(types.Null{})
-	vec.Append(types.Null{})
+	vec.Append(nil, true)
+	vec.Append(nil, true)
+	vec.Append(nil, true)
 	deletes = roaring.BitmapOf(0, 1)
 	//{n,n,n}
 	vec.Compact(deletes)
 	//{n}
 	assert.Equal(t, 1, vec.Length())
-	assert.True(t, types.IsNull(vec.Get(0)))
+	assert.True(t, vec.IsNull(0))
 
-	vec.Append([]byte("var"))
-	vec.Append(types.Null{})
-	vec.Append([]byte("var"))
-	vec.Append(types.Null{})
+	vec.Append([]byte("var"), false)
+	vec.Append(nil, true)
+	vec.Append([]byte("var"), false)
+	vec.Append(nil, true)
 	//{null,var,null,var,null}
 	deletes = roaring.BitmapOf(1, 3)
 	vec.Compact(deletes)
 	//{null,null,null}
 	assert.Equal(t, 3, vec.Length())
-	assert.True(t, types.IsNull(vec.Get(0)))
-	assert.True(t, types.IsNull(vec.Get(1)))
-	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, vec.IsNull(0))
+	assert.True(t, vec.IsNull(1))
+	assert.True(t, vec.IsNull(2))
 	vec.Close()
 }
 
@@ -446,7 +446,7 @@ func BenchmarkVectorExtend(t *testing.B) {
 func TestForeachWindowFixed(t *testing.T) {
 	vec1 := MockVector(types.T_uint32.ToType(), 2, false, nil)
 	defer vec1.Close()
-	vec1.Append(types.Null{})
+	vec1.Append(nil, true)
 
 	cnt := 0
 	op := func(v uint32, isNull bool, row int) (err error) {
@@ -466,7 +466,7 @@ func TestForeachWindowFixed(t *testing.T) {
 func TestForeachWindowBytes(t *testing.T) {
 	vec1 := MockVector(types.T_varchar.ToType(), 2, false, nil)
 	defer vec1.Close()
-	vec1.Append(types.Null{})
+	vec1.Append(nil, true)
 
 	cnt := 0
 	op := func(v []byte, isNull bool, row int) (err error) {

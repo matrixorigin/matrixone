@@ -435,7 +435,7 @@ func (app1 *APP1) Init(factor int) {
 	defer price.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodPrice := float64(rand.Intn(1000)+20) / float64(rand.Intn(10)+1) / float64(20)
-		price.Append(goodPrice)
+		price.Append(goodPrice, false)
 	}
 	goodsRel, err := db.GetRelationByName(goods.Name)
 	if err != nil {
@@ -454,7 +454,7 @@ func (app1 *APP1) Init(factor int) {
 	defer count.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodCount := rand.Intn(1000) + 100
-		count.Append(uint64(goodCount))
+		count.Append(uint64(goodCount), false)
 		goodsId := goodsData.Vecs[0].Get(i)
 		goodsName := goodsData.Vecs[1].Get(i)
 		goods := new(APP1Goods)
