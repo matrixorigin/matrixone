@@ -571,8 +571,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Source = originRel
-	newCtx.UniqueSource = indexRels
+	newCtx.Rels = append(newCtx.Rels, originRel)
+	newCtx.Rels = append(newCtx.Rels, indexRels...)
 
 	return &insert.Argument{
 		InsertCtx: newCtx,

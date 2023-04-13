@@ -107,7 +107,7 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
+	err := cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}
@@ -126,7 +126,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 }
 
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer) error {
+func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		var ch chan process.WrapCs
