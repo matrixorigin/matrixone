@@ -31,7 +31,11 @@ type FetchLockRowsFunc func(
 	// global config: max lock rows bytes per lock
 	max int,
 	// is lock table lock
-	lockTabel bool) ([][]byte, lock.Granularity)
+	lockTabel bool,
+	// used to filter rows
+	filter RowsFilter,
+	// used by filter rows func
+	filterCols []int) ([][]byte, lock.Granularity)
 
 // LockOptions lock operation options
 type LockOptions struct {
@@ -40,6 +44,8 @@ type LockOptions struct {
 	lockTable       bool
 	parker          *types.Packer
 	fetchFunc       FetchLockRowsFunc
+	filter          RowsFilter
+	filterCols      []int
 }
 
 // Argument lock op argument.
@@ -54,4 +60,9 @@ type lockTarget struct {
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
 	fetcher                      FetchLockRowsFunc
+	filter                       RowsFilter
+	filterColIndexInBatch        int32
 }
+
+// RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
+type RowsFilter func(row int, fliterCols []int) bool

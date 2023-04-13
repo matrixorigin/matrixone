@@ -61,7 +61,6 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
-	loadTag          bool
 }
 
 // messageSenderOnClient is a structure
@@ -80,7 +79,7 @@ func newMessageSenderOnClient(
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
-		return sender, nil
+		return sender, err
 	}
 
 	sender.streamSender = streamSender
@@ -276,7 +275,6 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
-	proc.LoadTag = pHelper.loadTag
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i] = &process.AnalyzeInfo{
@@ -288,7 +286,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c := &Compile{
 		proc: proc,
 		e:    cnInfo.storeEngine,
-		anal: &anaylze{},
+		anal: &anaylze{analInfos: proc.AnalInfos},
 		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
@@ -406,7 +404,6 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		unixTime:         procInfo.UnixTime,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
-		loadTag:          procInfo.LoadTag,
 	}
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
 	if err != nil {

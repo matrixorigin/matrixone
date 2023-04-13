@@ -352,7 +352,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
@@ -420,7 +420,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -496,7 +496,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem
+%type <tableDef> table_elem constaint_def constraint_elem index_def
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -2760,6 +2760,7 @@ show_stmt:
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
+|   show_roles_stmt
 |   show_collation_stmt
 |   show_function_status_stmt
 |   show_node_list_stmt
@@ -2824,6 +2825,14 @@ show_function_status_stmt:
        $$ = &tree.ShowFunctionStatus{
             Like: $4,
             Where: $5,
+        }
+    }
+
+show_roles_stmt:
+    SHOW ROLES like_opt
+    {
+        $$ = &tree.ShowRolesStmt{
+            Like: $3,
         }
     }
 
@@ -6246,36 +6255,13 @@ table_elem:
     {
         $$ = $1
     }
-
-constaint_def:
-    constraint_keyword constraint_elem
-    {
-        if $1 != "" {
-            switch v := $2.(type) {
-            case *tree.PrimaryKeyIndex:
-                v.Name = $1
-            case *tree.ForeignKey:
-                v.Name = $1
-            }
-        }
-        $$ = $2
-    }
-|    constraint_elem
+|   index_def
     {
         $$ = $1
     }
 
-constraint_elem:
-    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
-    {
-         $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
-    }
-|    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+index_def:
+    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
     {
         $$ = &tree.FullTextIndex{
             KeyParts: $5,
@@ -6304,6 +6290,37 @@ constraint_elem:
             KeyParts: $5,
             Name: $3[0],
             KeyType: keyTyp,
+            IndexOption: $7,
+        }
+    }
+
+constaint_def:
+    constraint_keyword constraint_elem
+    {
+        if $1 != "" {
+            switch v := $2.(type) {
+            case *tree.PrimaryKeyIndex:
+                v.ConstraintSymbol = $1
+            case *tree.ForeignKey:
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                v.ConstraintSymbol = $1
+            }
+        }
+        $$ = $2
+    }
+|    constraint_elem
+    {
+        $$ = $1
+    }
+
+constraint_elem:
+    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+         $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
             IndexOption: $7,
         }
     }
@@ -9274,6 +9291,7 @@ non_reserved_keyword:
 |   S3OPTION
 |   EXTENSION
 |   NODE
+|   ROLES
 |   UUID
 |   PARALLEL
 |   INCREMENT
@@ -9283,6 +9301,7 @@ non_reserved_keyword:
 |   PUBLICATION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
+|   PROPERTIES
 
 func_not_keyword:
     DATE_ADD

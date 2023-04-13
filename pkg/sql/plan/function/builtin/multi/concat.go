@@ -23,6 +23,13 @@ import (
 
 func Concat(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtyp := types.T_varchar.ToType()
+	// If any binary type exists return binary type.
+	for _, v := range ivecs {
+		if v.GetType().Oid == types.T_binary || v.GetType().Oid == types.T_varbinary || v.GetType().Oid == types.T_blob {
+			rtyp = types.T_blob.ToType()
+			break
+		}
+	}
 	isAllConst := true
 
 	for i := range ivecs {
@@ -34,14 +41,13 @@ func Concat(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 	}
 	if isAllConst {
-		return concatWithAllConst(ivecs, proc)
+		return concatWithAllConst(ivecs, proc, rtyp)
 	}
-	return concatWithSomeCols(ivecs, proc)
+	return concatWithSomeCols(ivecs, proc, rtyp)
 }
 
-func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process, vct types.Type) (*vector.Vector, error) {
 	//length := vectors[0].Length()
-	vct := types.T_varchar.ToType()
 	res := ""
 	for i := range ivecs {
 		res += ivecs[i].GetStringAt(0)
@@ -49,9 +55,8 @@ func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process) (*vector.
 	return vector.NewConstBytes(vct, []byte(res), ivecs[0].Length(), proc.Mp()), nil
 }
 
-func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process, rtyp types.Type) (*vector.Vector, error) {
 	length := ivecs[0].Length()
-	rtyp := types.T_varchar.ToType()
 	rvec := vector.NewVec(rtyp)
 	for i := range ivecs {
 		nulls.Or(ivecs[i].GetNulls(), rvec.GetNulls(), rvec.GetNulls())

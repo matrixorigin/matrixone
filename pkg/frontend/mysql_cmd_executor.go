@@ -362,6 +362,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
+
+	if oq.ep.Outfile {
+		initExportFirst(oq)
+	}
+
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
@@ -369,6 +374,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				return nil
 			default:
 			}
+			continue
 		}
 
 		if bat.Zs[j] <= 0 {
@@ -385,6 +391,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
+	if oq.ep.Outfile {
+		oq.rowIdx = uint64(n)
+		bat2 := preCopyBat(obj, bat)
+		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
+	}
 	err := oq.flush()
 	if err != nil {
 		return err
@@ -923,15 +934,6 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 
 	ses := mce.GetSession()
 
-	switch stmt.Statement.(type) {
-	case *tree.Delete:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-	case *tree.Update:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-	default:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-	}
-
 	//get query optimizer and execute Optimize
 	plan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
@@ -999,12 +1001,6 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 }
 
 func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*PrepareStmt, error) {
-	switch st.Stmt.(type) {
-	case *tree.Update:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-	case *tree.Delete:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-	}
 	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
@@ -1033,12 +1029,6 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
-	}
-	switch stmts[0].(type) {
-	case *tree.Update:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-	case *tree.Delete:
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
 
 	preparePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
@@ -1371,12 +1361,17 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	}
 	vs = vs[:count]
 	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
 	err := fill(session, bat)
-	vec.Free(session.GetMemPool())
+	if err != nil {
+		return err
+	}
+	// to trigger save result meta
+	err = fill(session, nil)
 	return err
 }
 
@@ -2396,7 +2391,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		selfHandle = false
-		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 
 		switch st := stmt.(type) {
 		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -2452,7 +2446,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
-			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -2515,29 +2508,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ExplainAnalyze:
 			ses.SetData(nil)
-			switch st.Statement.(type) {
-			case *tree.Delete:
-				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-			case *tree.Update:
-				ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-			case *tree.DropTable, *tree.DropIndex:
-				ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
-			case *tree.AlterTable:
-				ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
-			default:
-				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-			}
 		case *tree.ShowTableStatus:
 			ses.SetShowStmtType(ShowTableStatus)
 			ses.SetData(nil)
-		case *tree.Delete:
-			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-		case *tree.Update:
-			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-		case *tree.DropTable, *tree.DropIndex:
-			ses.GetTxnCompileCtx().SetQueryType(TXN_DROP)
-		case *tree.AlterTable:
-			ses.GetTxnCompileCtx().SetQueryType(TXN_ALTER)
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
@@ -2745,7 +2718,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
-			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
 			columns, err = cw.GetColumns()
@@ -2814,6 +2787,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if ep.Outfile {
+				oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
+				if err = exportAllData(oq); err != nil {
+					return err
+				}
 				if err = ep.Writer.Flush(); err != nil {
 					goto handleFailed
 				}

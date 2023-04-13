@@ -60,10 +60,18 @@ func FloorFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	return generalMathMulti("floor", vecs, proc, floor.FloorFloat64)
 }
 
+func FloorDecimal64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := vecs[0].GetType().Scale
+	cb := func(vs []types.Decimal64, rs []types.Decimal64, digits int64) []types.Decimal64 {
+		return floor.FloorDecimal64(vs, rs, digits, scale)
+	}
+	return generalMathMulti("floor", vecs, proc, cb)
+}
+
 func FloorDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	scale := vecs[0].GetType().Scale
 	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
-		return floor.FloorDecimal128(scale, vs, rs, digits)
+		return floor.FloorDecimal128(vs, rs, digits, scale)
 	}
 	return generalMathMulti("floor", vecs, proc, cb)
 }

@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 1",
-		output: "select 1",
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
 	}
 )
 
@@ -652,10 +652,10 @@ var (
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
 	}, {
 		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -664,7 +664,7 @@ var (
 		input: "create table t (a int, b char, fulltext idx (a, b))",
 	}, {
 		input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
-		output: "create table t (a int, b char, primary key p1 using none (a, b))",
+		output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
@@ -2059,6 +2059,42 @@ var (
 			output: "alter table t1 alter index c invisible",
 		},
 		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key (col3, col4)",
+			output: "alter table t1 add unique key (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint unique key zxxxxxx (col3, col4)",
+			output: "alter table t1 add unique key zxxxxxx (col3, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add constraint fk_6dotkott2kjsp8vw4d0m25fb7 foreign key (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key fk1 (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key fk1 (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
+			output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		},
+		{
 			input: "create publication pub1 database db1",
 		},
 		{
@@ -2137,6 +2173,14 @@ var (
 		{
 			input:  "show table_size from mo_role from mo_catalog",
 			output: "show table size from mo_role from mo_catalog",
+		},
+		{
+			input:  "show roles",
+			output: "show roles",
+		},
+		{
+			input:  "show roles like '%dafgda_'",
+			output: "show roles like %dafgda_",
 		},
 		{
 			input:  "create procedure test1 (in param1 int) 'test test'",
@@ -2295,6 +2339,43 @@ func TestMulti(t *testing.T) {
 		}
 		if tcase.output != res {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, res)
+		}
+	}
+}
+
+// Fault tolerant use cases
+var (
+	invalidSQL = []struct {
+		input string
+	}{
+		{
+			input: "alter table t1 add constraint index (col3, col4)",
+		},
+		{
+			input: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index (col3)",
+		},
+		{
+			input: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxx (col3)",
+		},
+		{
+			input: "create table t (a int, b char, constraint sdf index (a, b) )",
+		},
+		{
+			input: "create table t (a int, b char, constraint sdf index idx(a, b) )",
+		},
+		{
+			input: "create table t (a int, b char, constraint index idx(a, b) )",
+		},
+	}
+)
+
+func TestFaultTolerance(t *testing.T) {
+	ctx := context.TODO()
+	for _, tcase := range invalidSQL {
+		_, err := ParseOne(ctx, tcase.input, 1)
+		if err == nil {
+			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
+			continue
 		}
 	}
 }

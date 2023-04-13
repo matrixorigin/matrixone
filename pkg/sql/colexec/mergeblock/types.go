@@ -14,13 +14,11 @@
 package mergeblock
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -68,15 +66,15 @@ func (arg *Argument) GetMetaLocBat(name string) {
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	arg.GetMetaLocBat(bat.Attrs[1])
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
-	metaLocs := vector.MustBytesCol(bat.GetVector(1))
+	metaLocs := vector.MustStrCol(bat.GetVector(1))
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
 			if tblIdx[i] == 0 {
-				val, err := strconv.ParseUint(strings.Split(string(metaLocs[i]), ":")[2], 0, 64)
+				location, err := blockio.EncodeLocationFromString(metaLocs[i])
 				if err != nil {
 					return err
 				}
-				arg.AffectedRows += val
+				arg.AffectedRows += uint64(location.Rows())
 			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {

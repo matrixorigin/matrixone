@@ -28,6 +28,8 @@ var debugInstructionNames = map[int]string{
 	vm.Top:          "top",
 	vm.Join:         "join",
 	vm.Semi:         "semi",
+	vm.RightSemi:    "right semi",
+	vm.RightAnti:    "right anti",
 	vm.Left:         "left",
 	vm.Right:        "right",
 	vm.Limit:        "limit",

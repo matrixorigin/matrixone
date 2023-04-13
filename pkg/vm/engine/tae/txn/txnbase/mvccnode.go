@@ -441,17 +441,17 @@ func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 }
 
 func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
-	bat.GetVectorByName(SnapshotAttr_StartTS).Append(un.Start)
-	bat.GetVectorByName(SnapshotAttr_PrepareTS).Append(un.Prepare)
-	bat.GetVectorByName(SnapshotAttr_CommitTS).Append(un.End)
+	bat.GetVectorByName(SnapshotAttr_StartTS).Append(un.Start, false)
+	bat.GetVectorByName(SnapshotAttr_PrepareTS).Append(un.Prepare, false)
+	bat.GetVectorByName(SnapshotAttr_CommitTS).Append(un.End, false)
 	if un.LogIndex != nil {
-		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(un.LogIndex.LSN)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(un.LogIndex.CSN)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(un.LogIndex.Size)
+		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(un.LogIndex.LSN, false)
+		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(un.LogIndex.CSN, false)
+		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(un.LogIndex.Size, false)
 	} else {
-		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(uint64(0))
-		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(uint32(0))
-		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(uint32(0))
+		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(uint64(0), false)
+		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(uint32(0), false)
+		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(uint32(0), false)
 	}
 }
 

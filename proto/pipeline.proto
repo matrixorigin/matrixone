@@ -158,6 +158,26 @@ message RightJoin {
   repeated plan.Expr right_cond = 9;
 }
 
+message RightSemiJoin {
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 result = 3;
+  plan.Expr  expr = 4;
+  repeated plan.Type right_types = 5;
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
+}
+
+message RightAntiJoin {
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 result = 3;
+  plan.Expr  expr = 4;
+  repeated plan.Type right_types = 5;
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
+}
+
 message SemiJoin {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
@@ -218,10 +238,14 @@ message ExternalName2ColIndex {
   int32 index = 2;
 }
 
+message file_offset {
+  repeated int64 offset = 1;
+}
+
 message ExternalScan {
   repeated string attrs = 1;
   repeated int64 file_size = 2;
-  repeated int64 file_offset = 3;
+  repeated file_offset file_offset_total = 3;
   repeated plan.ColDef cols = 4;
   repeated ExternalName2ColIndex name2_col_index = 5;
   string create_sql = 6;
@@ -262,7 +286,9 @@ message Instruction{
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
   bool isLast = 26;
   
-  RightJoin  right_join = 27;
+  RightJoin right_join = 27;
+  RightSemiJoin right_semi_join = 28;
+  RightAntiJoin right_anti_join = 29;
 
 }
 
@@ -304,7 +330,6 @@ message ProcessInfo {
   string snapshot = 4;
   SessionInfo session_info = 5;
   repeated int32 analysis_node_list = 6;
-  bool load_tag = 7;
 }
 
 message SessionInfo {
@@ -335,11 +360,12 @@ message Pipeline {
 
   bool is_end = 7;
   bool is_join = 8;
-  NodeInfo node = 9;
-  int32 push_down_info = 10;
-  int32 children_count = 11;
+  bool is_load = 9;
+  NodeInfo node = 10;
+  int32 push_down_info = 11;
+  int32 children_count = 12;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 12;
+  repeated UuidToRegIdx uuids_to_reg_idx = 13;
 }
 
 message WrapNode {

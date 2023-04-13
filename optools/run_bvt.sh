@@ -19,10 +19,11 @@ set -o nounset
 MO_WORKSPACE=$1
 SYSTEM_INIT_COMPLETED=$MO_WORKSPACE/mo-data/local/system_init_completed
 LAUNCH=$2
+PROXY=${3:-}
 
 function launch_mo() {
     cd $MO_WORKSPACE
-    ./mo-service -launch ./etc/$LAUNCH/launch.toml &>mo-service.log &
+    ./mo-service -launch ./etc/$LAUNCH/launch.toml $PROXY &>mo-service.log &
 }
 
 # this will wait mo all system init completed

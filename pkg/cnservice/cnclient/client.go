@@ -118,6 +118,8 @@ func NewCNClient(
 		return nil
 	}
 
+	logger := logutil.GetGlobalLogger().Named("cn-backend")
+
 	var err error
 	cfg.Fill()
 	client = &CNClient{config: cfg, localServiceAddress: localServiceAddress}
@@ -136,12 +138,13 @@ func NewCNClient(
 			}),
 		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-backend")),
+		morpc.WithBackendLogger(logger),
 	)
 
 	client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 		morpc.WithClientTag("cn-client"),
+		morpc.WithClientLogger(logger),
 	)
 	client.ready = true
 	return err

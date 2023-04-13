@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"sync/atomic"
 
@@ -686,8 +687,8 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 			state = ES_Appendable
 		}
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
-		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		deltaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
+		deltaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
@@ -697,8 +698,8 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(types.Uuid)
 		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
 		un := txnbase.ReadTuple(delTxn, i)
-		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		deltaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
+		deltaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 		catalog.onReplayDeleteBlock(dbid, tid, sid, rid.GetBlockid(), metaLoc, deltaLoc, un)
 	}
 }
@@ -706,7 +707,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	dbid, tid uint64,
 	segid types.Uuid, blkid types.Blockid,
 	state EntryState,
-	metaloc, deltaloc string,
+	metaloc, deltaloc objectio.Location,
 	txnNode *txnbase.TxnMVCCNode,
 	dataFactory DataFactory) {
 	// catalog.OnReplayBlockID(blkid)
@@ -759,21 +760,12 @@ func (catalog *Catalog) onReplayCreateBlock(
 		}
 		node := blk.MVCCChain.SearchNode(un)
 		if node != nil {
-			if !node.CreatedAt.Equal(un.CreatedAt) {
-				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
-			}
-			if node.BaseNode.MetaLoc != un.BaseNode.MetaLoc {
-				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.BaseNode.MetaLoc, un.BaseNode.MetaLoc))
-			}
-			if node.BaseNode.DeltaLoc != un.BaseNode.DeltaLoc {
-				panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", node.BaseNode.DeltaLoc, un.BaseNode.DeltaLoc))
-			}
 			return
 		}
 	}
 	blk.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteBlock(dbid, tid uint64, segid types.Uuid, blkid types.Blockid, metaloc, deltaloc string, txnNode *txnbase.TxnMVCCNode) {
+func (catalog *Catalog) onReplayDeleteBlock(dbid, tid uint64, segid types.Uuid, blkid types.Blockid, metaloc, deltaloc objectio.Location, txnNode *txnbase.TxnMVCCNode) {
 	// catalog.OnReplayBlockID(blkid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {

@@ -16,13 +16,13 @@ package store
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -322,12 +322,12 @@ func (w *StoreInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) 
 	defer w.ckpMu.RUnlock()
 	//checkpointing
 	length := uint32(len(w.checkpointInfo))
-	if err = binary.Write(writer, binary.BigEndian, length); err != nil {
+	if _, err = writer.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	n += 4
 	for groupID, ckpInfo := range w.checkpointInfo {
-		if err = binary.Write(writer, binary.BigEndian, groupID); err != nil {
+		if _, err = writer.Write(types.EncodeUint32(&groupID)); err != nil {
 			return
 		}
 		n += 4
@@ -345,13 +345,13 @@ func (w *StoreInfo) readPostCommitEntry(reader io.Reader) (n int64, err error) {
 	defer w.ckpMu.Unlock()
 	//checkpointing
 	length := uint32(0)
-	if err = binary.Read(reader, binary.BigEndian, &length); err != nil {
+	if _, err = reader.Read(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	n += 4
 	for i := 0; i < int(length); i++ {
 		groupID := uint32(0)
-		if err = binary.Read(reader, binary.BigEndian, &groupID); err != nil {
+		if _, err = reader.Read(types.EncodeUint32(&groupID)); err != nil {
 			return
 		}
 		n += 4

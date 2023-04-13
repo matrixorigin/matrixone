@@ -53,7 +53,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
@@ -307,9 +307,13 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 			},
 		},
 	}
+	if 2*param.Idx >= len(param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset) {
+		return nil, nil
+	}
+	param.FileOffset = param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset[2*param.Idx : 2*param.Idx+2]
 	if param.Extern.Parallel {
-		vec.Entries[0].Offset = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)])
-		vec.Entries[0].Size = int64(param.FileOffset[2*(param.Fileparam.FileIndex-1)+1] - param.FileOffset[2*(param.Fileparam.FileIndex-1)])
+		vec.Entries[0].Offset = int64(param.FileOffset[0])
+		vec.Entries[0].Size = int64(param.FileOffset[1] - param.FileOffset[0])
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
@@ -321,8 +325,8 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int64, error) {
-	arr := make([][2]int64, 0)
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([]int64, error) {
+	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
@@ -355,10 +359,12 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 	start := int64(0)
 	for i := 0; i < mcpu; i++ {
 		if i+1 < mcpu {
-			arr = append(arr, [2]int64{start, (offset[i+1] + tailSize[i+1])})
+			arr = append(arr, start)
+			arr = append(arr, offset[i+1]+tailSize[i+1])
 			start = offset[i+1] + tailSize[i+1]
 		} else {
-			arr = append(arr, [2]int64{start, -1})
+			arr = append(arr, start)
+			arr = append(arr, -1)
 		}
 	}
 	return arr, nil
@@ -595,7 +601,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	if param.IgnoreLine != 0 {
-		if !param.Extern.Parallel || param.FileOffset[2*(param.Fileparam.FileIndex-1)] == 0 {
+		if !param.Extern.Parallel || param.FileOffset[0] == 0 {
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
@@ -627,8 +633,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
-	header := meta.GetHeader()
-	colCnt := header.GetColumnCount()
+	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if param.Extern.SysTable && idxs[i] >= colCnt {
@@ -636,7 +641,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +657,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = bats[0].Vecs[i]
+				vecTmp = tmpBat.Vecs[i]
 				if err != nil {
 					return nil, err
 				}
@@ -669,7 +674,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = bats[0].Vecs[i]
+			vecTmp = tmpBat.Vecs[i]
 			if err != nil {
 				return nil, err
 			}

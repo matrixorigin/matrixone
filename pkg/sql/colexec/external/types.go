@@ -22,9 +22,10 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,20 +42,22 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	IgnoreLine    int
-	IgnoreLineTag int
-	maxBatchSize  uint64
-	CreateSql     string
-	Attrs         []string
-	Cols          []*plan.ColDef
-	FileList      []string
-	FileSize      []int64
-	FileOffset    []int64
-	Name2ColIndex map[string]int32
-	Ctx           context.Context
-	Extern        *tree.ExternParam
-	tableDef      *plan.TableDef
-	ClusterTable  *plan.ClusterTable
+	IgnoreLine      int
+	IgnoreLineTag   int
+	maxBatchSize    uint64
+	Idx             int
+	CreateSql       string
+	Attrs           []string
+	Cols            []*plan.ColDef
+	FileList        []string
+	FileSize        []int64
+	FileOffset      []int64
+	FileOffsetTotal []*pipeline.FileOffset
+	Name2ColIndex   map[string]int32
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	tableDef        *plan.TableDef
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {

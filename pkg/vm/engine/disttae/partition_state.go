@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"net/http"
 	"runtime/trace"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -231,7 +233,7 @@ func (p *PartitionState) HandleRowsInsert(
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -292,7 +294,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	}
 
 	for i, rowID := range rowIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
 			blockID := rowID.GetBlockid()
 			pivot := RowEntry{
@@ -331,14 +333,14 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
 	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
 	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[6]))
+	metaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
+	deltaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[6]))
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
 			pivot := BlockEntry{
 				BlockInfo: catalog.BlockInfo{
@@ -351,10 +353,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				numInserted++
 			}
 
-			if location := metaLocationVector[i]; location != "" {
+			if location := objectio.Location(metaLocationVector[i]); !location.IsEmpty() {
 				entry.MetaLoc = location
 			}
-			if location := deltaLocationVector[i]; location != "" {
+			if location := objectio.Location(deltaLocationVector[i]); !location.IsEmpty() {
 				entry.DeltaLoc = location
 			}
 			if id := segmentIDVector[i]; common.IsEmptySegid(&id) {

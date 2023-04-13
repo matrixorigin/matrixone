@@ -271,6 +271,7 @@ func logGetRemoteBindFailed(
 func logRemoteBindChanged(
 	serviceID string,
 	old, new pb.LockTable) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("remote bind changed",
 			serviceIDField(serviceID),
@@ -283,6 +284,7 @@ func logLockTableCreated(
 	serviceID string,
 	bind pb.LockTable,
 	remote bool) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table created",
 			serviceIDField(serviceID),
@@ -295,6 +297,7 @@ func logLockTableClosed(
 	serviceID string,
 	bind pb.LockTable,
 	remote bool) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table closed",
 			serviceIDField(serviceID),
@@ -313,6 +316,20 @@ func logDeadLockFound(
 			serviceIDField(serviceID),
 			zap.String("txn", txn.DebugString()),
 			waitTxnArrayField("wait-txn-list", waiters.waitTxns))
+	}
+}
+
+func logAbortDeadLock(
+	serviceID string,
+	txn pb.WaitTxn,
+	activeTxn *activeTxn) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("abort dead lock txn",
+			serviceIDField(serviceID),
+			zap.String("wait-txn", txn.DebugString()),
+			txnField(activeTxn),
+			zap.Stringer("block", activeTxn.blockedWaiter))
 	}
 }
 
@@ -573,12 +590,14 @@ func logWaiterContactPool(
 
 func logWaiterClose(
 	serviceID string,
-	w *waiter) {
+	w *waiter,
+	err error) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter close",
 			serviceIDField(serviceID),
-			zap.Stringer("waiter", w))
+			zap.Stringer("waiter", w),
+			zap.Error(err))
 	}
 }
 

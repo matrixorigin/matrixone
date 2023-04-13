@@ -26,10 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -43,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -81,48 +84,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
+	for _, scope := range s.PreScopes {
+		switch scope.Magic {
 		case Normal:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.Run(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
 		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
 		case Remote:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.RemoteRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
 		case Parallel:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.ParallelRun(c, cs.IsRemote)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.ParallelRun(c, cs.IsRemote) }(scope)
 		case Pushdown:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.PushdownRun(c)
-			}(s.PreScopes[i])
+			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
 		}
 	}
 	var errReceiveChan chan error
@@ -195,16 +168,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
+	if s.IsLoad {
+		return s.LoadRun(c)
+	}
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
 	switch {
-	case s.Proc.LoadTag:
-		for i := 0; i < len(s.PreScopes); i++ {
-			s.PreScopes[i].Magic = Normal
-		}
-		return s.MergeRun(c)
 	case remote:
 		var err error
 		ctx := c.ctx
@@ -272,11 +243,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(c, s, ss)
+	newScope := newParallelScope(s, ss)
 	return newScope.MergeRun(c)
 }
 
-func (s *Scope) PushdownRun(c *Compile) error {
+func (s *Scope) PushdownRun() error {
 	var end bool // exist flag
 	var err error
 
@@ -321,16 +292,33 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
-	s = newParallelScope(c, s, ss)
+	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel := make(chan *[]int32)
+		channel32 := make(chan *[]int32)
+		channel8 := make(chan *[]uint8)
 		for i := range s.PreScopes {
-			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
-			arg.Channel = channel
-			arg.NumCPU = uint64(mcpu)
-			if i == 0 {
-				arg.Is_receiver = true
+			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
+			case *right.Argument:
+				arg.Channel = channel32
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
+
+			case *rightsemi.Argument:
+				arg.Channel = channel8
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
+
+			case *rightanti.Argument:
+				arg.Channel = channel8
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.Is_receiver = true
+				}
 			}
 		}
 	}
@@ -341,10 +329,33 @@ func (s *Scope) JoinRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 func (s *Scope) isRight() bool {
-	return s != nil && s.Instructions[0].Op == vm.Right
+	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
 
-func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
+func (s *Scope) LoadRun(c *Compile) error {
+	mcpu := s.NodeInfo.Mcpu
+	ss := make([]*Scope, mcpu)
+	bat := batch.NewWithSize(1)
+	{
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
+		bat.InitZsOne(1)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				Bat: bat,
+			},
+			NodeInfo: s.NodeInfo,
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+	}
+	newScope := newParallelScope(s, ss)
+
+	return newScope.MergeRun(c)
+}
+
+func newParallelScope(s *Scope, ss []*Scope) *Scope {
 	var flg bool
 
 	for i, in := range s.Instructions {
@@ -464,8 +475,8 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 		case vm.Output:
 		default:
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
+			for j := range ss {
+				ss[j].Instructions = append(ss[j].Instructions, dupInstruction(&in, nil, j))
 			}
 		}
 	}
@@ -520,28 +531,7 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-//func dupScopeList(ss []*Scope) []*Scope {
-//rs := make([]*Scope, len(ss))
-//for i := range rs {
-//rs[i] = dupScope(ss[i])
-//}
-//return rs
-//}
-
-//func dupScope(s *Scope) *Scope {
-//regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-
-//newScope, err := copyScope(s, regMap)
-//if err != nil {
-//return nil
-//}
-//err = fillInstructionsByCopyScope(newScope, s, regMap)
-//if err != nil {
-//return nil
-//}
-//return newScope
-//}
-
+/*
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
@@ -638,10 +628,12 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	}
 	return nil
 }
+*/
 
-func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
-	for _, rr := range s.RemoteReceivRegInfos {
-		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
+func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				reg.Ch <- nil
@@ -682,10 +674,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			}
 			reg.Ch <- nil
 			errChan <- nil
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
+		}(op, s.Proc.Reg.MergeReceivers[op.Idx], s.Proc.GetMPool())
 	}
-
-	return nil
 }
 
 func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {

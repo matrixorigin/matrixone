@@ -17,7 +17,6 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func NewService(
@@ -442,6 +442,8 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
+		s.timestampWaiter = client.NewTimestampWaiter()
+
 		rt := runtime.ProcessLevelRuntime()
 		client.SetupRuntimeTxnOptions(
 			rt,
@@ -453,10 +455,19 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
+		var opts []client.TxnClientCreateOption
+		if s.cfg.Txn.EnableSacrificingFreshness {
+			opts = append(opts,
+				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+		}
+		if s.cfg.Txn.EnableCNBasedConsistency {
+			opts = append(opts,
+				client.WithEnableCNBasedConsistency())
+		}
+		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
-			rt,
 			sender,
-			client.WithLockService(s.lockService))
+			opts...)
 		s._txnClient = c
 	})
 	c = s._txnClient
