@@ -5863,7 +5863,7 @@ func Test_doAlterUser(t *testing.T) {
 			})
 			bh.sql2result[sql] = mrs
 
-			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "root", moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
 				{0, 0},
 			})
