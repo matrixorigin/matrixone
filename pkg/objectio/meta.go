@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,6 +61,9 @@ func (o ObjectMeta) BlockIndex() BlockIndex {
 
 func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
+	if offset > length {
+		fmt.Println("err")
+	}
 	return BlockObject(o[offset:length])
 }
 

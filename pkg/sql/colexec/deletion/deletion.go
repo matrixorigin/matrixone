@@ -92,7 +92,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					return true, err
 				}
 				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), FlushMetaLoc, false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
 			}
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
 			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))

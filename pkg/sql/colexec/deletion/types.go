@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	flushThreshold = 24 * mpool.MB
+	flushThreshold = 16 * mpool.MB
 )
 
 // for now, we won't do compaction for cn block
@@ -86,11 +86,13 @@ type DeleteCtx struct {
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	for _, bat := range arg.ctr.blockId_rowIdBatch {
-		bat.Clean(proc.GetMPool())
-	}
-	for _, bat := range arg.ctr.blockId_metaLoc {
-		bat.Clean(proc.GetMPool())
+	if arg.RemoteDelete {
+		for _, bat := range arg.ctr.blockId_rowIdBatch {
+			bat.Clean(proc.GetMPool())
+		}
+		for _, bat := range arg.ctr.blockId_metaLoc {
+			bat.Clean(proc.GetMPool())
+		}
 	}
 }
 
@@ -145,7 +147,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 			vector.AppendFixed(bat.GetVector(0), int64(offset), false, proc.GetMPool())
 		}
 		// add rowId size
-		if !offsetFlag {
+		if offsetFlag {
 			continue
 		}
 		arg.ctr.batch_size += 24
