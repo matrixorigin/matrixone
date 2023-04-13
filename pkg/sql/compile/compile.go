@@ -59,7 +59,7 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold   uint64 = 1 * mpool.KB
+	DistributedThreshold   uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate uint64 = 300 * mpool.B
 )
 
