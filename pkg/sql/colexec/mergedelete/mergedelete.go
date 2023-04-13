@@ -37,9 +37,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
-		// here means the delete is over, we should start to do
-		// compaction here, but in the future, we will do this
-		// in deletion operator
+		// ToDo:
+		// start to do compaction for cn blocks
+		// there are three strageties:
+		// 1.do compaction at deletion operator
+		// 2.do compaction here
+		// 3.do compaction when read
+		// choose which one depends on next pr
 		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_Delete_ID)
 		return true, nil
 	}
@@ -50,9 +54,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// 		blkId          		deltaLoc                        type
 	// |-----------|-----------------------------------|----------------|
 	// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
-	// |  blk_id   |   batch.Marshal(int64 offset)    |  CNBlockOffset | CN Block
-	// |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
-	// |  blk_id   |   batch.Marshal(int64 offset)    | RawBatchOffset | RawBatch (in txn workspace)
+	// |  blk_id   |   batch.Marshal(int64 offset)     |  CNBlockOffset | CN Block
+	// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
+	// |  blk_id   |   batch.Marshal(int64 offset)     | RawBatchOffset | RawBatch (in txn workspace)
 	blkIds := vector.MustStrCol(bat.GetVector(0))
 	metaLocBats := vector.MustBytesCol(bat.GetVector(1))
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))

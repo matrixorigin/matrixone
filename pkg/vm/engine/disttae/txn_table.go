@@ -526,7 +526,13 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	if bat == nil {
+		// ToDo:
 		// start to do compaction for cn blocks
+		// there are three strageties:
+		// 1.do compaction at deletion operator
+		// 2.do compaction here
+		// 3.do compaction when read
+		// choose which one depends on next pr
 		return nil
 	}
 	// remoteDelete
