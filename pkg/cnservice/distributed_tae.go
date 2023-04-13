@@ -17,8 +17,6 @@ package cnservice
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func (s *service) initDistributedTAE(
@@ -77,7 +76,9 @@ func (s *service) initDistributedTAE(
 	cnEngine.SetPushModelFlag(usePushModel)
 	if usePushModel {
 		logutil.Info("cn turn push model on.")
-		err = cnEngine.InitLogTailPushModel(ctx)
+		err = cnEngine.InitLogTailPushModel(
+			ctx,
+			s.timestampWaiter)
 		if err != nil {
 			return err
 		}

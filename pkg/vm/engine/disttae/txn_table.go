@@ -88,7 +88,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	}
 
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	for _, part := range tbl.parts {
+	for _, part := range tbl.getParts() {
 		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -197,8 +197,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	if err != nil {
 		return nil, err
 	}
-
-	tbl.parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	parts := tbl.getParts()
 
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
@@ -230,7 +229,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
-				iter := tbl.parts[i].NewRowsIter(ts, &blockID, true)
+				iter := parts[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
 					id, offset := entry.RowID.Decode()
@@ -677,12 +676,12 @@ func (tbl *txnTable) newReader(
 
 	var iter partitionStateIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = tbl.parts[partitionIndex].NewPrimaryKeyIter(
+		iter = tbl.getParts()[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = tbl.parts[partitionIndex].NewRowsIter(
+		iter = tbl.getParts()[partitionIndex].NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,
@@ -857,4 +856,11 @@ func (tbl *txnTable) updateLocalState(
 func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	tbl.localTS = tbl.localTS.Next()
 	return tbl.localTS
+}
+
+func (tbl *txnTable) getParts() []*PartitionState {
+	tbl.setPartsOnce.Do(func() {
+		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	})
+	return tbl._parts
 }

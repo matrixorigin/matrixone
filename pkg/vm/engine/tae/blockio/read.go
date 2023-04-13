@@ -57,6 +57,37 @@ func BlockRead(
 	return columnBatch, nil
 }
 
+func mergeDeleteRows(d1, d2 []int64) []int64 {
+	if len(d1) == 0 {
+		return d2
+	} else if len(d2) == 0 {
+		return d1
+	}
+	ret := make([]int64, 0, len(d1)+len(d2))
+	i, j := 0, 0
+	n1, n2 := len(d1), len(d2)
+	for i < n1 || j < n2 {
+		if i == n1 {
+			ret = append(ret, d2[j:]...)
+			break
+		}
+		if j == n2 {
+			ret = append(ret, d1[i:]...)
+			break
+		}
+		if d1[i] == d2[j] {
+			j++
+		} else if d1[i] < d2[j] {
+			ret = append(ret, d1[i])
+			i++
+		} else {
+			ret = append(ret, d2[j])
+			j++
+		}
+	}
+	return ret
+}
+
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
@@ -76,7 +107,7 @@ func BlockReadInner(
 		if err != nil {
 			return nil, err
 		}
-		deleteRows = recordDeletes(deleteBatch, ts)
+		deleteRows = mergeDeleteRows(deleteRows, recordDeletes(deleteBatch, ts))
 		logutil.Infof(
 			"blockread %s read delete %d: base %s filter out %v\n",
 			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))

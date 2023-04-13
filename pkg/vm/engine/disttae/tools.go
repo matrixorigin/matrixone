@@ -987,7 +987,8 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 
 func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
 	txn := tbl.db.txn
-	bats := make([]*batch.Batch, len(tbl.parts))
+	parts := tbl.getParts()
+	bats := make([]*batch.Batch, len(parts))
 	for i := range bats {
 		bats[i] = batch.New(true, bat.Attrs)
 		for j := range bats[i].Vecs {
@@ -997,7 +998,7 @@ func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, erro
 	vec := bat.GetVector(0)
 	vs := vector.MustFixedCol[types.Rowid](vec)
 	for i, v := range vs {
-		for j, part := range tbl.parts {
+		for j, part := range parts {
 			var blks []BlockMeta
 
 			if tbl.meta != nil {

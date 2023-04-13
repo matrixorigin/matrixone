@@ -28,11 +28,12 @@ func TestARTIndexNumeric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_int32.ToType()
-	idx := NewSimpleARTMap(typ)
+	idx := NewSimpleARTMap()
 
 	var err error
 	var rows []uint32
-	_, err = idx.Search(int32(0))
+	val := int32(0)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.Error(t, err)
 
 	var vecs []containers.Vector
@@ -42,7 +43,8 @@ func TestARTIndexNumeric(t *testing.T) {
 		defer vec.Close()
 	}
 
-	_, err = idx.Search(int32(55))
+	val = int32(55)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.Error(t, err)
 
 	ctx := new(KeysCtx)
@@ -51,11 +53,13 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.BatchInsert(ctx, uint32(0))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(55))
+	val = int32(55)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), rows[0])
 
-	_, err = idx.Search(int32(100))
+	val = int32(100)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx = new(KeysCtx)
@@ -68,17 +72,24 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.BatchInsert(ctx, uint32(100))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(123))
+	val = int32(123)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(123), rows[0])
 
-	_, err = idx.Search(int32(233))
+	val = int32(233)
+	_, err = idx.Search(types.EncodeInt32(&val))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Insert(int32(55), uint32(55))
+	val = int32(55)
+	buf := types.EncodeInt32(&val)
+	bufval := make([]byte, len(buf))
+	copy(bufval, buf)
+	err = idx.Insert(bufval, uint32(55))
 	require.NoError(t, err)
 
-	rows, err = idx.Search(int32(55))
+	val = int32(55)
+	rows, err = idx.Search(types.EncodeInt32(&val))
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), rows[0])
 
@@ -88,7 +99,7 @@ func TestArtIndexString(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.T_varchar.ToType()
-	idx := NewSimpleARTMap(typ)
+	idx := NewSimpleARTMap()
 
 	var err error
 	var rows []uint32
@@ -135,7 +146,7 @@ func TestArtIndexString(t *testing.T) {
 }
 
 func BenchmarkArt(b *testing.B) {
-	tr := NewSimpleARTMap(types.T_char.ToType())
+	tr := NewSimpleARTMap()
 	b.Run("tree-insert", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
