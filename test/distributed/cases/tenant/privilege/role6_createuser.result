@@ -24,6 +24,7 @@ show tables;
 Tables_in_db1
 t
 alter user 'root' identified by '111';
+use db1;
 show tables;
 Tables_in_db1
 t
