@@ -989,17 +989,25 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableType:     n.TableDef.GetTableType(),
 		}
 	}
+
+	// prcoess partitioned table
+	var partitionRelNames []string
+	if n.TableDef.Partition != nil {
+		partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+	}
+
 	s = &Scope{
 		Magic:    Remote,
 		NodeInfo: node,
 		DataSource: &Source{
-			Timestamp:    ts,
-			Attributes:   attrs,
-			TableDef:     tblDef,
-			RelationName: n.TableDef.Name,
-			SchemaName:   n.ObjRef.SchemaName,
-			AccountId:    n.ObjRef.PubAccountId,
-			Expr:         colexec.RewriteFilterExprList(n.FilterList),
+			Timestamp:              ts,
+			Attributes:             attrs,
+			TableDef:               tblDef,
+			RelationName:           n.TableDef.Name,
+			PartitionRelationNames: partitionRelNames,
+			SchemaName:             n.ObjRef.SchemaName,
+			AccountId:              n.ObjRef.PubAccountId,
+			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
@@ -1815,6 +1823,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
+	isPartitionTable := false
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
@@ -1855,6 +1864,25 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 
+	if n.TableDef.Partition != nil {
+		isPartitionTable = true
+		partitionInfo := n.TableDef.Partition
+		partitionNum := int(partitionInfo.PartitionNum)
+		partitionTableNames := partitionInfo.PartitionTableNames
+		for i := 0; i < partitionNum; i++ {
+			partTableName := partitionTableNames[i]
+			subrelation, err := db.Relation(ctx, partTableName)
+			if err != nil {
+				return nil, err
+			}
+			subranges, err := subrelation.Ranges(ctx, expr)
+			if err != nil {
+				return nil, err
+			}
+			ranges = append(ranges, subranges[1:]...)
+		}
+	}
+
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
@@ -1866,14 +1894,27 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
-			nodes[i] = engine.Node{
-				Rel:  rel,
-				Id:   node.Id,
-				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+			if isPartitionTable {
+				nodes[i] = engine.Node{
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
+			} else {
+				nodes[i] = engine.Node{
+					Rel:  rel,
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
 			}
+
 		}
 		return nodes, nil
+	}
+
+	if isPartitionTable {
+		rel = nil
 	}
 
 	// In fact, the first element of Ranges is always a memory table.
@@ -1945,7 +1986,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
-
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
