@@ -58,8 +58,8 @@ func (l Location) Name() ObjectName {
 	return ObjectName(l[:ObjectNameLen])
 }
 
-func (l Location) Extent() *Extent {
-	return (*Extent)(unsafe.Pointer(&l[ExtentOff]))
+func (l Location) Extent() Extent {
+	return Extent(l[ExtentOff : ExtentOff+ExtentLen])
 }
 
 func (l Location) Rows() uint32 {

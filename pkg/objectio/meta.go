@@ -58,7 +58,7 @@ func (o ObjectMeta) BlockIndex() BlockIndex {
 
 func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
-	return BlockObject(o[offset:length])
+	return BlockObject(o[offset : offset+length])
 }
 
 func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {

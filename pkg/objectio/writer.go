@@ -266,7 +266,7 @@ func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 	w.Lock()
 	defer w.Unlock()
 	block.BlockHeader().SetBlockID(w.lastId)
-	data := blockData{meta: block}
+	data := blockData{meta: block, bloomFilter: make(map[uint16][]byte)}
 	for i, vec := range bat.Vecs {
 		buf, err := vec.MarshalBinary()
 		if err != nil {

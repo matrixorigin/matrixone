@@ -145,7 +145,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		return blocks, objectio.Extent{}, err
 	}
 	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
-	return blocks, *blocks[0].BlockHeader().MetaLocation(), err
+	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
 
 func (w *BlockWriter) GetName() objectio.ObjectName {

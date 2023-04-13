@@ -25,7 +25,7 @@ import (
 type prefetch struct {
 	name    objectio.ObjectName
 	nameStr string
-	meta    *objectio.Extent
+	meta    objectio.Extent
 	ids     map[uint32]*objectio.ReadBlockOptions
 	reader  *objectio.ObjectReader
 }

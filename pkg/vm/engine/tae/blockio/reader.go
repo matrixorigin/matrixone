@@ -36,13 +36,13 @@ type BlockReader struct {
 	reader  *objectio.ObjectReader
 	key     objectio.Location
 	name    string
-	meta    *objectio.Extent
+	meta    objectio.Extent
 	manager *IoPipeline
 }
 
 type fetch struct {
 	name   string
-	meta   *objectio.Extent
+	meta   objectio.Extent
 	idxes  []uint16
 	id     uint32
 	pool   *mpool.MPool
@@ -223,7 +223,7 @@ func (r *BlockReader) GetName() string {
 	return r.name
 }
 
-func (r *BlockReader) GetObjectExtent() *objectio.Extent {
+func (r *BlockReader) GetObjectExtent() objectio.Extent {
 	return r.meta
 }
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
