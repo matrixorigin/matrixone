@@ -141,7 +141,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// write block meta
 	for i, block := range w.blocks {
 		n := uint32(len(block.meta))
-		blockIndex.SetBlockMetaPos(uint32(i), start+32, n)
+		blockIndex.SetBlockMetaPos(uint32(i), start, n)
 		start += n
 	}
 
