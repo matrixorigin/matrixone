@@ -76,6 +76,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
 			for blkid, bat := range p.ctr.blockId_rowIdBatch {
 				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 				bytes, err := bat.MarshalBinary()
 				if err != nil {
 					return true, err
@@ -85,6 +86,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			}
 			for blkid, bat := range p.ctr.blockId_metaLoc {
 				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 				bytes, err := bat.MarshalBinary()
 				if err != nil {
 					return true, err

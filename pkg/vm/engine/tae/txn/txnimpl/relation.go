@@ -278,6 +278,9 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 			return
 		}, nil)
+	if err != nil {
+		fmt.Println("abc")
+	}
 	return
 }
 

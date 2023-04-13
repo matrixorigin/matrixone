@@ -41,9 +41,7 @@ type container struct {
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
-	blockId_type map[string]int8
-	// blockId_min        map[string]uint32
-	// blockId_max        map[string]uint32
+	blockId_type   map[string]int8
 	batch_size     uint32
 	deleted_length uint32
 }
@@ -125,6 +123,8 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
 			arg.ctr.blockId_type[str] = CNBlockOffset
 			offsetFlag = true
+		} else {
+			arg.ctr.blockId_type[str] = RawRowIdBatch
 		}
 		if _, ok := arg.ctr.blockId_rowIdBatch[str]; !ok {
 			if !offsetFlag {
@@ -181,6 +181,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		}
 		resSize += uint32(bat.Size())
 		blkids = append(blkids, blkid)
+		bat.CleanOnlyData()
 	}
 	metaLocs, err := s3writer.WriteEndBlocks(proc)
 	for i, metaLoc := range metaLocs {

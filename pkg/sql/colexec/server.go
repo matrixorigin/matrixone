@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"math"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -95,29 +93,31 @@ func (srv *Server) GetCnSegmentType(segmentName string) int32 {
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
-func (srv *Server) GenerateSegment() []byte {
+func (srv *Server) GenerateSegment() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
-	if srv.InitSegmentId {
-		srv.incrementSegmentId()
-	} else {
-		srv.getNewSegmentId()
-		srv.currentFileOffset = 0
-		srv.InitSegmentId = true
-	}
-	return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileOffset)
+	return objectio.BuildObjectName(common.MustUuid1(), 0)
+	// for future fileOffset
+	// if srv.InitSegmentId {
+	// 	srv.incrementSegmentId()
+	// } else {
+	// 	srv.getNewSegmentId()
+	// 	srv.currentFileOffset = 0
+	// 	srv.InitSegmentId = true
+	// }
+	// return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileOffset)
 }
 
-func (srv *Server) incrementSegmentId() {
-	if srv.currentFileOffset < math.MaxUint16 {
-		srv.currentFileOffset++
-	} else {
-		srv.getNewSegmentId()
-		srv.currentFileOffset = 0
-	}
-}
+// func (srv *Server) incrementSegmentId() {
+// 	if srv.currentFileOffset < math.MaxUint16 {
+// 		srv.currentFileOffset++
+// 	} else {
+// 		srv.getNewSegmentId()
+// 		srv.currentFileOffset = 0
+// 	}
+// }
 
-// for now, rowId is common between CN and DN.
-func (srv *Server) getNewSegmentId() {
-	srv.CNSegmentId = common.NewSegmentid()
-}
+// // for now, rowId is common between CN and DN.
+// func (srv *Server) getNewSegmentId() {
+// 	srv.CNSegmentId = common.NewSegmentid()
+// }

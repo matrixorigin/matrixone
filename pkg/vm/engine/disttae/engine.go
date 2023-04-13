@@ -534,6 +534,9 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.cnBlockDeletsMap = nil
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))
