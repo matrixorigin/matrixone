@@ -157,11 +157,11 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		if err != nil {
 			return err
 		}
-		s3Writer.InitBuffers(mp[key][0], 0)
+		s3Writer.InitBuffers(mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
-			s3Writer.Put(mp[key][i], 0)
+			s3Writer.Put(mp[key][i])
 		}
-		err = s3Writer.MergeBlock(0, len(mp[key]), txn.proc, false)
+		err = s3Writer.MergeBlock(len(mp[key]), txn.proc, false)
 
 		if err != nil {
 			return err
@@ -188,10 +188,10 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
-	s3Writer.Init(1)
+	s3Writer.Init()
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
-		s3Writer.AddSortIdx(sortIdx)
+		s3Writer.SetSortIdx(sortIdx)
 	}
 	return s3Writer, tbl, nil
 }
