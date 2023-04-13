@@ -640,10 +640,11 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, c.anal.curr)
 		if len(n.GroupBy) == 0 || n.Stats.HashmapSize < plan2.HashMapSizeForBucket {
 			ss = c.compileAgg(n, ss, ns)
+			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		} else {
 			ss = c.compileGroup(n, ss, ns)
+			return c.compileSort(n, ss), nil
 		}
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
@@ -1467,6 +1468,9 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
 		})
 	}
+
+	rs = c.compileProjection(n, rs)
+
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
