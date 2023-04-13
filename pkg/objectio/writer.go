@@ -149,7 +149,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for i, colmeta := range w.colmeta {
 		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
-	extent := NewExtent(0, uint32(32), start, start)
+	extent := NewExtent(0, HeaderSize, start, start)
 	test := objectMeta.BlockHeader().MetaLocation()
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 	test = objectMeta.BlockHeader().MetaLocation()
@@ -158,14 +158,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for y, block := range w.blocks {
 		for i := range block.data {
 			location := w.blocks[y].meta.ColumnMeta(uint16(i)).Location()
-			location.SetOffset(start + 32)
+			location.SetOffset(start + HeaderSize)
 			w.blocks[y].meta.ColumnMeta(uint16(i)).setLocation(location)
 			logutil.Infof("meta: %v", w.blocks[y].meta.ColumnMeta(uint16(i)).String())
 			start += location.Length()
 		}
 		for idx := range block.bloomFilter {
 			location := w.blocks[y].meta.ColumnMeta(idx).BloomFilter()
-			location.SetOffset(start + 32)
+			location.SetOffset(start + HeaderSize)
 			w.blocks[y].meta.ColumnMeta(idx).setBloomFilter(location)
 			start += location.Length()
 		}

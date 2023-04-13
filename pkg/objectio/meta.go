@@ -21,6 +21,7 @@ import (
 )
 
 const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
+const HeaderSize = 32
 
 type ObjectMeta []byte
 
