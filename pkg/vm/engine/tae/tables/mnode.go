@@ -103,7 +103,8 @@ func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
 }
 
 func (node *memoryNode) GetValueByRow(row, col int) (v any, isNull bool) {
-	return node.data.Vecs[col].Get(row), node.data.Vecs[col].IsNull(row)
+	vec := node.data.Vecs[col]
+	return vec.Get(row), vec.IsNull(row)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
