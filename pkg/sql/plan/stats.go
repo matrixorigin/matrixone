@@ -28,6 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+const (
+	HashMapSizeForBucket = 250000
+)
+
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
 	cachePool map[uint64]*StatsInfoMap
