@@ -59,3 +59,12 @@ alter account accx open;
 
 drop account if exists acc1;
 drop account if exists accx;
+
+--alter account check version
+drop account if exists acc1;
+create account acc1 admin_name "root1" identified by "111";
+select account_name, version from mo_account where account_name = 'acc1';
+alter account acc1 suspend;
+alter account acc1 open;
+select account_name, version from mo_account where account_name = 'acc1';
+drop account if exists acc1;
