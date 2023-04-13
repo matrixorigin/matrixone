@@ -155,7 +155,7 @@ func (node *persistedNode) ApplyAppend(
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
-func (node *persistedNode) GetValueByRow(row, col int) (v any) {
+func (node *persistedNode) GetValueByRow(row, col int) (v any, isNull bool) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 

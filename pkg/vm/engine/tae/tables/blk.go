@@ -150,7 +150,7 @@ func (blk *block) BatchDedup(
 
 func (blk *block) GetValue(
 	txn txnif.AsyncTxn,
-	row, col int) (v any, err error) {
+	row, col int) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.getPersistedValue(

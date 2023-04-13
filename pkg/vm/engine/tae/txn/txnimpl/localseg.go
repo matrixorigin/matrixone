@@ -355,7 +355,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
-		v, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v, _, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 		if err != nil {
 			return err
 		}
@@ -508,7 +508,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
-func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
+func (seg *localSegment) GetValue(row uint32, col uint16) (any, bool, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	return n.GetValue(int(col), noffset)

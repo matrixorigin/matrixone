@@ -618,23 +618,26 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
+
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_AGG:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		if len(n.GroupBy) == 0 || !c.info.WithBigMem {
 			ss = c.compileAgg(n, ss, ns)
 		} else {
@@ -642,64 +645,69 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], left, right)), nil
 	case plan.Node_SORT:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
 	case plan.Node_UNION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnion(n, left, right)), nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType)), nil
 	case plan.Node_UNION_ALL:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
@@ -709,12 +717,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_INSERT, plan.Node_UPDATE:
 		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
@@ -1663,6 +1672,9 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 		})
 	}
 
+	// all join's first flag will setting in newLeftScope and newRightScope
+	// so we set it to false now
+	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1692,17 +1704,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
 
-	for i := range s.RemoteReceivRegInfos {
-		op := &s.RemoteReceivRegInfos[i]
-		if op.Idx == 0 {
-			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Idx:      0,
-				Uuid:     op.Uuid,
-				FromAddr: op.FromAddr,
-			})
-			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
-		}
-	}
+	remoteReceivRegInfosTransplant(s, rs, 0, 0)
 	return rs
 }
 
@@ -1724,19 +1726,27 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
 
-	for i := range s.RemoteReceivRegInfos {
-		op := &s.RemoteReceivRegInfos[i]
-		if op.Idx == 1 {
-			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Idx:      0,
+	remoteReceivRegInfosTransplant(s, rs, 1, 0)
+	return rs
+}
+
+// Transplant the source's RemoteReceivRegInfos which index equal to sourceIdx to
+// target with new index targetIdx
+func remoteReceivRegInfosTransplant(source, target *Scope, sourceIdx, targetIdx int) {
+	i := 0
+	for i < len(source.RemoteReceivRegInfos) {
+		op := &source.RemoteReceivRegInfos[i]
+		if op.Idx == sourceIdx {
+			target.RemoteReceivRegInfos = append(target.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      targetIdx,
 				Uuid:     op.Uuid,
 				FromAddr: op.FromAddr,
 			})
-			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
+			source.RemoteReceivRegInfos = append(source.RemoteReceivRegInfos[:i], source.RemoteReceivRegInfos[i+1:]...)
+			continue
 		}
+		i++
 	}
-
-	return rs
 }
 
 // Number of cpu's available on the current machine
