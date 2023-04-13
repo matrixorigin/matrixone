@@ -141,3 +141,10 @@ description varchar(20) not null,
 price decimal(9,2) not null);
 desc products;
 drop table products;
+
+drop database if exists test_creatsql;
+create database test_creatsql;
+use test_creatsql;
+/*comments*/create table /*comments*/ t(a int)/*comments*/;select 1;
+select rel_createsql from mo_catalog.mo_tables where relname = 't' and reldatabase = 'test_creatsql';
+drop database test_creatsql;
