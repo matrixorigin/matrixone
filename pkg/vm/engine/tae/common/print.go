@@ -63,8 +63,8 @@ type WithSpecialRowid struct{}
 
 func (w WithSpecialRowid) apply(o *opt) { o.specialRowid = true }
 
-func TypeStringValue(t types.Type, v any, opts ...TypePrintOpt) string {
-	if types.IsNull(v) {
+func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) string {
+	if isNull {
 		return "null"
 	}
 	opt := &opt{}
@@ -150,9 +150,9 @@ func vec2Str[T any](vec []T, v *vector.Vector) string {
 			_ = w.WriteByte(',')
 		}
 		if v.GetNulls().Contains(uint64(i)) {
-			_, _ = w.WriteString(TypeStringValue(*v.GetType(), types.Null{}))
+			_, _ = w.WriteString(TypeStringValue(*v.GetType(), nil, true))
 		} else {
-			_, _ = w.WriteString(TypeStringValue(*v.GetType(), vec[i], WithDoNotPrintBin{}))
+			_, _ = w.WriteString(TypeStringValue(*v.GetType(), vec[i], false, WithDoNotPrintBin{}))
 		}
 		first = false
 	}

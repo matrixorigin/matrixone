@@ -315,7 +315,7 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tbl.store.nodesMgr.String())
-	v, err := tbl.GetLocalValue(100, 0)
+	v, _, err := tbl.GetLocalValue(100, 0)
 	assert.NoError(t, err)
 	t.Log(tbl.store.nodesMgr.String())
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
