@@ -304,6 +304,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 
 func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, batLen int, attrs []string, rowSkip []bool, parentIdx map[string]int32) (*batch.Batch, error) {
 	updateBatch := batch.New(true, attrs)
+	updateBatch.AddCnt(1)
 	var toVec *vector.Vector
 	var err error
 

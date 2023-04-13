@@ -70,10 +70,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		return false, nil
 	}
 
-	defer func() {
-		bat.Clean(proc.Mp())
-	}()
-
 	insertCtx := insertArg.InsertCtx
 
 	//write origin table
@@ -84,7 +80,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			return false, err
 		}
 	} else {
-		// write origin table, bat will be copied.
+		defer func() {
+			bat.Clean(proc.Mp())
+		}()
+		// write origin table, bat will be deeply copied into txn's workspace.
 		err := insertCtx.Rels[0].Write(proc.Ctx, bat)
 		if err != nil {
 			return false, err
@@ -105,6 +104,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 
 	affectedRows := uint64(bat.Vecs[0].Length())
+
 	if insertArg.IsRemote {
 		if err := collectAndOutput(proc, s3Writers); err != nil {
 			return false, err
@@ -127,7 +127,7 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 		}
 		w.ResetMetaLocBat()
 	}
-	res.Cnt = 1
+	res.AddCnt(1)
 	proc.SetInputBatch(res)
 	return
 }
