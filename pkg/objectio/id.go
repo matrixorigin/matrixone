@@ -54,6 +54,13 @@ func NewRowid(blkid *Blockid, offset uint32) types.Rowid {
 	return rowid
 }
 
+func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
+	var id Blockid
+	copy(id[:], name[0:NameStringOff])
+	copy(id[NameStringOff:], types.EncodeUint16(&sequence))
+	return &id
+}
+
 func ToObjectName(blkID *Blockid) ObjectName {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
 }

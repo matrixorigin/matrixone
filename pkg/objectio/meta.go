@@ -17,6 +17,8 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -49,7 +51,7 @@ func (o ObjectMeta) Length() uint32 {
 }
 
 func (o ObjectMeta) BlockCount() uint32 {
-	return o.BlockHeader().BlockID()
+	return uint32(o.BlockHeader().Sequence())
 }
 
 func (o ObjectMeta) BlockIndex() BlockIndex {
@@ -153,11 +155,10 @@ func (om ObjectColumnMeta) SetZoneMap(zm []byte) {
 }
 
 const (
+	sequenceLen       = 2
 	tableIDLen        = 8
-	segmentIDOff      = tableIDLen
-	segmentIDLen      = 8
-	blockIDOff        = segmentIDOff + segmentIDLen
-	blockIDLen        = 4
+	blockIDOff        = tableIDLen
+	blockIDLen        = types.BlockidSize
 	rowsOff           = blockIDOff + blockIDLen
 	rowsLen           = 4
 	columnCountOff    = rowsOff + rowsLen
@@ -215,20 +216,20 @@ func (bh BlockHeader) SetTableID(id uint64) {
 	copy(bh[:tableIDLen], types.EncodeUint64(&id))
 }
 
-func (bh BlockHeader) SegmentID() uint64 {
-	return types.DecodeUint64(bh[segmentIDOff : segmentIDOff+segmentIDLen])
+func (bh BlockHeader) BlockID() *Blockid {
+	return (*Blockid)(unsafe.Pointer(&bh[blockIDOff]))
 }
 
-func (bh BlockHeader) SetSegmentID(id uint64) {
-	copy(bh[segmentIDOff:segmentIDOff+segmentIDLen], types.EncodeUint64(&id))
+func (bh BlockHeader) SetBlockID(id *Blockid) {
+	copy(bh[blockIDOff:blockIDOff+blockIDLen], id[:])
 }
 
-func (bh BlockHeader) BlockID() uint32 {
-	return types.DecodeUint32(bh[blockIDOff : blockIDOff+blockIDLen])
+func (bh BlockHeader) Sequence() uint16 {
+	return types.DecodeUint16(bh[rowsOff-sequenceLen : rowsOff])
 }
 
-func (bh BlockHeader) SetBlockID(id uint32) {
-	copy(bh[blockIDOff:blockIDOff+blockIDLen], types.EncodeUint32(&id))
+func (bh BlockHeader) SetSequence(seq uint16) {
+	copy(bh[rowsOff-sequenceLen:rowsOff], types.EncodeUint16(&seq))
 }
 
 func (bh BlockHeader) Rows() uint32 {
