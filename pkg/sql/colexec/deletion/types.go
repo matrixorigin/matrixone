@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	flushThreshold = 32 * mpool.MB
+	flushThreshold = 24 * mpool.MB
 )
 
 // for now, we won't do compaction for cn block
