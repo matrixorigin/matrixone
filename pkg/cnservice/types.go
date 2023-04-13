@@ -162,6 +162,15 @@ type Config struct {
 		Isolation string `toml:"isolation"`
 		// Mode txn mode. optimistic or pessimistic, default is optimistic
 		Mode string `toml:"mode"`
+		// EnableSacrificingFreshness In Push Mode, the transaction is not guaranteed
+		// to see the latest commit data, and the latest Logtail commit timestamp received
+		// by the current CN + 1 is used as the start time of the transaction. But it will
+		// ensure that the transactions of the same database connection can see the writes
+		// of the previous committed transactions.
+		EnableSacrificingFreshness bool `toml:"enable-sacrificing-freshness"`
+		// EnableCNBasedConsistency ensure that all the transactions on a CN can read
+		// the writes of the previous committed transaction
+		EnableCNBasedConsistency bool `toml:"enable-cn-based-consistency"`
 	} `toml:"txn"`
 }
 
@@ -267,6 +276,7 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
+	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService

@@ -39,7 +39,7 @@ type Vector interface {
 
 	// Deep copy ops
 	Get(i int) any
-	Append(v any)
+	Append(v any, isNull bool)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
 
 	WriteTo(w io.Writer) (int64, error)
@@ -52,7 +52,7 @@ type Vector interface {
 	GetDownstreamVector() *cnVector.Vector
 	setDownstreamVector(vec *cnVector.Vector)
 
-	Update(i int, v any)
+	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
 
 	Extend(o Vector)
@@ -79,7 +79,7 @@ type Vector interface {
 	Equals(o Vector) bool
 	String() string
 	PPString(num int) string
-	AppendMany(vs ...any)
+	AppendMany(vs []any, isNulls []bool)
 	Delete(i int)
 }
 

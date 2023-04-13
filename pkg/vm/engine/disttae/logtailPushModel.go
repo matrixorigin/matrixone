@@ -16,18 +16,19 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
@@ -88,10 +89,16 @@ type pushClient struct {
 
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
+
+	// timestampWaiter is used to notify the latest commit timestamp
+	timestampWaiter client.TimestampWaiter
 }
 
-func (client *pushClient) init(serviceAddr string) error {
-	client.receivedLogTailTime.initLogTailTimestamp()
+func (client *pushClient) init(
+	serviceAddr string,
+	timestampWaiter client.TimestampWaiter) error {
+	client.timestampWaiter = timestampWaiter
+	client.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
 	client.subscribed.initTableSubscribeRecord()
 
 	if client.subscriber == nil {
@@ -305,7 +312,7 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 			}
 			logutil.Infof("start to reconnect to dn log tail service")
 			dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-			if err := client.init(dnLogTailServerBackend); err != nil {
+			if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
 				logutil.Error("rebuild the cn log tail client failed.")
 				reconnectErr <- err
 			}
@@ -418,14 +425,16 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
-	ready atomic.Bool
-	tList []struct {
+	timestampWaiter client.TimestampWaiter
+	ready           atomic.Bool
+	tList           []struct {
 		time timestamp.Timestamp
 		sync.RWMutex
 	}
 }
 
-func (r *syncLogTailTimestamp) initLogTailTimestamp() {
+func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
+	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
 	r.tList = make([]struct {
 		time timestamp.Timestamp
@@ -452,6 +461,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp
 	r.tList[index].Lock()
 	r.tList[index].time = newTimestamp
 	r.tList[index].Unlock()
+	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
@@ -480,6 +490,7 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
+	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &service.LogtailResponseSegment{}
 	})
@@ -487,12 +498,13 @@ func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 		),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+		morpc.WithBackendLogger(logger),
 	)
 
 	c, err1 := morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(10000),
 		morpc.WithClientTag("cn-log-tail-client"),
+		morpc.WithClientLogger(logger),
 	)
 	if err1 != nil {
 		return nil, err1
@@ -581,12 +593,15 @@ func (e *Engine) UsePushModelOrNot() bool {
 }
 
 func (e *Engine) InitLogTailPushModel(
-	ctx context.Context) error {
+	ctx context.Context,
+	timestampWaiter client.TimestampWaiter) error {
 	e.SetPushModelFlag(true)
 
 	// get log tail service address.
 	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-	if err := e.pClient.init(dnLogTailServerBackend); err != nil {
+	if err := e.pClient.init(
+		dnLogTailServerBackend,
+		timestampWaiter); err != nil {
 		return err
 	}
 	e.pClient.receiveTableLogTailContinuously(e)

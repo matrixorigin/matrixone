@@ -6206,7 +6206,8 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	bh := NewBackgroundHandler(ctx, ctx, mp, pu, aicm)
+	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
+	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
 	//USE the mo_catalog
