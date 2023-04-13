@@ -188,37 +188,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		s.NodeInfo.Data = nil
 	case s.NodeInfo.Rel != nil:
-		// get readers of main table
-		if mainRds, err := s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		var err error
+
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
-		} else {
-			rds = append(rds, mainRds...)
-		}
-		// get readers of partitioned tables
-		if s.DataSource.PartitionRelationNames != nil {
-			db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
-			if err != nil {
-				return err
-			}
-			for _, relName := range s.DataSource.PartitionRelationNames {
-				rel, err := db.Relation(c.ctx, relName)
-				if err != nil {
-					var e error // avoid contamination of error messages
-					db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
-					if e != nil {
-						return e
-					}
-					rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, relName))
-					if e != nil {
-						return err
-					}
-				}
-				memRds, err := rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
-				if err != nil {
-					return err
-				}
-				rds = append(rds, memRds...)
-			}
 		}
 		s.NodeInfo.Data = nil
 	default:
@@ -246,8 +219,25 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
+		} else {
+			rds = append(rds, mainRds...)
+		}
+
+		// get readers of partitioned tables
+		if s.DataSource.PartitionRelationNames != nil {
+			for _, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				if err != nil {
+					return err
+				}
+				rds = append(rds, memRds...)
+			}
 		}
 		s.NodeInfo.Data = nil
 	}
