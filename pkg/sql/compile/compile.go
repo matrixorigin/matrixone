@@ -1908,8 +1908,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			//FIXME::just for debug
-			//if c.cnList[j].Addr == c.addr {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
@@ -1929,8 +1927,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		} else {
-			//FIXME::just for debug
-			//if c.cnList[j].Addr == c.addr {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
