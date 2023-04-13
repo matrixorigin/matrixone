@@ -625,7 +625,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID(), proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, uint32(param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence()), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
