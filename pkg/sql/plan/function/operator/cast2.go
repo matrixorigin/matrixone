@@ -183,6 +183,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_timestamp,
+		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -1188,6 +1189,12 @@ func timestampToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timestampToStr(source, rs, length, zone, toType)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return timestampToDecimal64(proc.Ctx, source, rs, length)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return timestampToDecimal128(proc.Ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from timestamp to %s", toType))
 }
@@ -2342,6 +2349,58 @@ func timestampToDate(
 				return err
 			}
 			if err = to.Append(result[0].ToDate(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToDecimal64(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Decimal64], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal64
+	for ; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := v.UnixToDecimal64()
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToDecimal128(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Decimal128], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal128
+	for ; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := v.UnixToDecimal128()
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
