@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -240,10 +239,33 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 					deletes[id] = append(deletes[id], int(offset))
 				}
 				iter.Close()
+				// DN flush deletes rowids block
+				for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[string(blockID[:])] {
+					vs := vector.MustStrCol(bat.GetVector(0))
+					for _, metalLoc := range vs {
+						location, err := blockio.EncodeLocationFromString(metalLoc)
+						if err != nil {
+							return nil, err
+						}
+						s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
+						if err != nil {
+							return nil, err
+						}
+						rowIdBat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, location.ID(), tbl.db.txn.proc.GetMPool())
+						if err != nil {
+							return nil, err
+						}
+						rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+						for _, rowId := range rowIds {
+							id, offset := rowId.Decode()
+							deletes[id] = append(deletes[id], int(offset))
+						}
+					}
+				}
 			}
-
 			for _, entry := range tbl.writes {
-				if entry.typ == DELETE {
+				// rawBatch detele rowId for Dn block
+				if entry.typ == DELETE && entry.fileName == "" {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						id, offset := v.Decode()
@@ -468,7 +490,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |-----------|-----------------------------------|----------------|
 // |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
-// |  blk_id   |   batch.Marshal(rowId）           |  RawRowIdBatch | DN Blcok
+// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	blkId, typ_str := name[:len(name)-2], string(name[len(name)-1])
@@ -478,12 +500,17 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	}
 	switch typ {
 	case deletion.FlushMetaLoc:
-		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
-		CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
-		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.db.txn.dnStores[0]); err != nil {
+		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
+		if err != nil {
 			return err
 		}
+		fileName := location.Name().String()
+		copBat := CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
+		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
+			return err
+		}
+		tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId], copBat)
 	case deletion.CNBlockOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
@@ -491,7 +518,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	case deletion.RawBatchOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		entry_bat := tbl.db.txn.blockId_batch[blkId]
+		entry_bat := tbl.db.txn.blockId_raw_batch[blkId]
 		entry_bat.AntiShrink(vs)
 	}
 	return nil
@@ -499,8 +526,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	if bat == nil {
-		return nil
 		// start to do compaction for cn blocks
+		return nil
 	}
 	// remoteDelete
 	if name != catalog.Row_ID {

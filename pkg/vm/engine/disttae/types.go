@@ -37,6 +37,7 @@ import (
 const (
 	INSERT = iota
 	DELETE
+	COMPACTION_CN
 	UPDATE
 )
 
@@ -122,8 +123,9 @@ type Transaction struct {
 	// use to cache created table
 	createMap *sync.Map
 
-	cnBlockDeletsMap *CnBlockDeletsMap
-	blockId_batch    map[string]*batch.Batch
+	cnBlockDeletsMap                *CnBlockDeletsMap
+	blockId_raw_batch               map[string]*batch.Batch
+	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
 }
 
 type CnBlockDeletsMap struct {

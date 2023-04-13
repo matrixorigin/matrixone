@@ -358,7 +358,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlockDeletsMap: &CnBlockDeletsMap{
 			mp: map[string][]int64{},
 		},
-		blockId_batch: make(map[string]*batch.Batch),
+		blockId_raw_batch:               make(map[string]*batch.Batch),
+		blockId_dn_delete_metaLoc_batch: make(map[string][]*batch.Batch),
 	}
 	// TxnWorkSpace SegmentName
 	colexec.Srv.PutCnSegment(string(id[:]), colexec.TxnWorkSpaceIdType)

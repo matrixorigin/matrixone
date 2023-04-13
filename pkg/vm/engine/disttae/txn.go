@@ -107,7 +107,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-		txn.blockId_batch[txn.getCurrentBlockId()] = bat
+		txn.blockId_raw_batch[txn.getCurrentBlockId()] = bat
 		txn.workspaceSize += uint64(bat.Size())
 	}
 	txn.Lock()
@@ -227,6 +227,10 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
+	// used for cn block compaction
+	if typ == COMPACTION_CN {
+		typ = INSERT
+	}
 	txn.readOnly = false
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
@@ -243,7 +247,9 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		panic("fileName parse Uuid error")
 	} else {
 		// get uuid string
-		colexec.Srv.PutCnSegment(string(uid[:]), colexec.CnBlockIdType)
+		if typ == INSERT {
+			colexec.Srv.PutCnSegment(string(uid[:]), colexec.CnBlockIdType)
+		}
 	}
 	return nil
 }
@@ -326,7 +332,7 @@ func (txn *Transaction) genBlock() {
 func (txn *Transaction) getCurrentBlockId() string {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 	blkId := rowId.GetBlockid()
-	return blkId.String()
+	return string(blkId[:])
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
