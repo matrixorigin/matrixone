@@ -69,6 +69,9 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		if entry.tableId != tbl.tableId {
 			continue
 		}
+		if entry.typ == DELETE {
+			continue
+		}
 		writes = append(writes, entry)
 	}
 	tbl.db.txn.Unlock()

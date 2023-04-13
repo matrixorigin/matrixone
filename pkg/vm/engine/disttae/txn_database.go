@@ -29,21 +29,50 @@ var _ engine.Database = new(txnDatabase)
 
 func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	var rels []string
-
+	//first get all delete tables
+	deleteTables := make(map[string]any)
+	db.txn.deletedTableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId {
+			deleteTables[key.name] = nil
+		}
+		return true
+	})
 	db.txn.createMap.Range(func(k, _ any) bool {
 		key := k.(tableKey)
 		if key.databaseId == db.databaseId {
-			rels = append(rels, key.name)
+			//if the table is deleted, do not save it.
+			if _, exist := deleteTables[key.name]; !exist {
+				rels = append(rels, key.name)
+			}
 		}
 		return true
 	})
 	tbls, _ := db.txn.engine.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
-	rels = append(rels, tbls...)
+	for _, tbl := range tbls {
+		//if the table is deleted, do not save it.
+		if _, exist := deleteTables[tbl]; !exist {
+			rels = append(rels, tbl)
+		}
+	}
 	return rels, nil
 }
 
 func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	tblName := ""
+	//first check the tableID is deleted or not
+	deleted := false
+	db.txn.deletedTableMap.Range(func(k, _ any) bool {
+		key := k.(tableKey)
+		if key.databaseId == db.databaseId && key.tableId == id {
+			deleted = true
+			return false
+		}
+		return true
+	})
+	if deleted {
+		return ""
+	}
 	db.txn.createMap.Range(func(k, _ any) bool {
 		key := k.(tableKey)
 		if key.databaseId == db.databaseId && key.tableId == id {
@@ -76,6 +105,10 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
 	logDebugf(db.txn.meta, "txnDatabase.Relation table %s", name)
+	//check the table is deleted or not
+	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
+		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+	}
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
@@ -142,6 +175,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	k := genTableKey(ctx, name, db.databaseId)
 	if _, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
+		db.txn.deletedTableMap.Store(k, nil)
 		return nil
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
 		id = v.(*txnTable).tableId
@@ -170,6 +204,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		}
 	}
 
+	db.txn.deletedTableMap.Store(k, nil)
 	return nil
 }
 

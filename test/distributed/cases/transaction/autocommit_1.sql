@@ -13,9 +13,11 @@ SELECT @@session.autocommit;
 
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
+commit;
 
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
+commit;
 
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
@@ -441,6 +443,6 @@ rollback;
 select * from t9;
 commit;
 drop table t9;
-
+commit;
 set @@autocommit=on;
 

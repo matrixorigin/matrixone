@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 1",
-		output: "select 1",
+		input:  "set @a = nextval('s1')",
+		output: "set @a = nextval('s1')",
 	}
 )
 

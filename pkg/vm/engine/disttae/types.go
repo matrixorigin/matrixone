@@ -123,6 +123,8 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
+	// for deleted table
+	deletedTableMap *sync.Map
 }
 
 // Entry represents a delete/insert

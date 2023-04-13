@@ -350,12 +350,13 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId:       id,
-		dnStores:    e.getDNServices(),
-		fileMap:     make(map[string]uint64),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		segId:           id,
+		dnStores:        e.getDNServices(),
+		fileMap:         make(map[string]uint64),
+		tableMap:        new(sync.Map),
+		databaseMap:     new(sync.Map),
+		createMap:       new(sync.Map),
+		deletedTableMap: new(sync.Map),
 	}
 	e.newTransaction(op, txn)
 
@@ -528,6 +529,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.deletedTableMap = nil
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))

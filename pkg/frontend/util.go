@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"os"
 	"runtime"
 	"strconv"
@@ -269,68 +272,28 @@ func WildcardMatch(pattern, target string) bool {
 
 // only support single value and unary minus
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
-	var err error
-	var erArray []ExecResult
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		bh := ses.GetBackgroundExec(ses.GetRequestContext())
-		defer bh.Close()
-
-		//"expr" is rewrote to "select (expr)"
-		rewroteSql := "select (" + e.String() + ");"
-
-		err = bh.Exec(ctx, "begin;")
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx())
+		bindContext := plan2.NewBindContext(builder, nil)
+		binder := plan2.NewSetVarBinder(builder, bindContext)
+		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
-			goto handleFailed
+			return nil, err
 		}
-
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, rewroteSql)
+		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		// Here the evalExpr may execute some function that needs engine.Engine.
+		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
+		vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
-			goto handleFailed
+			return nil, err
 		}
-
-		err = bh.Exec(ctx, "commit;")
-		if err != nil {
-			goto handleFailed
-		}
-
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			goto handleFailed
-		}
-
-		if execResultArrayHasOneRow(erArray) {
-
-		}
-
-		return nil, err
-
-	handleFailed:
-		err2 := bh.Exec(ctx, "rollback;")
-		if err2 != nil {
-			return nil, err2
-		}
-		return nil, nil
-
-		//binder := plan2.NewDefaultBinder(ses.GetRequestContext(), nil, nil, nil, nil)
-		//planExpr, err := binder.BindExpr(e, 0, false)
-		//if err != nil {
-		//	return nil, err
-		//}
-		//// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		//bat := batch.NewWithSize(0)
-		//bat.Zs = []int64{1}
-		//// Here the evalExpr may execute some function that needs engine.Engine.
-		//ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
-		//vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
-		//if err != nil {
-		//	return nil, err
-		//}
-		//return getValueFromVector(vec, ses, planExpr)
+		return getValueFromVector(vec, ses, planExpr)
 	}
 }
 
