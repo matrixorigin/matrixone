@@ -172,7 +172,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 	return table.GetByFilter(filter)
 }
 
-func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err error) {
+func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return
