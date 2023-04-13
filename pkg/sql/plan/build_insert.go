@@ -63,14 +63,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 			return nil, err
 		}
 	} else {
-		// if table have parent table. add left join to query
-		if len(tableDef.Fkeys) > 0 {
-			err = appendJoinNodeForParentFkCheck(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, 0)
-			if err != nil {
-				return nil, err
-			}
-		}
-		buildInsertPlans(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
+		query, err = buildInsertPlans(builder, bindCtx, objRef, tableDef, ctx, rewriteInfo.rootId)
 		if err != nil {
 			return nil, err
 		}

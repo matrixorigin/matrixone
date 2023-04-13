@@ -585,6 +585,8 @@ message Node {
 		ON_DUPLICATE_KEY = 58;
 		PRE_INSERT = 59;
 		PRE_DELETE = 60;
+		// the node which build insert batch for hidden table(unique key)
+		PRE_INSERT_UK = 61;
 	}
 
 	enum JoinFlag {
@@ -659,6 +661,14 @@ message Node {
 	// and only keep preInsertCtx, preDeleteCtx
 	PreDeleteCtx pre_delete_ctx = 32;
 	PreInsertCtx pre_insert_ctx = 33;
+	// build unique key batch before insert into hidden table which keep the unique key
+	PreInsertUkCtx pre_insert_uk_ctx = 34; 
+}
+
+message PreInsertUkCtx {
+	// index of columns(parts of unique key) in pre batch
+	repeated Expr columns 	= 1;
+	Expr pk_column 			= 2;  
 }
 
 message PreDeleteCtx {
@@ -669,8 +679,6 @@ message PreDeleteCtx {
 message PreInsertCtx {
 	//the indexes of insert columns in the batch
 	repeated int32 idx 	= 1;
-	//the index of pk column in the batch
-	int32 pk_idx 		= 2;
 }
 
 message IdList {

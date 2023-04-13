@@ -33,7 +33,7 @@ func TestSingleSQL(t *testing.T) {
 	//sql := "select * from nation"
 	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
 	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
-	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)"
+	sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {

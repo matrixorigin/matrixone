@@ -282,6 +282,45 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 	return newCtx
 }
 
+func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.PreInsertCtx{
+		Idx: make([]int32, len(ctx.Idx)),
+	}
+	copy(newCtx.Idx, ctx.Idx)
+
+	return newCtx
+}
+
+func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.PreInsertUkCtx{
+		Columns:  make([]*Expr, len(ctx.Columns)),
+		PkColumn: DeepCopyExpr(ctx.PkColumn),
+	}
+	for i, col := range ctx.Columns {
+		newCtx.Columns[i] = DeepCopyExpr(col)
+	}
+
+	return newCtx
+}
+
+func DeepCopyPreDeleteCtx(ctx *plan.PreDeleteCtx) *plan.PreDeleteCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.PreDeleteCtx{
+		Idx: make([]int32, len(ctx.Idx)),
+	}
+	copy(newCtx.Idx, ctx.Idx)
+
+	return newCtx
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
@@ -308,6 +347,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		NotCacheable:    node.NotCacheable,
 		CurrentStep:     node.CurrentStep,
 		SourceStep:      node.SourceStep,
+		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
 	}
 
 	copy(newNode.Children, node.Children)
