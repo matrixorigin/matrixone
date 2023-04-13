@@ -235,16 +235,18 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			continue
 		}
 		var colVal any
+		var colValIsNull bool
 		if int(col) == def.Idx {
 			colVal = v
+			colValIsNull = isNull
 		} else {
-			colVal, isNull, err = h.table.GetValue(id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
 		}
 		vec := containers.MakeVector(def.Type)
-		vec.Append(colVal, isNull)
+		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
