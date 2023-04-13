@@ -235,38 +235,19 @@ insert into t4 values(4, '1981-04-02','Dora', 24);
 insert into t4 values(5, '1981-09-28','bcvdf', 25);
 insert into t4 values(6, '1981-05-01','green', 26);
 alter table t4 add constraint index (col3, col4);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 35 near " index (col3, col4);";
 alter table t4 add constraint index wwwww (col3, col4);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 35 near " index wwwww (col3, col4);";
 alter table t4 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 65 near " index zxxxxx (col3);";
 show index from t4;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
-t4    1    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 alter table t4 add index zxxxxx(col3);
-duplicate key name 'zxxxxx'
 show index from t4;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
 t4    1    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
-alter table t4 add constraint idx_6dotkott2kjsp8v index (col3);
-alter table t4 add constraint idx_6dotkott2kjsp8v index (col4);
-duplicate key name 'idx_6dotkott2kjsp8v'
-show index from t4;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
-t4    1    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
-t4    1    idx_6dotkott2kjsp8v    1    col3    A    0    NULL    NULL                    YES    NULL
 drop table t4;
 drop table if exists t5;
 CREATE TABLE t5(
