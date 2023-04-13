@@ -292,7 +292,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 
 func (blk *ablock) GetValue(
 	txn txnif.AsyncTxn,
-	row, col int) (v any, err error) {
+	row, col int) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -311,7 +311,7 @@ func (blk *ablock) GetValue(
 func (blk *ablock) getInMemoryValue(
 	mnode *memoryNode,
 	txn txnif.TxnReader,
-	row, col int) (v any, err error) {
+	row, col int) (v any, isNull bool, err error) {
 	blk.RLock()
 	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), txn, blk.RWMutex)
 	blk.RUnlock()
@@ -327,7 +327,7 @@ func (blk *ablock) getInMemoryValue(
 		return
 	}
 	defer view.Close()
-	v = view.GetValue(row)
+	v, isNull = view.GetValue(row)
 	//switch val := v.(type) {
 	//case []byte:
 	//	myVal := make([]byte, len(val))

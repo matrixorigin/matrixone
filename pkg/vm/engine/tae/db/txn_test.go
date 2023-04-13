@@ -260,7 +260,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			}
 			id = blk.Fingerprint()
 			key := model.EncodePhyAddrKeyWithPrefix(id.BlockID[:], uint32(row))
-			cntv, err := rel.GetValueByPhyAddrKey(key, 2)
+			cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return
 			}
@@ -289,7 +289,7 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 
 	entry = new(APP1Goods)
 	entry.ID = goodId
-	price, _ := goodRel.GetValue(id, offset, 2)
+	price, _, _ := goodRel.GetValue(id, offset, 2)
 	entry.Price = price.(float64)
 	return
 }
