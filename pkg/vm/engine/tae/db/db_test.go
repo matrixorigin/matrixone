@@ -5979,3 +5979,31 @@ func TestDedup2(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 }
+
+func TestCompactLargeTable(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(600, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 10)
+
+	tae.createRelAndAppend(data, true)
+
+	tae.restart()
+
+	tae.checkRowsByScan(10, true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	tae.restart()
+
+	tae.checkRowsByScan(10, true)
+}
