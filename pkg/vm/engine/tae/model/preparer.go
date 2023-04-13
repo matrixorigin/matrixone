@@ -24,7 +24,7 @@ func PreparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32) 
 	col = containers.MakeVector(typ)
 	for i := uint32(0); i < length; i++ {
 		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		col.Append(rowid)
+		col.Append(rowid, false)
 	}
 	return
 }
@@ -33,7 +33,7 @@ func PreparePhyAddrDataWithPool(typ types.Type, prefix []byte, startRow, length 
 	col = containers.MakeVector(typ, containers.Options{Allocator: pool})
 	for i := uint32(0); i < length; i++ {
 		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		col.Append(rowid)
+		col.Append(rowid, false)
 	}
 	return
 }

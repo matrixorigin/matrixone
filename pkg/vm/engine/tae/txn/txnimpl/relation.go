@@ -244,7 +244,12 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 			}
 		}
 		vec := containers.MakeVector(def.Type)
-		vec.Append(colVal)
+		if types.IsNull(colVal) {
+			vec.Append(colVal, true)
+		} else {
+			vec.Append(colVal, false)
+		}
+
 		bat.AddVector(def.Name, vec)
 	}
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {

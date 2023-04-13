@@ -78,7 +78,7 @@ func TestAppendNull(t *testing.T) {
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)
 		defer vec.Close()
-		vec.Append(types.Null{})
+		vec.Append(nil, true)
 		assert.Equal(t, 11, vec.Length())
 		assert.True(t, vec.IsNull(10))
 		t.Log(vec.String())

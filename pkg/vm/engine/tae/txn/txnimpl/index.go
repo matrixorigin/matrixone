@@ -102,11 +102,11 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
-			vec.Append([]byte(k.(string)))
+			vec.Append([]byte(k.(string)), false)
 		}
 	default:
 		for k := range idx.tree {
-			vec.Append(k)
+			vec.Append(k, false)
 		}
 	}
 	return vec
@@ -123,7 +123,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
-			vec.Append([]byte(k.(string)))
+			vec.Append([]byte(k.(string)), false)
 		}
 	default:
 		for k := range idx.tree {
@@ -131,7 +131,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
-			vec.Append(k)
+			vec.Append(k, false)
 		}
 	}
 	if vec.Length() > 0 {
