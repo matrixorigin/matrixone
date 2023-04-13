@@ -260,7 +260,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			}
 			id = blk.Fingerprint()
 			key := model.EncodePhyAddrKeyWithPrefix(id.BlockID[:], uint32(row))
-			cntv, err := rel.GetValueByPhyAddrKey(key, 2)
+			cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return
 			}
@@ -289,7 +289,7 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 
 	entry = new(APP1Goods)
 	entry.ID = goodId
-	price, _ := goodRel.GetValue(id, offset, 2)
+	price, _, _ := goodRel.GetValue(id, offset, 2)
 	entry.Price = price.(float64)
 	return
 }
@@ -312,7 +312,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	}
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
-	err = rel.UpdateByFilter(handle.NewEQFilter(entry.ID), uint16(2), newLeft)
+	err = rel.UpdateByFilter(handle.NewEQFilter(entry.ID), uint16(2), newLeft, false)
 	return err
 }
 
@@ -621,7 +621,7 @@ func TestTxn8(t *testing.T) {
 	assert.NoError(t, err)
 	pkv := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(pkv)
-	err = rel.UpdateByFilter(filter, 3, int64(9999))
+	err = rel.UpdateByFilter(filter, 3, int64(9999), false)
 	assert.NoError(t, err)
 
 	pkv = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
@@ -760,7 +760,7 @@ func TestTxn9(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
-	err = rel.UpdateByFilter(filter, 2, int32(9999))
+	err = rel.UpdateByFilter(filter, 2, int32(9999), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()

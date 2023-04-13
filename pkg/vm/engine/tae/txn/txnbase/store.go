@@ -122,7 +122,7 @@ func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32, handl
 func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, err error) {
+func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, isNull bool, err error) {
 	return
 }
 
