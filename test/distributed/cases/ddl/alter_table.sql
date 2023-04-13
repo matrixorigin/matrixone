@@ -153,9 +153,6 @@ alter table t4 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3);
 show index from t4;
 alter table t4 add index zxxxxx(col3);
 show index from t4;
-alter table t4 add constraint idx_6dotkott2kjsp8v index (col3);
-alter table t4 add constraint idx_6dotkott2kjsp8v index (col4);
-show index from t4;
 drop table t4;
 
 drop table if exists t5;

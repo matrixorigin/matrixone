@@ -260,35 +260,35 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 	for did, entry := range t.dbs {
 		if entry.drop {
-			bats[DropDB].GetVectorByName(GCAttrDBId).Append(did)
+			bats[DropDB].GetVectorByName(GCAttrDBId).Append(did, false)
 		}
 		for tid, table := range entry.tables {
 			if table.drop {
-				bats[DropTable].GetVectorByName(GCAttrTableId).Append(tid)
-				bats[DropTable].GetVectorByName(GCAttrDBId).Append(did)
+				bats[DropTable].GetVectorByName(GCAttrTableId).Append(tid, false)
+				bats[DropTable].GetVectorByName(GCAttrDBId).Append(did, false)
 			}
 
 			for name, obj := range table.object {
 				for _, block := range obj.table.blocks {
-					bats[CreateBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID)
-					bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
-					bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(block.TableID)
-					bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.PartID)
-					bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name))
+					bats[CreateBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
+					bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID, false)
+					bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
+					bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.PartID, false)
+					bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 				}
 				for _, block := range obj.table.delete {
-					bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID)
-					bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID)
-					bats[DeleteBlock].GetVectorByName(GCAttrTableId).Append(block.TableID)
-					bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.PartID)
-					bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name))
+					bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
+					bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID, false)
+					bats[DeleteBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
+					bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.PartID, false)
+					bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 				}
 			}
 		}
 	}
 
 	for _, name := range files {
-		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append([]byte(name))
+		bats[DeleteFile].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 	}
 	return bats
 }

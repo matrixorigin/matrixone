@@ -222,7 +222,7 @@ func TestTxn4(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		pk := containers.MakeVector(schema.GetSingleSortKey().Type)
 		defer pk.Close()
-		pk.AppendMany(int32(1), int32(2), int32(1))
+		pk.AppendMany([]any{int32(1), int32(2), int32(1)}, []bool{false, false, false})
 		provider := containers.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 		bat := containers.MockBatch(schema.Types(), 3, schema.GetSingleSortKeyIdx(), provider)
@@ -439,8 +439,8 @@ func TestMergeBlocks1(t *testing.T) {
 	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		pk.Append(v)
-		col3.Append(col3Data[i])
+		pk.Append(v, false)
+		col3.Append(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 
@@ -541,8 +541,8 @@ func TestMergeBlocks2(t *testing.T) {
 	col3 := containers.MakeVector(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		pk.Append(v)
-		col3.Append(col3Data[i])
+		pk.Append(v, false)
+		col3.Append(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 

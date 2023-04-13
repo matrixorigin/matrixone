@@ -1076,7 +1076,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		if indexInfo.GetIndexName() == "" {
+		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 			nameCount[firstPart]++
 			count := nameCount[firstPart]
@@ -1086,7 +1086,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			indexDef.IndexName = indexName
 		} else {
-			indexDef.IndexName = indexInfo.GetIndexName()
+			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = ""
 		indexDef.Parts = indexParts
@@ -1752,7 +1752,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.Index:
-				indexName := def.GetIndexName()
+				indexName := def.Name
 				constrNames := map[string]bool{}
 				// Check not empty constraint name whether is duplicated.
 				for _, idx := range tableDef.Indexes {

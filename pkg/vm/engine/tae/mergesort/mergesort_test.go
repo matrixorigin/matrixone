@@ -34,7 +34,7 @@ func TestSort1(t *testing.T) {
 		vec := containers.MockVector(vecType, 10, false, nil)
 		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
-			vec2.Append(vec.Get(i))
+			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0)
@@ -50,7 +50,7 @@ func TestSort1(t *testing.T) {
 		vec.Update(rand.Intn(10), nil, true)
 		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
-			vec2.Append(vec.Get(i))
+			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0)
@@ -84,11 +84,11 @@ func TestMerge1(t *testing.T) {
 		_, _ = SortBlockColumns(vecs, 0)
 		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec3.Append(vec.Get(i))
+			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
@@ -117,11 +117,11 @@ func TestMerge1(t *testing.T) {
 
 		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec3.Append(vec.Get(i))
+			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
