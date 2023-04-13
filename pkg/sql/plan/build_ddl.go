@@ -425,6 +425,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		stmt.Format(fmtCtx)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -432,7 +434,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
+				Value: fmtCtx.String(),
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
@@ -1076,7 +1078,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		if indexInfo.GetIndexName() == "" {
+		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 			nameCount[firstPart]++
 			count := nameCount[firstPart]
@@ -1086,7 +1088,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			indexDef.IndexName = indexName
 		} else {
-			indexDef.IndexName = indexInfo.GetIndexName()
+			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = ""
 		indexDef.Parts = indexParts
@@ -1752,7 +1754,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.Index:
-				indexName := def.GetIndexName()
+				indexName := def.Name
 				constrNames := map[string]bool{}
 				// Check not empty constraint name whether is duplicated.
 				for _, idx := range tableDef.Indexes {

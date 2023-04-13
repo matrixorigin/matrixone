@@ -244,3 +244,11 @@ pname    VARCHAR(50)    NO        null
 description    VARCHAR(20)    NO        null        
 price    DECIMAL64(9)    NO        null        
 drop table products;
+drop database if exists test_creatsql;
+create database test_creatsql;
+use test_creatsql;
+/*comments*/create table /*comments*/ t(a int)/*comments*/;select 1;
+select rel_createsql from mo_catalog.mo_tables where relname = 't' and reldatabase = 'test_creatsql';
+rel_createsql
+create table t (a int)
+drop database test_creatsql;
