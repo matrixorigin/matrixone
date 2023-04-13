@@ -59,7 +59,7 @@ type InsertNode interface {
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) (any, error)
+	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
