@@ -349,12 +349,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	dedupClosure func(
-		containers.Vector,
-		txnif.TxnReader,
-		*roaring.Bitmap,
-		*catalog.ColDef,
-	) func(any, bool, int) error) (err error) {
+	isAblk bool) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
@@ -379,8 +374,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), txn, view.DeleteMask, def)
-	err = keys.ForeachShallow(dedupFn, sels)
+	var dedupFn any
+	if isAblk {
+		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn)
+	} else {
+		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def)
+	}
+	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 

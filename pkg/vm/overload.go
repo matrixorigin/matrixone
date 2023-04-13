@@ -17,9 +17,6 @@ package vm
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -33,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -52,10 +50,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -68,6 +69,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Top:        top.String,
 	Join:       join.String,
 	Semi:       semi.String,
+	RightSemi:  rightsemi.String,
+	RightAnti:  rightanti.String,
 	Left:       left.String,
 	Right:      right.String,
 	Single:     single.String,
@@ -120,6 +123,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Top:        top.Prepare,
 	Join:       join.Prepare,
 	Semi:       semi.Prepare,
+	RightSemi:  rightsemi.Prepare,
+	RightAnti:  rightanti.Prepare,
 	Left:       left.Prepare,
 	Right:      right.Prepare,
 	Single:     single.Prepare,
@@ -172,6 +177,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
 	Semi:       semi.Call,
+	RightSemi:  rightsemi.Call,
+	RightAnti:  rightanti.Call,
 	Left:       left.Call,
 	Right:      right.Call,
 	Single:     single.Call,

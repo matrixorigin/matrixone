@@ -496,7 +496,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem
+%type <tableDef> table_elem constaint_def constraint_elem index_def
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -6255,40 +6255,13 @@ table_elem:
     {
         $$ = $1
     }
-
-constaint_def:
-    constraint_keyword constraint_elem
-    {
-        if $1 != "" {
-            switch v := $2.(type) {
-            case *tree.PrimaryKeyIndex:
-                v.ConstraintSymbol = $1
-            case *tree.ForeignKey:
-                v.ConstraintSymbol = $1
-            case *tree.UniqueIndex:
-                v.ConstraintSymbol = $1
-            case *tree.Index:
-		v.ConstraintSymbol = $1
-            }
-        }
-        $$ = $2
-    }
-|    constraint_elem
+|   index_def
     {
         $$ = $1
     }
 
-constraint_elem:
-    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
-    {
-         $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
-    }
-|    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+index_def:
+    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
     {
         $$ = &tree.FullTextIndex{
             KeyParts: $5,
@@ -6317,6 +6290,37 @@ constraint_elem:
             KeyParts: $5,
             Name: $3[0],
             KeyType: keyTyp,
+            IndexOption: $7,
+        }
+    }
+
+constaint_def:
+    constraint_keyword constraint_elem
+    {
+        if $1 != "" {
+            switch v := $2.(type) {
+            case *tree.PrimaryKeyIndex:
+                v.ConstraintSymbol = $1
+            case *tree.ForeignKey:
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                v.ConstraintSymbol = $1
+            }
+        }
+        $$ = $2
+    }
+|    constraint_elem
+    {
+        $$ = $1
+    }
+
+constraint_elem:
+    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+         $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
             IndexOption: $7,
         }
     }

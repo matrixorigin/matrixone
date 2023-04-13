@@ -31,7 +31,7 @@ type mutableIndex struct {
 
 func NewPkMutableIndex(typ types.Type) *mutableIndex {
 	return &mutableIndex{
-		art:     index.NewSimpleARTMap(typ),
+		art:     index.NewSimpleARTMap(),
 		zonemap: index.NewZM(typ.Oid),
 	}
 }
@@ -72,7 +72,8 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 		return
 	}
 	// 2. search art tree for key
-	row, err = idx.art.Search(key)
+	ikey := types.EncodeValue(key, idx.zonemap.GetType())
+	row, err = idx.art.Search(ikey)
 	err = TranslateError(err)
 	return
 }
@@ -85,7 +86,8 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 	if !exist {
 		return
 	}
-	rows, err := idx.art.Search(key)
+	ikey := types.EncodeValue(key, idx.zonemap.GetType())
+	rows, err := idx.art.Search(ikey)
 	if err == index.ErrNotFound {
 		err = nil
 		return
@@ -109,7 +111,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	if !exist {
 		return
 	}
-	op := func(v any, _ bool, _ int) error {
+	op := func(v []byte, _ bool, _ int) error {
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {
 			return nil
@@ -121,7 +123,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 		}
 		return nil
 	}
-	if err = keys.ForeachWindowShallow(0, keys.Length(), op, nil); err != nil {
+	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {

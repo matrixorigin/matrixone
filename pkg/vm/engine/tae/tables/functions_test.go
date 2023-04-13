@@ -27,7 +27,7 @@ func BenchmarkFunctions(b *testing.B) {
 	vec2 := containers.MakeVector(vec.GetType())
 	defer vec2.Close()
 	for i := 9999999; i < 9999999+1000; i++ {
-		vec2.Append(int64(i))
+		vec2.Append(int64(i), false)
 	}
 
 	// op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupNABlkFunctions, vec, nil, nil)

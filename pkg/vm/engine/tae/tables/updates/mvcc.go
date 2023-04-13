@@ -298,8 +298,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 				abortedBitmap.AddRange(uint64(node.startRow), uint64(node.maxRow))
 			}
 			for i := 0; i < int(node.maxRow-node.startRow); i++ {
-				commitTSVec.Append(node.GetCommitTS())
-				abortVec.Append(node.IsAborted())
+				commitTSVec.Append(node.GetCommitTS(), false)
+				abortVec.Append(node.IsAborted(), false)
 			}
 			return true
 		})
@@ -338,9 +338,9 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 				}
 				for it.HasNext() {
 					row := it.Next()
-					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row))
-					commitTSVec.Append(node.GetEnd())
-					abortVec.Append(node.IsAborted())
+					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row), false)
+					commitTSVec.Append(node.GetEnd(), false)
+					abortVec.Append(node.IsAborted(), false)
 				}
 			}
 			return !before

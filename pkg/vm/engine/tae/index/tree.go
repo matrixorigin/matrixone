@@ -17,7 +17,7 @@ package index
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
 
@@ -42,55 +42,50 @@ func (chain *IndexMVCCChain) GetRows() []uint32 {
 }
 
 type simpleARTMap struct {
-	typ  types.Type
 	tree art.Tree
 }
 
-func NewSimpleARTMap(typ types.Type) *simpleARTMap {
+func NewSimpleARTMap() *simpleARTMap {
 	return &simpleARTMap{
-		typ:  typ,
 		tree: art.New(),
 	}
 }
 
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
-func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
+func (art *simpleARTMap) Insert(key []byte, offset uint32) (err error) {
 	chain := NewIndexMVCCChain()
 	chain.Insert(offset)
-	ikey := types.EncodeValue(key, art.typ.Oid)
-	old, _ := art.tree.Insert(ikey, chain)
+	old, _ := art.tree.Insert(key, chain)
 	if old != nil {
 		oldChain := old.(*IndexMVCCChain)
 		oldChain.Insert(offset)
-		art.tree.Insert(ikey, old)
+		art.tree.Insert(key, old)
 	}
 	return
 }
 
 func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error) {
 	existence := make(map[any]bool)
-	op := func(v any, _ bool, i int) error {
-		encoded := types.EncodeValue(v, art.typ.Oid)
+	op := func(v []byte, _ bool, i int) error {
 		if keys.NeedVerify {
-			if _, found := existence[string(encoded)]; found {
+			if _, found := existence[string(v)]; found {
 				return ErrDuplicate
 			}
-			existence[string(encoded)] = true
+			existence[string(v)] = true
 		}
 		chain := NewIndexMVCCChain()
 		chain.Insert(startRow)
-		old, _ := art.tree.Insert(encoded, chain)
+		old, _ := art.tree.Insert(v, chain)
 		if old != nil {
 			oldChain := old.(*IndexMVCCChain)
 			oldChain.Insert(startRow)
-			art.tree.Insert(encoded, old)
+			art.tree.Insert(v, old)
 		}
 		startRow++
 		return nil
 	}
-
-	err = keys.Keys.ForeachWindowShallow(keys.Start, keys.Count, op, nil)
+	err = containers.ForeachWindowBytes(keys.Keys, keys.Start, keys.Count, op, nil)
 	return
 }
 
@@ -98,9 +93,8 @@ func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 	return
 }
 
-func (art *simpleARTMap) Search(key any) ([]uint32, error) {
-	ikey := types.EncodeValue(key, art.typ.Oid)
-	v, found := art.tree.Search(ikey)
+func (art *simpleARTMap) Search(key []byte) ([]uint32, error) {
+	v, found := art.tree.Search(key)
 	if !found {
 		return nil, ErrNotFound
 	}
