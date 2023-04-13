@@ -97,7 +97,9 @@ func fetchBoolRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v bool) []byte {
 		parker.Reset()
 		parker.EncodeBool(v)
@@ -112,7 +114,9 @@ func fetchInt8Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v int8) []byte {
 		parker.Reset()
 		parker.EncodeInt8(v)
@@ -128,7 +132,9 @@ func fetchInt8Rows(
 		vec,
 		max,
 		1,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchInt16Rows(
@@ -136,7 +142,9 @@ func fetchInt16Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v int16) []byte {
 		parker.Reset()
 		parker.EncodeInt16(v)
@@ -152,7 +160,9 @@ func fetchInt16Rows(
 		vec,
 		max,
 		2,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchInt32Rows(
@@ -160,7 +170,9 @@ func fetchInt32Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v int32) []byte {
 		parker.Reset()
 		parker.EncodeInt32(v)
@@ -176,7 +188,9 @@ func fetchInt32Rows(
 		vec,
 		max,
 		4,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchInt64Rows(
@@ -184,7 +198,9 @@ func fetchInt64Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v int64) []byte {
 		parker.Reset()
 		parker.EncodeInt64(v)
@@ -200,7 +216,9 @@ func fetchInt64Rows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchUint8Rows(
@@ -208,7 +226,9 @@ func fetchUint8Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v uint8) []byte {
 		parker.Reset()
 		parker.EncodeUint8(v)
@@ -224,7 +244,9 @@ func fetchUint8Rows(
 		vec,
 		max,
 		1,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchUint16Rows(
@@ -232,7 +254,9 @@ func fetchUint16Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v uint16) []byte {
 		parker.Reset()
 		parker.EncodeUint16(v)
@@ -248,7 +272,9 @@ func fetchUint16Rows(
 		vec,
 		max,
 		2,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchUint32Rows(
@@ -256,7 +282,9 @@ func fetchUint32Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v uint32) []byte {
 		parker.Reset()
 		parker.EncodeUint32(v)
@@ -272,7 +300,9 @@ func fetchUint32Rows(
 		vec,
 		max,
 		4,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchUint64Rows(
@@ -280,7 +310,9 @@ func fetchUint64Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v uint64) []byte {
 		parker.Reset()
 		parker.EncodeUint64(v)
@@ -296,7 +328,9 @@ func fetchUint64Rows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchFloat32Rows(
@@ -304,7 +338,9 @@ func fetchFloat32Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v float32) []byte {
 		parker.Reset()
 		parker.EncodeFloat32(v)
@@ -320,7 +356,9 @@ func fetchFloat32Rows(
 		vec,
 		max,
 		4,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchFloat64Rows(
@@ -328,7 +366,9 @@ func fetchFloat64Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v float64) []byte {
 		parker.Reset()
 		parker.EncodeFloat64(v)
@@ -344,7 +384,9 @@ func fetchFloat64Rows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchDateRows(
@@ -352,7 +394,9 @@ func fetchDateRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Date) []byte {
 		parker.Reset()
 		parker.EncodeDate(v)
@@ -368,7 +412,9 @@ func fetchDateRows(
 		vec,
 		max,
 		4,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchTimeRows(
@@ -376,7 +422,9 @@ func fetchTimeRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Time) []byte {
 		parker.Reset()
 		parker.EncodeTime(v)
@@ -392,7 +440,9 @@ func fetchTimeRows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchDateTimeRows(
@@ -400,7 +450,9 @@ func fetchDateTimeRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Datetime) []byte {
 		parker.Reset()
 		parker.EncodeDatetime(v)
@@ -416,7 +468,9 @@ func fetchDateTimeRows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchTimestampRows(
@@ -424,7 +478,9 @@ func fetchTimestampRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Timestamp) []byte {
 		parker.Reset()
 		parker.EncodeTimestamp(v)
@@ -440,7 +496,9 @@ func fetchTimestampRows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchDecimal64Rows(
@@ -448,7 +506,9 @@ func fetchDecimal64Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Decimal64) []byte {
 		parker.Reset()
 		parker.EncodeDecimal64(v)
@@ -464,7 +524,9 @@ func fetchDecimal64Rows(
 		vec,
 		max,
 		8,
-		fn)
+		fn,
+		filter,
+		filterCols)
 }
 
 func fetchDecimal128Rows(
@@ -472,7 +534,9 @@ func fetchDecimal128Rows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Decimal128) []byte {
 		parker.Reset()
 		parker.EncodeDecimal128(v)
@@ -492,6 +556,8 @@ func fetchDecimal128Rows(
 		func(v1, v2 types.Decimal128) int {
 			return v1.Compare(v2)
 		},
+		filter,
+		filterCols,
 	)
 }
 
@@ -500,7 +566,9 @@ func fetchUUIDRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v types.Uuid) []byte {
 		parker.Reset()
 		parker.EncodeStringType(v[:])
@@ -524,6 +592,8 @@ func fetchUUIDRows(
 		func(v1, v2 types.Uuid) int {
 			return bytes.Compare(v1[:], v2[:])
 		},
+		filter,
+		filterCols,
 	)
 }
 
@@ -532,7 +602,9 @@ func fetchVarlenaRows(
 	parker *types.Packer,
 	tp types.Type,
 	max int,
-	lockTabel bool) ([][]byte, lock.Granularity) {
+	lockTabel bool,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	fn := func(v []byte) []byte {
 		parker.Reset()
 		parker.EncodeStringType(v[:])
@@ -553,10 +625,19 @@ func fetchVarlenaRows(
 	}
 	size := n * int(tp.Width)
 	if size > max {
-		v := data[0].GetByteSlice(area)
-		min, max := v, v
-		for i := 1; i < n; i++ {
-			v = data[i].GetByteSlice(area)
+		var min, max []byte
+		initialized := false
+		for i := 0; i < n; i++ {
+			if filter != nil &&
+				!filter(i, filterCols) {
+				continue
+			}
+			v := data[i].GetByteSlice(area)
+			if !initialized {
+				min, max = v, v
+				initialized = true
+				continue
+			}
 			if bytes.Compare(v, min) < 0 {
 				min = v
 			}
@@ -571,6 +652,10 @@ func fetchVarlenaRows(
 	}
 	rows := make([][]byte, 0, n)
 	for idx := range data {
+		if filter != nil &&
+			!filter(idx, filterCols) {
+			continue
+		}
 		rows = append(rows, fn(data[idx].GetByteSlice(area)))
 	}
 	return rows, lock.Granularity_Row
@@ -580,7 +665,9 @@ func fetchFixedRows[T constraints.Ordered](
 	vec *vector.Vector,
 	max int,
 	typeSize int,
-	fn func(v T) []byte) ([][]byte, lock.Granularity) {
+	fn func(v T) []byte,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	return fetchFixedRowsWithCompare(
 		vec,
 		max,
@@ -594,6 +681,8 @@ func fetchFixedRows[T constraints.Ordered](
 			}
 			return 0
 		},
+		filter,
+		filterCols,
 	)
 }
 
@@ -602,18 +691,28 @@ func fetchFixedRowsWithCompare[T any](
 	max int,
 	typeSize int,
 	fn func(v T) []byte,
-	compare func(a, b T) int) ([][]byte, lock.Granularity) {
+	compare func(a, b T) int,
+	filter RowsFilter,
+	filterCols []int) ([][]byte, lock.Granularity) {
 	n := vec.Length()
 	values := vector.MustFixedCol[T](vec)
 	if n == 1 {
-		return [][]byte{
-				fn(values[0])},
-			lock.Granularity_Row
+		return [][]byte{fn(values[0])}, lock.Granularity_Row
 	}
 	size := n * typeSize
 	if size > max {
-		min, max := values[0], values[0]
-		for _, v := range values[1:] {
+		var min, max T
+		initialized := false
+		for row, v := range values {
+			if filter != nil &&
+				!filter(row, filterCols) {
+				continue
+			}
+			if !initialized {
+				min, max = v, v
+				initialized = true
+				continue
+			}
 			if compare(v, min) < 0 {
 				min = v
 			}
@@ -627,7 +726,11 @@ func fetchFixedRowsWithCompare[T any](
 			lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
-	for _, v := range values {
+	for row, v := range values {
+		if filter != nil &&
+			!filter(row, filterCols) {
+			continue
+		}
 		rows = append(rows, fn(v))
 	}
 	return rows, lock.Granularity_Row
