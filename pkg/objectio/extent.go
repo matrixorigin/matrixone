@@ -85,5 +85,5 @@ func (ex Extent) SetOriginSize(originSize uint32) {
 }
 
 func (ex Extent) String() string {
-	return fmt.Sprintf("%d-%d_%d_%d", ex.Alg(), ex.Offset(), ex.Length(), ex.OriginSize())
+	return fmt.Sprintf("%d_%d_%d_%d", ex.Alg(), ex.Offset(), ex.Length(), ex.OriginSize())
 }
