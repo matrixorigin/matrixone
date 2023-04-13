@@ -17,10 +17,11 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/pierrec/lz4/v4"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -129,7 +130,11 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(columnCount)
-	objectMeta.BlockHeader().SetBlockID(blockCount)
+
+	// CHANGE ME
+	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
+	// objectMeta.BlockHeader().SetBlockID(blockCount)
+
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	objectMeta.BlockHeader().SetColumnCount(columnCount)
 	blockIndex := BuildBlockIndex(blockCount)
@@ -265,7 +270,10 @@ func (b *blockData) WriteWithCompress(buf []byte) (extent Extent, err error) {
 func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 	w.Lock()
 	defer w.Unlock()
-	block.BlockHeader().SetBlockID(w.lastId)
+	// CHANGE ME
+	// block.BlockHeader().SetBlockID(w.lastId)
+	block.BlockHeader().SetSequence(uint16(w.lastId))
+
 	data := blockData{meta: block, bloomFilter: make(map[uint16][]byte)}
 	for i, vec := range bat.Vecs {
 		buf, err := vec.MarshalBinary()

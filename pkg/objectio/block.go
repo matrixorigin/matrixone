@@ -39,7 +39,7 @@ func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
 	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %d, column count: %d",
-			idx, bm.BlockHeader().BlockID(),
+			idx, bm.BlockHeader().Sequence(),
 			bm.BlockHeader().ColumnCount())
 	}
 	return bm.ColumnMeta(idx), nil
@@ -54,7 +54,7 @@ func (bm BlockObject) GetMeta() BlockObject {
 }
 
 func (bm BlockObject) GetID() uint32 {
-	return uint32(bm.BlockHeader().BlockID())
+	return uint32(bm.BlockHeader().Sequence())
 }
 
 func (bm BlockObject) GetColumnCount() uint16 {
