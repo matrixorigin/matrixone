@@ -24,8 +24,5 @@ show tables;
 Tables_in_db1
 t
 alter user 'root' identified by '111';
-show tables;
-Tables_in_db1
-t
 drop database db1;
 drop account acc_idx;

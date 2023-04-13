@@ -2391,9 +2391,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	//the user can be altered
 	//otherwise only general user can alter itself
 	if account.IsSysTenant() {
-		sql, err = getSqlForCheckUserHasRole(ctx, userName, moAdminRoleID)
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
 	} else {
-		sql, err = getSqlForCheckUserHasRole(ctx, userName, accountAdminRoleID)
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
 	}
 	if err != nil {
 		goto handleFailed
