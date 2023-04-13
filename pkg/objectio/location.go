@@ -23,7 +23,7 @@ import (
 
 const (
 	ExtentOff   = ObjectNameLen
-	ExtentLen   = 16
+	ExtentLen   = ExtentSize
 	RowsOff     = ExtentOff + ExtentLen
 	RowsLen     = 4
 	BlockIDOff  = RowsOff + RowsLen
@@ -48,7 +48,7 @@ type Location []byte
 func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Location {
 	var location [LocationLen]byte
 	copy(location[:ObjectNameLen], name)
-	copy(location[ExtentOff:ExtentOff+ExtentSize], extent.Marshal())
+	copy(location[ExtentOff:ExtentOff+ExtentSize], extent)
 	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
 	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)

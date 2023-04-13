@@ -16,8 +16,7 @@ package objectio
 
 import (
 	"bytes"
-	"unsafe"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -165,7 +164,7 @@ const (
 	headerDummyOff    = columnCountOff + columnCountLen
 	headerDummyLen    = 18
 	metaLocationOff   = headerDummyOff + headerDummyLen
-	metaLocationLen   = 16
+	metaLocationLen   = ExtentSize
 	headerCheckSumOff = metaLocationOff + metaLocationLen
 	headerCheckSumLen = 4
 	headerLen         = headerCheckSumOff + headerCheckSumLen
@@ -247,12 +246,12 @@ func (bh BlockHeader) SetColumnCount(count uint16) {
 	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
 }
 
-func (bh BlockHeader) MetaLocation() *Extent {
-	return (*Extent)(unsafe.Pointer(&bh[metaLocationOff]))
+func (bh BlockHeader) MetaLocation() Extent {
+	return Extent(bh[metaLocationOff : metaLocationOff+metaLocationLen])
 }
 
-func (bh BlockHeader) SetMetaLocation(location *Extent) {
-	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location.Marshal())
+func (bh BlockHeader) SetMetaLocation(location Extent) {
+	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location)
 }
 
 func (bh BlockHeader) IsEmpty() bool {
@@ -266,11 +265,11 @@ const (
 	algOff             = idxOff + idxLen
 	algLen             = 1
 	locationOff        = algOff + algLen
-	locationLen        = 16
+	locationLen        = ExtentSize
 	zoneMapOff         = locationOff + locationLen
 	zoneMapLen         = 64
 	bloomFilterOff     = zoneMapOff + zoneMapLen
-	bloomFilterLen     = 16
+	bloomFilterLen     = ExtentSize
 	colMetaDummyOff    = bloomFilterOff + bloomFilterLen
 	colMetaDummyLen    = 32
 	colMetaChecksumOff = colMetaDummyOff + colMetaDummyLen
@@ -298,6 +297,10 @@ func SetColumnMetaZoneMap(meta ColumnMeta, zm ZoneMap) {
 	meta.setZoneMap(zm)
 }
 
+func (cm ColumnMeta) String() string {
+	return fmt.Sprintf("type: %d, index: %d, alg: %d, dataloc: %v", cm.Type(), cm.Idx(), cm.Alg(), cm.Location())
+}
+
 func (cm ColumnMeta) Type() uint8 {
 	return types.DecodeUint8(cm[:typeLen])
 }
@@ -322,12 +325,12 @@ func (cm ColumnMeta) setAlg(alg uint8) {
 	copy(cm[algOff:algOff+algLen], types.EncodeUint8(&alg))
 }
 
-func (cm ColumnMeta) Location() *Extent {
-	return (*Extent)(unsafe.Pointer(&cm[locationOff]))
+func (cm ColumnMeta) Location() Extent {
+	return Extent(cm[locationOff : locationOff+locationLen])
 }
 
-func (cm ColumnMeta) setLocation(location *Extent) {
-	copy(cm[locationOff:locationOff+locationLen], location.Marshal())
+func (cm ColumnMeta) setLocation(location Extent) {
+	copy(cm[locationOff:locationOff+locationLen], location)
 }
 
 func (cm ColumnMeta) ZoneMap() ZoneMap {
@@ -338,12 +341,12 @@ func (cm ColumnMeta) setZoneMap(zm ZoneMap) {
 	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm)
 }
 
-func (cm ColumnMeta) BloomFilter() *Extent {
-	return (*Extent)(unsafe.Pointer(&cm[bloomFilterOff]))
+func (cm ColumnMeta) BloomFilter() Extent {
+	return Extent(cm[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 }
 
-func (cm ColumnMeta) setBloomFilter(location *Extent) {
-	copy(cm[bloomFilterOff:bloomFilterOff+bloomFilterLen], location.Marshal())
+func (cm ColumnMeta) setBloomFilter(location Extent) {
+	copy(cm[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
 }
 
 func (cm ColumnMeta) Checksum() uint32 {

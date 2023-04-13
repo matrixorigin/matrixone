@@ -97,7 +97,7 @@ func (b *ObjectBuffer) SetDataOptions(items ...WriteOptions) {
 	}
 }
 
-func (b *ObjectBuffer) WriteWithCompress(buf []byte) (ext *Extent, err error) {
+func (b *ObjectBuffer) WriteWithCompress(buf []byte) (ext Extent, err error) {
 	dataLen := len(buf)
 	data := make([]byte, lz4.CompressBlockBound(dataLen))
 	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
@@ -107,10 +107,6 @@ func (b *ObjectBuffer) WriteWithCompress(buf []byte) (ext *Extent, err error) {
 	if err != nil {
 		return
 	}
-	ext = &Extent{
-		offset:     uint32(offset),
-		length:     uint32(length),
-		originSize: uint32(dataLen),
-	}
+	ext = NewExtent(0, uint32(offset), uint32(length), uint32(dataLen))
 	return
 }

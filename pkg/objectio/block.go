@@ -32,7 +32,7 @@ func NewBlock(colCnt uint16) BlockObject {
 }
 
 func (bm BlockObject) GetExtent() Extent {
-	return *bm.BlockHeader().MetaLocation()
+	return bm.BlockHeader().MetaLocation()
 }
 
 func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {

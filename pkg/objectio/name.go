@@ -57,13 +57,8 @@ func MockObjectName() ObjectName {
 }
 
 func MockLocation(name ObjectName) Location {
-	extent := Extent{
-		id:         uint32(rand.Intn(300)),
-		offset:     uint32(rand.Intn(10000)),
-		length:     uint32(rand.Intn(10000)),
-		originSize: uint32(rand.Intn(10000)),
-	}
-	return BuildLocation(name, extent, uint32(rand.Intn(8192)), extent.id)
+	extent := NewExtent(0, uint32(rand.Intn(10000)), uint32(rand.Intn(10000)), uint32(rand.Intn(10000)))
+	return BuildLocation(name, extent, uint32(rand.Intn(8192)), uint32(rand.Intn(300)))
 }
 
 func (o ObjectName) Equal(a ObjectName) bool {

@@ -61,7 +61,7 @@ func (r *ObjectReader) GetObject() *Object {
 
 func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	m *mpool.MPool,
 ) (ObjectMeta, error) {
 	metas := &fileservice.IOVector{
@@ -71,8 +71,8 @@ func (r *ObjectReader) ReadMeta(
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.offset),
-		Size:   int64(extent.originSize),
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.OriginSize()),
 
 		ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
 			if len(data) == 0 {
@@ -97,7 +97,7 @@ func (r *ObjectReader) ReadMeta(
 
 func (r *ObjectReader) Read(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	idxs []uint16,
 	id uint32,
 	m *mpool.MPool,
@@ -132,7 +132,7 @@ func (r *ObjectReader) Read(
 
 func (r *ObjectReader) ReadAll(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	idxs []uint16,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
@@ -172,7 +172,7 @@ func (r *ObjectReader) ReadAll(
 
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	ids map[uint32]*ReadBlockOptions,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
@@ -213,8 +213,8 @@ func (r *ObjectReader) ReadAllMeta(
 	if err != nil {
 		return nil, err
 	}
-	extent := Extent{offset: footer.metaStart, length: footer.metaLen, originSize: footer.metaLen}
-	return r.ReadMeta(ctx, &extent, m)
+	extent := NewExtent(0, footer.metaStart, footer.metaLen, footer.metaLen)
+	return r.ReadMeta(ctx, extent, m)
 }
 
 func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {

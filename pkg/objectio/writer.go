@@ -84,7 +84,7 @@ func (w *ObjectWriter) WriteHeader() error {
 	header.Write(types.EncodeFixed(h.magic))
 	header.Write(types.EncodeFixed(h.version))
 	header.Write(make([]byte, 22))
-	_, _, err = w.buffer.Write(header.Bytes(), 0)
+	_, _, err = w.buffer.Write(header.Bytes())
 	return err
 }
 
@@ -104,10 +104,7 @@ func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
 	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
 		return
 	}
-	extent := &Extent{
-		length: uint32(len(data)),
-		offset: uint32(dataLen),
-	}
+	extent := NewExtent(0, 0, uint32(len(data)), uint32(dataLen))
 	w.blocks[blkIdx].bloomFilter[uint16(colIdx)] = data
 	w.blocks[blkIdx].meta.ColumnMeta(uint16(colIdx)).setBloomFilter(extent)
 	return
@@ -142,10 +139,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	length := 0
 
 	// write block meta
-	metabuf := &bytes.Buffer{}
 	for i, block := range w.blocks {
 		n := uint32(len(block.meta))
-		blockIndex.SetBlockMetaPos(uint32(i), start, start+n)
+		blockIndex.SetBlockMetaPos(uint32(i), start+32, n)
 		start += n
 	}
 
@@ -153,19 +149,24 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for i, colmeta := range w.colmeta {
 		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
+	extent := NewExtent(0, uint32(32), start, start)
+	test := objectMeta.BlockHeader().MetaLocation()
+	objectMeta.BlockHeader().SetMetaLocation(extent)
+	test = objectMeta.BlockHeader().MetaLocation()
+	logutil.Infof("test %v", test.String())
 
-	for _, block := range w.blocks {
-		meta := block.meta
+	for y, block := range w.blocks {
 		for i := range block.data {
-			location := meta.ColumnMeta(uint16(i)).Location()
-			location.offset = start
-			meta.ColumnMeta(uint16(i)).setLocation(location)
-			start += location.length
+			location := w.blocks[y].meta.ColumnMeta(uint16(i)).Location()
+			location.SetOffset(start + 32)
+			w.blocks[y].meta.ColumnMeta(uint16(i)).setLocation(location)
+			logutil.Infof("meta: %v", w.blocks[y].meta.ColumnMeta(uint16(i)).String())
+			start += location.Length()
 		}
 		for idx := range block.bloomFilter {
-			location := meta.ColumnMeta(idx).BloomFilter()
-			location.offset = start
-			meta.ColumnMeta(idx).setBloomFilter(location)
+			location := w.blocks[y].meta.ColumnMeta(idx).BloomFilter()
+			location.SetOffset(start + 32)
+			w.blocks[y].meta.ColumnMeta(idx).setBloomFilter(location)
 
 		}
 	}
@@ -182,6 +183,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	length += n
 	for _, block := range w.blocks {
+		_, n, err = w.buffer.Write(block.meta)
+		if err != nil {
+			return nil, err
+		}
+
+	}
+
+	for _, block := range w.blocks {
 		for _, data := range block.data {
 			_, n, err = w.buffer.Write(data)
 			if err != nil {
@@ -196,21 +205,10 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		}
 
 	}
-	_, n, err = w.buffer.Write(metabuf.Bytes())
-	if err != nil {
-		return nil, err
-	}
-	length += n
-	extent := &Extent{
-		offset:     uint32(start),
-		length:     uint32(length),
-		originSize: uint32(length),
-	}
-	objectMeta.BlockHeader().SetMetaLocation(extent)
 	// write footer
 	footer := Footer{
-		metaStart: uint32(start),
-		metaLen:   uint32(length),
+		metaStart: extent.Offset(),
+		metaLen:   extent.Length(),
 		magic:     Magic,
 	}
 
@@ -223,12 +221,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		header := w.blocks[i].meta.BlockHeader()
-		extent := &Extent{
-			offset:     uint32(start),
-			length:     uint32(length),
-			originSize: uint32(length),
-		}
-		header.SetMetaLocation(extent)
+		header.SetMetaLocation(objectMeta.BlockHeader().MetaLocation())
 		blockObjects = append(blockObjects, w.blocks[i].meta)
 	}
 	err = w.Sync(ctx, items...)
@@ -258,17 +251,14 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	return err
 }
 
-func (b *blockData) WriteWithCompress(buf []byte) (extent *Extent, err error) {
+func (b *blockData) WriteWithCompress(buf []byte) (extent Extent, err error) {
 	dataLen := len(buf)
 	data := make([]byte, lz4.CompressBlockBound(dataLen))
 	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
 		return
 	}
 	b.data = append(b.data, data)
-	extent = &Extent{
-		length: uint32(len(data)),
-		offset: uint32(dataLen),
-	}
+	extent = NewExtent(0, 0, uint32(len(data)), uint32(dataLen))
 	return
 }
 
@@ -282,7 +272,7 @@ func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		var ext *Extent
+		var ext Extent
 		if ext, err = data.WriteWithCompress(buf); err != nil {
 			return err
 		}
@@ -292,10 +282,11 @@ func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 	}
 	w.blocks = append(w.blocks, data)
 	w.lastId++
+	return nil
 }
 
 func (w *ObjectWriter) GetBlock(id uint32) BlockObject {
 	w.Lock()
 	defer w.Unlock()
-	return w.blocks[id]
+	return w.blocks[id].meta
 }
