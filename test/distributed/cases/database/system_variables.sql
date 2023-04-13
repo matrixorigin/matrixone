@@ -170,22 +170,22 @@ select @@sql_mode;
 
 drop database if exists test;
 create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 drop database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 
 drop database if exists test;
 create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 drop database test;
 
 drop database if exists test;
 create database test;
 use test;
 select version();
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 drop database test;
 
@@ -198,17 +198,17 @@ create database test;
 create database test1;
 use test;
 select version();
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 use test1;
 select version();
-alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+alter account config abc set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
 select version();
 use test1;
 select version();
 drop database test;
 drop database test1;
 -- @session
-alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter account config sys set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
-alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+alter account config abc1 set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
