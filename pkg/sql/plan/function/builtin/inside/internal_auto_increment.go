@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +43,11 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 
 	eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	// New returns a TxnOperator to handle read and write operation for a transaction.
-	txnOperator, err := proc.TxnClient.New()
+	var minSnapshotTS timestamp.Timestamp
+	if proc.TxnOperator != nil {
+		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
+	}
+	txnOperator, err := proc.TxnClient.New(proc.Ctx, minSnapshotTS)
 	if err != nil {
 		return nil, err
 	}

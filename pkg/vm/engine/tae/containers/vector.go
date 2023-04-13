@@ -60,7 +60,6 @@ func (vec *vector[T]) Get(i int) any {
 	if vec.IsNull(i) {
 		return types.Null{}
 	}
-
 	if vec.GetType().IsVarlen() {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
@@ -82,10 +81,9 @@ func (vec *vector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *vector[T]) Append(v any) {
+func (vec *vector[T]) Append(v any, isNull bool) {
 	vec.tryCoW()
 
-	_, isNull := v.(types.Null)
 	var err error
 	if isNull {
 		err = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
@@ -117,9 +115,9 @@ func (vec *vector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec *vector[T]) Update(i int, v any) {
+func (vec *vector[T]) Update(i int, v any, isNull bool) {
 	vec.tryCoW()
-	UpdateValue(vec.downstreamVector, uint32(i), v)
+	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
 
 func (vec *vector[T]) Slice() any {
@@ -278,7 +276,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 					isNull := false
 					if vec.IsNull(i + offset + bias) {
 						isNull = true
-						vv = types.Null{}
+						vv = nil
 					} else {
 						vv = elem
 					}
@@ -300,7 +298,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 					isNull := false
 					if vec.IsNull(int(idx) + bias) {
 						isNull = true
-						vv = types.Null{}
+						vv = nil
 					} else {
 						vv = slice[int(idx)-offset]
 					}
@@ -434,9 +432,9 @@ func (vec *vector[T]) PPString(num int) string {
 
 // AppendMany appends multiple values
 // Deprecated: Only use for test functions
-func (vec *vector[T]) AppendMany(vs ...any) {
-	for _, v := range vs {
-		vec.Append(v)
+func (vec *vector[T]) AppendMany(vs []any, isNulls []bool) {
+	for i, v := range vs {
+		vec.Append(v, isNulls[i])
 	}
 }
 

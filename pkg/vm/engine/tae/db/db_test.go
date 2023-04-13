@@ -2474,7 +2474,7 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bats[0].Vecs[3].Update(2, types.Null{})
+	bats[0].Vecs[3].Update(2, nil, true)
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()
@@ -2482,8 +2482,8 @@ func TestNull1(t *testing.T) {
 	view, err := blk.GetColumnDataById(3)
 	assert.NoError(t, err)
 	defer view.Close()
-	v := view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	//v := view.GetData().Get(2)
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
@@ -2493,11 +2493,11 @@ func TestNull1(t *testing.T) {
 	view, err = blk.GetColumnDataById(3)
 	assert.NoError(t, err)
 	defer view.Close()
-	v = view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	//v = view.GetData().Get(2)
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 
-	v = getSingleSortKeyValue(bats[0], schema, 2)
+	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter_2 := handle.NewEQFilter(v)
 	uv0_2, err := rel.GetValueByFilter(filter_2, 3)
 	assert.NoError(t, err)
@@ -3109,9 +3109,9 @@ func TestTruncateZonemap(t *testing.T) {
 	trickyMinv := mockBytes(0, 33)                                        // smaller than minv, not in mut index but in immut index
 	maxv := mockBytes(0xff, 35, Mod{0, 0x61}, Mod{1, 0x62}, Mod{2, 0x63}) // abc0xff0xff...
 	trickyMaxv := []byte("abd")                                           // bigger than maxv, not in mut index but in immut index
-	bat.Vecs[12].Update(8, maxv)
-	bat.Vecs[12].Update(11, minv)
-	bat.Vecs[12].Update(22, []byte("abcc"))
+	bat.Vecs[12].Update(8, maxv, false)
+	bat.Vecs[12].Update(11, minv, false)
+	bat.Vecs[12].Update(22, []byte("abcc"), false)
 	defer bat.Close()
 
 	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
@@ -4315,7 +4315,7 @@ func TestDelete4(t *testing.T) {
 	schema.SegmentMaxBlocks = 5
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
-	bat.Vecs[1].Update(0, uint32(0))
+	bat.Vecs[1].Update(0, uint32(0), false)
 	defer bat.Close()
 	tae.createRelAndAppend(bat, true)
 
@@ -4345,7 +4345,7 @@ func TestDelete4(t *testing.T) {
 			txn.Rollback()
 			return
 		}
-		cloneBat.Vecs[1].Update(0, newV)
+		cloneBat.Vecs[1].Update(0, newV, false)
 		if err := rel.Append(cloneBat); err != nil {
 			txn.Rollback()
 			return
@@ -4624,7 +4624,7 @@ func TestUpdate(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	bat.Vecs[2].Update(0, int32(0))
+	bat.Vecs[2].Update(0, int32(0), false)
 
 	tae.createRelAndAppend(bat, true)
 
@@ -4649,7 +4649,7 @@ func TestUpdate(t *testing.T) {
 		tuples := bat.CloneWindow(0, 1)
 		defer tuples.Close()
 		updatedV := v.(int32) + 1
-		tuples.Vecs[2].Update(0, updatedV)
+		tuples.Vecs[2].Update(0, updatedV, false)
 		err = rel.Append(tuples)
 		assert.NoError(t, err)
 
@@ -4749,7 +4749,7 @@ func TestAlwaysUpdate(t *testing.T) {
 				_ = txn.Rollback()
 				return
 			}
-			tuples.Vecs[3].Update(0, int64(x))
+			tuples.Vecs[3].Update(0, int64(x), false)
 			err = rel.Append(tuples)
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit())
@@ -5948,4 +5948,32 @@ func TestMarshalPartioned(t *testing.T) {
 	_, rel = tae.getRelation()
 	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
 	assert.Equal(t, int8(1), partioned)
+}
+
+func TestDedup2(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	count := 50
+	data := catalog.MockBatch(schema, count)
+	datas := data.Split(count)
+
+	tae.createRelAndAppend(datas[0], true)
+
+	for i := 1; i < count; i++ {
+		tae.DoAppend(datas[i])
+		txn, rel := tae.getRelation()
+		for j := 0; j <= i; j++ {
+			err := rel.Append(datas[j])
+			assert.Error(t, err)
+		}
+		assert.NoError(t, txn.Commit())
+	}
 }
