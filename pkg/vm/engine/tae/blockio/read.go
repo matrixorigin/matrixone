@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -299,4 +300,54 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		rows = append(rows, int64(r))
 	}
 	return rows
+}
+
+// BlockPrefetch is the interface for cn to call read ahead
+// columns  Which columns should be taken for columns
+// service  fileservice
+// infos [s3object name][block]
+func BlockPrefetch(
+	columns []string,
+	tableDef *plan.TableDef,
+	service fileservice.FileService,
+	infos [][]*pkgcatalog.BlockInfo) error {
+	idxes := make([]uint16, len(columns))
+
+	// Generate index for columns
+	for i, column := range columns {
+		if column != pkgcatalog.Row_ID {
+			if colIdx, ok := tableDef.Name2ColIndex[column]; ok {
+				idxes[i] = uint16(colIdx)
+			} else {
+				idxes[i] = uint16(len(tableDef.Name2ColIndex))
+			}
+		}
+	}
+	return PrefetchInner(idxes, service, infos)
+}
+
+func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
+	// Generate prefetch task
+	for i := range infos {
+		// build reader
+		pref, err := BuildPrefetch(service, infos[i][0].MetaLoc)
+		if err != nil {
+			return err
+		}
+		for _, info := range infos[i] {
+			pref.AddBlock(idxes, []uint32{info.MetaLoc.ID()})
+			if !info.DeltaLoc.IsEmpty() {
+				// Need to read all delete
+				err = Prefetch([]uint16{0, 1, 2}, []uint32{info.DeltaLoc.ID()}, service, info.DeltaLoc)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		err = pipeline.Prefetch(pref)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

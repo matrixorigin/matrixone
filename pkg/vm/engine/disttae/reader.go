@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -170,6 +171,12 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 
 	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
 	return bat, nil
+}
+
+func NewMergeReader(readers []engine.Reader) *mergeReader {
+	return &mergeReader{
+		rds: readers,
+	}
 }
 
 func (r *mergeReader) Close() error {

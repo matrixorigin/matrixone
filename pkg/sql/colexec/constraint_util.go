@@ -155,7 +155,7 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *batch.Batch,
+func WriteUniqueTable(s3Writers []*S3Writer, proc *process.Process, updateBatch *batch.Batch,
 	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	if tableDef.Indexes == nil {
 		return nil
@@ -209,7 +209,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 			ukBatch.SetVector(1, vec)
 		}
 
-		if s3Writer == nil {
+		if s3Writers == nil {
 			rel := rels[uIdx]
 			err := rel.Write(proc.Ctx, ukBatch)
 			if err != nil {
@@ -218,7 +218,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 			uIdx++
 		} else {
 			uIdx++
-			err := s3Writer.WriteS3Batch(ukBatch, proc, uIdx)
+			err := s3Writers[uIdx].WriteS3Batch(ukBatch, proc)
 			if err != nil {
 				return err
 			}
@@ -304,6 +304,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 
 func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, batLen int, attrs []string, rowSkip []bool, parentIdx map[string]int32) (*batch.Batch, error) {
 	updateBatch := batch.New(true, attrs)
+	updateBatch.AddCnt(1)
 	var toVec *vector.Vector
 	var err error
 
