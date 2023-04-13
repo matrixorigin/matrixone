@@ -16,8 +16,6 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,34 +184,4 @@ type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
-}
-
-type mergeReader struct {
-	rds []engine.Reader
-}
-
-func (r *mergeReader) Close() error {
-	return nil
-}
-
-func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
-	if len(r.rds) == 0 {
-		return nil, nil
-	}
-	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(ctx, cols, expr, m)
-		if err != nil {
-			for _, rd := range r.rds {
-				rd.Close()
-			}
-			return nil, err
-		}
-		if bat == nil {
-			r.rds = r.rds[1:]
-		}
-		if bat != nil {
-			return bat, nil
-		}
-	}
-	return nil, nil
 }

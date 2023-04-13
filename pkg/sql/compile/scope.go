@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
 
@@ -255,9 +256,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		newRds := make([]engine.Reader, 0, mcpu)
 		step := len(rds) / mcpu
 		for i := 0; i < len(rds); i += step {
-			m := &mergeReader{
-				rds: rds[i : i+step],
-			}
+			m := disttae.NewMergeReader(rds[i : i+step])
 			newRds = append(newRds, m)
 		}
 		rds = newRds
