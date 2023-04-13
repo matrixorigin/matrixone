@@ -57,9 +57,6 @@ func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 }
 
 func (vec *vector[T]) Get(i int) any {
-	if vec.IsNull(i) {
-		return types.Null{}
-	}
 	if vec.GetType().IsVarlen() {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
@@ -71,9 +68,6 @@ func (vec *vector[T]) Get(i int) any {
 }
 
 func (vec *vector[T]) ShallowGet(i int) any {
-	if vec.IsNull(i) {
-		return types.Null{}
-	}
 	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 

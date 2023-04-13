@@ -245,11 +245,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			}
 		}
 		vec := containers.MakeVector(def.Type)
-		if isNull {
-			vec.Append(colVal, true)
-		} else {
-			vec.Append(colVal, types.IsNull(colVal))
-		}
+		vec.Append(colVal, isNull)
 
 		bat.AddVector(def.Name, vec)
 	}
