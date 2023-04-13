@@ -282,7 +282,6 @@ func (bat *Batch) CleanOnlyData() {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.CleanOnlyData()
-
 		}
 	}
 	if len(bat.Zs) != 0 {

@@ -51,6 +51,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
+		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, 300)}
 	}
 	return nil
 }

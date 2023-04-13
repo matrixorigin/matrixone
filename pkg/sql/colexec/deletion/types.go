@@ -32,6 +32,23 @@ const (
 	flushThreshold = 16 * mpool.MB
 )
 
+type BatchPool struct {
+	pools []*batch.Batch
+}
+
+func (pool *BatchPool) put(bat *batch.Batch) {
+	pool.pools = append(pool.pools, bat)
+}
+
+func (pool *BatchPool) get() *batch.Batch {
+	if len(pool.pools) == 0 {
+		return nil
+	}
+	bat := pool.pools[0]
+	pool.pools = pool.pools[1:]
+	return bat
+}
+
 // for now, we won't do compaction for cn block
 type container struct {
 	// blockId => rowId Batch
@@ -44,6 +61,7 @@ type container struct {
 	blockId_type   map[string]int8
 	batch_size     uint32
 	deleted_length uint32
+	pool           *BatchPool
 }
 
 type Argument struct {
@@ -130,8 +148,12 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		}
 		if _, ok := arg.ctr.blockId_rowIdBatch[str]; !ok {
 			if !offsetFlag {
-				bat := batch.New(false, []string{catalog.Row_ID})
-				bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+				var bat *batch.Batch
+				bat = arg.ctr.pool.get()
+				if bat == nil {
+					bat = batch.New(false, []string{catalog.Row_ID})
+					bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+				}
 				arg.ctr.blockId_rowIdBatch[str] = bat
 			} else {
 				bat := batch.New(false, []string{catalog.BlockMetaOffset})
@@ -184,6 +206,8 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		resSize += uint32(bat.Size())
 		blkids = append(blkids, blkid)
 		bat.CleanOnlyData()
+		ctr.pool.put(bat)
+		delete(ctr.blockId_rowIdBatch, blkid)
 	}
 	metaLocs, err := s3writer.WriteEndBlocks(proc)
 	for i, metaLoc := range metaLocs {

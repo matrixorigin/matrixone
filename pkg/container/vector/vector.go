@@ -131,6 +131,7 @@ func (v *Vector) GetBytesAt(i int) []byte {
 
 func (v *Vector) CleanOnlyData() {
 	if v.data != nil {
+		v.data = v.data[:0]
 		v.length = 0
 	}
 	if v.area != nil {
