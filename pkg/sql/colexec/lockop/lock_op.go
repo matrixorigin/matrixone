@@ -86,8 +86,14 @@ func Call(
 	for _, target := range arg.targets {
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
+			zap.Bool("filter", target.filter != nil),
+			zap.Int32("filter-col", target.filterColIndexInBatch),
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
+		var filterCols []int
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
+		if target.filter != nil {
+			filterCols = vector.MustFixedCol[int](bat.GetVector(target.filterColIndexInBatch))
+		}
 		refreshTS, err := Lock(
 			proc.Ctx,
 			target.tableID,
@@ -98,7 +104,8 @@ func Call(
 			DefaultLockOptions(arg.parker).
 				WithLockMode(lock.LockMode_Exclusive).
 				WithFetchLockRowsFunc(target.fetcher).
-				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)),
+				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)).
+				WithFilterRows(target.filter, filterCols),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -150,7 +157,9 @@ func Lock(
 		opts.parker,
 		pkType,
 		opts.maxBytesPerLock,
-		opts.lockTable)
+		opts.lockTable,
+		opts.filter,
+		opts.filterCols)
 	result, err := lockService.Lock(
 		ctx,
 		tableID,
@@ -238,6 +247,15 @@ func (opts LockOptions) WithFetchLockRowsFunc(fetchFunc FetchLockRowsFunc) LockO
 	return opts
 }
 
+// WithFilterRows set filter rows, filterCols used to rowsFilter func
+func (opts LockOptions) WithFilterRows(
+	filter RowsFilter,
+	filterCols []int) LockOptions {
+	opts.filter = filter
+	opts.filterCols = filterCols
+	return opts
+}
+
 // NewArgument create new lock op argument.
 func NewArgument() *Argument {
 	return &Argument{}
@@ -258,11 +276,61 @@ func (arg *Argument) AddLockTarget(
 	return arg
 }
 
+// AddLockTargetWithPartition add lock targets for partition tables. Our partitioned table implementation
+// has each partition as a separate table. So when modifying data, these rows may belong to different
+// partitions. For lock op does not care about the logic of data and partition mapping calculation, the
+// caller needs to tell the lock op.
+//
+// tableIDs: the set of ids of the sub-tables of the parition to which the data of the current operation is
+// attributed after calculation.
+//
+// partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
+func (arg *Argument) AddLockTargetWithPartition(
+	tableIDs []uint64,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	refreshTimestampIndexInBatch int32,
+	partitionTableIDMappingInBatch int32) *Argument {
+	if len(tableIDs) == 0 {
+		panic("invalid partition table ids")
+	}
+
+	// only one partition table, process as normal table
+	if len(tableIDs) == 1 {
+		return arg.AddLockTarget(tableIDs[0],
+			primaryColumnIndexInBatch,
+			primaryColumnType,
+			refreshTimestampIndexInBatch)
+	}
+
+	for _, tableID := range tableIDs {
+		arg.targets = append(arg.targets, lockTarget{
+			tableID:                      tableID,
+			primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
+			primaryColumnType:            primaryColumnType,
+			refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
+			filter:                       getRowsFilter(tableID, tableIDs),
+			filterColIndexInBatch:        partitionTableIDMappingInBatch,
+		})
+	}
+	return arg
+}
+
 // Free free mem
 func (arg *Argument) Free(
 	proc *process.Process,
 	pipelineFailed bool) {
 	if arg.parker != nil {
 		arg.parker.FreeMem()
+	}
+}
+
+func getRowsFilter(
+	tableID uint64,
+	partitionTables []uint64) RowsFilter {
+	return func(
+		row int,
+		fliterCols []int) bool {
+		return partitionTables[fliterCols[row]] == tableID
 	}
 }
