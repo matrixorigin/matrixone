@@ -58,12 +58,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	//handle unique index tables
 	for i := range ap.Unique_tbls {
 		if ap.container.mp[i+1].Length() > 0 {
+			//batches in mp will be deeply copied into txn's workspace.
 			if err = ap.Unique_tbls[i].Write(proc.Ctx, ap.container.mp[i+1]); err != nil {
 				return false, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[i+1] {
+			//batches in mp2 will be deeply copied into txn's workspace.
 			if err = ap.Unique_tbls[i].Write(proc.Ctx, bat); err != nil {
 				return false, err
 			}
@@ -72,12 +74,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 	// handle origin/main table.
 	if ap.container.mp[0].Length() > 0 {
+		//batches in mp will be deeply copied into txn's workspace.
 		if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 			return false, err
 		}
 	}
 
 	for _, bat := range ap.container.mp2[0] {
+		//batches in mp2 will be deeply copied into txn's workspace.
 		if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
 			return false, err
 		}

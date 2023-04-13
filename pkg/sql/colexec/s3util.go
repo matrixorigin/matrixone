@@ -188,7 +188,6 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 			return err
 		}
 		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-		//w.WriteEnd(proc)
 		return nil
 	}
 	for _, bat := range w.Bats {
@@ -209,7 +208,6 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 
 	}
 	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-	//w.WriteEnd(proc)
 	return nil
 }
 

@@ -78,13 +78,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	//write origin table
 	if insertArg.IsRemote {
-		// write to s3
+		// write to s3.
 		err := s3Writers[0].WriteS3Batch(bat, proc)
 		if err != nil {
 			return false, err
 		}
 	} else {
-		// write origin table
+		// write origin table, bat will be copied.
 		err := insertCtx.Rels[0].Write(proc.Ctx, bat)
 		if err != nil {
 			return false, err

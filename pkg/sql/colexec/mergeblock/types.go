@@ -23,7 +23,8 @@ import (
 )
 
 type Container struct {
-	// mp is used to store the metaLoc Batch
+	// mp is used to store the metaLoc Batch.
+	// Notice that batches in mp should be free, since the memory of these batches be allocated from mpool.
 	mp map[int]*batch.Batch
 	// mp2 is used to store the normal data batches
 	mp2 map[int][]*batch.Batch
