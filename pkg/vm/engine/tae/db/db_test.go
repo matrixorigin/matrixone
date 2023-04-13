@@ -251,6 +251,8 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	assert.NoError(t, err)
 
 	oldv := bats[0].Vecs[updateColIdx].Get(5)
+	oldvIsNull := bats[0].Vecs[updateColIdx].IsNull(5)
+
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(5)
 	ufilter := handle.NewEQFilter(v)
 	{
@@ -260,7 +262,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
 		}
 	}
-	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, bats[0].Vecs[updateColIdx].IsNull(5))
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, oldvIsNull)
 	assert.NoError(t, err)
 
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)

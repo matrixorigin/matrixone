@@ -42,7 +42,8 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 			_ = w.WriteByte(',')
 		}
 		v := vec.Get(i)
-		_, _ = w.WriteString(common.TypeStringValue(typ, v, vec.IsNull(i), opts...))
+		vIsNull := vec.IsNull(i)
+		_, _ = w.WriteString(common.TypeStringValue(typ, v, vIsNull, opts...))
 		first = false
 	}
 
