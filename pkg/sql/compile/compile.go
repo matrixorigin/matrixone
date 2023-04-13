@@ -463,6 +463,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 
+	debugstr := DebugShowScopes(steps)
+	logutil.Infof("!!!!!!!!!!%v", debugstr)
+
 	return steps, err
 }
 
@@ -635,7 +638,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		c.setAnalyzeCurrent(ss, c.anal.curr)
-		if len(n.GroupBy) == 0 || !c.info.WithBigMem {
+		if len(n.GroupBy) == 0 || true {
 			ss = c.compileAgg(n, ss, ns)
 		} else {
 			ss = c.compileGroup(n, ss, ns)
@@ -1411,7 +1414,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum))
+	rs := c.newScopeList(validScopeCount(ss), int(8))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
