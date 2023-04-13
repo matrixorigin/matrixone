@@ -167,7 +167,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 			location := w.blocks[y].meta.ColumnMeta(idx).BloomFilter()
 			location.SetOffset(start + 32)
 			w.blocks[y].meta.ColumnMeta(idx).setBloomFilter(location)
-
+			start += location.Length()
 		}
 	}
 

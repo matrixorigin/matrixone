@@ -17,6 +17,7 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type Extent []byte
@@ -33,6 +34,9 @@ const (
 )
 
 func NewExtent(alg uint8, offset, length, originSize uint32) Extent {
+	if originSize == 35 {
+		logutil.Infof("fsdfsdfsd")
+	}
 	var extent [ExtentSize]byte
 	copy(extent[:extentAlgLen], types.EncodeUint8(&alg))
 	copy(extent[extentOffsetOff:extentLengthOff], types.EncodeUint32(&offset))
@@ -74,6 +78,9 @@ func (ex Extent) OriginSize() uint32 {
 }
 
 func (ex Extent) SetOriginSize(originSize uint32) {
+	if originSize == 35 {
+		logutil.Infof("fsdfsdfsd")
+	}
 	copy(ex[extentOriginOff:ExtentSize], types.EncodeUint32(&originSize))
 }
 
