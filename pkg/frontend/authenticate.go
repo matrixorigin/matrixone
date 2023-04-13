@@ -750,7 +750,8 @@ var (
 				column_name    varchar(256) not null,
 				ordinal_position  int unsigned  not null,
 				options     text,
-				index_table_name varchar(5000)
+				index_table_name varchar(5000),
+				primary key(id, column_name)
 			);`
 
 	//the sqls creating many tables for the tenant.
