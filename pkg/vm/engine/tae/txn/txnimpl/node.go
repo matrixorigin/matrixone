@@ -100,7 +100,7 @@ func (n *node) Window(start, end uint32) (*containers.Batch, error) {
 	panic("not implemented yet ")
 }
 
-func (n *node) GetValue(col int, row uint32) (any, error) {
+func (n *node) GetValue(col int, row uint32) (any, bool, error) {
 	//TODO::
 	panic("not implemented yet ")
 }

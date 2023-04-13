@@ -96,7 +96,7 @@ type Block interface {
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
+	GetValue(txn txnif.AsyncTxn, row, col int) (any, bool, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error

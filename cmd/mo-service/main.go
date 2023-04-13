@@ -284,6 +284,9 @@ func startLogService(
 
 // startProxyService starts the proxy service.
 func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
 		s, err := proxy.NewServer(
 			ctx,

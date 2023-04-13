@@ -291,8 +291,8 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			tableID := entry.GetID()
 			commitTs := tblNode.GetEnd()
 			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))))
-				commitVec.Append(commitTs)
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
+				commitVec.Append(commitTs, false)
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
@@ -377,8 +377,8 @@ func catalogEntry2Batch[
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
+	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid, false)
+	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
 }
 
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
@@ -490,15 +490,15 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable(), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
@@ -506,8 +506,8 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 	}
 
 }

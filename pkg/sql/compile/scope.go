@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
 
@@ -218,11 +219,39 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
+		} else {
+			rds = append(rds, mainRds...)
+		}
+
+		// get readers of partitioned tables
+		if s.DataSource.PartitionRelationNames != nil {
+			for _, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				if err != nil {
+					return err
+				}
+				rds = append(rds, memRds...)
+			}
 		}
 		s.NodeInfo.Data = nil
 	}
+
+	if len(rds) != mcpu {
+		newRds := make([]engine.Reader, 0, mcpu)
+		step := len(rds) / mcpu
+		for i := 0; i < len(rds); i += step {
+			m := disttae.NewMergeReader(rds[i : i+step])
+			newRds = append(newRds, m)
+		}
+		rds = newRds
+	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{

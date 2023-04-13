@@ -388,7 +388,7 @@ func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	row, col int,
-	skipMemory bool) (v any, err error) {
+	skipMemory bool) (v any, isNull bool, err error) {
 	view := model.NewColumnView(col)
 	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
 		return
@@ -410,7 +410,7 @@ func (blk *baseBlock) getPersistedValue(
 		return
 	}
 	defer view2.Close()
-	v = view2.GetValue(row)
+	v, isNull = view2.GetValue(row)
 	return
 }
 
