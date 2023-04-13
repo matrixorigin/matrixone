@@ -170,10 +170,6 @@ func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) 
 	return expr
 }
 
-func (builder *QueryBuilder) pushdownFiltersToAgg(nodeID int32) {
-
-}
-
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
 
