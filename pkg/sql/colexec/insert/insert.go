@@ -127,8 +127,7 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 		}
 		w.ResetMetaLocBat()
 	}
-	//FIXME:: res.Cnt = 1 ?
-	//res.Cnt = 1
+	res.Cnt = 1
 	proc.SetInputBatch(res)
 	return
 }
