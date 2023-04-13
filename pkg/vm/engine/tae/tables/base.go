@@ -262,7 +262,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		return blockio.Prefetch(idxes, []uint32{key.ID()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.fs.Service, key)
 	}
 }
 

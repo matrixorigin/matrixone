@@ -120,7 +120,7 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 		return nil, err
 	}
 	name := objectio.BuildObjectName(uid, uint16(num))
-	return objectio.BuildLocation(name, extent, uint32(rows), uint32(id)), nil
+	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }
 
 // EncodeLocation Generate a metaloc
@@ -128,6 +128,6 @@ func EncodeLocation(
 	name objectio.ObjectName,
 	extent objectio.Extent,
 	rows uint32,
-	id uint32) objectio.Location {
+	id uint16) objectio.Location {
 	return objectio.BuildLocation(name, extent, rows, id)
 }

@@ -26,7 +26,7 @@ type prefetch struct {
 	name    objectio.ObjectName
 	nameStr string
 	meta    objectio.Extent
-	ids     map[uint32]*objectio.ReadBlockOptions
+	ids     map[uint16]*objectio.ReadBlockOptions
 	reader  *objectio.ObjectReader
 }
 
@@ -39,7 +39,7 @@ func BuildPrefetch(service fileservice.FileService, key objectio.Location) (pref
 }
 
 func buildPrefetch(reader *BlockReader) prefetch {
-	ids := make(map[uint32]*objectio.ReadBlockOptions)
+	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetch{
 		name:    reader.GetObjectName(),
 		nameStr: reader.GetObjectName().String(),
@@ -49,7 +49,7 @@ func buildPrefetch(reader *BlockReader) prefetch {
 	}
 }
 func buildPrefetchNew(reader *BlockReader) prefetch {
-	ids := make(map[uint32]*objectio.ReadBlockOptions)
+	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetch{
 		nameStr: reader.GetName(),
 		meta:    reader.GetObjectExtent(),
@@ -58,8 +58,8 @@ func buildPrefetchNew(reader *BlockReader) prefetch {
 	}
 }
 
-func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
-	blocks := make(map[uint32]*objectio.ReadBlockOptions)
+func (p *prefetch) AddBlock(idxes []uint16, ids []uint16) {
+	blocks := make(map[uint16]*objectio.ReadBlockOptions)
 	columns := make(map[uint16]bool)
 	for _, idx := range idxes {
 		columns[idx] = true
@@ -73,7 +73,7 @@ func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
 	p.mergeIds(blocks)
 }
 
-func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
+func (p *prefetch) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
 	for id, block := range ids2 {
 		if p.ids[id] == nil {
 			p.ids[id] = block

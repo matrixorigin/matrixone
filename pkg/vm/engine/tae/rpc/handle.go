@@ -415,7 +415,7 @@ func (h *Handle) prefetch(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{location.ID()})
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }

@@ -27,7 +27,7 @@ const (
 	RowsOff     = ExtentOff + ExtentLen
 	RowsLen     = 4
 	BlockIDOff  = RowsOff + RowsLen
-	BlockIDLen  = 4
+	BlockIDLen  = 2
 	LocationLen = BlockIDOff + BlockIDLen
 )
 
@@ -41,16 +41,16 @@ const (
 
 /*
 Location is a fixed-length unmodifiable byte array.
-Layout:  ObjectName | Extent | Rows(uint32) | ID(uint32)
+Layout:  ObjectName | Extent | Rows(uint32) | ID(uint16)
 */
 type Location []byte
 
-func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Location {
+func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint16) Location {
 	var location [LocationLen]byte
 	copy(location[:ObjectNameLen], name)
 	copy(location[ExtentOff:ExtentOff+ExtentSize], extent)
 	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
-	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
+	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint16(&id))
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
@@ -66,8 +66,8 @@ func (l Location) Rows() uint32 {
 	return types.DecodeUint32(l[RowsOff : RowsOff+RowsLen])
 }
 
-func (l Location) ID() uint32 {
-	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
+func (l Location) ID() uint16 {
+	return types.DecodeUint16(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
 func (l Location) IsEmpty() bool {

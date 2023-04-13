@@ -99,7 +99,7 @@ func (r *ObjectReader) Read(
 	ctx context.Context,
 	extent Extent,
 	idxs []uint16,
-	id uint32,
+	id uint16,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
@@ -113,7 +113,7 @@ func (r *ObjectReader) Read(
 		NoCache:  r.noCache,
 	}
 	for _, idx := range idxs {
-		col := meta.GetColumnMeta(idx, id)
+		col := meta.GetColumnMeta(idx, uint32(id))
 		ext := col.Location()
 		data.Entries = append(data.Entries, fileservice.IOEntry{
 			Offset: int64(ext.Offset()),
@@ -173,7 +173,7 @@ func (r *ObjectReader) ReadAll(
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
 	extent Extent,
-	ids map[uint32]*ReadBlockOptions,
+	ids map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
@@ -187,7 +187,7 @@ func (r *ObjectReader) ReadBlocks(
 	}
 	for _, block := range ids {
 		for idx := range block.Idxes {
-			col := meta.GetColumnMeta(idx, block.Id)
+			col := meta.GetColumnMeta(idx, uint32(block.Id))
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),

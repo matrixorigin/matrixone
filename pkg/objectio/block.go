@@ -53,8 +53,8 @@ func (bm BlockObject) GetMeta() BlockObject {
 	return bm
 }
 
-func (bm BlockObject) GetID() uint32 {
-	return uint32(bm.BlockHeader().Sequence())
+func (bm BlockObject) GetID() uint16 {
+	return bm.BlockHeader().Sequence()
 }
 
 func (bm BlockObject) GetColumnCount() uint16 {

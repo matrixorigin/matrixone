@@ -40,7 +40,7 @@ type WriteOptions struct {
 }
 
 type ReadBlockOptions struct {
-	Id    uint32
+	Id    uint16
 	Idxes map[uint16]bool
 }
 

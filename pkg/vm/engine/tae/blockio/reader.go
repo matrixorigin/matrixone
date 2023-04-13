@@ -44,7 +44,7 @@ type fetch struct {
 	name   string
 	meta   objectio.Extent
 	idxes  []uint16
-	id     uint32
+	id     uint16
 	pool   *mpool.MPool
 	reader *objectio.ObjectReader
 }
@@ -86,7 +86,7 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 }
 
 func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
-	id uint32, m *mpool.MPool) (*batch.Batch, error) {
+	id uint16, m *mpool.MPool) (*batch.Batch, error) {
 	var bat *batch.Batch
 	if r.meta.End() == 0 {
 		return bat, nil
@@ -145,13 +145,13 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	id uint32, m *mpool.MPool) ([]objectio.ZoneMap, error) {
+	id uint16, m *mpool.MPool) ([]objectio.ZoneMap, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
 
-	block := meta.GetBlockMeta(id)
+	block := meta.GetBlockMeta(uint32(id))
 	blocksZoneMap, err := r.LoadZoneMap(ctx, idxs, block, m)
 	if err != nil {
 		return nil, err
@@ -196,12 +196,12 @@ func (r *BlockReader) LoadZoneMap(
 }
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
-	id uint32, m *mpool.MPool) (objectio.StaticFilter, error) {
+	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
-	column := meta.GetColumnMeta(idx, id)
+	column := meta.GetColumnMeta(idx, uint32(id))
 	bf, err := column.GetIndex(ctx, r.reader.GetObject(), LoadBloomFilterFunc, m)
 	if err != nil {
 		return nil, err
@@ -281,7 +281,7 @@ func PrefetchWithMerged(pref prefetch) error {
 	return pipeline.Prefetch(pref)
 }
 
-func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key objectio.Location) error {
+func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
 
 	pref, err := BuildPrefetch(service, key)
 	if err != nil {
@@ -314,7 +314,7 @@ func PrefetchFile(service fileservice.FileService, size int64, name string) erro
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
 			idxes[a] = a
 		}
-		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+		pref.AddBlock(idxes, []uint16{bs[i].GetID()})
 	}
 	return PrefetchWithMerged(pref)
 }
