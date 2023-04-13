@@ -152,14 +152,6 @@ func init() {
 	SystemDBTS = BuildTS(1, 0)
 }
 
-// Very opinioned code, almost surely a bug, but there you go.
-type Null struct{}
-
-func IsNull(v any) bool {
-	_, ok := v.(Null)
-	return ok
-}
-
 // var v T
 func DefaultVal[T any]() T {
 	var v T
