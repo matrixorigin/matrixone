@@ -17,8 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -965,9 +963,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	for i, e := range cn.ProjectList {
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
-
-	logutil.Infof("ibucket %v nbucket %v !!!!!!!!!!!", ibucket, nbucket)
-
 	// we need to store the
 	return &group.Argument{
 		Aggs:      aggs,

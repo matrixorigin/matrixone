@@ -638,7 +638,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		c.setAnalyzeCurrent(ss, c.anal.curr)
-		if len(n.GroupBy) == 0 || true {
+		if len(n.GroupBy) == 0 || n.Stats.HashmapSize < 1000000 {
 			ss = c.compileAgg(n, ss, ns)
 		} else {
 			ss = c.compileGroup(n, ss, ns)
@@ -1441,7 +1441,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	rs := c.newScopeList(validScopeCount(ss), int(8))
+	rs := c.newScopeList(validScopeCount(ss), int(64))
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
