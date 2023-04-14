@@ -162,9 +162,9 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.NewVec(ap.Left_typs[rp.Pos])
+			rbat.Vecs[i] = proc.GetVector(ap.Left_typs[rp.Pos])
 		} else {
-			rbat.Vecs[i] = vector.NewVec(ap.Right_typs[rp.Pos])
+			rbat.Vecs[i] = proc.GetVector(ap.Right_typs[rp.Pos])
 		}
 	}
 
@@ -192,22 +192,22 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
-	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
+	defer ctr.cleanEvalVectors(proc.Mp())
 
 	count := bat.Length()
 	mSels := ctr.mp.Sels()

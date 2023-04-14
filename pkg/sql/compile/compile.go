@@ -252,6 +252,7 @@ func (c *Compile) Run(_ uint64) error {
 			return e
 		}
 	}
+	c.proc.FreeVectors()
 	return nil
 }
 

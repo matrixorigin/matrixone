@@ -65,11 +65,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -142,7 +143,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	rbat.Zs = proc.Mp().GetSels()
 
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.NewVec(ap.Right_typs[pos])
+		rbat.Vecs[i] = proc.GetVector(ap.Right_typs[pos])
 	}
 
 	count := ctr.bat.Length()
@@ -168,18 +169,12 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.NewVec(ap.Right_typs[pos])
-	}
-
-	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
+	defer ctr.cleanEvalVectors(proc.Mp())
 
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
@@ -216,8 +211,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-	analyze.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	proc.SetInputBatch(&batch.Batch{})
 	return nil
 }
 
