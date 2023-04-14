@@ -188,7 +188,7 @@ func (r *BlockReader) LoadZoneMap(
 		if err != nil {
 			return nil, err
 		}
-		zoneMapList[i] = index.DecodeZM(column.GetMeta().ZoneMap())
+		zoneMapList[i] = index.DecodeZM(column.ZoneMap())
 	}
 
 	return zoneMapList, nil

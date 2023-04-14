@@ -96,7 +96,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// read index
 	for _, bbs := range r.bs {
 		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, bbs.GetExtent().Id(), mp)
+			r.idxs, bbs.GetID(), mp)
 		require.Nil(t, err)
 	}
 
@@ -295,7 +295,7 @@ func TestTaeReadFile(t *testing.T) {
 	// read index
 	for _, bbs := range r.bs {
 		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, bbs.GetExtent().Id(), mp)
+			r.idxs, bbs.GetID(), mp)
 		require.Nil(t, err)
 	}
 
@@ -354,7 +354,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 		// read index
 		for _, bbs := range r.bs {
 			_, err = r.blockReader.LoadZoneMaps(context.Background(),
-				r.idxs, bbs.GetExtent().Id(), mp)
+				r.idxs, bbs.GetID(), mp)
 			require.Nil(t, err)
 		}
 

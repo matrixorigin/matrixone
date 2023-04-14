@@ -45,8 +45,8 @@ func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
 	return bm.ColumnMeta(idx), nil
 }
 
-func (bm BlockObject) GetRows() (uint32, error) {
-	panic(any("implement me"))
+func (bm BlockObject) GetRows() uint32 {
+	return bm.BlockHeader().Rows()
 }
 
 func (bm BlockObject) GetMeta() BlockObject {
@@ -59,8 +59,4 @@ func (bm BlockObject) GetID() uint16 {
 
 func (bm BlockObject) GetColumnCount() uint16 {
 	return bm.BlockHeader().ColumnCount()
-}
-
-func (bm BlockObject) MarshalMeta() []byte {
-	return bm
 }

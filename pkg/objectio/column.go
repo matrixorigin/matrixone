@@ -38,15 +38,3 @@ func (cm ColumnMeta) GetIndex(ctx context.Context, object *Object, readFunc Read
 	}
 	return data.Entries[0].Object.(StaticFilter), nil
 }
-
-func (cm ColumnMeta) GetMeta() ColumnMeta {
-	return cm
-}
-
-func (cm ColumnMeta) MarshalMeta() []byte {
-	return cm
-}
-
-func (cm ColumnMeta) UnmarshalMate(data []byte) error {
-	return nil
-}

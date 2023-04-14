@@ -62,7 +62,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	colZoneMap := col.GetMeta().ZoneMap()
+	colZoneMap := col.ZoneMap()
 	zm := index.DecodeZM(colZoneMap)
 
 	require.NoError(t, err)
