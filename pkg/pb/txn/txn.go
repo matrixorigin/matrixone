@@ -171,7 +171,7 @@ func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	case TxnMethod_RollbackDNShard:
 		return m.RollbackDNShardRequest.DNShard
 	default:
-		panic("unknown txn request method")
+		panic(fmt.Sprintf("unknown txn request method: %v", m.Method))
 	}
 }
 
@@ -255,7 +255,7 @@ func WrapError(err error, internalCode uint16) *TxnError {
 		return v
 	}
 
-	panic("only moerr supported")
+	panic(fmt.Sprintf("only moerr supported, got %T, %v", err, err.Error()))
 }
 
 // UnwrapError unwrap the moerr from the TxnError
