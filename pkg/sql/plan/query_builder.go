@@ -127,6 +127,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
+			Partition:     node.TableDef.Partition,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -242,6 +243,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
+			Partition:     node.TableDef.Partition,
 		}
 
 		for i, col := range node.TableDef.Cols {
