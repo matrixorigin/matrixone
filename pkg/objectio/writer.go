@@ -199,12 +199,31 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	bloomFilterExtent := NewExtent(compress.Lz4, start+HeaderSize, uint32(len(bloomFilterData)), uint32(dataLen))
 	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
-	logutil.Infof("blockid %v, eeeeeee %v", bloomFilterExtent.String(), blockid.String())
-	logutil.Infof("22222222 %v", objectMeta.BlockHeader().BloomFilter().String())
+	start += uint32(len(bloomFilterData))
 
-	if w.name.Num() == 13 {
-		logutil.Infof("blockid1111 %v, eeeeeee %v", bloomFilterExtent.String(), blockid.String())
+	zoneMapArea := new(bytes.Buffer)
+	zoneMapAreaStart := uint32(0)
+	zoneMapAreaIndex := BuildBlockIndex(blockCount)
+	zoneMapAreaIndex.SetBlockCount(blockCount)
+	zoneMapAreaStart += zoneMapAreaIndex.Length()
+	for i, block := range w.blocks {
+		n := uint32(block.meta.GetColumnCount() * ZoneMapSize)
+		zoneMapAreaIndex.SetBlockMetaPos(uint32(i), zoneMapAreaStart, n)
+		zoneMapAreaStart += n
 	}
+	zoneMapArea.Write(zoneMapAreaIndex)
+	for _, block := range w.blocks {
+		for i := range block.data {
+			zoneMapArea.Write(block.meta.ColumnMeta(uint16(i)).ZoneMap())
+		}
+	}
+	dataLen = len(zoneMapArea.Bytes())
+	zoneMapAreaData := make([]byte, lz4.CompressBlockBound(dataLen))
+	if zoneMapAreaData, err = compress.Compress(zoneMapArea.Bytes(), zoneMapAreaData, compress.Lz4); err != nil {
+		return nil, err
+	}
+	zoneMapAreaExtent := NewExtent(compress.Lz4, start+HeaderSize, uint32(len(zoneMapAreaData)), uint32(dataLen))
+	objectMeta.BlockHeader().SetZoneMapArea(zoneMapAreaExtent)
 	// begin write
 
 	// writer object header

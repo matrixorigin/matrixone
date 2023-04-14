@@ -154,7 +154,11 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
-
+	zma, err := objectReader.ReadZoneMapArea(context.Background(), meta.BlockHeader().ZoneMapArea())
+	buf = zma.GetZoneMap(0, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint8(0x1), buf[31])
+	assert.Equal(t, uint8(0xa), buf[63])
 }
 
 func getObjectMeta(t *testing.B) ObjectMeta {

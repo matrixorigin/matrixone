@@ -131,7 +131,9 @@ const (
 	metaLocationLen = ExtentSize
 	bloomFilterOff  = metaLocationOff + metaLocationLen
 	bloomFilterLen  = ExtentSize
-	headerLen       = bloomFilterOff + bloomFilterLen
+	zoneMapAreaOff  = bloomFilterOff + bloomFilterLen
+	zoneMapAreaLen  = ZoneMapSize
+	headerLen       = zoneMapAreaOff + zoneMapAreaLen
 )
 
 type BlockObject []byte
@@ -218,6 +220,14 @@ func (bh BlockHeader) SetMetaLocation(location Extent) {
 	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location)
 }
 
+func (bh BlockHeader) ZoneMapArea() Extent {
+	return Extent(bh[zoneMapAreaOff : zoneMapAreaOff+zoneMapAreaLen])
+}
+
+func (bh BlockHeader) SetZoneMapArea(location Extent) {
+	copy(bh[zoneMapAreaOff:zoneMapAreaOff+zoneMapAreaLen], location)
+}
+
 func (bh BlockHeader) BloomFilter() Extent {
 	return Extent(bh[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 }
@@ -236,16 +246,28 @@ func (bf BloomFilter) BlockCount() uint32 {
 	return types.DecodeUint32(bf[:blockCountLen])
 }
 
-func (bf BloomFilter) SetBlockCount(cnt uint32) {
-	copy(bf[:blockCountLen], types.EncodeUint32(&cnt))
-}
-
 func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
 	offStart := blockCountLen + BlockID*posLen
 	offEnd := blockCountLen + BlockID*posLen + blockOffset
 	offset := types.DecodeUint32(bf[offStart:offEnd])
 	length := types.DecodeUint32(bf[offStart+blockLen : offEnd+blockLen])
 	return bf[offset : offset+length]
+}
+
+type ZoneMapArea []byte
+
+func (zma ZoneMapArea) BlockCount() uint32 {
+	return types.DecodeUint32(zma[:blockCountLen])
+}
+
+func (zma ZoneMapArea) GetZoneMap(idx uint16, BlockID uint32) ZoneMap {
+	offStart := blockCountLen + BlockID*posLen
+	offEnd := blockCountLen + BlockID*posLen + blockOffset
+	blockOff := types.DecodeUint32(zma[offStart:offEnd])
+	blockLength := types.DecodeUint32(zma[offStart+blockLen : offEnd+blockLen])
+	offset := blockOff + uint32(idx)*ZoneMapSize
+	return ZoneMap(zma[offset : offset+blockLength])
+
 }
 
 type Header []byte

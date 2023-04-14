@@ -197,6 +197,30 @@ func (r *ObjectReader) ReadBloomFilter(
 	return metas.Entries[0].Object.([]StaticFilter), err
 }
 
+func (r *ObjectReader) ReadZoneMapArea(
+	ctx context.Context,
+	extent Extent,
+) (ZoneMapArea, error) {
+	metas := &fileservice.IOVector{
+		FilePath: r.nameStr,
+		Entries:  make([]fileservice.IOEntry, 1),
+		NoCache:  r.noCache,
+	}
+
+	metas.Entries[0] = fileservice.IOEntry{
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.Length()),
+
+		ToObject: newDecompressToObject(int64(extent.OriginSize())),
+	}
+	err := r.object.fs.Read(ctx, metas)
+	if err != nil {
+		return nil, err
+	}
+
+	return metas.Entries[0].Object.([]byte), err
+}
+
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
 	extent Extent,
