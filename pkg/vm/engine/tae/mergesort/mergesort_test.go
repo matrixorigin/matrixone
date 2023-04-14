@@ -34,7 +34,7 @@ func TestSort1(t *testing.T) {
 		vec := containers.MockVector(vecType, 10, false, nil)
 		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
-			vec2.Append(vec.Get(i))
+			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0)
@@ -46,11 +46,11 @@ func TestSort1(t *testing.T) {
 	// sort null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, nil)
-		vec.Update(rand.Intn(10), types.Null{})
-		vec.Update(rand.Intn(10), types.Null{})
+		vec.Update(rand.Intn(10), nil, true)
+		vec.Update(rand.Intn(10), nil, true)
 		vec2 := containers.MakeVector(vecType)
 		for i := 0; i < 10; i++ {
-			vec2.Append(vec.Get(i))
+			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vecs := []containers.Vector{vec, vec2}
 		_, _ = SortBlockColumns(vecs, 0)
@@ -84,11 +84,11 @@ func TestMerge1(t *testing.T) {
 		_, _ = SortBlockColumns(vecs, 0)
 		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec3.Append(vec.Get(i))
+			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
@@ -106,22 +106,22 @@ func TestMerge1(t *testing.T) {
 	// merge null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 5, false, nil)
-		vec.Update(rand.Intn(5), types.Null{})
-		vec.Update(rand.Intn(5), types.Null{})
+		vec.Update(rand.Intn(5), nil, true)
+		vec.Update(rand.Intn(5), nil, true)
 		vecs := []containers.Vector{vec}
 		_, _ = SortBlockColumns(vecs, 0)
 		vec2 := containers.MockVector(vecType, 5, false, nil)
-		vec2.Update(rand.Intn(5), types.Null{})
+		vec2.Update(rand.Intn(5), nil, true)
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0)
 
 		vec3 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec3.Append(vec.Get(i))
+			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
 		vec4 := containers.MakeVector(vecType)
 		for i := 0; i < 5; i++ {
-			vec4.Append(vec2.Get(i))
+			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
 		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
@@ -156,9 +156,9 @@ func TestReshape1(t *testing.T) {
 	vecTypes := types.MockColTypes(18)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 4, false, nil)
-		vec.Update(rand.Intn(4), types.Null{})
+		vec.Update(rand.Intn(4), nil, true)
 		vec2 := containers.MockVector(vecType, 6, false, nil)
-		vec2.Update(rand.Intn(6), types.Null{})
+		vec2.Update(rand.Intn(6), nil, true)
 		t.Log(vec)
 		t.Log(vec2)
 		ret := Reshape([]containers.Vector{vec, vec2}, []uint32{4, 6}, []uint32{5, 5})

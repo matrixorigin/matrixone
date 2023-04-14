@@ -4,27 +4,27 @@ create table t1 (a int, b int);
 create table t2 (aa int, bb varchar(20));
 create view v1 as select * from t1;
 select * from v1;
-a	b
+a    b
 insert into t1 values (1, 11), (2, 22), (3, 33);
 insert into t2 values (1, "aa"), (2, "bb");
 show columns from v1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-b    INT(32)    YES        null
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
 select * from v1 where a > 1;
-a	b
-2	22
-3	33
+a    b
+2    22
+3    33
 select * from v1, t2 where v1.a = t2.aa;
-a	b	aa	bb
-1	11	1	aa
-2	22	2	bb
+a    b    aa    bb
+1    11    1    aa
+2    22    2    bb
 create database db2;
 use db2;
 select * from view.v1 where a > 1;
-a	b
-2	22
-3	33
+a    b
+2    22
+3    33
 use view;
 drop database db2;
 drop table t1;
@@ -53,7 +53,6 @@ create view vv as select * from tt;
 drop table if exists tt;
 drop table if exists vv;
 drop view vv;
-
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1);
@@ -66,7 +65,6 @@ a
 1
 1
 drop view vvvv;
-
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
@@ -94,7 +92,7 @@ insert into t1 values(1, 'aaaa'),(2, 'bbbbbb'),(3, 'cccccccc');
 create view v1 as select (case when a>1 then 'NO' else 'YES' end) as IS_NULLABLE from t1;
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-is_nullable    VARCHAR(3)    YES        NULL
+is_nullable    VARCHAR(3)    YES        null        
 drop view v1;
 drop database if exists test;
 create database test;
@@ -105,6 +103,6 @@ create view v1 as select * from t1;
 SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
 relname    rel_createsql    relkind
 %!%mo_increment_columns        
-t1    create table t1(a int);    r
+t1    create table t1 (a int)    r
 v1    create view v1 as select * from t1;    v
 drop database test;

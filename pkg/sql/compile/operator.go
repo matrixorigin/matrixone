@@ -64,6 +64,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -135,8 +137,28 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Right_typs: t.Right_typs,
-			Left_typs:  t.Left_typs,
+			RightTypes: t.RightTypes,
+			LeftTypes:  t.LeftTypes,
+			Conditions: t.Conditions,
+		}
+	case vm.RightSemi:
+		t := sourceIns.Arg.(*rightsemi.Argument)
+		res.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			RightTypes: t.RightTypes,
+			Conditions: t.Conditions,
+		}
+	case vm.RightAnti:
+		t := sourceIns.Arg.(*rightanti.Argument)
+		res.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -308,13 +330,12 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap:    t.NeedHashMap,
-			NeedExpr:       t.NeedExpr,
-			NeedSelectList: t.NeedSelectList,
-			Ibucket:        t.Ibucket,
-			Nbucket:        t.Nbucket,
-			Typs:           t.Typs,
-			Conditions:     t.Conditions,
+			NeedHashMap: t.NeedHashMap,
+			NeedExpr:    t.NeedExpr,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			Typs:        t.Typs,
+			Conditions:  t.Conditions,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -550,8 +571,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Source = originRel
-	newCtx.UniqueSource = indexRels
+	newCtx.Rels = append(newCtx.Rels, originRel)
+	newCtx.Rels = append(newCtx.Rels, indexRels...)
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
@@ -767,8 +788,40 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &right.Argument{
-		Left_typs:  left_typs,
-		Right_typs: right_typs,
+		LeftTypes:  left_typs,
+		RightTypes: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
+func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightsemi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		_, result[i] = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &rightsemi.Argument{
+		RightTypes: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
+func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightanti.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		_, result[i] = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &rightanti.Argument{
+		RightTypes: right_typs,
 		Nbucket:    Nbucket,
 		Ibucket:    Ibucket,
 		Result:     result,
@@ -1152,26 +1205,23 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
@@ -1180,7 +1230,27 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Typs:        arg.RightTypes,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.RightSemi:
+		arg := in.Arg.(*rightsemi.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.RightTypes,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.RightAnti:
+		arg := in.Arg.(*rightanti.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:
@@ -1193,59 +1263,51 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 
 	default:

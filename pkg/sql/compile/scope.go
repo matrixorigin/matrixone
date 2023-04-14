@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
 
@@ -42,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -216,11 +219,39 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
+		} else {
+			rds = append(rds, mainRds...)
+		}
+
+		// get readers of partitioned tables
+		if s.DataSource.PartitionRelationNames != nil {
+			for _, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				if err != nil {
+					return err
+				}
+				rds = append(rds, memRds...)
+			}
 		}
 		s.NodeInfo.Data = nil
 	}
+
+	if len(rds) != mcpu {
+		newRds := make([]engine.Reader, 0, mcpu)
+		step := len(rds) / mcpu
+		for i := 0; i < len(rds); i += step {
+			m := disttae.NewMergeReader(rds[i : i+step])
+			newRds = append(newRds, m)
+		}
+		rds = newRds
+	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -284,28 +315,45 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
-	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel := make(chan *[]int32)
+		channel := make(chan *[]uint8)
 		for i := range s.PreScopes {
-			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
-			arg.Channel = channel
-			arg.NumCPU = uint64(mcpu)
-			if i == 0 {
-				arg.Is_receiver = true
+			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
+			case *right.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
+
+			case *rightsemi.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
+
+			case *rightanti.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
 			}
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, left_scope)
-	s.PreScopes = append(s.PreScopes, right_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
+	s.PreScopes = append(s.PreScopes, build_scope)
 
 	return s.MergeRun(c)
 }
+
 func (s *Scope) isRight() bool {
-	return s != nil && s.Instructions[0].Op == vm.Right
+	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
 
 func newParallelScope(s *Scope, ss []*Scope) *Scope {

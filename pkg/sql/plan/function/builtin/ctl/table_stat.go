@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,7 +38,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
+	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
+	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
+	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +245,7 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New()
+	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 	if err != nil {
 		return nil, err
 	}
@@ -376,20 +377,20 @@ const (
 
 var (
 	predefinedTables = map[string]int8{
-		"mo_database":                0,
-		"mo_tables":                  0,
-		"mo_columns":                 0,
-		"mo_account":                 0,
-		"mo_user":                    0,
-		"mo_role":                    0,
-		"mo_user_grant":              0,
-		"mo_role_grant":              0,
-		"mo_role_privs":              0,
-		"mo_user_defined_function":   0,
-		"mo_stored_procedure":        0,
-		"mo_mysql_compatbility_mode": 0,
-		catalog.AutoIncrTableName:    0,
-		"mo_indexes":                 0,
-		"mo_pubs":                    0,
+		"mo_database":                 0,
+		"mo_tables":                   0,
+		"mo_columns":                  0,
+		"mo_account":                  0,
+		"mo_user":                     0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
+		"mo_mysql_compatibility_mode": 0,
+		catalog.AutoIncrTableName:     0,
+		"mo_indexes":                  0,
+		"mo_pubs":                     0,
 	}
 )

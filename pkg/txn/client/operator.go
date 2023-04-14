@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -129,17 +128,25 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+// WithUpdateLastCommitTSFunc we maintain a CN-based last commit timestamp to ensure that a
+// session with that CN can see previous writes.
+func WithUpdateLastCommitTSFunc(value func(timestamp.Timestamp)) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.updateLastCommitTSFunc = value
+	}
+}
+
 type txnOperator struct {
-	rt     runtime.Runtime
 	sender rpc.TxnSender
 	txnID  []byte
 
 	option struct {
-		readyOnly        bool
-		enableCacheWrite bool
-		disable1PCOpt    bool
-		coordinator      bool
-		lockService      lockservice.LockService
+		readyOnly              bool
+		enableCacheWrite       bool
+		disable1PCOpt          bool
+		coordinator            bool
+		lockService            lockservice.LockService
+		updateLastCommitTSFunc func(timestamp.Timestamp)
 	}
 
 	mu struct {
@@ -152,23 +159,21 @@ type txnOperator struct {
 }
 
 func newTxnOperator(
-	rt runtime.Runtime,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
 	options ...TxnOption) *txnOperator {
-	tc := &txnOperator{rt: rt, sender: sender}
+	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
 	for _, opt := range options {
 		opt(tc)
 	}
 	tc.adjust()
-	util.LogTxnCreated(tc.rt.Logger(), tc.mu.txn)
+	util.LogTxnCreated(tc.mu.txn)
 	return tc
 }
 
 func newTxnOperatorWithSnapshot(
-	rt runtime.Runtime,
 	sender rpc.TxnSender,
 	snapshot []byte) (*txnOperator, error) {
 	v := &txn.CNTxnSnapshot{}
@@ -176,7 +181,7 @@ func newTxnOperatorWithSnapshot(
 		return nil, err
 	}
 
-	tc := &txnOperator{rt: rt, sender: sender}
+	tc := &txnOperator{sender: sender}
 	tc.mu.txn = v.Txn
 	tc.txnID = v.Txn.ID
 	tc.mu.lockTables = v.LockTables
@@ -185,22 +190,22 @@ func newTxnOperatorWithSnapshot(
 	tc.option.readyOnly = v.ReadyOnly
 
 	tc.adjust()
-	util.LogTxnCreated(tc.rt.Logger(), tc.mu.txn)
+	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
 }
 
 func (tc *txnOperator) adjust() {
 	if tc.sender == nil {
-		tc.rt.Logger().Fatal("missing txn sender")
+		util.GetLogger().Fatal("missing txn sender")
 	}
 	if len(tc.mu.txn.ID) == 0 {
-		tc.rt.Logger().Fatal("missing txn id")
+		util.GetLogger().Fatal("missing txn id")
 	}
 	if tc.mu.txn.SnapshotTS.IsEmpty() {
-		tc.rt.Logger().Fatal("missing txn snapshot timestamp")
+		util.GetLogger().Fatal("missing txn snapshot timestamp")
 	}
 	if tc.option.readyOnly && tc.option.enableCacheWrite {
-		tc.rt.Logger().Fatal("readyOnly and delayWrites cannot both be set")
+		util.GetLogger().Fatal("readyOnly and delayWrites cannot both be set")
 	}
 }
 
@@ -240,7 +245,7 @@ func (tc *txnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	if !tc.option.coordinator {
-		tc.rt.Logger().Fatal("apply snapshot on non-coordinator txn operator")
+		util.GetLogger().Fatal("apply snapshot on non-coordinator txn operator")
 	}
 
 	tc.mu.Lock()
@@ -256,7 +261,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	}
 
 	if !bytes.Equal(snapshot.Txn.ID, tc.mu.txn.ID) {
-		tc.rt.Logger().Fatal("apply snapshot with invalid txn id")
+		util.GetLogger().Fatal("apply snapshot with invalid txn id")
 	}
 
 	// apply locked tables in other cn
@@ -282,12 +287,12 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
 		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
 	}
-	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
+	util.LogTxnUpdated(tc.mu.txn)
 	return nil
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	util.LogTxnRead(tc.rt.Logger(), tc.getTxnMeta(false))
+	util.LogTxnRead(tc.getTxnMeta(false))
 
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
@@ -302,7 +307,7 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	util.LogTxnWrite(tc.rt.Logger(), tc.getTxnMeta(false))
+	util.LogTxnWrite(tc.getTxnMeta(false))
 
 	return tc.doWrite(ctx, requests, false)
 }
@@ -312,7 +317,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	util.LogTxnCommit(tc.rt.Logger(), tc.getTxnMeta(false))
+	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
 		return nil
@@ -329,7 +334,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
-	util.LogTxnRollback(tc.rt.Logger(), tc.getTxnMeta(false))
+	util.LogTxnRollback(tc.getTxnMeta(false))
 
 	tc.mu.Lock()
 	defer func() {
@@ -407,13 +412,16 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if tc.option.readyOnly {
-		tc.rt.Logger().Fatal("can not write on ready only transaction")
+		util.GetLogger().Fatal("can not write on ready only transaction")
 	}
 
 	if commit {
 		tc.mu.Lock()
 		defer func() {
 			tc.mu.closed = true
+			if tc.option.updateLastCommitTSFunc != nil {
+				tc.option.updateLastCommitTSFunc(tc.mu.txn.CommitTS)
+			}
 			tc.mu.Unlock()
 		}()
 		if tc.needUnlockLocked() {
@@ -470,12 +478,12 @@ func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
 		}
 	}
 	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
-	util.LogTxnUpdated(tc.rt.Logger(), tc.mu.txn)
+	util.LogTxnUpdated(tc.mu.txn)
 }
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.rt.Logger().Fatal("context deadline set")
+		util.GetLogger().Fatal("context deadline set")
 	}
 
 	return tc.checkStatus(locked)
@@ -569,13 +577,13 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		requests[idx].Txn = txnMeta
 	}
 
-	util.LogTxnSendRequests(tc.rt.Logger(), requests)
+	util.LogTxnSendRequests(requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
-		util.LogTxnSendRequestsFailed(tc.rt.Logger(), requests, err)
+		util.LogTxnSendRequestsFailed(requests, err)
 		return nil, err
 	}
-	util.LogTxnReceivedResponses(tc.rt.Logger(), result.Responses)
+	util.LogTxnReceivedResponses(result.Responses)
 
 	if len(result.Responses) == 0 {
 		return result, nil
@@ -636,7 +644,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		tc.rt.Logger().Fatal("invalid response",
+		util.GetLogger().Fatal("invalid response",
 			zap.String("response", resp.DebugString()))
 	}
 	return nil
@@ -659,7 +667,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
 		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	default:
-		tc.rt.Logger().Fatal("invalid response status for read or write",
+		util.GetLogger().Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
 	}
 	return nil
@@ -740,7 +748,7 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		ctx,
 		tc.mu.txn.ID,
 		tc.mu.txn.CommitTS); err != nil {
-		tc.rt.Logger().Error("failed to unlock txn",
+		util.GetLogger().Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
 	}

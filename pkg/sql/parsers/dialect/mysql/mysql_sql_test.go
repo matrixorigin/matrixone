@@ -29,8 +29,6 @@ var (
 	}{
 		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
 		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		//input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
-		//output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 	}
 )
 
@@ -148,7 +146,7 @@ var (
 	}, {
 		input: "select time from t1 as value",
 	}, {
-		input:  "alter database test set mysql_compatbility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
+		input:  "alter database test set mysql_compatibility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
 		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
@@ -2061,18 +2059,6 @@ var (
 			output: "alter table t1 alter index c invisible",
 		},
 		{
-			input:  "alter table t1 add constraint index (col3, col4)",
-			output: "alter table t1 add index (col3, col4)",
-		},
-		{
-			input:  "alter table t1 add constraint index zxxxxxx (col3, col4)",
-			output: "alter table t1 add index zxxxxxx (col3, col4)",
-		},
-		{
-			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
-			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3)",
-		},
-		{
 			input:  "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 			output: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 unique key (col3)",
 		},
@@ -2353,6 +2339,43 @@ func TestMulti(t *testing.T) {
 		}
 		if tcase.output != res {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, res)
+		}
+	}
+}
+
+// Fault tolerant use cases
+var (
+	invalidSQL = []struct {
+		input string
+	}{
+		{
+			input: "alter table t1 add constraint index (col3, col4)",
+		},
+		{
+			input: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index (col3)",
+		},
+		{
+			input: "alter table t1 add constraint uk_6dotkott2kjsp8vw4d0m25fb7 index zxxx (col3)",
+		},
+		{
+			input: "create table t (a int, b char, constraint sdf index (a, b) )",
+		},
+		{
+			input: "create table t (a int, b char, constraint sdf index idx(a, b) )",
+		},
+		{
+			input: "create table t (a int, b char, constraint index idx(a, b) )",
+		},
+	}
+)
+
+func TestFaultTolerance(t *testing.T) {
+	ctx := context.TODO()
+	for _, tcase := range invalidSQL {
+		_, err := ParseOne(ctx, tcase.input, 1)
+		if err == nil {
+			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
+			continue
 		}
 	}
 }

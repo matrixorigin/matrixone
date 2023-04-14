@@ -1103,12 +1103,12 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
-// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+// handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
-// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+// handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }

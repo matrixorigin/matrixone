@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,17 +67,18 @@ const (
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
-	PushdownId   uint64
-	PushdownAddr string
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	R            engine.Reader
-	Bat          *batch.Batch
-	Expr         *plan.Expr
-	TableDef     *plan.TableDef
-	Timestamp    timestamp.Timestamp
-	AccountId    int32
+	PushdownId             uint64
+	PushdownAddr           string
+	SchemaName             string
+	RelationName           string
+	PartitionRelationNames []string
+	Attributes             []string
+	R                      engine.Reader
+	Bat                    *batch.Batch
+	Expr                   *plan.Expr
+	TableDef               *plan.TableDef
+	Timestamp              timestamp.Timestamp
+	AccountId              int32
 }
 
 // Col is the information of attribute
