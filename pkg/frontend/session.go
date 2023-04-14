@@ -355,6 +355,27 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	return ses
 }
 
+func (ses *Session) Close() {
+	ses.ep = nil
+	ses.errInfo.codes = nil
+	ses.errInfo.msgs = nil
+	ses.errInfo = nil
+	ses.cache.invalidate()
+	ses.cache = nil
+	ses.txnCompileCtx = nil
+	ses.txnHandler = nil
+	ses.sysVars = nil
+	ses.userDefinedVars = nil
+	ses.gSysVars = nil
+	ses.prepareStmts = nil
+	ses.seqCurValues = nil
+	ses.sqlHelper = nil
+	ses.cleanCache()
+	ses.statsCache = nil
+	// Clean sequence record data.
+	ses.seqCurValues = nil
+}
+
 // BackgroundSession executing the sql in background
 type BackgroundSession struct {
 	*Session
