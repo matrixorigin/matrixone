@@ -145,14 +145,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.T(col.Typ.Id).ToType()
 		typeStr := typ.String()
-		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+		if typ.Oid.IsDecimal() { //after decimal fix,remove this
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
 			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		if types.IsFloat(typ.Oid) && col.Typ.Scale != -1 {
+		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 

@@ -40,7 +40,7 @@ func adapter(ivecs []*vector.Vector,
 		var svals []string
 		var uvals []uint64
 		var resultSpace interface{}
-		if rtyp.IsString() {
+		if rtyp.IsVarlen() {
 			svals = make([]string, 1)
 			resultSpace = svals
 		} else {
@@ -55,7 +55,7 @@ func adapter(ivecs []*vector.Vector,
 		//step 4: fill the result vector
 		if result == nil {
 			return vector.NewConstNull(rtyp, 1, proc.Mp()), nil
-		} else if rtyp.IsString() {
+		} else if rtyp.IsVarlen() {
 			return vector.NewConstBytes(rtyp, []byte(svals[0]), 1, proc.Mp()), nil
 		} else {
 			return vector.NewConstFixed(rtyp, uvals[0], 1, proc.Mp()), nil

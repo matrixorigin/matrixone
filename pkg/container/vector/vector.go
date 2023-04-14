@@ -1510,7 +1510,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
 	w.setupColFromData()
-	if v.typ.IsString() {
+	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
 	w.cantFreeData = true
@@ -1531,7 +1531,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
 		w.setupColFromData()
-		if v.typ.IsString() {
+		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
 		}
