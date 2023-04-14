@@ -980,20 +980,21 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
-	if cnt == 0 {
+	addCnt := 0
+	for i := range flags {
+		addCnt += int(flags[i])
+	}
+
+	if addCnt == 0 {
 		return nil
 	}
 
-	if err := extend(v, cnt, mp); err != nil {
+	if err := extend(v, addCnt, mp); err != nil {
 		return err
 	}
 
 	if w.IsConst() {
 		oldLen := v.length
-		addCnt := 0
-		for i := range flags {
-			addCnt += int(flags[i])
-		}
 		v.length += addCnt
 		if w.IsConstNull() {
 			nulls.AddRange(v.GetNulls(), uint64(oldLen), uint64(v.length))

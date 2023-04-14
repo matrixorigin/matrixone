@@ -175,6 +175,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						rbat.Clean(proc.Mp())
 						return err
 					}
+					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+						vec.Free(proc.Mp())
+						continue
+					}
 					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
 						if matched {

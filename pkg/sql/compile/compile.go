@@ -512,8 +512,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
-					Tbl:         arg.InsertCtx.Source,
-					Unique_tbls: arg.InsertCtx.UniqueSource,
+					Tbl:         arg.InsertCtx.Rels[0],
+					Unique_tbls: arg.InsertCtx.Rels[1:],
 				},
 			})
 		} else {
@@ -618,23 +618,26 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
+
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_AGG:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		if len(n.GroupBy) == 0 || !c.info.WithBigMem {
 			ss = c.compileAgg(n, ss, ns)
 		} else {
@@ -642,64 +645,69 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], left, right)), nil
 	case plan.Node_SORT:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
 	case plan.Node_UNION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnion(n, left, right)), nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType)), nil
 	case plan.Node_UNION_ALL:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		c.setAnalyzeCurrent(right, c.anal.curr)
+		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
@@ -709,12 +717,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_INSERT, plan.Node_UPDATE:
 		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		c.setAnalyzeCurrent(ss, c.anal.curr)
+		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
@@ -980,17 +989,25 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			TableType:     n.TableDef.GetTableType(),
 		}
 	}
+
+	// prcoess partitioned table
+	var partitionRelNames []string
+	if n.TableDef.Partition != nil {
+		partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+	}
+
 	s = &Scope{
 		Magic:    Remote,
 		NodeInfo: node,
 		DataSource: &Source{
-			Timestamp:    ts,
-			Attributes:   attrs,
-			TableDef:     tblDef,
-			RelationName: n.TableDef.Name,
-			SchemaName:   n.ObjRef.SchemaName,
-			AccountId:    n.ObjRef.PubAccountId,
-			Expr:         colexec.RewriteFilterExprList(n.FilterList),
+			Timestamp:              ts,
+			Attributes:             attrs,
+			TableDef:               tblDef,
+			RelationName:           n.TableDef.Name,
+			PartitionRelationNames: partitionRelNames,
+			SchemaName:             n.ObjRef.SchemaName,
+			AccountId:              n.ObjRef.PubAccountId,
+			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
@@ -1663,6 +1680,9 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 		})
 	}
 
+	// all join's first flag will setting in newLeftScope and newRightScope
+	// so we set it to false now
+	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1674,7 +1694,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	return rs
 }
 
-func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
@@ -1692,21 +1712,11 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
 
-	for i := range s.RemoteReceivRegInfos {
-		op := &s.RemoteReceivRegInfos[i]
-		if op.Idx == 0 {
-			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Idx:      0,
-				Uuid:     op.Uuid,
-				FromAddr: op.FromAddr,
-			})
-			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
-		}
-	}
+	remoteReceivRegInfosTransplant(s, rs, 0, 0)
 	return rs
 }
 
-func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
@@ -1724,19 +1734,27 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
 
-	for i := range s.RemoteReceivRegInfos {
-		op := &s.RemoteReceivRegInfos[i]
-		if op.Idx == 1 {
-			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Idx:      0,
+	remoteReceivRegInfosTransplant(s, rs, 1, 0)
+	return rs
+}
+
+// Transplant the source's RemoteReceivRegInfos which index equal to sourceIdx to
+// target with new index targetIdx
+func remoteReceivRegInfosTransplant(source, target *Scope, sourceIdx, targetIdx int) {
+	i := 0
+	for i < len(source.RemoteReceivRegInfos) {
+		op := &source.RemoteReceivRegInfos[i]
+		if op.Idx == sourceIdx {
+			target.RemoteReceivRegInfos = append(target.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      targetIdx,
 				Uuid:     op.Uuid,
 				FromAddr: op.FromAddr,
 			})
-			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
+			source.RemoteReceivRegInfos = append(source.RemoteReceivRegInfos[:i], source.RemoteReceivRegInfos[i+1:]...)
+			continue
 		}
+		i++
 	}
-
-	return rs
 }
 
 // Number of cpu's available on the current machine
@@ -1805,6 +1823,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
+	isPartitionTable := false
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
@@ -1845,6 +1864,25 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 
+	if n.TableDef.Partition != nil {
+		isPartitionTable = true
+		partitionInfo := n.TableDef.Partition
+		partitionNum := int(partitionInfo.PartitionNum)
+		partitionTableNames := partitionInfo.PartitionTableNames
+		for i := 0; i < partitionNum; i++ {
+			partTableName := partitionTableNames[i]
+			subrelation, err := db.Relation(ctx, partTableName)
+			if err != nil {
+				return nil, err
+			}
+			subranges, err := subrelation.Ranges(ctx, expr)
+			if err != nil {
+				return nil, err
+			}
+			ranges = append(ranges, subranges[1:]...)
+		}
+	}
+
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
@@ -1856,14 +1894,27 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
-			nodes[i] = engine.Node{
-				Rel:  rel,
-				Id:   node.Id,
-				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+			if isPartitionTable {
+				nodes[i] = engine.Node{
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
+			} else {
+				nodes[i] = engine.Node{
+					Rel:  rel,
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
 			}
+
 		}
 		return nodes, nil
+	}
+
+	if isPartitionTable {
+		rel = nil
 	}
 
 	// In fact, the first element of Ranges is always a memory table.
@@ -1935,7 +1986,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
-
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
