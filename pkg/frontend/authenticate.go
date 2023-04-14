@@ -369,7 +369,7 @@ const (
 
 	moCatalog = "mo_catalog"
 
-	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatbility_mode_temp_db"
+	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatibility_mode_temp_db"
 )
 
 type objectType int
@@ -707,33 +707,33 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                    0,
-		"mo_account":                 0,
-		"mo_role":                    0,
-		"mo_user_grant":              0,
-		"mo_role_grant":              0,
-		"mo_role_privs":              0,
-		"mo_user_defined_function":   0,
-		"mo_mysql_compatbility_mode": 0,
-		catalog.AutoIncrTableName:    0,
+		"mo_user":                     0,
+		"mo_account":                  0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_mysql_compatibility_mode": 0,
+		catalog.AutoIncrTableName:     0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                0,
-		"mo_tables":                  0,
-		"mo_columns":                 0,
-		"mo_account":                 0,
-		"mo_user":                    0,
-		"mo_role":                    0,
-		"mo_user_grant":              0,
-		"mo_role_grant":              0,
-		"mo_role_privs":              0,
-		"mo_user_defined_function":   0,
-		"mo_stored_procedure":        0,
-		"mo_mysql_compatbility_mode": 0,
-		catalog.AutoIncrTableName:    0,
-		"mo_indexes":                 0,
-		"mo_pubs":                    0,
+		"mo_database":                 0,
+		"mo_tables":                   0,
+		"mo_columns":                  0,
+		"mo_account":                  0,
+		"mo_user":                     0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
+		"mo_mysql_compatibility_mode": 0,
+		catalog.AutoIncrTableName:     0,
+		"mo_indexes":                  0,
+		"mo_pubs":                     0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
@@ -831,7 +831,7 @@ var (
 				database_collation varchar(64),
 				primary key(function_id)
 			);`,
-		`create table mo_mysql_compatbility_mode(
+		`create table mo_mysql_compatibility_mode(
 				configuration_id int auto_increment,
 				account_name varchar(300),
 				dat_name     varchar(5000),
@@ -879,7 +879,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
-		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 	}
 	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
@@ -887,7 +887,7 @@ var (
 
 	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
 
-	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_name,
 		dat_name,
 		configuration) values ("%s","%s",%s);`
@@ -1244,20 +1244,20 @@ const (
 	// delete stored procedure from mo_user_defined_function
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
-	// delete a tuple from mo_mysql_compatbility_mode when drop a database
-	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+	// delete a tuple from mo_mysql_compatibility_mode when drop a database
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
 
 	getDbName = `select datname from mo_catalog.mo_database where datname = "%s";`
 
-	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
 
-	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
 
-	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
+	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s";`
 
-	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -3181,7 +3181,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 5 : drop table mo_role_grant
 	//step 6 : drop table mo_role_privs
 	//step 7 : drop table mo_user_defined_function
-	//step 8 : drop table mo_mysql_compatbility_mode
+	//step 8 : drop table mo_mysql_compatibility_mode
 	//step 9 : drop table %!%mo_increment_columns
 	for _, sql = range getSqlForDropAccount() {
 		err = bh.Exec(deleteCtx, sql)
@@ -6340,7 +6340,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
-	//step6: add new entries to the mo_compatbility_mode
+	//step6: add new entries to the mo_compatibility_mode
 	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
@@ -6582,7 +6582,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		goto handleFailed
 	}
 
-	//step2.Add new entries to the mo_mysql_compatbility_mode when create a new account
+	//step2.Add new entries to the mo_mysql_compatibility_mode when create a new account
 	// configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	// sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	// err = bh.Exec(ctx, sql)
@@ -6690,7 +6690,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
-	//step6: add new entries to the mo_mysql_compatbility_mode
+	//step6: add new entries to the mo_mysql_compatibility_mode
 	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
@@ -7310,7 +7310,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		goto handleFailed
 	}
 
-	//step2: update the mo_mysql_compatbility_mode of that database
+	//step2: update the mo_mysql_compatibility_mode of that database
 	sql, err = getSqlForUpdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname)
 	if err != nil {
 		goto handleFailed
