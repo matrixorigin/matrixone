@@ -218,4 +218,14 @@ drop table t1;
 create table t1(a datetime);
 insert into t1 values("9999-12-31 23:59:59.999999");
 
+set time_zone = '+8:00';
+drop table if exists t1;
+create table t1(t datetime(6));
+insert into t1 values('2020-01-01 23:59:59.999999'),('2021-02-03 04:05:06.070809');
+select t + 1 from t1;
+select t - 1 from t1;
+select t * 10 from t1;
+select t / 10 from t1;
+select t % 5 from t1;
+
 set @@time_zone='+5:99';
