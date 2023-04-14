@@ -172,12 +172,3 @@ func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 		}
 	}
 }
-
-func (ctr *container) cleanEqVectors(mp *mpool.MPool) {
-	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].needFree && ctr.buildEqEvecs[i].vec != nil {
-			ctr.buildEqEvecs[i].vec.Free(mp)
-			ctr.buildEqEvecs[i].vec = nil
-		}
-	}
-}
