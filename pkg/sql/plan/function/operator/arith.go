@@ -227,3 +227,21 @@ func ModInt[T constraints.Signed](args []*vector.Vector, proc *process.Process) 
 func ModFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, *args[0].GetType(), mod.NumericModFloat[T])
 }
+
+func ModDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := args[0].GetType().Scale
+	if scale < args[1].GetType().Scale {
+		scale = args[1].GetType().Scale
+	}
+	resultTyp := types.New(types.T_decimal64, 18, scale)
+	return Arith[types.Decimal64, types.Decimal64](args, proc, resultTyp, mod.Decimal64VecMod)
+}
+
+func ModDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	scale := args[0].GetType().Scale
+	if scale < args[1].GetType().Scale {
+		scale = args[1].GetType().Scale
+	}
+	resultTyp := types.New(types.T_decimal128, 38, scale)
+	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, mod.Decimal128VecMod)
+}
