@@ -1017,7 +1017,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
-			if types.T(args[0].Typ.Id).IsString() {
+			if types.T(args[0].Typ.Id).IsMySQLString() {
 				if exprC, ok := args[0].Expr.(*plan.Expr_C); ok {
 					sval := exprC.C.Value.(*plan.Const_Sval)
 					tp := judgeUnixTimestampReturnType(sval.Sval)
@@ -1039,7 +1039,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		tp := types.T(args[0].Typ.Id)
 		switch {
-		case tp.IsString(), tp.IsInteger():
+		case tp.IsMySQLString(), tp.IsInteger():
 		default:
 			targetTp := types.T_varchar.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetTp), false)

@@ -118,7 +118,7 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 		// CHAR, VARCHAR, BINARY, and VARBINARY
 		// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 		t := types.T(columnsExpr[i].Typ.Id)
-		if !t.IsInteger() && !t.IsString() && !t.IsDateRelate() {
+		if !t.IsInteger() && !t.IsMySQLString() && !t.IsDateRelate() {
 			return moerr.NewSyntaxError(ctx,
 				"column %s type %s is not allowed in partition clause", tree.String(column, dialect.MYSQL), t.String())
 		}

@@ -105,7 +105,7 @@ func generalInternalType(funName string, ivecs []*vector.Vector, proc *process.P
 
 // 'internal_char_lengh' function operator
 func getTypeCharLength(typ types.Type) (bool, int32) {
-	if typ.Oid.IsString() {
+	if typ.Oid.IsMySQLString() {
 		return true, typ.Width
 	} else {
 		return false, -1
@@ -114,7 +114,7 @@ func getTypeCharLength(typ types.Type) (bool, int32) {
 
 // 'internal_char_size' function operator
 func getTypeCharSize(typ types.Type) (bool, int32) {
-	if typ.Oid.IsString() {
+	if typ.Oid.IsMySQLString() {
 		return true, typ.GetSize() * typ.Width
 	} else {
 		return false, -1
