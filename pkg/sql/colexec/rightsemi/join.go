@@ -78,7 +78,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			return false, nil
+			continue
 
 		case SendLast:
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
@@ -166,11 +166,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	analyze.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
-	}
 
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
@@ -212,8 +207,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-	analyze.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
 	return nil
 }
 
