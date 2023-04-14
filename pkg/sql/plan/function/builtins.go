@@ -1945,13 +1945,13 @@ var builtins = map[int]Functions{
 			if len(inputs) < 2 {
 				return wrongFunctionParameters, nil
 			}
-			if inputs[0] != types.T_json && !types.IsString(inputs[0]) && inputs[0] != types.T_any { //any: null scalar
+			if inputs[0] != types.T_json && !inputs[0].IsMySQLString() && inputs[0] != types.T_any { //any: null scalar
 				return wrongFunctionParameters, nil
 			}
 			ts = make([]types.T, len(inputs))
 			ts[0] = inputs[0]
 			for i := 1; i < len(inputs); i++ {
-				if !types.IsString(inputs[i]) && inputs[i] != types.T_any {
+				if !inputs[i].IsMySQLString() && inputs[i] != types.T_any {
 					ts[i] = types.T_varchar
 					continue
 				}
