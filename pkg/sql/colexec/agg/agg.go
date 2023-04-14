@@ -73,7 +73,7 @@ func (a *UnaryAgg[T1, T2]) InputTypes() []types.Type {
 }
 
 func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
-	if a.otyp.IsString() {
+	if a.otyp.IsVarlen() {
 		if len(a.vs) == 0 {
 			a.es = make([]bool, 0, size)
 			a.vs = make([]T2, 0, size)
@@ -122,7 +122,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
-	if vec.GetType().IsString() {
+	if vec.GetType().IsVarlen() {
 		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
 	} else {
 		a.vs[i], a.es[i] = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
@@ -133,7 +133,7 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
 	constNull := vec.IsConstNull()
-	if vec.GetType().IsString() {
+	if vec.GetType().IsVarlen() {
 		for i := range os {
 			hasNull := constNull || vec.GetNulls().Contains(uint64(i)+uint64(start))
 			if vps[i] == 0 {
@@ -202,13 +202,13 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		if vec.IsConstNull() {
 			var v T1
 			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zsum, a.es[i], true)
-		} else if vec.GetType().IsString() {
+		} else if vec.GetType().IsVarlen() {
 			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zsum, a.es[i], false)
 		} else {
 			a.vs[i], a.es[i] = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], zsum, a.es[i], false)
 		}
 		return nil
-	} else if vec.GetType().IsString() {
+	} else if vec.GetType().IsVarlen() {
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
@@ -266,7 +266,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 			}
 		}
 	}
-	if a.otyp.IsString() {
+	if a.otyp.IsVarlen() {
 		vec := vector.NewVec(a.otyp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
@@ -324,7 +324,7 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		IsCount:    a.isCount,
 	}
 	switch {
-	case types.IsString(a.otyp.Oid):
+	case a.otyp.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getUnaryAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -367,7 +367,7 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 func setAggValues[T1, T2 any](agg any, typ types.Type) {
 	switch {
-	case types.IsString(typ.Oid):
+	case typ.Oid.IsMySQLString():
 		a := agg.(*UnaryAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))

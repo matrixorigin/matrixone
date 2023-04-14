@@ -105,7 +105,7 @@ func generalInternalType(funName string, ivecs []*vector.Vector, proc *process.P
 
 // 'internal_char_lengh' function operator
 func getTypeCharLength(typ types.Type) (bool, int32) {
-	if types.IsString(typ.Oid) {
+	if typ.Oid.IsMySQLString() {
 		return true, typ.Width
 	} else {
 		return false, -1
@@ -114,7 +114,7 @@ func getTypeCharLength(typ types.Type) (bool, int32) {
 
 // 'internal_char_size' function operator
 func getTypeCharSize(typ types.Type) (bool, int32) {
-	if types.IsString(typ.Oid) {
+	if typ.Oid.IsMySQLString() {
 		return true, typ.GetSize() * typ.Width
 	} else {
 		return false, -1
@@ -123,7 +123,7 @@ func getTypeCharSize(typ types.Type) (bool, int32) {
 
 // 'internal_numeric_precision' function operator
 func getTypeNumericPrecision(typ types.Type) (bool, int32) {
-	if types.IsDecimal(typ.Oid) {
+	if typ.Oid.IsDecimal() {
 		return true, typ.Width
 	} else {
 		return false, -1
@@ -132,7 +132,7 @@ func getTypeNumericPrecision(typ types.Type) (bool, int32) {
 
 // 'internal_numeric_scale' function operator
 func getTypeNumericScale(typ types.Type) (bool, int32) {
-	if types.IsDecimal(typ.Oid) {
+	if typ.Oid.IsDecimal() {
 		return true, typ.Scale
 	} else {
 		return false, -1

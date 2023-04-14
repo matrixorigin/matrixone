@@ -219,7 +219,7 @@ func initTypeCheckRelated() {
 				if t1 == t2 || t2 == types.T_any {
 					continue
 				}
-				if types.IsDecimal(t2) {
+				if t2.IsDecimal() {
 					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, types.T_float64, types.T_float64})
 					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, types.T_float64, types.T_float64})
 				} else {
@@ -455,7 +455,7 @@ func initTypeCheckRelated() {
 	{ // string
 		for _, t := range strings {
 			for _, typ := range all {
-				if !types.IsDecimal(typ) {
+				if !typ.IsDecimal() {
 					castTable[t][typ] = true
 				}
 			}
