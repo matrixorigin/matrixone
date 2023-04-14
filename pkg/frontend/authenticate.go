@@ -775,6 +775,7 @@ var (
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
+				version bigint unsigned default 0,
 				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(
@@ -998,11 +999,13 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,suspended_time from mo_catalog.mo_account where account_name = "%s";`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s";`
 
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
 
 	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
+
+	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = "%s" where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
@@ -1373,6 +1376,14 @@ func getSqlForUpdateStatusOfAccount(ctx context.Context, status, timestamp, acco
 		return "", err
 	}
 	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account), nil
+}
+
+func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, timestamp, account string, version uint64) (string, error) {
+	err := inputNameIsInvalid(ctx, status, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, timestamp, account), nil
 }
 
 func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (string, error) {
@@ -2315,6 +2326,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
+	var version uint64
 	var accountExist bool
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
@@ -2399,6 +2411,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			if err != nil {
 				goto handleFailed
 			}
+			version, err = erArray[0].GetUint64(ctx, i, 3)
+			if err != nil {
+				goto handleFailed
+			}
 		}
 		accountExist = true
 	} else {
@@ -2465,14 +2481,26 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 		//Option 3: suspend or resume the account
 		if aa.StatusOption.Exist {
-			sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
-			if err != nil {
-				goto handleFailed
-			}
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				goto handleFailed
+			if aa.StatusOption.Option == tree.AccountStatusSuspend {
+				sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+				if err != nil {
+					goto handleFailed
+				}
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+			} else if aa.StatusOption.Option == tree.AccountStatusOpen {
+				sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxInt64)
+				if err != nil {
+					goto handleFailed
+				}
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
 			}
 		}
 	}
