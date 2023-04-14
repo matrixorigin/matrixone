@@ -980,20 +980,21 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
-	if cnt == 0 {
+	addCnt := 0
+	for i := range flags {
+		addCnt += int(flags[i])
+	}
+
+	if addCnt == 0 {
 		return nil
 	}
 
-	if err := extend(v, cnt, mp); err != nil {
+	if err := extend(v, addCnt, mp); err != nil {
 		return err
 	}
 
 	if w.IsConst() {
 		oldLen := v.length
-		addCnt := 0
-		for i := range flags {
-			addCnt += int(flags[i])
-		}
 		v.length += addCnt
 		if w.IsConstNull() {
 			nulls.AddRange(v.GetNulls(), uint64(oldLen), uint64(v.length))
@@ -1509,7 +1510,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
 	w.setupColFromData()
-	if v.typ.IsString() {
+	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
 	w.cantFreeData = true
@@ -1530,7 +1531,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
 		w.setupColFromData()
-		if v.typ.IsString() {
+		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
 		}
