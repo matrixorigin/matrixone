@@ -319,7 +319,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -2583,7 +2583,7 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
@@ -2591,7 +2591,7 @@ alter_database_config_stmt:
             IsAccountLevel: false,
         }
      }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
@@ -9106,7 +9106,7 @@ equal_opt:
 //|   COLUMN_NUMBER
 //|   TABLE_VALUES
 //|   RETURNS
-//|   MYSQL_COMPATBILITY_MODE
+//|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT
