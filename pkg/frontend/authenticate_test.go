@@ -6002,7 +6002,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6049,7 +6049,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6183,7 +6183,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, "0", "open", 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6191,7 +6191,9 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
-		bh.sql2result[sql] = nil
+		bh.sql2result[sql] = newMrsForCheckTenant([][]interface{}{
+			{0, 0, 0, 0},
+		})
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -6305,7 +6307,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6346,7 +6348,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -7046,8 +7048,19 @@ func newMrsForCheckTenant(rows [][]interface{}) *MysqlResultSet {
 	col2 := &MysqlColumn{}
 	col2.SetName("account_name")
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("status")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("version")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONG)
+
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
