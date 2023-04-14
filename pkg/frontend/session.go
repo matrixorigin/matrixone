@@ -356,22 +356,42 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 }
 
 func (ses *Session) Close() {
+	ses.mrs = nil
+	ses.data = nil
 	ses.ep = nil
+	ses.txnHandler = nil
+	ses.txnCompileCtx = nil
+	ses.storage = nil
+	ses.sql = ""
+	ses.sysVars = nil
+	ses.userDefinedVars = nil
+	ses.gSysVars = nil
+	ses.prepareStmts = nil
+	ses.requestCtx = nil
+	ses.connectCtx = nil
+	ses.allResultSet = nil
+	ses.tenant = nil
+	ses.priv = nil
 	ses.errInfo.codes = nil
 	ses.errInfo.msgs = nil
 	ses.errInfo = nil
 	ses.cache.invalidate()
 	ses.cache = nil
-	ses.txnCompileCtx = nil
-	ses.txnHandler = nil
-	ses.sysVars = nil
-	ses.userDefinedVars = nil
-	ses.gSysVars = nil
-	ses.prepareStmts = nil
-	ses.seqCurValues = nil
-	ses.sqlHelper = nil
+	ses.debugStr = ""
+	ses.sqlSourceType = nil
+	ses.tempTablestorage = nil
+	ses.tStmt = nil
+	ses.ast = nil
+	ses.rs = nil
+	ses.QueryId = nil
+	ses.p = nil
+	ses.planCache.clean()
+	ses.planCache = nil
 	ses.cleanCache()
 	ses.statsCache = nil
+	ses.seqCurValues = nil
+	ses.seqLastValue = ""
+	ses.sqlHelper = nil
 	// Clean sequence record data.
 	ses.seqCurValues = nil
 }
@@ -406,16 +426,7 @@ func (bgs *BackgroundSession) Close() {
 	}
 
 	if bgs.Session != nil {
-		bgs.Session.ep = nil
-		bgs.Session.errInfo.codes = nil
-		bgs.Session.errInfo.msgs = nil
-		bgs.Session.errInfo = nil
-		bgs.Session.cache.invalidate()
-		bgs.Session.cache = nil
-		bgs.Session.txnCompileCtx = nil
-		bgs.Session.txnHandler = nil
-		bgs.Session.gSysVars = nil
-		bgs.Session.statsCache = nil
+		bgs.Session.Close()
 	}
 	bgs = nil
 }
