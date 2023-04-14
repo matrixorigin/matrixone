@@ -213,16 +213,16 @@ func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, er
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
-func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error) {
+func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, isNull bool, err error) {
 	id, row, err := h.GetByFilter(filter)
 	if err != nil {
 		return
 	}
-	v, err = h.GetValue(id, row, uint16(col))
+	v, isNull, err = h.GetValue(id, row, uint16(col))
 	return
 }
 
-func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {
+func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
 	id, row, err := h.table.GetByFilter(filter)
 	if err != nil {
 		return
@@ -235,21 +235,18 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 			continue
 		}
 		var colVal any
+		var colValIsNull bool
 		if int(col) == def.Idx {
 			colVal = v
+			colValIsNull = isNull
 		} else {
-			colVal, err = h.table.GetValue(id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
 		}
 		vec := containers.MakeVector(def.Type)
-		if types.IsNull(colVal) {
-			vec.Append(colVal, true)
-		} else {
-			vec.Append(colVal, false)
-		}
-
+		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
@@ -298,7 +295,7 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end, dt)
 }
 
-func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, error) {
+func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
 	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
@@ -308,7 +305,7 @@ func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, error) {
 	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, uint16(col))
 }
 
-func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, error) {
+func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, bool, error) {
 	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
 }
 
