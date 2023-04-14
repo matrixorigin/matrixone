@@ -133,10 +133,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		columnCount = w.blocks[0].meta.GetColumnCount()
 	}
 
-	objectHeader := Header{
-		magic:   Magic,
-		version: Version,
-	}
+	objectHeader := BuildHeader()
 
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(columnCount)
@@ -168,7 +165,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	extent := NewExtent(0, HeaderSize, start, start)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
-	objectHeader.metaExtent = extent
+	objectHeader.SetLocation(extent)
 
 	for y, block := range w.blocks {
 		for i := range block.data {
@@ -211,7 +208,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// begin write
 
 	// writer object header
-	_, n, err := w.buffer.Write(objectHeader.Marshal())
+	_, n, err := w.buffer.Write(objectHeader)
 	if err != nil {
 		return nil, err
 	}

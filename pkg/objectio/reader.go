@@ -239,14 +239,14 @@ func (r *ObjectReader) ReadAllMeta(
 	if err != nil {
 		return nil, err
 	}
-	return r.ReadMeta(ctx, header.metaExtent, m)
+	return r.ReadMeta(ctx, header.Location(), m)
 }
 
-func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (*Header, error) {
+func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (Header, error) {
 	return r.readHeaderAndUnMarshal(ctx, HeaderSize, m)
 }
 
-func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m *mpool.MPool) (*Header, error) {
+func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m *mpool.MPool) (Header, error) {
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
 		Entries: []fileservice.IOEntry{
@@ -263,8 +263,7 @@ func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m
 							return nil, 0, err
 						}
 					}
-					header := DecodeHeader(data)
-					return header, int64(len(data)), nil
+					return data, int64(len(data)), nil
 				},
 			},
 		},
@@ -275,7 +274,7 @@ func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m
 		return nil, err
 	}
 
-	return data.Entries[0].Object.(*Header), nil
+	return data.Entries[0].Object.([]byte), nil
 }
 
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)

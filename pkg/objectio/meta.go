@@ -248,20 +248,23 @@ func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
 	return bf[offset : offset+length]
 }
 
-type Header struct {
-	magic      uint64
-	version    uint16
-	metaExtent Extent
-	checksum   uint32
-	dummy      [37]byte
+type Header []byte
+
+func BuildHeader() Header {
+	var buf [HeaderSize]byte
+	magic := uint64(Magic)
+	version := uint16(Version)
+	copy(buf[:8], types.EncodeUint64(&magic))
+	copy(buf[8:8+2], types.EncodeUint16(&version))
+	return buf[:]
 }
 
-func (h Header) Marshal() []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&h)), HeaderSize)
+func (h Header) SetLocation(location Extent) {
+	copy(h[8+2:8+2+ExtentSize], location)
 }
 
-func DecodeHeader(data []byte) *Header {
-	return (*Header)(unsafe.Pointer(&data[0]))
+func (h Header) Location() Extent {
+	return Extent(h[8+2 : 8+2+ExtentSize])
 }
 
 type Footer struct {
@@ -274,13 +277,4 @@ type Footer struct {
 
 func (f Footer) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&f)), FooterSize)
-}
-
-func (f *Footer) Unmarshal(data []byte) error {
-	footer := *(*Footer)(unsafe.Pointer(&data[0]))
-	f.checksum = footer.checksum
-	f.metaExtent = footer.metaExtent
-	f.version = footer.version
-	f.magic = footer.magic
-	return nil
 }
