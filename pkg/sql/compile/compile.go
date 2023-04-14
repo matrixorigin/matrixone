@@ -1694,7 +1694,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	return rs
 }
 
-func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
@@ -1716,7 +1716,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
