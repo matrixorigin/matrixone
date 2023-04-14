@@ -1017,7 +1017,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
-			if types.IsString(types.T(args[0].Typ.Id)) {
+			if types.T(args[0].Typ.Id).IsMySQLString() {
 				if exprC, ok := args[0].Expr.(*plan.Expr_C); ok {
 					sval := exprC.C.Value.(*plan.Const_Sval)
 					tp := judgeUnixTimestampReturnType(sval.Sval)
@@ -1039,7 +1039,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		tp := types.T(args[0].Typ.Id)
 		switch {
-		case types.IsString(tp), types.IsInteger(tp):
+		case tp.IsMySQLString(), tp.IsInteger():
 		default:
 			targetTp := types.T_varchar.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetTp), false)
@@ -1167,7 +1167,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
-				if argsType[idx].Oid == castType.Oid && types.IsDecimal(castType.Oid) && argsType[idx].Scale == castType.Scale {
+				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
 				}
 				typ := makePlan2Type(&castType)

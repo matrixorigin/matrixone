@@ -1127,6 +1127,10 @@ func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUs
 	return doDropUser(ctx, mce.GetSession(), du)
 }
 
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+	return doAlterUser(ctx, mce.GetSession(), au)
+}
+
 // handleCreateRole creates the new role
 func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.CreateRole) error {
 	ses := mce.GetSession()
@@ -2589,7 +2593,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.AlterUser: //TODO
+			selfHandle = true
 			ses.InvalidatePrivilegeCache()
+			if err = mce.handleAlterUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateRole:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
