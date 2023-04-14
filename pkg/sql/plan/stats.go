@@ -30,6 +30,7 @@ import (
 
 const (
 	HashMapSizeForBucket = 250000
+	MAXShuffleDOP        = 16
 )
 
 // stats cache is small, no need to use LRU for now

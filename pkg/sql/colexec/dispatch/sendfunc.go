@@ -55,6 +55,9 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 	lenRegs := len(ap.LocalRegs)
 	lenVecs := len(bat.Vecs)
 	preAllocLen := bat.Length() / lenRegs
+	if preAllocLen < 1024 {
+		preAllocLen = 1024
+	}
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels := make([][]int32, lenRegs)
 	lenShuffledSels := make([]int, lenRegs)
@@ -63,10 +66,6 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 		sels[i] = make([]int32, preAllocLen)
 		for j := range shuffledBats[i].Vecs {
 			shuffledBats[i].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
-			err := shuffledBats[i].Vecs[j].PreExtend(preAllocLen, proc.Mp())
-			if err != nil {
-				return false, err
-			}
 		}
 	}
 
