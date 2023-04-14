@@ -41,7 +41,7 @@ type BlockReader struct {
 	manager *IoPipeline
 }
 
-type fetch struct {
+type fetchParams struct {
 	name   string
 	meta   objectio.Extent
 	idxes  []uint16
@@ -92,7 +92,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	if r.meta.End() == 0 {
 		return bat, nil
 	}
-	proc := fetch{
+	proc := fetchParams{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxes,
@@ -288,26 +288,26 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 }
 
 // The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(pref prefetch) error {
-	return pipeline.Prefetch(pref)
+func PrefetchWithMerged(params prefetchParams) error {
+	return pipeline.Prefetch(params)
 }
 
 func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
 
-	pref, err := BuildPrefetch(service, key)
+	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	pref.AddBlock(idxes, ids)
-	return pipeline.Prefetch(pref)
+	params.AddBlock(idxes, ids)
+	return pipeline.Prefetch(params)
 }
 
 func PrefetchMeta(service fileservice.FileService, key objectio.Location) error {
-	pref, err := BuildPrefetch(service, key)
+	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	return pipeline.Prefetch(pref)
+	return pipeline.Prefetch(params)
 }
 
 func PrefetchFile(service fileservice.FileService, name string) error {
@@ -319,13 +319,13 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 	if err != nil {
 		return err
 	}
-	pref := buildPrefetchNew(reader)
+	params := buildPrefetchParams2(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
 			idxes[a] = a
 		}
-		pref.AddBlock(idxes, []uint16{bs[i].GetID()})
+		params.AddBlock(idxes, []uint16{bs[i].GetID()})
 	}
-	return PrefetchWithMerged(pref)
+	return PrefetchWithMerged(params)
 }

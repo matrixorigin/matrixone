@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
@@ -330,7 +331,7 @@ func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*p
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
-		pref, err := BuildPrefetch(service, infos[i][0].MetaLoc)
+		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLoc)
 		if err != nil {
 			return err
 		}

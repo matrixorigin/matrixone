@@ -484,7 +484,7 @@ func (data *CheckpointData) PrefetchFrom(
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 
-	pref, err := blockio.BuildPrefetch(service, key)
+	pref, err := blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
