@@ -653,7 +653,10 @@ func IsFloat(t T) bool {
 
 // isString: return true if the types.T is string type
 func IsString(t T) bool {
-	return t.FixedLength() < 0
+	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
+		return true
+	}
+	return false
 }
 
 func IsDateRelate(t T) bool {
