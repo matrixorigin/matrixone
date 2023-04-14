@@ -525,3 +525,11 @@ func ValidDatetime(year int32, month, day uint8) bool {
 func (dt Datetime) SecsSinceUnixEpoch() int64 {
 	return (int64(dt) - unixEpochMicroSecs) / microSecsPerSec
 }
+
+func (dt Datetime) ToDecimal64() Decimal64 {
+	return Decimal64(int64(dt) - unixEpochMicroSecs)
+}
+
+func (dt Datetime) ToDecimal128() Decimal128 {
+	return Decimal128{uint64(int64(dt) - unixEpochMicroSecs), 0}
+}

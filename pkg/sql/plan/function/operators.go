@@ -3210,6 +3210,30 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_float64,
 				Fn:        operator.ModFloat[float64],
 			},
+			{
+				Index: 10,
+				Args:  []types.T{types.T_decimal64, types.T_decimal64},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if scale < parameters[1].Scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_decimal64, 18, scale)
+				},
+				Fn: operator.ModDecimal64,
+			},
+			{
+				Index: 11,
+				Args:  []types.T{types.T_decimal128, types.T_decimal128},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if scale < parameters[1].Scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_decimal128, 38, scale)
+				},
+				Fn: operator.ModDecimal128,
+			},
 		},
 	},
 
