@@ -65,11 +65,11 @@ func (o ObjectName) Equal(a ObjectName) bool {
 	return bytes.Equal(o, a)
 }
 
-var NameQueryResult ObjectName
-var NameCheckPoint ObjectName
-var NameDiskCleaner ObjectName
-var NameETL ObjectName
-var NameNormal ObjectName
+var NameQueryResult [NameStringOff]byte
+var NameCheckPoint [NameStringOff]byte
+var NameDiskCleaner [NameStringOff]byte
+var NameETL [NameStringOff]byte
+var NameNormal [NameStringOff]byte
 
 func init() {
 	copy(NameQueryResult[:], "Query_ResultXXXX")
@@ -80,21 +80,21 @@ func init() {
 }
 
 func BuildQueryResultName() ObjectName {
-	return NameQueryResult
+	return NameQueryResult[:]
 }
 
 func BuildCheckpointName() ObjectName {
-	return NameCheckPoint
+	return NameCheckPoint[:]
 }
 
 func BuildDiskCleanerName() ObjectName {
-	return NameDiskCleaner
+	return NameDiskCleaner[:]
 }
 
 func BuildETLName() ObjectName {
-	return NameETL
+	return NameETL[:]
 }
 
 func BuildNormalName() ObjectName {
-	return NameNormal
+	return NameNormal[:]
 }

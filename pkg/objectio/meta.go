@@ -15,7 +15,6 @@
 package objectio
 
 import (
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +26,7 @@ const HeaderSize = 64
 type ObjectMeta []byte
 
 func BuildObjectMeta(count uint16) ObjectMeta {
-	length := headerLen + uint32(count)*objectColumnMetaLen
+	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	return buf[:]
 }
@@ -36,17 +35,17 @@ func (o ObjectMeta) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
-func (o ObjectMeta) ObjectColumnMeta(idx uint16) ObjectColumnMeta {
+func (o ObjectMeta) ObjectColumnMeta(idx uint16) ColumnMeta {
 	return GetObjectColumnMeta(idx, o[headerLen:])
 }
 
-func (o ObjectMeta) AddColumnMeta(idx uint16, col ObjectColumnMeta) {
-	offset := headerLen + uint32(idx)*objectColumnMetaLen
-	copy(o[offset:offset+objectColumnMetaLen], col)
+func (o ObjectMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
+	offset := headerLen + uint32(idx)*colMetaLen
+	copy(o[offset:offset+colMetaLen], col)
 }
 
 func (o ObjectMeta) Length() uint32 {
-	return headerLen + uint32(o.BlockHeader().ColumnCount())*objectColumnMetaLen
+	return headerLen + uint32(o.BlockHeader().ColumnCount())*colMetaLen
 }
 
 func (o ObjectMeta) BlockCount() uint32 {
@@ -107,68 +106,32 @@ func (oh BlockIndex) Length() uint32 {
 	return oh.BlockCount()*posLen + blockCountLen
 }
 
-const (
-	ndvLen              = 4
-	nullCntOff          = ndvLen
-	nullCntLen          = 4
-	oZoneMapOff         = nullCntOff + nullCntLen
-	oZoneMapLen         = 64
-	objectColumnMetaLen = oZoneMapOff + oZoneMapLen
-)
-
-// ObjectColumnMeta len 4 + 4 + 64 = 72 bytes
-type ObjectColumnMeta []byte
-
-func GetObjectColumnMeta(idx uint16, data []byte) ObjectColumnMeta {
-	offset := uint32(idx) * objectColumnMetaLen
-	return data[offset : offset+objectColumnMetaLen]
+func GetObjectColumnMeta(idx uint16, data []byte) ColumnMeta {
+	offset := uint32(idx) * colMetaLen
+	return data[offset : offset+colMetaLen]
 }
 
-func BuildObjectColumnMeta() ObjectColumnMeta {
-	var buf [objectColumnMetaLen]byte
+func BuildObjectColumnMeta() ColumnMeta {
+	var buf [colMetaLen]byte
 	return buf[:]
 }
 
-func (om ObjectColumnMeta) Ndv() uint32 {
-	return types.DecodeUint32(om[:ndvLen])
-}
-
-func (om ObjectColumnMeta) SetNdv(cnt uint32) {
-	copy(om[:ndvLen], types.EncodeUint32(&cnt))
-}
-
-func (om ObjectColumnMeta) NullCnt() uint32 {
-	return types.DecodeUint32(om[nullCntOff : nullCntOff+nullCntLen])
-}
-
-func (om ObjectColumnMeta) SetNullCnt(cnt uint32) {
-	copy(om[nullCntOff:nullCntOff+nullCntLen], types.EncodeUint32(&cnt))
-}
-
-func (om ObjectColumnMeta) ZoneMap() ZoneMap {
-	return ZoneMap(om[oZoneMapOff : oZoneMapOff+oZoneMapLen])
-}
-
-func (om ObjectColumnMeta) SetZoneMap(zm []byte) {
-	copy(om[oZoneMapOff:oZoneMapOff+oZoneMapLen], zm)
-}
-
 const (
-	sequenceLen       = 2
-	tableIDLen        = 8
-	blockIDOff        = tableIDLen
-	blockIDLen        = types.BlockidSize
-	rowsOff           = blockIDOff + blockIDLen
-	rowsLen           = 4
-	columnCountOff    = rowsOff + rowsLen
-	columnCountLen    = 2
-	headerDummyOff    = columnCountOff + columnCountLen
-	headerDummyLen    = 18
-	metaLocationOff   = headerDummyOff + headerDummyLen
-	metaLocationLen   = ExtentSize
-	headerCheckSumOff = metaLocationOff + metaLocationLen
-	headerCheckSumLen = 4
-	headerLen         = headerCheckSumOff + headerCheckSumLen
+	sequenceLen     = 2
+	tableIDLen      = 8
+	blockIDOff      = tableIDLen
+	blockIDLen      = types.BlockidSize
+	rowsOff         = blockIDOff + blockIDLen
+	rowsLen         = 4
+	columnCountOff  = rowsOff + rowsLen
+	columnCountLen  = 2
+	headerDummyOff  = columnCountOff + columnCountLen
+	headerDummyLen  = 18
+	metaLocationOff = headerDummyOff + headerDummyLen
+	metaLocationLen = ExtentSize
+	bloomFilterOff  = metaLocationOff + metaLocationLen
+	bloomFilterLen  = ExtentSize
+	headerLen       = bloomFilterOff + bloomFilterLen
 )
 
 type BlockObject []byte
@@ -255,107 +218,34 @@ func (bh BlockHeader) SetMetaLocation(location Extent) {
 	copy(bh[metaLocationOff:metaLocationOff+metaLocationLen], location)
 }
 
+func (bh BlockHeader) BloomFilter() Extent {
+	return Extent(bh[bloomFilterOff : bloomFilterOff+bloomFilterLen])
+}
+
+func (bh BlockHeader) SetBloomFilter(location Extent) {
+	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
+}
+
 func (bh BlockHeader) IsEmpty() bool {
 	return len(bh) == 0
 }
 
-const (
-	typeLen            = 1
-	idxOff             = typeLen
-	idxLen             = 2
-	algOff             = idxOff + idxLen
-	algLen             = 1
-	locationOff        = algOff + algLen
-	locationLen        = ExtentSize
-	zoneMapOff         = locationOff + locationLen
-	zoneMapLen         = 64
-	bloomFilterOff     = zoneMapOff + zoneMapLen
-	bloomFilterLen     = ExtentSize
-	colMetaDummyOff    = bloomFilterOff + bloomFilterLen
-	colMetaDummyLen    = 32
-	colMetaChecksumOff = colMetaDummyOff + colMetaDummyLen
-	colMetaChecksumLen = 4
-	colMetaLen         = colMetaChecksumOff + colMetaChecksumLen
-)
+type BloomFilter []byte
 
-func GetColumnMeta(idx uint16, data []byte) ColumnMeta {
-	offset := headerLen + uint32(idx)*colMetaLen
-	return data[offset : offset+colMetaLen]
+func (bf BloomFilter) BlockCount() uint32 {
+	return types.DecodeUint32(bf[:blockCountLen])
 }
 
-type ColumnMeta []byte
-
-func BuildColumnMeta() ColumnMeta {
-	var buf [colMetaLen]byte
-	return buf[:]
+func (bf BloomFilter) SetBlockCount(cnt uint32) {
+	copy(bf[:blockCountLen], types.EncodeUint32(&cnt))
 }
 
-func SetColumnMetaType(meta ColumnMeta, t uint8) {
-	meta.setType(t)
-}
-
-func SetColumnMetaZoneMap(meta ColumnMeta, zm ZoneMap) {
-	meta.setZoneMap(zm)
-}
-
-func (cm ColumnMeta) String() string {
-	return fmt.Sprintf("type: %d, index: %d, alg: %d, dataloc: %v", cm.Type(), cm.Idx(), cm.Alg(), cm.Location())
-}
-
-func (cm ColumnMeta) Type() uint8 {
-	return types.DecodeUint8(cm[:typeLen])
-}
-
-func (cm ColumnMeta) setType(t uint8) {
-	copy(cm[:typeLen], types.EncodeUint8(&t))
-}
-
-func (cm ColumnMeta) Idx() uint16 {
-	return types.DecodeUint16(cm[idxOff : idxOff+idxLen])
-}
-
-func (cm ColumnMeta) setIdx(idx uint16) {
-	copy(cm[idxOff:idxOff+idxLen], types.EncodeUint16(&idx))
-}
-
-func (cm ColumnMeta) Alg() uint8 {
-	return types.DecodeUint8(cm[algOff : algOff+algLen])
-}
-
-func (cm ColumnMeta) setAlg(alg uint8) {
-	copy(cm[algOff:algOff+algLen], types.EncodeUint8(&alg))
-}
-
-func (cm ColumnMeta) Location() Extent {
-	return Extent(cm[locationOff : locationOff+locationLen])
-}
-
-func (cm ColumnMeta) setLocation(location Extent) {
-	copy(cm[locationOff:locationOff+locationLen], location)
-}
-
-func (cm ColumnMeta) ZoneMap() ZoneMap {
-	return ZoneMap(cm[zoneMapOff : zoneMapOff+zoneMapLen])
-}
-
-func (cm ColumnMeta) setZoneMap(zm ZoneMap) {
-	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm)
-}
-
-func (cm ColumnMeta) BloomFilter() Extent {
-	return Extent(cm[bloomFilterOff : bloomFilterOff+bloomFilterLen])
-}
-
-func (cm ColumnMeta) setBloomFilter(location Extent) {
-	copy(cm[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
-}
-
-func (cm ColumnMeta) Checksum() uint32 {
-	return types.DecodeUint32(cm[colMetaChecksumOff : colMetaChecksumOff+colMetaChecksumLen])
-}
-
-func (cm ColumnMeta) IsEmpty() bool {
-	return len(cm) == 0
+func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
+	offStart := blockCountLen + BlockID*posLen
+	offEnd := blockCountLen + BlockID*posLen + blockOffset
+	offset := types.DecodeUint32(bf[offStart:offEnd])
+	length := types.DecodeUint32(bf[offStart+blockLen : offEnd+blockLen])
+	return bf[offset : offset+length]
 }
 
 type Header struct {
@@ -370,12 +260,8 @@ func (h Header) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&h)), HeaderSize)
 }
 
-func (h *Header) Unmarshal(data []byte) {
-	header := *(*Header)(unsafe.Pointer(&data[0]))
-	h.magic = header.magic
-	h.version = header.version
-	h.metaExtent = header.metaExtent
-	h.checksum = header.checksum
+func DecodeHeader(data []byte) *Header {
+	return (*Header)(unsafe.Pointer(&data[0]))
 }
 
 type Footer struct {

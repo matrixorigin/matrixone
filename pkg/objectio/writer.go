@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"sync"
 
@@ -32,7 +33,7 @@ type ObjectWriter struct {
 	object   *Object
 	blocks   []blockData
 	totalRow uint32
-	colmeta  []ObjectColumnMeta
+	colmeta  []ColumnMeta
 	buffer   *ObjectBuffer
 	fileName string
 	lastId   uint32
@@ -42,7 +43,7 @@ type ObjectWriter struct {
 type blockData struct {
 	meta        BlockObject
 	data        [][]byte
-	bloomFilter map[uint16][]byte
+	bloomFilter []byte
 }
 
 type WriterType int8
@@ -107,22 +108,15 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 }
 
 func (w *ObjectWriter) UpdateBlockZM(blkIdx, colIdx int, zm ZoneMap) {
-	w.blocks[blkIdx].meta.ColumnMeta(uint16(colIdx)).setZoneMap(zm)
+	w.blocks[blkIdx].meta.ColumnMeta(uint16(colIdx)).SetZoneMap(zm)
 }
 
 func (w *ObjectWriter) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
-	dataLen := len(buf)
-	data := make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
-		return
-	}
-	extent := NewExtent(0, 0, uint32(len(data)), uint32(dataLen))
-	w.blocks[blkIdx].bloomFilter[uint16(colIdx)] = data
-	w.blocks[blkIdx].meta.ColumnMeta(uint16(colIdx)).setBloomFilter(extent)
+	w.blocks[blkIdx].bloomFilter = buf
 	return
 }
 
-func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ObjectColumnMeta) {
+func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ColumnMeta) {
 	w.totalRow = totalrow
 	w.colmeta = metas
 }
@@ -149,7 +143,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	// CHANGE ME
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
-	// objectMeta.BlockHeader().SetBlockID(blockCount)
+	sid := w.name.SegmentId()
+	blockid := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
+	objectMeta.BlockHeader().SetBlockID(&blockid)
 
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	objectMeta.BlockHeader().SetColumnCount(columnCount)
@@ -177,19 +173,41 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	for y, block := range w.blocks {
 		for i := range block.data {
 			location := w.blocks[y].meta.ColumnMeta(uint16(i)).Location()
+			logutil.Infof("location : %v", location.String())
 			location.SetOffset(start + HeaderSize)
 			w.blocks[y].meta.ColumnMeta(uint16(i)).setLocation(location)
-			logutil.Infof("meta: %v", w.blocks[y].meta.ColumnMeta(uint16(i)).String())
-			start += location.Length()
-		}
-		for idx := range block.bloomFilter {
-			location := w.blocks[y].meta.ColumnMeta(idx).BloomFilter()
-			location.SetOffset(start + HeaderSize)
-			w.blocks[y].meta.ColumnMeta(idx).setBloomFilter(location)
+			location = w.blocks[y].meta.ColumnMeta(uint16(i)).Location()
+			logutil.Infof("location2 : %v", location.String())
 			start += location.Length()
 		}
 	}
+	bloomFilter := new(bytes.Buffer)
+	bloomFilterStart := uint32(0)
+	bloomFilterIndex := BuildBlockIndex(blockCount)
+	bloomFilterIndex.SetBlockCount(blockCount)
+	bloomFilterStart += bloomFilterIndex.Length()
+	for i, block := range w.blocks {
+		n := uint32(len(block.bloomFilter))
+		bloomFilterIndex.SetBlockMetaPos(uint32(i), bloomFilterStart, n)
+		bloomFilterStart += n
+	}
+	bloomFilter.Write(bloomFilterIndex)
+	for _, block := range w.blocks {
+		bloomFilter.Write(block.bloomFilter)
+	}
+	dataLen := len(bloomFilter.Bytes())
+	bloomFilterData := make([]byte, lz4.CompressBlockBound(dataLen))
+	if bloomFilterData, err = compress.Compress(bloomFilter.Bytes(), bloomFilterData, compress.Lz4); err != nil {
+		return nil, err
+	}
+	bloomFilterExtent := NewExtent(compress.Lz4, start+HeaderSize, uint32(len(bloomFilterData)), uint32(dataLen))
+	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
+	logutil.Infof("blockid %v, eeeeeee %v", bloomFilterExtent.String(), blockid.String())
+	logutil.Infof("22222222 %v", objectMeta.BlockHeader().BloomFilter().String())
 
+	if w.name.Num() == 13 {
+		logutil.Infof("blockid1111 %v, eeeeeee %v", bloomFilterExtent.String(), blockid.String())
+	}
 	// begin write
 
 	// writer object header
@@ -197,7 +215,6 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-
 	// writer object metadata
 	_, n, err = w.buffer.Write(objectMeta)
 	if err != nil {
@@ -229,14 +246,16 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 				return nil, err
 			}
 		}
-		for _, data := range block.bloomFilter {
-			_, n, err = w.buffer.Write(data)
-			if err != nil {
-				return nil, err
-			}
-		}
 
 	}
+
+	// writer bloom filter
+	_, n, err = w.buffer.Write(bloomFilterData)
+	if err != nil {
+		return nil, err
+	}
+	length += n
+
 	// write footer
 	footer := Footer{
 		metaExtent: extent,
@@ -290,7 +309,7 @@ func (b *blockData) WriteWithCompress(buf []byte) (extent Extent, err error) {
 		return
 	}
 	b.data = append(b.data, data)
-	extent = NewExtent(0, 0, uint32(len(data)), uint32(dataLen))
+	extent = NewExtent(compress.Lz4, 0, uint32(len(data)), uint32(dataLen))
 	return
 }
 
@@ -301,7 +320,7 @@ func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 	// block.BlockHeader().SetBlockID(w.lastId)
 	block.BlockHeader().SetSequence(uint16(w.lastId))
 
-	data := blockData{meta: block, bloomFilter: make(map[uint16][]byte)}
+	data := blockData{meta: block}
 	for i, vec := range bat.Vecs {
 		buf, err := vec.MarshalBinary()
 		if err != nil {
@@ -312,8 +331,7 @@ func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
 			return err
 		}
 		block.ColumnMeta(uint16(i)).setLocation(ext)
-		block.ColumnMeta(uint16(i)).setAlg(compress.Lz4)
-		block.ColumnMeta(uint16(i)).setType(uint8(vec.GetType().Oid))
+		block.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
 	}
 	w.blocks = append(w.blocks, data)
 	w.lastId++

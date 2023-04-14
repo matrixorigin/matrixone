@@ -81,7 +81,7 @@ func TestNewObjectWriter(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+		fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -182,7 +182,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 			zbuf := make([]byte, 64)
 			zbuf[31] = 1
 			zbuf[63] = 10
-			fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+			fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 		}
 	}
 	ts := time.Now()
@@ -249,7 +249,7 @@ func TestNewObjectReader(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+		fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)

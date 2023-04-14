@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -197,15 +198,15 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
+	logutil.Infof("meta name %v; %v; blockcount %d", meta.BlockHeader().BlockID().String(), meta.BlockHeader().BloomFilter(), meta.BlockCount())
 	if err != nil {
 		return nil, err
 	}
-	column := meta.GetColumnMeta(idx, uint32(id))
-	bf, err := column.GetIndex(ctx, r.reader.GetObject(), LoadBloomFilterFunc, m)
+	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), LoadBloomFilterFunc)
 	if err != nil {
 		return nil, err
 	}
-	return bf, nil
+	return bf[id], nil
 }
 
 func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
@@ -244,11 +245,22 @@ func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		bf, err := index.DecodeBloomFilter(decompressed)
-		if err != nil {
-			return nil, 0, err
+		indexes := make([]objectio.StaticFilter, 0)
+		bf := objectio.BloomFilter(decompressed)
+		count := bf.BlockCount()
+		for i := uint32(0); i < count; i++ {
+			buf := bf.GetBloomFilter(i)
+			if len(buf) == 0 {
+				indexes = append(indexes, nil)
+				continue
+			}
+			index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
+			if err != nil {
+				return nil, 0, err
+			}
+			indexes = append(indexes, index)
 		}
-		return bf, int64(len(decompressed)), nil
+		return indexes, int64(len(decompressed)), nil
 	}
 }
 

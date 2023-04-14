@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -170,6 +171,32 @@ func (r *ObjectReader) ReadAll(
 	return data, nil
 }
 
+func (r *ObjectReader) ReadBloomFilter(
+	ctx context.Context,
+	extent Extent,
+	readFunc ReadObjectFunc,
+) ([]StaticFilter, error) {
+	metas := &fileservice.IOVector{
+		FilePath: r.nameStr,
+		Entries:  make([]fileservice.IOEntry, 1),
+		NoCache:  r.noCache,
+	}
+
+	metas.Entries[0] = fileservice.IOEntry{
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.Length()),
+
+		ToObject: readFunc(int64(extent.OriginSize())),
+	}
+	logutil.Infof("ReadBloomFilter %v", extent.String())
+	err := r.object.fs.Read(ctx, metas)
+	if err != nil {
+		return nil, err
+	}
+
+	return metas.Entries[0].Object.([]StaticFilter), err
+}
+
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
 	extent Extent,
@@ -236,8 +263,7 @@ func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m
 							return nil, 0, err
 						}
 					}
-					header := &Header{}
-					header.Unmarshal(data)
+					header := DecodeHeader(data)
 					return header, int64(len(data)), nil
 				},
 			},

@@ -53,7 +53,7 @@ type Writer interface {
 	Write(batch *batch.Batch) (BlockObject, error)
 
 	// Write metadata for every column of all blocks
-	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)
+	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ColumnMeta)
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
