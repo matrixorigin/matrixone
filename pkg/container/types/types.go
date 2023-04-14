@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -651,12 +651,11 @@ func (t T) IsFloat() bool {
 	return false
 }
 
-// IsString return true if the types.T is string type
+// IsString return true if the types.T is a MySQL string type (https://dev.mysql.com/doc/refman/8.0/en/string-types.html)
 // NOTE: types.IsVarlen() and t.IsString() are different. IsString() doesn't have T_Json type.
 func (t T) IsString() bool {
 	// Don't replace this with t.FixedLength()<0
 	// The t.FixedLength()<0 logic includes T_Json, which is not a MySQL string type.
-	// https://dev.mysql.com/doc/refman/8.0/en/string-types.html
 	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
 		return true
 	}
