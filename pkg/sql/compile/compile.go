@@ -1459,7 +1459,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.HashmapSize/plan2.HashMapSizeForBucket))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.HashmapSize/plan2.HashMapSizeForBucket)+1)
 	shuffle := false
 	if len(n.GroupBy) == 1 && n.GroupBy[0].Typ.Id == int32(types.T_int64) {
 		shuffle = true

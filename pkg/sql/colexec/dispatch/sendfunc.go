@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -50,18 +51,38 @@ const (
 
 // common sender: shuffle to all LocalReceiver
 func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	refCountAdd := int64(len(ap.LocalRegs) - 1)
-	atomic.AddInt64(&bat.Cnt, refCountAdd)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
-		jm.IncRef(refCountAdd)
-		jm.SetDupCount(int64(len(ap.LocalRegs)))
+
+	lenRegs := len(ap.LocalRegs)
+	lenVecs := len(bat.Vecs)
+	preAllocLen := bat.Length() / lenRegs
+	shuffledBats := make([]*batch.Batch, lenRegs)
+	for i := range shuffledBats {
+		shuffledBats[i] = batch.NewWithSize(lenVecs)
+		for j := range shuffledBats[i].Vecs {
+			shuffledBats[i].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
+			err := shuffledBats[i].Vecs[j].PreExtend(preAllocLen, proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
+	for row, v := range groupByVector {
+		index := v % int64(lenRegs)
+		for i := range shuffledBats[index].Vecs {
+			err := shuffledBats[index].Vecs[i].Union(bat.Vecs[i], []int32{int32(row)}, proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		}
+		shuffledBats[index].Zs = append(shuffledBats[index].Zs, bat.Zs[row])
 	}
 
-	for _, reg := range ap.LocalRegs {
+	for i, reg := range ap.LocalRegs {
 		select {
 		case <-reg.Ctx.Done():
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-		case reg.Ch <- bat:
+		case reg.Ch <- shuffledBats[i]:
 		}
 	}
 
