@@ -111,9 +111,8 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	return bat, nil
 }
 
-func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
-	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, size, m)
+func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +162,8 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objec
 	return r.reader.ReadMeta(ctx, r.meta, m)
 }
 
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, size, m)
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
@@ -299,12 +298,12 @@ func PrefetchMeta(service fileservice.FileService, key objectio.Location) error 
 	return pipeline.Prefetch(pref)
 }
 
-func PrefetchFile(service fileservice.FileService, size int64, name string) error {
+func PrefetchFile(service fileservice.FileService, name string) error {
 	reader, err := NewFileReader(service, name)
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(context.Background(), size, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(context.Background(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

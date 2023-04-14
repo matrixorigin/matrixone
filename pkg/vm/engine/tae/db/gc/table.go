@@ -366,7 +366,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 }
 
 func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	return blockio.PrefetchFile(fs.Service, size, name)
+	return blockio.PrefetchFile(fs.Service, name)
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
@@ -375,7 +375,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, size, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

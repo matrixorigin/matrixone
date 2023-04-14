@@ -335,10 +335,10 @@ func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*p
 			return err
 		}
 		for _, info := range infos[i] {
-			pref.AddBlock(idxes, []uint32{info.MetaLoc.ID()})
+			pref.AddBlock(idxes, []uint16{info.MetaLoc.ID()})
 			if !info.DeltaLoc.IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint32{info.DeltaLoc.ID()}, service, info.DeltaLoc)
+				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLoc.ID()}, service, info.DeltaLoc)
 				if err != nil {
 					return err
 				}

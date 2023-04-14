@@ -332,7 +332,7 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 }
 
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.filesize, r.mp)
+	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
 		return nil, err
 	}

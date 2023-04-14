@@ -206,27 +206,25 @@ func (r *ObjectReader) ReadBlocks(
 
 func (r *ObjectReader) ReadAllMeta(
 	ctx context.Context,
-	fileSize int64,
 	m *mpool.MPool,
 ) (ObjectMeta, error) {
-	footer, err := r.readFooter(ctx, fileSize, m)
+	header, err := r.readHeader(ctx, m)
 	if err != nil {
 		return nil, err
 	}
-	extent := NewExtent(0, footer.metaStart, footer.metaLen, footer.metaLen)
-	return r.ReadMeta(ctx, extent, m)
+	return r.ReadMeta(ctx, header.metaExtent, m)
 }
 
-func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
-	return r.readFooterAndUnMarshal(ctx, fileSize, FooterSize, m)
+func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (*Header, error) {
+	return r.readHeaderAndUnMarshal(ctx, HeaderSize, m)
 }
 
-func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
+func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m *mpool.MPool) (*Header, error) {
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset: fileSize - size,
+				Offset: 0,
 				Size:   size,
 
 				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
@@ -238,12 +236,9 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 							return nil, 0, err
 						}
 					}
-					footer := &Footer{}
-					err := footer.Unmarshal(data)
-					if err != nil {
-						return footer, 0, nil
-					}
-					return footer, int64(len(data)), nil
+					header := &Header{}
+					header.Unmarshal(data)
+					return header, int64(len(data)), nil
 				},
 			},
 		},
@@ -254,7 +249,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 		return nil, err
 	}
 
-	return data.Entries[0].Object.(*Footer), nil
+	return data.Entries[0].Object.(*Header), nil
 }
 
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)

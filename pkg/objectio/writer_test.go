@@ -131,7 +131,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
 	assert.Nil(t, err)
-	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool)
+	meta, err = objectReader.ReadAllMeta(context.Background(), pool)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(2), meta.BlockCount())
 	assert.Nil(t, err)

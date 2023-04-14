@@ -15,15 +15,12 @@
 package objectio
 
 import (
-	"bytes"
 	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/pierrec/lz4/v4"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -86,8 +83,7 @@ func NewObjectWriterSpecial(wt WriterType, fileName string, fs fileservice.FileS
 		blocks:   make([]blockData, 0),
 		lastId:   0,
 	}
-	err := writer.WriteHeader()
-	return writer, err
+	return writer, nil
 }
 
 func NewObjectWriter(name ObjectName, fs fileservice.FileService) (*ObjectWriter, error) {
@@ -101,21 +97,7 @@ func NewObjectWriter(name ObjectName, fs fileservice.FileService) (*ObjectWriter
 		blocks:   make([]blockData, 0),
 		lastId:   0,
 	}
-	err := writer.WriteHeader()
-	return writer, err
-}
-
-func (w *ObjectWriter) WriteHeader() error {
-	var (
-		err    error
-		header bytes.Buffer
-	)
-	h := Header{magic: Magic, version: Version}
-	header.Write(types.EncodeFixed(h.magic))
-	header.Write(types.EncodeFixed(h.version))
-	header.Write(make([]byte, 22))
-	_, _, err = w.buffer.Write(header.Bytes())
-	return err
+	return writer, nil
 }
 
 func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
@@ -157,6 +139,11 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		columnCount = w.blocks[0].meta.GetColumnCount()
 	}
 
+	objectHeader := Header{
+		magic:   Magic,
+		version: Version,
+	}
+
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(columnCount)
 
@@ -184,10 +171,8 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		objectMeta.AddColumnMeta(uint16(i), colmeta)
 	}
 	extent := NewExtent(0, HeaderSize, start, start)
-	test := objectMeta.BlockHeader().MetaLocation()
 	objectMeta.BlockHeader().SetMetaLocation(extent)
-	test = objectMeta.BlockHeader().MetaLocation()
-	logutil.Infof("test %v", test.String())
+	objectHeader.metaExtent = extent
 
 	for y, block := range w.blocks {
 		for i := range block.data {
@@ -206,16 +191,28 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 
 	// begin write
-	_, n, err := w.buffer.Write(objectMeta)
+
+	// writer object header
+	_, n, err := w.buffer.Write(objectHeader.Marshal())
+	if err != nil {
+		return nil, err
+	}
+
+	// writer object metadata
+	_, n, err = w.buffer.Write(objectMeta)
 	if err != nil {
 		return nil, err
 	}
 	length += n
+
+	// writer block index
 	_, n, err = w.buffer.Write(blockIndex)
 	if err != nil {
 		return nil, err
 	}
 	length += n
+
+	// writer block metadata
 	for _, block := range w.blocks {
 		_, n, err = w.buffer.Write(block.meta)
 		if err != nil {
@@ -224,6 +221,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	}
 
+	// writer data& bloom filter
 	for _, block := range w.blocks {
 		for _, data := range block.data {
 			_, n, err = w.buffer.Write(data)
@@ -241,9 +239,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	// write footer
 	footer := Footer{
-		metaStart: extent.Offset(),
-		metaLen:   extent.Length(),
-		magic:     Magic,
+		metaExtent: extent,
+		version:    Version,
+		magic:      Magic,
 	}
 
 	if _, _, err = w.buffer.Write(footer.Marshal()); err != nil {

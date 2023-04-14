@@ -15,15 +15,14 @@
 package objectio
 
 import (
-	"bytes"
 	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-const FooterSize = 8 /*Magic*/ + 4 /*metaStart*/ + 4 /*metaLen*/
-const HeaderSize = 32
+const FooterSize = 64
+const HeaderSize = 64
 
 type ObjectMeta []byte
 
@@ -360,30 +359,42 @@ func (cm ColumnMeta) IsEmpty() bool {
 }
 
 type Header struct {
-	magic   uint64
-	version uint16
-	//dummy   [22]byte
+	magic      uint64
+	version    uint16
+	metaExtent Extent
+	checksum   uint32
+	dummy      [37]byte
+}
+
+func (h Header) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&h)), HeaderSize)
+}
+
+func (h *Header) Unmarshal(data []byte) {
+	header := *(*Header)(unsafe.Pointer(&data[0]))
+	h.magic = header.magic
+	h.version = header.version
+	h.metaExtent = header.metaExtent
+	h.checksum = header.checksum
 }
 
 type Footer struct {
-	magic     uint64
-	metaStart uint32
-	metaLen   uint32
+	dummy      [37]byte
+	checksum   uint32
+	metaExtent Extent
+	version    uint16
+	magic      uint64
 }
 
-func (f *Footer) Marshal() []byte {
-	var buffer bytes.Buffer
-	buffer.Write(types.EncodeUint32(&f.metaStart))
-	buffer.Write(types.EncodeUint32(&f.metaLen))
-	buffer.Write(types.EncodeUint64(&f.magic))
-	return buffer.Bytes()
+func (f Footer) Marshal() []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&f)), FooterSize)
 }
 
 func (f *Footer) Unmarshal(data []byte) error {
-	f.metaStart = types.DecodeUint32(data)
-	data = data[4:]
-	f.metaLen = types.DecodeUint32(data)
-	data = data[4:]
-	f.magic = types.DecodeUint64(data)
+	footer := *(*Footer)(unsafe.Pointer(&data[0]))
+	f.checksum = footer.checksum
+	f.metaExtent = footer.metaExtent
+	f.version = footer.version
+	f.magic = footer.magic
 	return nil
 }

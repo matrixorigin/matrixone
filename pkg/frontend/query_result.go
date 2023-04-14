@@ -248,19 +248,12 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		e, err := f.StatFile(requestCtx, path)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return moerr.NewResultFileNotFound(requestCtx, path)
-			}
-			return err
-		}
 		reader, err := blockio.NewFileReader(f, path)
 		if err != nil {
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, ses.GetMemPool())
+		bats, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
@@ -578,13 +571,6 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		return nil, moerr.NewInternalError(ctx, "modump does not work without the account info")
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
-	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, moerr.NewResultFileNotFound(ctx, metaFile)
-		}
-		return nil, err
-	}
 	// read meta's meta
 	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, metaFile)
 	if err != nil {
@@ -593,7 +579,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, ses.GetMemPool())
+	bats, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +629,7 @@ func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize
 	if err != nil {
 		return nil, nil, err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, fileSize, ses.GetMemPool())
+	bs, err := reader.LoadAllBlocks(ctx, ses.GetMemPool())
 	if err != nil {
 		return nil, nil, err
 	}

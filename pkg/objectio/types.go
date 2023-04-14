@@ -90,7 +90,7 @@ type Reader interface {
 	ReadMeta(ctx context.Context, extent *Extent, m *mpool.MPool) (ObjectMeta, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) (ObjectMeta, error)
+	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectMeta, error)
 
 	GetObject() *Object
 }
