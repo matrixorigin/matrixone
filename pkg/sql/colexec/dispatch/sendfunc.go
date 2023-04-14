@@ -42,7 +42,31 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyRemoteFunc
 	SendToAnyFunc
+
+	//shuffle to all reg functions
+	ShuffleToAllFunc
+	ShuffleToAllLocalFunc
 )
+
+// common sender: shuffle to all LocalReceiver
+func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	refCountAdd := int64(len(ap.LocalRegs) - 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		jm.IncRef(refCountAdd)
+		jm.SetDupCount(int64(len(ap.LocalRegs)))
+	}
+
+	for _, reg := range ap.LocalRegs {
+		select {
+		case <-reg.Ctx.Done():
+			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+		case reg.Ch <- bat:
+		}
+	}
+
+	return false, nil
+}
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
@@ -58,6 +82,27 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		case <-reg.Ctx.Done():
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
+		}
+	}
+
+	return false, nil
+}
+
+// common sender: shuffle to all RemoteReceiver
+func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	if !ap.prepared {
+		ap.waitRemoteRegsReady(proc)
+	}
+
+	{ // send to remote regs
+		encodeData, errEncode := types.Encode(bat)
+		if errEncode != nil {
+			return false, errEncode
+		}
+		for _, r := range ap.ctr.remoteReceivers {
+			if err := sendBatchToClientSession(encodeData, r); err != nil {
+				return false, err
+			}
 		}
 	}
 
@@ -80,6 +125,21 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 				return false, err
 			}
 		}
+	}
+
+	return false, nil
+}
+
+// shuffle to all receiver (include LocalReceiver and RemoteReceiver)
+func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	_, remoteErr := shuffleToAllRemoteFunc(bat, ap, proc)
+	if remoteErr != nil {
+		return false, remoteErr
+	}
+
+	_, localErr := shuffleToAllLocalFunc(bat, ap, proc)
+	if localErr != nil {
+		return false, localErr
 	}
 
 	return false, nil

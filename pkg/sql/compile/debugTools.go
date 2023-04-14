@@ -200,6 +200,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					}
 				}
 				switch arg.FuncId {
+				case dispatch.ShuffleToAllFunc, dispatch.ShuffleToAllLocalFunc:
+					str += fmt.Sprintf(" shuffle to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAnyLocalFunc:
