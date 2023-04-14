@@ -139,14 +139,6 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (bat *Batch) ExpandNulls() {
-	if len(bat.Zs) > 0 {
-		for i := range bat.Vecs {
-			bat.Vecs[i].TryExpandNulls(len(bat.Zs))
-		}
-	}
-}
-
 // I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
 	mp := make(map[*vector.Vector]uint8)

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -147,13 +146,6 @@ func (v *Vector) GetStringAt(i int) string {
 	}
 	bs := v.col.([]types.Varlena)
 	return bs[i].GetString(v.area)
-}
-
-func (v *Vector) TryExpandNulls(n int) {
-	if v.nsp == nil {
-		v.nsp = &nulls.Nulls{Np: bitmap.New(0)}
-	}
-	nulls.TryExpand(v.nsp, n)
 }
 
 func NewVec(typ types.Type) *Vector {
