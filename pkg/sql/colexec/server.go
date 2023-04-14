@@ -92,11 +92,16 @@ func (srv *Server) GetCnSegmentType(segmentName string) int32 {
 	return srv.cnSegmentMap.mp[segmentName]
 }
 
+func (srv *Server) GetCurrentObejctName() objectio.ObjectName {
+	return srv.objName
+}
+
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
 func (srv *Server) GenerateSegment() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
-	return objectio.BuildObjectName(common.MustUuid1(), 0)
+	srv.objName = objectio.BuildObjectName(common.MustUuid1(), 0)
+	return srv.objName
 	// for future fileOffset
 	// if srv.InitSegmentId {
 	// 	srv.incrementSegmentId()

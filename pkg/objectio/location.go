@@ -16,9 +16,10 @@ package objectio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math/rand"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )

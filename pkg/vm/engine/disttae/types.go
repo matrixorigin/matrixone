@@ -123,22 +123,29 @@ type Transaction struct {
 	// use to cache created table
 	createMap *sync.Map
 
-	cnBlockDeletsMap                *CnBlockDeletsMap
+	cnBlockDeletesMap *CnBlockDeletesMap
+	// batch -> blkIds
+	cnBlkId_Pos                     map[string]Pos
 	blockId_raw_batch               map[string]*batch.Batch
 	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
 }
 
-type CnBlockDeletsMap struct {
+type Pos struct {
+	idx    int
+	offset int64
+}
+
+type CnBlockDeletesMap struct {
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
 	mp map[string][]int64
 }
 
-func (cn_deletes_mp *CnBlockDeletsMap) PutCnBlockDeletes(blockId string, offsets []int64) {
+func (cn_deletes_mp *CnBlockDeletesMap) PutCnBlockDeletes(blockId string, offsets []int64) {
 	cn_deletes_mp.mp[blockId] = append(cn_deletes_mp.mp[blockId], offsets...)
 }
 
-func (cn_deletes_mp *CnBlockDeletsMap) GetCnBlockDeletes(blockId string) []int64 {
+func (cn_deletes_mp *CnBlockDeletesMap) GetCnBlockDeletes(blockId string) []int64 {
 	res := cn_deletes_mp.mp[blockId]
 	offsets := make([]int64, len(res))
 	copy(offsets, res)
@@ -146,7 +153,7 @@ func (cn_deletes_mp *CnBlockDeletsMap) GetCnBlockDeletes(blockId string) []int64
 }
 
 func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
-	txn.cnBlockDeletsMap.PutCnBlockDeletes(blockId, offsets)
+	txn.cnBlockDeletesMap.PutCnBlockDeletes(blockId, offsets)
 }
 
 // Entry represents a delete/insert

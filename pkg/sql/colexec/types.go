@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -53,6 +54,7 @@ type Server struct {
 	currentFileOffset uint16
 	uuidCsChanMap     UuidCsChanMap
 	cnSegmentMap      CnSegmentMap
+	objName           objectio.ObjectName
 }
 
 type UuidCsChanMap struct {

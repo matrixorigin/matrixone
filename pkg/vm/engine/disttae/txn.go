@@ -30,6 +30,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -227,9 +229,21 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
-	// used for cn block compaction
+	idx := len(txn.writes)
+	// used for cn block compaction (next pr)
 	if typ == COMPACTION_CN {
 		typ = INSERT
+	} else if typ == INSERT {
+		metaLocs := vector.MustStrCol(bat.GetVector(0))
+		for i, metaLoc := range metaLocs {
+			if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
+				return err
+			} else {
+				sid := location.Name().Sid()
+				blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+				txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
+			}
+		}
 	}
 	txn.readOnly = false
 	txn.writes = append(txn.writes, Entry{

@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	flushThreshold = 16 * mpool.MB
+	flushThreshold = 32 * mpool.MB
 )
 
 type BatchPool struct {
@@ -63,7 +63,6 @@ type container struct {
 	deleted_length uint32
 	pool           *BatchPool
 }
-
 type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
@@ -78,7 +77,6 @@ type Argument struct {
 	Nbucket      uint32
 	ctr          *container
 }
-
 type DeleteCtx struct {
 	CanTruncate bool
 
@@ -111,6 +109,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		for _, bat := range arg.ctr.blockId_metaLoc {
 			bat.Clean(proc.GetMPool())
 		}
+		arg.SegmentMap = nil
+		arg.ctr.blockId_bitmap = nil
+		arg.ctr.blockId_metaLoc = nil
+		arg.ctr.blockId_rowIdBatch = nil
+		arg.ctr.blockId_type = nil
+		arg.ctr.pool = nil
 	}
 }
 

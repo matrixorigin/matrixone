@@ -355,9 +355,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 		},
 		segId: id,
-		cnBlockDeletsMap: &CnBlockDeletsMap{
+		cnBlockDeletesMap: &CnBlockDeletesMap{
 			mp: map[string][]int64{},
 		},
+		cnBlkId_Pos:                     map[string]Pos{},
 		blockId_raw_batch:               make(map[string]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[string][]*batch.Batch),
 	}
@@ -536,7 +537,8 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
-	txn.cnBlockDeletsMap = nil
+	txn.cnBlockDeletesMap = nil
+	txn.cnBlkId_Pos = nil
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
@@ -524,6 +525,59 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	return nil
 }
 
+// CN Block Compaction
+func (tbl *txnTable) compaction() error {
+	mp := make(map[int][]int64)
+	s3writer := &colexec.S3Writer{}
+	err := s3writer.GenerateWriter(tbl.db.txn.proc)
+	if err != nil {
+		return err
+	}
+	for id, deleteOffsets := range tbl.db.txn.cnBlockDeletesMap.mp {
+		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
+		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
+		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
+		delete(tbl.db.txn.cnBlockDeletesMap.mp, id)
+		if len(deleteOffsets) == 0 {
+			continue
+		}
+		mp[pos.idx] = append(mp[pos.idx], pos.offset)
+		// start compaction
+		metaLoc := tbl.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
+		location, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
+			return err
+		}
+		s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
+		if err != nil {
+			return err
+		}
+		bat, err := s3BlockReader.LoadColumns(context.Background(), []uint16{0}, location.ID(), tbl.db.txn.proc.GetMPool())
+		if err != nil {
+			return err
+		}
+		bat.AntiShrink(deleteOffsets)
+		// ToDo: Optimize this logic, we need to control blocks num in one file
+		// and make sure one block has as close as possible to 8192 rows
+		s3writer.WriteBlock(bat)
+	}
+	metaLocs, err := s3writer.WriteEndBlock(tbl.db.txn.proc)
+	new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+	new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	for _, metaLoc := range metaLocs {
+		vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
+	}
+	err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, colexec.Srv.GetCurrentObejctName().String(), new_bat, tbl.db.txn.dnStores[0])
+	if err != nil {
+		return err
+	}
+	// delete old block info
+	for idx, offsets := range mp {
+		tbl.writes[idx].bat.AntiShrink(offsets)
+	}
+	return nil
+}
+
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	if bat == nil {
 		// ToDo:
@@ -532,8 +586,9 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 		// 1.do compaction at deletion operator
 		// 2.do compaction here
 		// 3.do compaction when read
-		// choose which one depends on next pr
-		return nil
+		// choose which one at last depends on next pr
+		// we use 2 now.
+		return tbl.compaction()
 	}
 	// remoteDelete
 	if name != catalog.Row_ID {
@@ -785,7 +840,7 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
-		deletes_map:     txn.cnBlockDeletsMap.mp,
+		deletes_map:     txn.cnBlockDeletesMap.mp,
 	}
 	readers[0] = partReader
 
