@@ -272,6 +272,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	}
 	length += n
 
+	_, n, err = w.buffer.Write(zoneMapAreaData)
+	if err != nil {
+		return nil, err
+	}
+	length += n
+
 	// write footer
 	footer := Footer{
 		metaExtent: extent,
