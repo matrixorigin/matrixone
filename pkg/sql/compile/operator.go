@@ -137,8 +137,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Right_typs: t.Right_typs,
-			Left_typs:  t.Left_typs,
+			RightTypes: t.RightTypes,
+			LeftTypes:  t.LeftTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.RightSemi:
@@ -148,7 +148,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Right_typs: t.Right_typs,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.RightAnti:
@@ -158,7 +158,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Right_typs: t.Right_typs,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -788,8 +788,8 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &right.Argument{
-		Left_typs:  left_typs,
-		Right_typs: right_typs,
+		LeftTypes:  left_typs,
+		RightTypes: right_typs,
 		Nbucket:    Nbucket,
 		Ibucket:    Ibucket,
 		Result:     result,
@@ -805,7 +805,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightsemi.Argument{
-		Right_typs: right_typs,
+		RightTypes: right_typs,
 		Nbucket:    Nbucket,
 		Ibucket:    Ibucket,
 		Result:     result,
@@ -821,7 +821,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightanti.Argument{
-		Right_typs: right_typs,
+		RightTypes: right_typs,
 		Nbucket:    Nbucket,
 		Ibucket:    Ibucket,
 		Result:     result,
@@ -1230,7 +1230,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.RightSemi:
@@ -1240,7 +1240,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.RightAnti:
@@ -1250,7 +1250,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:

@@ -838,7 +838,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
-		builder.swapJoinBuildSide(rootID)
+		builder.swapJoinChildren(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
@@ -1475,6 +1475,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
+		// rewrite right join to left join
+		builder.rewriteRightJoinToLeftJoin(nodeID)
+
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
@@ -1770,6 +1773,19 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	ReCalcNodeStats(nodeID, builder, false, true)
 	return nodeID
+}
+
+func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+
+	for i := range node.Children {
+		builder.rewriteRightJoinToLeftJoin(node.Children[i])
+	}
+
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_RIGHT {
+		node.JoinType = plan.Node_LEFT
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
@@ -2215,7 +2231,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 }
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
-	var joinType plan.Node_JoinFlag
+	var joinType plan.Node_JoinType
 
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
