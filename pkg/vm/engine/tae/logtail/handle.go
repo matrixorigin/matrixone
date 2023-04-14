@@ -637,7 +637,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range locations {
-		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
+		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
 		if err != nil {
 			return nil, err
 		}

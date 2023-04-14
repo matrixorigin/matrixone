@@ -405,7 +405,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	if err != nil {
 		return nil
 	}
-	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.eng.GetTAE(ctx).Fs.Service, loc)
 	if err != nil {
 		return nil
 	}
