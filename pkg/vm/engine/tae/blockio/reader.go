@@ -40,7 +40,7 @@ type BlockReader struct {
 	manager *IoPipeline
 }
 
-type fetch struct {
+type fetchParams struct {
 	name   string
 	meta   objectio.Extent
 	idxes  []uint16
@@ -91,7 +91,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	if r.meta.End() == 0 {
 		return bat, nil
 	}
-	proc := fetch{
+	proc := fetchParams{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxes,

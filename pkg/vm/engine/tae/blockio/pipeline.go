@@ -61,7 +61,7 @@ func putJob(job *tasks.Job) {
 
 var pipeline *IoPipeline
 
-type IOJobFactory func(context.Context, fetch) *tasks.Job
+type IOJobFactory func(context.Context, fetchParams) *tasks.Job
 
 func init() {
 	pipeline = NewIOPipeline()
@@ -88,16 +88,16 @@ func makeName(location string) string {
 // load data job
 func jobFactory(
 	ctx context.Context,
-	proc fetch,
+	params fetchParams,
 ) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(proc.name),
+		makeName(params.name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.id, nil, LoadColumnFunc)
+			ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, LoadColumnFunc)
 			if err != nil {
 				res.Err = err
 				return
@@ -150,11 +150,11 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 	)
 }
 
-type FetchFunc = func(ctx context.Context, proc fetch) (any, error)
+type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
-func simpleFetch(ctx context.Context, proc fetch) (any, error) {
-	ioVectors, err := proc.reader.Read(ctx, proc.meta, proc.idxes, proc.id, nil, LoadColumnFunc)
+func simpleFetch(ctx context.Context, params fetchParams) (any, error) {
+	ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -262,18 +262,18 @@ func (p *IoPipeline) Stop() {
 
 func (p *IoPipeline) Fetch(
 	ctx context.Context,
-	proc fetch,
+	params fetchParams,
 ) (res any, err error) {
-	return p.fetchFun(ctx, proc)
+	return p.fetchFun(ctx, params)
 }
 
 func (p *IoPipeline) doAsyncFetch(
 	ctx context.Context,
-	proc fetch,
+	params fetchParams,
 ) (job *tasks.Job, err error) {
 	job = p.jobFactory(
 		ctx,
-		proc,
+		params,
 	)
 	if _, err = p.fetch.queue.Enqueue(job); err != nil {
 		job.DoneWithErr(err)
@@ -289,9 +289,9 @@ func (p *IoPipeline) Prefetch(params prefetchParams) (err error) {
 
 func (p *IoPipeline) doFetch(
 	ctx context.Context,
-	proc fetch,
+	params fetchParams,
 ) (res any, err error) {
-	job, err := p.doAsyncFetch(ctx, proc)
+	job, err := p.doAsyncFetch(ctx, params)
 	if err != nil {
 		return
 	}
