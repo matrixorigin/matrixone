@@ -54,10 +54,13 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 
 	lenRegs := len(ap.LocalRegs)
 	lenVecs := len(bat.Vecs)
-	preAllocLen := bat.Length() / lenRegs
+	preAllocLen := bat.Length()
 	shuffledBats := make([]*batch.Batch, lenRegs)
+	sels := make([][]int32, lenRegs)
+	lenShuffledSels := make([]int, lenRegs)
 	for i := range shuffledBats {
 		shuffledBats[i] = batch.NewWithSize(lenVecs)
+		sels[i] = make([]int32, preAllocLen)
 		for j := range shuffledBats[i].Vecs {
 			shuffledBats[i].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
 			err := shuffledBats[i].Vecs[j].PreExtend(preAllocLen, proc.Mp())
@@ -66,16 +69,27 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 			}
 		}
 	}
+
 	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
 	for row, v := range groupByVector {
-		index := v % int64(lenRegs)
-		for i := range shuffledBats[index].Vecs {
-			err := shuffledBats[index].Vecs[i].Union(bat.Vecs[i], []int32{int32(row)}, proc.Mp())
+		regIndex := v % int64(lenRegs)
+		sels[regIndex][lenShuffledSels[regIndex]] = int32(row)
+		lenShuffledSels[regIndex]++
+	}
+
+	for regIndex := range shuffledBats {
+		b := shuffledBats[regIndex]
+		for vecIndex := range b.Vecs {
+			v := b.Vecs[vecIndex]
+			err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
 			if err != nil {
 				return false, err
 			}
 		}
-		shuffledBats[index].Zs = append(shuffledBats[index].Zs, bat.Zs[row])
+		b.Zs = make([]int64, lenShuffledSels[regIndex])
+		for i := 0; i < lenShuffledSels[regIndex]; i++ {
+			b.Zs[i] = bat.Zs[sels[regIndex][i]]
+		}
 	}
 
 	for i, reg := range ap.LocalRegs {
