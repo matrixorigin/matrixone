@@ -146,7 +146,7 @@ var (
 	}, {
 		input: "select time from t1 as value",
 	}, {
-		input:  "alter database test set mysql_compatbility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
+		input:  "alter database test set mysql_compatibility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
 		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
