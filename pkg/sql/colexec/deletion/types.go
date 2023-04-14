@@ -193,7 +193,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 	var err error
 	s3writer := &colexec.S3Writer{}
 	resSize := uint32(0)
-	err = s3writer.GenerateWriter(proc)
+	_, err = s3writer.GenerateWriter(proc)
 	if err != nil {
 		return 0, err
 	}

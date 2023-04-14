@@ -521,6 +521,11 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		entry_bat := tbl.db.txn.blockId_raw_batch[blkId]
 		entry_bat.AntiShrink(vs)
+		// reset rowId offset
+		rowIds := vector.MustFixedCol[types.Rowid](entry_bat.GetVector(0))
+		for i := range rowIds {
+			(&rowIds[i]).SetRowOffset(uint32(i))
+		}
 	}
 	return nil
 }
@@ -529,7 +534,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 func (tbl *txnTable) compaction() error {
 	mp := make(map[int][]int64)
 	s3writer := &colexec.S3Writer{}
-	err := s3writer.GenerateWriter(tbl.db.txn.proc)
+	batchNums := 0
+	name, err := s3writer.GenerateWriter(tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
@@ -543,7 +549,7 @@ func (tbl *txnTable) compaction() error {
 		}
 		mp[pos.idx] = append(mp[pos.idx], pos.offset)
 		// start compaction
-		metaLoc := tbl.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
+		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
 		location, err := blockio.EncodeLocationFromString(metaLoc)
 		if err != nil {
 			return err
@@ -552,28 +558,54 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		bat, err := s3BlockReader.LoadColumns(context.Background(), []uint16{0}, location.ID(), tbl.db.txn.proc.GetMPool())
+		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, location.ID(), tbl.db.txn.proc.GetMPool())
 		if err != nil {
 			return err
 		}
+		bat.SetZs(bat.GetVector(0).Length(), tbl.db.txn.proc.GetMPool())
 		bat.AntiShrink(deleteOffsets)
+		if bat.Length() == 0 {
+			continue
+		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
 		// and make sure one block has as close as possible to 8192 rows
 		s3writer.WriteBlock(bat)
+		batchNums++
 	}
-	metaLocs, err := s3writer.WriteEndBlock(tbl.db.txn.proc)
-	new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
-	new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-	for _, metaLoc := range metaLocs {
-		vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
+	if batchNums == 0 {
+		return nil
 	}
-	err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, colexec.Srv.GetCurrentObejctName().String(), new_bat, tbl.db.txn.dnStores[0])
+	metaLocs, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
+	new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+	new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	for _, metaLoc := range metaLocs {
+		if metaLoc == "" {
+			fmt.Println("error")
+		}
+		vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
+	}
+	new_bat.SetZs(len(metaLocs), tbl.db.txn.proc.GetMPool())
+	err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, name.String(), new_bat, tbl.db.txn.dnStores[0])
+	if err != nil {
+		return err
+	}
+
+	remove_batch := make(map[*batch.Batch]bool)
 	// delete old block info
 	for idx, offsets := range mp {
-		tbl.writes[idx].bat.AntiShrink(offsets)
+		tbl.db.txn.writes[idx].bat.AntiShrink(offsets)
+		if tbl.db.txn.writes[idx].bat.Length() == 0 {
+			remove_batch[tbl.db.txn.writes[idx].bat] = true
+		}
+	}
+	for i := 0; i < len(tbl.db.txn.writes); i++ {
+		if remove_batch[tbl.db.txn.writes[i].bat] {
+			tbl.db.txn.writes = append(tbl.db.txn.writes[:i], tbl.db.txn.writes[i+1:]...)
+			i--
+		}
 	}
 	return nil
 }

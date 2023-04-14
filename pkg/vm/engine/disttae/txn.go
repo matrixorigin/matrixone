@@ -340,7 +340,7 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 
 func (txn *Transaction) genBlock() {
 	txn.rowId[4]++
-	txn.rowId[5] = 0
+	txn.rowId[5] = INIT_ROWID_OFFSET
 }
 
 func (txn *Transaction) getCurrentBlockId() string {
@@ -350,7 +350,11 @@ func (txn *Transaction) getCurrentBlockId() string {
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
-	txn.rowId[5]++
+	if txn.rowId[5] != INIT_ROWID_OFFSET {
+		txn.rowId[5]++
+	} else {
+		txn.rowId[5] = 0
+	}
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 

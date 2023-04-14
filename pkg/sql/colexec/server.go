@@ -80,6 +80,14 @@ func (srv *Server) PutCnSegment(segmentName string, segmentType int32) {
 	srv.cnSegmentMap.mp[segmentName] = segmentType
 }
 
+func (srv *Server) DeleteTxnSegmentIds(segmentNames []string) {
+	srv.cnSegmentMap.Lock()
+	defer srv.cnSegmentMap.Unlock()
+	for _, segmentName := range segmentNames {
+		delete(srv.cnSegmentMap.mp, segmentName)
+	}
+}
+
 func (srv *Server) GetCnSegmentMap() map[string]int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
@@ -92,16 +100,11 @@ func (srv *Server) GetCnSegmentType(segmentName string) int32 {
 	return srv.cnSegmentMap.mp[segmentName]
 }
 
-func (srv *Server) GetCurrentObejctName() objectio.ObjectName {
-	return srv.objName
-}
-
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
 func (srv *Server) GenerateSegment() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
-	srv.objName = objectio.BuildObjectName(common.MustUuid1(), 0)
-	return srv.objName
+	return objectio.BuildObjectName(common.MustUuid1(), 0)
 	// for future fileOffset
 	// if srv.InitSegmentId {
 	// 	srv.incrementSegmentId()

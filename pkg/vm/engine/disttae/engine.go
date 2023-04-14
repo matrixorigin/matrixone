@@ -538,6 +538,16 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
 	txn.cnBlockDeletesMap = nil
+	segmentnames := make([]string, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, string(txn.segId[:]))
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, blkId[:16])
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
 	e.Lock()
 	defer e.Unlock()

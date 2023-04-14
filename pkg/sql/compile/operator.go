@@ -417,6 +417,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			AffectedRows: t.AffectedRows,
 			Engine:       t.Engine,
 			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))

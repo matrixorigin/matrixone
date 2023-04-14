@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -788,32 +787,6 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	18 bytes   2 bytes   4 bytes
 */
 // SegmentId = Uuid + fileId
-func generateRowIdForCNBlock(segmentName string, blockId uint16, offsetId uint32) types.Rowid {
-	idx := len(segmentName) - 1
-	for segmentName[idx] != '-' {
-		idx--
-	}
-	uuidStr := segmentName[:idx]
-	Uuid, err := types.ParseUuid(uuidStr)
-	if err != nil {
-		panic("Uuid Parse Error!!!")
-	}
-	fileOffset, _ := strconv.ParseUint(segmentName[idx+1:], 10, 64)
-	blkid := common.NewBlockid(&Uuid, uint16(fileOffset), blockId)
-	return common.NewRowid(&blkid, offsetId)
-}
-
-func generateBlkId(segmentName string, blockId uint16) types.Blockid {
-	idx := len(segmentName) - 1
-	for segmentName[idx] != '-' {
-		idx--
-	}
-	uuidStr := segmentName[:idx]
-	Uuid, err := types.ParseUuid(uuidStr)
-	if err != nil {
-		panic("Uuid Parse Error!!!")
-	}
-	fileOffset, _ := strconv.ParseUint(segmentName[idx+1:], 10, 64)
-	blkid := common.NewBlockid(&Uuid, uint16(fileOffset), blockId)
-	return blkid
+func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
+	return common.NewRowid(blkid, offset)
 }

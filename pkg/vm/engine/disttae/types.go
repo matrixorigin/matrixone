@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -51,6 +52,7 @@ const (
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
+	INIT_ROWID_OFFSET             = math.MaxUint32
 )
 
 type DNStore = metadata.DNService
@@ -124,7 +126,7 @@ type Transaction struct {
 	createMap *sync.Map
 
 	cnBlockDeletesMap *CnBlockDeletesMap
-	// batch -> blkIds
+	// blkId -> Pos
 	cnBlkId_Pos                     map[string]Pos
 	blockId_raw_batch               map[string]*batch.Batch
 	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionReader struct {
@@ -155,20 +156,21 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if colNames[len(colNames)-1] == catalog.Row_ID {
 				hasRowId = true
 			}
+			sid := location.Name().Sid()
+			blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
 			if hasRowId {
 				// add rowId col for rbat
 				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
 				for i := 0; i < lens; i++ {
-					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(p.currentFileName, uint16(p.blockBatch.idx), uint32(i)), false,
+					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(&blkid, uint32(i)), false,
 						p.procMPool); err != nil {
 						return rbat, err
 					}
 				}
 				rbat.Vecs = append(rbat.Vecs, vec)
 			}
-			blkid := generateBlkId(p.currentFileName, uint16(p.blockBatch.idx))
-			deletes := p.deletes_map[(&blkid).String()]
+			deletes := p.deletes_map[string(blkid[:])]
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
@@ -195,6 +197,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					}
 				}
 			}
+			b.SetZs(bat.Length(), p.procMPool)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}

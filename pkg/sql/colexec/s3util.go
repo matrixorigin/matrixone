@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -65,7 +68,7 @@ const (
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3Size uint64 = 10 * mpool.MB
+	TagS3Size uint64 = 128 * mpool.KB
 )
 
 func (w *S3Writer) GetMetaLocBat() *batch.Batch {
@@ -317,7 +320,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 	}
 	// just write ahead, no need to sort
 	if sortIdx == -1 {
-		if err := w.generateWriter(proc); err != nil {
+		if _, err := w.generateWriter(proc); err != nil {
 			return err
 		}
 
@@ -336,7 +339,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 			}
 			w.buffer.CleanOnlyData()
 		}
-		if _, err := w.writeEndBlocks(proc); err != nil {
+		if err := w.writeEndBlocks(proc); err != nil {
 			return err
 		}
 	} else {
@@ -386,7 +389,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), getStrCols(bats, pos, stopIdx), nulls)
 		}
-		if err := w.generateWriter(proc); err != nil {
+		if _, err := w.generateWriter(proc); err != nil {
 			return err
 		}
 		lens := 0
@@ -415,7 +418,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 			}
 			w.buffer.CleanOnlyData()
 		}
-		if _, err := w.writeEndBlocks(proc); err != nil {
+		if err := w.writeEndBlocks(proc); err != nil {
 			return err
 		}
 		// force clean
@@ -475,24 +478,24 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	return newBat
 }
 
-func (w *S3Writer) GenerateWriter(proc *process.Process) error {
+func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	return w.generateWriter(proc)
 }
 
-func (w *S3Writer) generateWriter(proc *process.Process) error {
+func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
 	segId := Srv.GenerateSegment()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	w.writer, err = blockio.NewBlockWriterNew(s3, segId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	w.lengths = w.lengths[:0]
-	return nil
+	return segId, err
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -535,18 +538,39 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 	return nil
 }
 
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
-	return w.writeEndBlocks(proc)
+func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
+	metaLocs, err := w.WriteEndBlocks(proc)
+	if err != nil {
+		return err
+	}
+	for _, metaLoc := range metaLocs {
+		if err := vector.AppendFixed(
+			w.metaLocBat.Vecs[0],
+			w.idx,
+			false,
+			proc.GetMPool()); err != nil {
+			return err
+		}
+		if err := vector.AppendBytes(
+			w.metaLocBat.Vecs[1],
+			[]byte(metaLoc),
+			false,
+			proc.GetMPool()); err != nil {
+			return err
+		}
+	}
+	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+	return nil
 }
 
 // writeEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) writeEndBlocks(proc *process.Process) ([]string, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
-	metaLocs := make([]string, 0, len(blocks))
 	if err != nil {
 		return nil, err
 	}
+	metaLocs := make([]string, 0, len(blocks))
 	for j := range blocks {
 		metaLoc := blockio.EncodeLocation(
 			w.writer.GetName(),
@@ -555,21 +579,9 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) ([]string, error) {
 			blocks[j].GetID(),
 		).String()
 		metaLocs = append(metaLocs, metaLoc)
-		if err := vector.AppendFixed(
-			w.metaLocBat.Vecs[0],
-			w.idx,
-			false,
-			proc.GetMPool()); err != nil {
-			return nil, err
-		}
-		if err := vector.AppendBytes(
-			w.metaLocBat.Vecs[1],
-			[]byte(metaLoc),
-			false,
-			proc.GetMPool()); err != nil {
-			return nil, err
+		if metaLoc == "" {
+			fmt.Println("error")
 		}
 	}
-	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return metaLocs, err
 }
