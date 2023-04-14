@@ -112,7 +112,7 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 	return nil
 }
 
-func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, right *BindContext) (*plan.Expr, error) {
+func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
 		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left table", col)

@@ -49,7 +49,7 @@ type container struct {
 
 	mp *hashmap.JoinMap
 
-	matched_sels []int32
+	matched []uint8
 }
 
 type Argument struct {
@@ -57,14 +57,14 @@ type Argument struct {
 	Ibucket    uint64
 	Nbucket    uint64
 	Result     []colexec.ResultPos
-	Left_typs  []types.Type
-	Right_typs []types.Type
+	LeftTypes  []types.Type
+	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
-	Is_receiver bool
-	Channel     chan *[]int32
-	NumCPU      uint64
+	IsMerger bool
+	Channel  chan *[]uint8
+	NumCPU   uint64
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
