@@ -2325,6 +2325,147 @@ func normalizeNamesOfUsers(ctx context.Context, users []*tree.User) error {
 	return nil
 }
 
+func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
+
+	var err error
+	var sql string
+	var vr *verifiedRole
+	var user *tree.User
+	var userName string
+	var hostName string
+	var passwaord string
+	var erArray []ExecResult
+	account := ses.GetTenantInfo()
+	currentUser := account.User
+
+	//1.authenticate the actions
+	if au.Role != nil {
+		return moerr.NewInternalError(ctx, "not support alter role")
+	}
+	if au.MiscOpt != nil {
+		return moerr.NewInternalError(ctx, "not support password or lock operation")
+	}
+	if au.CommentOrAttribute.Exist {
+		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
+	}
+	if len(au.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+
+	err = normalizeNamesOfUsers(ctx, au.Users)
+	if err != nil {
+		return err
+	}
+	user = au.Users[0]
+	userName = user.Username
+	hostName = user.Hostname
+	passwaord = user.AuthOption.Str
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if user.AuthOption == nil {
+		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
+		goto handleFailed
+	}
+
+	if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
+		goto handleFailed
+	}
+
+	//check the user exists or not
+	sql, err = getSqlForPasswordOfUser(ctx, userName)
+	if err != nil {
+		goto handleFailed
+	}
+	vr, err = verifyRoleFunc(ctx, bh, sql, userName, roleType)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if vr == nil {
+		//If Exists :
+		// false : return an error
+		// true : return and  do nothing
+		if !au.IfExists {
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
+			goto handleFailed
+		} else {
+			return err
+		}
+	}
+
+	//if the user is admin user with the role moadmin or accountadmin,
+	//the user can be altered
+	//otherwise only general user can alter itself
+	if account.IsSysTenant() {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
+	} else {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
+	}
+	if err != nil {
+		goto handleFailed
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		if currentUser != userName {
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			goto handleFailed
+		}
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+
+}
 func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) error {
 	var err error
 	var sql string
