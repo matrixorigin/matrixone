@@ -492,7 +492,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex[0]))
-	if ovec.GetType().IsString() {
+	if ovec.GetType().IsVarlen() {
 		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil

@@ -272,11 +272,6 @@ func (t Type) IsTuple() bool {
 	return t.Oid == T_tuple
 }
 
-// Bad function, but keep for now so that old code works.
-func (t Type) IsString() bool {
-	return t.IsVarlen()
-}
-
 func (t Type) IsInt() bool {
 	switch t.Oid {
 	case T_int8, T_int16, T_int32, T_int64:
