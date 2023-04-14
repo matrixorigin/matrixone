@@ -30,15 +30,15 @@ type prefetch struct {
 	reader  *objectio.ObjectReader
 }
 
-func BuildPrefetch(service fileservice.FileService, key objectio.Location) (prefetch, error) {
+func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (prefetch, error) {
 	reader, err := NewObjectReader(service, key)
 	if err != nil {
 		return prefetch{}, err
 	}
-	return buildPrefetch(reader), nil
+	return buildPrefetchParams(reader), nil
 }
 
-func buildPrefetch(reader *BlockReader) prefetch {
+func buildPrefetchParams(reader *BlockReader) prefetch {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetch{
 		name:    reader.GetObjectName(),
@@ -48,7 +48,7 @@ func buildPrefetch(reader *BlockReader) prefetch {
 		reader:  reader.GetObjectReader(),
 	}
 }
-func buildPrefetchNew(reader *BlockReader) prefetch {
+func buildPrefetchParams2(reader *BlockReader) prefetch {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetch{
 		nameStr: reader.GetName(),

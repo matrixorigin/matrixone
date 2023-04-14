@@ -282,7 +282,7 @@ func PrefetchWithMerged(pref prefetch) error {
 
 func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
 
-	pref, err := BuildPrefetch(service, key)
+	pref, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key
 }
 
 func PrefetchMeta(service fileservice.FileService, key objectio.Location) error {
-	pref, err := BuildPrefetch(service, key)
+	pref, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 	if err != nil {
 		return err
 	}
-	pref := buildPrefetchNew(reader)
+	pref := buildPrefetchParams2(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
