@@ -324,7 +324,7 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		IsCount:    a.isCount,
 	}
 	switch {
-	case types.IsString(a.otyp.Oid):
+	case a.otyp.Oid.IsString():
 		source.Da = types.EncodeStringSlice(getUnaryAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -367,7 +367,7 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 func setAggValues[T1, T2 any](agg any, typ types.Type) {
 	switch {
-	case types.IsString(typ.Oid):
+	case typ.Oid.IsString():
 		a := agg.(*UnaryAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))

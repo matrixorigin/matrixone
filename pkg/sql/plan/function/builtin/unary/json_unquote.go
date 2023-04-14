@@ -34,7 +34,7 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		fBacth  func([][]byte, []string, *nulls.Nulls) ([]string, error)
 	)
 	switch {
-	case types.IsString(vec.GetType().Oid):
+	case vec.GetType().Oid.IsString():
 		fSingle = json_unquote.StringSingle
 		fBacth = json_unquote.StringBatch
 	default:

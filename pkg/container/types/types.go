@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -619,40 +619,41 @@ func (t T) FixedLength() int {
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
 
-// isUnsignedInt: return true if the types.T is UnSigned integer type
-func IsUnsignedInt(t T) bool {
+// IsUnsignedInt return true if the types.T is UnSigned integer type
+func (t T) IsUnsignedInt() bool {
 	if t == T_uint8 || t == T_uint16 || t == T_uint32 || t == T_uint64 {
 		return true
 	}
 	return false
 }
 
-// isSignedInt: return true if the types.T is Signed integer type
-func IsSignedInt(t T) bool {
+// IsSignedInt return true if the types.T is Signed integer type
+func (t T) IsSignedInt() bool {
 	if t == T_int8 || t == T_int16 || t == T_int32 || t == T_int64 {
 		return true
 	}
 	return false
 }
 
-// if expr type is integer return true,else return false
-func IsInteger(t T) bool {
-	if IsUnsignedInt(t) || IsSignedInt(t) {
+// IsInteger if expr type is integer return true,else return false
+func (t T) IsInteger() bool {
+	if t.IsUnsignedInt() || t.IsSignedInt() {
 		return true
 	}
 	return false
 }
 
-// IsFloat: return true if the types.T is floating Point Types
-func IsFloat(t T) bool {
+// IsFloat return true if the types.T is floating Point Types
+func (t T) IsFloat() bool {
 	if t == T_float32 || t == T_float64 {
 		return true
 	}
 	return false
 }
 
-// isString: return true if the types.T is string type
-func IsString(t T) bool {
+// IsString return true if the types.T is string type
+// NOTE: types.IsVarlen() and t.IsString() are different. IsString() doesn't have T_Json type.
+func (t T) IsString() bool {
 	// Don't replace this with t.FixedLength()<0
 	// The t.FixedLength()<0 logic includes T_Json, which is not a MySQL string type.
 	// https://dev.mysql.com/doc/refman/8.0/en/string-types.html
@@ -662,15 +663,15 @@ func IsString(t T) bool {
 	return false
 }
 
-func IsDateRelate(t T) bool {
+func (t T) IsDateRelate() bool {
 	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
 		return true
 	}
 	return false
 }
 
-// IsDecimal: return true if the types.T is decimal64 or decimal128
-func IsDecimal(t T) bool {
+// IsDecimal return true if the types.T is decimal64 or decimal128
+func (t T) IsDecimal() bool {
 	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {
 		return true
 	}

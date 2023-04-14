@@ -391,7 +391,7 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Srcs:       a.srcs,
 	}
 	switch {
-	case types.IsString(a.otyp.Oid):
+	case a.otyp.Oid.IsString():
 		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -449,7 +449,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
 	switch {
-	case types.IsString(typ.Oid):
+	case typ.Oid.IsString():
 		a := agg.(*UnaryDistAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))
