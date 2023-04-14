@@ -115,7 +115,6 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		p.cleanup(proc, true)
 		return false, err
 	}
-	bat.Cnt = 1
 	pipelineInputBatches := []*batch.Batch{bat, nil}
 	for {
 		for i := range pipelineInputBatches {

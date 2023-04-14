@@ -218,9 +218,8 @@ func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
 		for _, vec := range vecs {
 			vec.Free(mp)
 		}
-		vp.vecs[k] = nil
+		delete(vp.vecs, k)
 	}
-	vp.vecs = nil
 }
 
 func (vp *vectorPool) putVector(vec *vector.Vector) {

@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
