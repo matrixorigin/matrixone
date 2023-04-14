@@ -54,7 +54,7 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 
 	lenRegs := len(ap.LocalRegs)
 	lenVecs := len(bat.Vecs)
-	preAllocLen := bat.Length()
+	preAllocLen := bat.Length() / lenRegs
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels := make([][]int32, lenRegs)
 	lenShuffledSels := make([]int, lenRegs)
@@ -73,7 +73,11 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
 	for row, v := range groupByVector {
 		regIndex := v % int64(lenRegs)
-		sels[regIndex][lenShuffledSels[regIndex]] = int32(row)
+		if lenShuffledSels[regIndex] < preAllocLen {
+			sels[regIndex][lenShuffledSels[regIndex]] = int32(row)
+		} else {
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 		lenShuffledSels[regIndex]++
 	}
 
