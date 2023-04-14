@@ -38,9 +38,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// -- new logic
 	lastNode := builder.qry.Nodes[lastNodeId]
+	lastTag := lastNode.BindingTags[0]
 	// append sink node
 	sinkTag := builder.genNewTag()
-	sinkProjection := getProjectionByPreProjection(lastNode.ProjectList, sinkTag)
+	sinkProjection := getProjectionByPreProjection(lastNode.ProjectList, lastTag)
 	sinkNode := &Node{
 		NodeType:    plan.Node_SINK,
 		Children:    []int32{lastNodeId},

@@ -40,6 +40,13 @@ func buildInsertPlans(
 	}
 
 	//make insert plans
+	// append hidden column to tableDef
+	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	}
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+	}
 	err = makeInsertPlan(ctx, builder, bindCtx, objRef, tableDef, sourceStep)
 	if err != nil {
 		return nil, err
@@ -55,14 +62,19 @@ func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info 
 	return query, err
 }
 
-// makePreInsertPlan  build preinsert plan.
+// buildDeletePlans  build preinsert plan.
 // sink_scan -> join[unique key] -> predelete[build partition] -> [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, beginIdx int, sourceStep int32, currentStep int32) (int32, error) {
 	var err error
-	sinkScanTag := builder.genNewTag()
-	sinkScanProjection := make([]*Expr, len(tableDef.Cols))
+	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep, currentStep)
+	sinkScanTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+
+	// append project Node to fetch the columns of this table
+	// we will opt it to only keep row_id/pk column in delete. but we need more columns in update
+	projectTag := builder.genNewTag()
+	projectProjection := make([]*Expr, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
-		sinkScanProjection[i] = &plan.Expr{
+		projectProjection[i] = &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -73,42 +85,81 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			},
 		}
 	}
-	sinkScanNode := &Node{
-		NodeType:    plan.Node_SINK_SCAN,
-		CurrentStep: currentStep,
-		BindingTags: []int32{sinkScanTag},
-		ProjectList: sinkScanProjection,
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{projectTag},
 		SourceStep:  sourceStep,
+		ProjectList: projectProjection,
 	}
-	lastNodeId := builder.appendNode(sinkScanNode, bindCtx)
+	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	// append join node to get unique key table's row_id/pk for delete
-	lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, tableDef, lastNodeId)
-	if err != nil {
-		return -1, err
-	}
+	haveUniqueKey := haveUniqueKey(tableDef)
+	if haveUniqueKey {
+		// append join node to get unique key table's row_id/pk for delete
+		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, tableDef, lastNodeId)
+		lastNode := builder.qry.Nodes[lastNodeId]
+		projectTag = lastNode.BindingTags[0]
+		projectProjection = lastNode.ProjectList
+		if err != nil {
+			return -1, err
+		}
 
-	// delete unique table
-	beginIdx := len(tableDef.Cols)
-	for i, indexdef := range tableDef.Indexes {
-		if indexdef.Unique {
-			_, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
-			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxTableDef, beginIdx, lastNodeId)
-			if err != nil {
-				return -1, err
+		// delete unique table
+		deleteIdx := len(tableDef.Cols)
+		for _, indexdef := range tableDef.Indexes {
+			if indexdef.Unique {
+				_, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxTableDef, deleteIdx, lastNodeId)
+				if err != nil {
+					return -1, err
+				}
+				beginIdx = beginIdx + 2 // row_id & pk
 			}
-			beginIdx = beginIdx + 2 // row_id & pk
 		}
 	}
 
 	// delete origin table
+	deleteIdx := -1
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			deleteIdx = i
+			break
+		}
+	}
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, tableDef, deleteIdx, lastNodeId)
+	if err != nil {
+		return -1, err
+	}
 
-	return currentStep, nil
+	// append project node in the end
+	endProjectProjection := getProjectionByPreProjection(projectProjection, projectTag)
+	endProjectTag := builder.genNewTag()
+	endProjectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{endProjectTag},
+		SourceStep:  sourceStep,
+		ProjectList: endProjectProjection,
+	}
+	lastNodeId = builder.appendNode(endProjectNode, bindCtx)
+
+	sourceStep = builder.appendStep(lastNodeId)
+	return sourceStep + 1, nil
+}
+
+func haveUniqueKey(tableDef *TableDef) bool {
+	for _, indexdef := range tableDef.Indexes {
+		if indexdef.Unique {
+			return true
+		}
+	}
+	return false
 }
 
 // makeOneDeletePlan
 // predelete[build partition] -> lock -> filter -> delete
-func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, beginIdx int, lastNodeId int32) (int32, error) {
+func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, deleteIdx int, lastNodeId int32) (int32, error) {
 	// todo: append predelete node to build partition id
 
 	// todo: append lock & filter
@@ -119,7 +170,7 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *Ta
 		NodeType:    plan.Node_DELETE,
 		BindingTags: []int32{deleteTag},
 		Children:    []int32{lastNodeId},
-		//deleteCtx  store index of row_id
+		DeleteCtx:   &plan.DeleteCtx{RowIdIdx: int32(deleteIdx)},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
 
@@ -129,19 +180,35 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *Ta
 // makePreInsertPlan  build preinsert plan.
 // xx -> preinsert -> sink
 func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32, lastNodeId int32, tableDef *TableDef) (int32, error) {
-	preTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+	preNode := builder.qry.Nodes[lastNodeId]
+	preTag := preNode.BindingTags[0]
 	preInsertTag := builder.genNewTag()
-	preInsertProjection := getProjectionByTableDef(tableDef, preTag, preInsertTag)
-	sinkProjection := getProjectionByPreProjection(preInsertProjection, preInsertTag)
+	sinkProjection := getProjectionByPreProjection(preNode.ProjectList, preTag)
+	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
+
+	preProjectLength := len(preNode.ProjectList)
+	for i, typ := range hiddenColumnTyp {
+		sinkProjection = append(sinkProjection, &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: preTag,
+					ColPos: int32(i + preProjectLength),
+					Name:   hiddenColumnName[i],
+				},
+			},
+		})
+	}
 
 	preInsertNode := &Node{
 		NodeType:    plan.Node_PRE_INSERT,
 		Children:    []int32{lastNodeId},
 		BindingTags: []int32{preInsertTag},
 		PreInsertCtx: &plan.PreInsertCtx{
-			Idx: idx,
+			Idx:              idx,
+			HiddenColumnTyp:  hiddenColumnTyp,
+			HiddenColumnName: hiddenColumnName,
 		},
-		ProjectList: preInsertProjection,
 	}
 	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
 
@@ -161,22 +228,12 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32,
 // makePreInsertUkPlan  build preinsert plan.
 // sink_scan -> preinsert_uk -> sink
 func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, sourceStep int32, indexIdx int) (int32, error) {
-	sinkScanTag := builder.genNewTag()
-	sinkScanProjection := getProjectionByTableDef(tableDef, sinkScanTag, sinkScanTag)
-	sinkScanNode := &Node{
-		NodeType:    plan.Node_SINK_SCAN,
-		CurrentStep: sourceStep + 1,
-		BindingTags: []int32{sinkScanTag},
-		ProjectList: sinkScanProjection,
-		SourceStep:  sourceStep,
-	}
-	lastNodeId := builder.appendNode(sinkScanNode, bindCtx)
+	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep, sourceStep+1)
+	sinkScanNode := builder.qry.Nodes[lastNodeId]
+	sinkScanTag := sinkScanNode.BindingTags[0]
 
 	preInsertUkTag := builder.genNewTag()
-	var sinkProjection []*Expr
-	var preInsertUkProjection []*Expr
-	var useColumns []*Expr
-	var pkColumn *Expr
+	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	partsMap := make(map[string]struct{})
 	for _, part := range idxDef.Parts {
@@ -184,54 +241,40 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 	}
 	for i, col := range tableDef.Cols {
 		if _, ok := partsMap[col.Name]; ok {
-			useColumns = append(useColumns, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: sinkScanTag,
-						ColPos: int32(i),
-						Name:   col.Name,
-					},
-				},
-			})
-			preInsertUkProjection = append(preInsertUkProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: preInsertUkTag,
-						ColPos: int32(i),
-						Name:   col.Name,
-					},
-				},
-			})
+			useColumns = append(useColumns, int32(i))
 		}
 	}
 
-	pkPos := getPkPos(tableDef)
-	// have pk
-	if pkPos > -1 {
-		lastIdx := int32(len(preInsertUkProjection))
-		col := tableDef.Cols[pkPos]
-		pkColumn = &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: sinkScanTag,
-					ColPos: lastIdx,
-					Name:   col.Name,
-				},
-			},
+	pkColumn := int32(getPkPos(tableDef))
+	var pkType *Type
+	var ukType *Type
+	if len(idxDef.Parts) == 1 {
+		ukType = tableDef.Cols[useColumns[0]].Typ
+	} else {
+		ukType = &Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
 		}
-		preInsertUkProjection = append(preInsertUkProjection, &plan.Expr{
-			Typ: col.Typ,
+	}
+	sinkProjection := getProjectionByPreProjection(sinkScanNode.ProjectList, sinkScanTag)
+	sinkProjection = append(sinkProjection, &plan.Expr{
+		Typ: ukType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: preInsertUkTag,
+				ColPos: 0,
+			},
+		}})
+	if pkColumn > -1 {
+		pkType = tableDef.Cols[pkColumn].Typ
+		sinkProjection = append(sinkProjection, &plan.Expr{
+			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: preInsertUkTag,
-					ColPos: lastIdx,
-					Name:   col.Name,
+					ColPos: 1,
 				},
-			},
-		})
+			}})
 	}
 	preInsertUkNode := &Node{
 		NodeType:    plan.Node_PRE_INSERT_UK,
@@ -240,8 +283,9 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 		PreInsertUkCtx: &plan.PreInsertUkCtx{
 			Columns:  useColumns,
 			PkColumn: pkColumn,
+			PkType:   pkType,
+			UkType:   ukType,
 		},
-		ProjectList: preInsertUkProjection,
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
@@ -256,6 +300,22 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 	sourceStep = builder.appendStep(lastNodeId)
 
 	return sourceStep, nil
+}
+
+func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep int32, currentStep int32) int32 {
+	sinkScanTag := builder.genNewTag()
+	lastNodeId := builder.qry.Steps[sourceStep]
+	lastNode := builder.qry.Nodes[lastNodeId]
+	sinkScanProject := getProjectionByPreProjection(lastNode.ProjectList, sinkScanTag)
+	sinkScanNode := &Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		CurrentStep: currentStep,
+		SourceStep:  sourceStep,
+		BindingTags: []int32{sinkScanTag},
+		ProjectList: sinkScanProject,
+	}
+	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+	return lastNodeId
 }
 
 // makeInsertPlan  build insert plan for one table
@@ -273,20 +333,17 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 [o]sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 */
 func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, sourceStep int32) error {
-	// make plan : sink_scan -> lock -> filter -> [project(if update)] -> join(check fk) -> filter -> insert
+
 	var lastNodeId int32
 	var err error
+
+	haveUniqueKey := haveUniqueKey(tableDef)
+	var insertUserTag int32
+
+	// make plan : sink_scan -> lock -> filter -> [project(if update)] -> join(check fk) -> filter -> insert -> sink/project
 	{
-		sinkScanTag := builder.genNewTag()
-		sinkScanProjection := getProjectionByTableDef(tableDef, sinkScanTag, sinkScanTag)
-		sinkScanNode := &Node{
-			NodeType:    plan.Node_SINK_SCAN,
-			CurrentStep: sourceStep + 1,
-			SourceStep:  sourceStep,
-			BindingTags: []int32{sinkScanTag},
-			ProjectList: sinkScanProjection,
-		}
-		lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep, sourceStep+1)
+		insertUserTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
 
 		// todo: append lock & filter nodes
 
@@ -297,7 +354,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				return err
 			}
 			lastNode := builder.qry.Nodes[lastNodeId]
-			lastTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
+			insertUserTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
 
 			//get filter exprs
@@ -309,7 +366,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					Typ: makePlan2Type(&rowIdTyp),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: lastTag,
+							RelPos: insertUserTag,
 							ColPos: int32(beginIdx + i),
 							Name:   catalog.Row_ID,
 						},
@@ -335,36 +392,93 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 		}
 
+		// in this case. insert columns in front of batch
+		insertIdx := make([]int32, len(tableDef.Cols))
+		for i := range tableDef.Cols {
+			insertIdx[i] = int32(i)
+		}
 		insertNode := &Node{
 			NodeType: plan.Node_INSERT,
 			ObjRef:   objRef,
+			InsertCtx: &plan.InsertCtx{
+				Columns: insertIdx,
+			},
 			Children: []int32{lastNodeId},
 		}
 		lastNodeId = builder.appendNode(insertNode, bindCtx)
-		builder.appendStep(lastNodeId)
+
+		if haveUniqueKey {
+			// append sink
+			sinkTag := builder.genNewTag()
+			sinkProjection := make([]*Expr, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				sinkProjection[i] = &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: insertUserTag,
+							ColPos: int32(i),
+							Name:   col.Name,
+						},
+					},
+				}
+			}
+			sinkNode := &Node{
+				NodeType:    plan.Node_SINK,
+				Children:    []int32{lastNodeId},
+				BindingTags: []int32{sinkTag},
+				ProjectList: sinkProjection,
+			}
+			lastNodeId = builder.appendNode(sinkNode, bindCtx)
+			uniqueSourceStep := builder.appendStep(lastNodeId)
+
+			// append plan for the hidden tables of unique keys
+			for i, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
+					idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+					//make preinsert_uk plan,  to build the batch to insert
+					newSourceStep, err := makePreInsertUkPlan(builder, bindCtx, tableDef, uniqueSourceStep, i)
+					if err != nil {
+						return err
+					}
+
+					//make insert plans(for unique key table)
+					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, newSourceStep)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			// append project after insert Node
+			projectTag := builder.genNewTag()
+			projectProjection := make([]*Expr, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				projectProjection[i] = &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: insertUserTag,
+							ColPos: int32(i),
+							Name:   col.Name,
+						},
+					},
+				}
+			}
+			projectNode := &Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeId},
+				BindingTags: []int32{projectTag},
+				ProjectList: projectProjection,
+			}
+			lastNodeId = builder.appendNode(projectNode, bindCtx)
+			builder.appendStep(lastNodeId)
+		}
 	}
 
 	// todo: make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 
 	// todo: make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-
-	// append plan for the hidden tables of unique keys
-	for i, indexdef := range tableDef.Indexes {
-		if indexdef.Unique {
-			idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
-			//make preinsert_uk plan,  to build the batch to insert
-			newSourceStep, err := makePreInsertUkPlan(builder, bindCtx, tableDef, sourceStep, i)
-			if err != nil {
-				return err
-			}
-
-			//make insert plans(for unique key table)
-			err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, newSourceStep)
-			if err != nil {
-				return err
-			}
-		}
-	}
 
 	return nil
 }
@@ -518,6 +632,19 @@ func getProjectionByPreProjection(preNodeProjection []*Expr, tag int32) []*Expr 
 	return projection
 }
 
+func getHiddenColumnForPreInsert(tableDef *TableDef) ([]*Type, []string) {
+	var typs []*Type
+	var names []string
+	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		typs = append(typs, makeHiddenColTyp())
+		names = append(names, catalog.CPrimaryKeyColName)
+	} else if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		typs = append(typs, makeHiddenColTyp())
+		names = append(names, tableDef.ClusterBy.Name)
+	}
+	return typs, names
+}
+
 func getProjectionByTableDef(tableDef *TableDef, preTag int32, nowTag int32) []*Expr {
 	var projection []*Expr
 	for i, col := range tableDef.Cols {
@@ -561,10 +688,12 @@ func getProjectionByTableDef(tableDef *TableDef, preTag int32, nowTag int32) []*
 }
 
 func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, baseNodeId int32) (int32, error) {
-	var projectList []*Expr
 	lastNodeId := baseNodeId
 	typMap := make(map[string]*plan.Type)
 	posMap := make(map[string]int)
+	baseNode := builder.qry.Nodes[baseNodeId]
+	baseTag := baseNode.BindingTags[0]
+	projectList := getProjectionByPreProjection(baseNode.ProjectList, baseTag)
 	for idx, col := range tableDef.Cols {
 		posMap[col.Name] = idx
 		typMap[col.Name] = col.Typ
@@ -581,16 +710,15 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 				return -1, err
 			}
 			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-			baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 			rightTableDef := builder.qry.Nodes[rightId].TableDef
 
 			var rightRowIdPos int32 = -1
-			var rightIdxPos int32 = -1 //it's also a primary key.
+			var rightPkPos int32 = -1
 			for colIdx, col := range rightTableDef.Cols {
 				if col.Name == catalog.Row_ID {
 					rightRowIdPos = int32(colIdx)
 				} else if col.Name == catalog.IndexTableIndexColName {
-					rightIdxPos = int32(colIdx)
+					rightPkPos = int32(colIdx)
 				}
 			}
 
@@ -603,24 +731,22 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 						ColPos: rightRowIdPos,
 					},
 				},
-			})
-
-			projectList = append(projectList, &plan.Expr{
-				Typ: rightTableDef.Cols[rightIdxPos].Typ,
+			}, &plan.Expr{
+				Typ: rightTableDef.Cols[rightPkPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
-						ColPos: rightIdxPos,
+						ColPos: rightPkPos,
 					},
 				},
 			})
 
 			rightExpr := &plan.Expr{
-				Typ: rightTableDef.Cols[rightIdxPos].Typ,
+				Typ: rightTableDef.Cols[rightPkPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
-						ColPos: rightIdxPos,
+						ColPos: rightPkPos,
 					},
 				},
 			}
@@ -681,5 +807,15 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 			bindCtx.binder = NewTableBinder(builder, bindCtx)
 		}
 	}
+
+	// append project node to make sure we only get the columns: origin table's columns + row_id/pk of unique table
+	projectNodeTag := builder.genNewTag()
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{projectNodeTag},
+		ProjectList: projectList,
+	}, bindCtx)
+
 	return lastNodeId, nil
 }

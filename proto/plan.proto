@@ -483,6 +483,8 @@ message InsertCtx {
 	map<string, int32> parent_idx 	= 7;
 
 	ClusterTable cluster_table = 8;
+
+	repeated int32 columns = 9;
 }
 
 message UpdateCtx {
@@ -675,8 +677,10 @@ message Node {
 
 message PreInsertUkCtx {
 	// index of columns(parts of unique key) in pre batch
-	repeated Expr columns 	= 1;
-	Expr pk_column 			= 2;  
+	repeated int32 columns 	= 1;
+	int32 pk_column 		= 2;
+	Type pk_type 			= 3;
+	Type uk_type			= 4;
 }
 
 message PreDeleteCtx {
@@ -687,6 +691,8 @@ message PreDeleteCtx {
 message PreInsertCtx {
 	//the indexes of insert columns in the batch
 	repeated int32 idx 	= 1;
+	repeated Type hidden_column_typ = 2;
+	repeated string hidden_column_name = 3;
 }
 
 message IdList {
@@ -716,6 +722,7 @@ message DeleteCtx {
 	repeated ColPosMap on_set_update_col 	= 12;
 
 	bool can_truncate = 13;
+	int32 row_id_idx = 14;
 }
 
 message Query {

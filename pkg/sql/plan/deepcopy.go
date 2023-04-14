@@ -70,10 +70,13 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
 
 		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
+
+		Columns: make([]int32, len(ctx.Columns)),
 	}
 
 	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
 	copy(newCtx.IdxIdx, ctx.IdxIdx)
+	copy(newCtx.Columns, ctx.Columns)
 
 	for i, ref := range ctx.IdxRef {
 		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
@@ -101,6 +104,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	}
 	newCtx := &plan.DeleteCtx{
 		CanTruncate:   ctx.CanTruncate,
+		RowIdIdx:      ctx.RowIdIdx,
 		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
 		IdxIdx:        make([]int32, len(ctx.IdxIdx)),
 		OnCascadeIdx:  make([]int32, len(ctx.OnCascadeIdx)),
@@ -287,9 +291,15 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Idx: make([]int32, len(ctx.Idx)),
+		Idx:              make([]int32, len(ctx.Idx)),
+		HiddenColumnTyp:  make([]*plan.Type, len(ctx.HiddenColumnTyp)),
+		HiddenColumnName: make([]string, len(ctx.HiddenColumnName)),
 	}
 	copy(newCtx.Idx, ctx.Idx)
+	copy(newCtx.HiddenColumnName, ctx.HiddenColumnName)
+	for i, typ := range ctx.HiddenColumnTyp {
+		ctx.HiddenColumnTyp[i] = DeepCopyTyp(typ)
+	}
 
 	return newCtx
 }
@@ -299,12 +309,12 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:  make([]*Expr, len(ctx.Columns)),
-		PkColumn: DeepCopyExpr(ctx.PkColumn),
+		Columns:  make([]int32, len(ctx.Columns)),
+		PkColumn: ctx.PkColumn,
+		PkType:   DeepCopyTyp(ctx.PkType),
+		UkType:   DeepCopyTyp(ctx.UkType),
 	}
-	for i, col := range ctx.Columns {
-		newCtx.Columns[i] = DeepCopyExpr(col)
-	}
+	copy(newCtx.Columns, ctx.Columns)
 
 	return newCtx
 }
@@ -467,6 +477,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
+		Hidden:    col.Hidden,
 		Typ:       DeepCopyTyp(col.Typ),
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
