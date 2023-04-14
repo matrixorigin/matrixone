@@ -737,7 +737,7 @@ var (
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
-	// mo_indexes table does not have primary keys and index constraints, nor does it have self increasing columns,
+	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
@@ -750,14 +750,15 @@ var (
 				column_name    varchar(256) not null,
 				ordinal_position  int unsigned  not null,
 				options     text,
-				index_table_name varchar(5000)
+				index_table_name varchar(5000),
+				primary key(id, column_name)
 			);`
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
 		`create table mo_user(
-				user_id int signed auto_increment,
+				user_id int signed auto_increment primary key,
 				user_host varchar(100),
 				user_name varchar(300),
 				authentication_string varchar(100),
@@ -770,7 +771,7 @@ var (
 				default_role int signed
     		);`,
 		`create table mo_account(
-				account_id int signed auto_increment,
+				account_id int signed auto_increment primary key,
 				account_name varchar(300),
 				status varchar(300),
 				created_time timestamp,
@@ -779,7 +780,7 @@ var (
 				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(
-				role_id int signed auto_increment,
+				role_id int signed auto_increment primary key,
 				role_name varchar(300),
 				creator int signed,
 				owner int signed,
@@ -790,7 +791,8 @@ var (
 				role_id int signed,
 				user_id int signed,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(role_id, user_id)
 			);`,
 		`create table mo_role_grant(
 				granted_id int signed,
@@ -798,7 +800,8 @@ var (
 				operation_role_id int signed,
 				operation_user_id int signed,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(granted_id, grantee_id)
 			);`,
 		`create table mo_role_privs(
 				role_id int signed,
@@ -810,7 +813,8 @@ var (
 				privilege_level varchar(100),
 				operation_user_id int unsigned,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
 			);`,
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
