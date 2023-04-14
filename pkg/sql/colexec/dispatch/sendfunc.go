@@ -49,10 +49,7 @@ const (
 	ShuffleToAllLocalFunc
 )
 
-// common sender: shuffle to all LocalReceiver
-func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-
-	lenRegs := len(ap.LocalRegs)
+func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
 	lenVecs := len(bat.Vecs)
 	preAllocLen := bat.Length() / lenRegs
 	if preAllocLen < 1024 {
@@ -86,13 +83,23 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 			v := b.Vecs[vecIndex]
 			err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
 			if err != nil {
-				return false, err
+				return nil, err
 			}
 		}
 		b.Zs = make([]int64, lenShuffledSels[regIndex])
 		for i := 0; i < lenShuffledSels[regIndex]; i++ {
 			b.Zs[i] = bat.Zs[sels[regIndex][i]]
 		}
+	}
+
+	return shuffledBats, nil
+}
+
+// common sender: shuffle to all LocalReceiver
+func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	shuffledBats, err := getShuffledBats(bat, len(ap.LocalRegs), proc)
+	if err != nil {
+		return false, err
 	}
 
 	for i, reg := range ap.LocalRegs {
@@ -132,18 +139,21 @@ func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Proces
 		ap.waitRemoteRegsReady(proc)
 	}
 
-	{ // send to remote regs
-		encodeData, errEncode := types.Encode(bat)
+	shuffledBats, err := getShuffledBats(bat, len(ap.ctr.remoteReceivers), proc)
+	if err != nil {
+		return false, err
+	}
+
+	// send to remote regs
+	for i, r := range ap.ctr.remoteReceivers {
+		encodeData, errEncode := types.Encode(shuffledBats[i])
 		if errEncode != nil {
 			return false, errEncode
 		}
-		for _, r := range ap.ctr.remoteReceivers {
-			if err := sendBatchToClientSession(encodeData, r); err != nil {
-				return false, err
-			}
+		if err := sendBatchToClientSession(encodeData, r); err != nil {
+			return false, err
 		}
 	}
-
 	return false, nil
 }
 
