@@ -141,7 +141,7 @@ func main() {
 		readProc := func(reader engine.Reader) {
 			defer wg.Done()
 			for {
-				bat, err := reader.Read(ctx, []string{schema.ColDefs[0].Name}, nil, m)
+				bat, err := reader.Read(ctx, []string{schema.ColDefs[0].Name}, nil, m, nil)
 				if err != nil {
 					panic(err)
 				}

@@ -146,7 +146,7 @@ func TestEngine(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, m, nil)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
@@ -255,7 +255,7 @@ func TestEngineAllType(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(ctx, schema.Attrs(), nil, m)
+		bat, err := reader.Read(ctx, schema.Attrs(), nil, m, nil)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
@@ -328,7 +328,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	delete := mobat.New(true, bat.Attrs)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m, nil)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 100, bat.Vecs[0].Length())
@@ -360,7 +360,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	readers, _ = rel.NewReader(ctx, 1, nil, nil)
 	m = mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m, nil)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 0, bat.Vecs[0].Length())
