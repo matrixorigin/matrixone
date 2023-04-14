@@ -163,7 +163,6 @@ func (w *ObjectWriter) prepareBlockMeta(offset uint32) uint32 {
 }
 
 func (w *ObjectWriter) prepareBloomFilter(blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	var err error
 	bloomFilter := new(bytes.Buffer)
 	bloomFilterStart := uint32(0)
 	bloomFilterIndex := BuildBlockIndex(blockCount)
@@ -178,17 +177,10 @@ func (w *ObjectWriter) prepareBloomFilter(blockCount uint32, offset uint32) ([]b
 	for _, block := range w.blocks {
 		bloomFilter.Write(block.bloomFilter)
 	}
-	dataLen := len(bloomFilter.Bytes())
-	bloomFilterData := make([]byte, lz4.CompressBlockBound(dataLen))
-	if bloomFilterData, err = compress.Compress(bloomFilter.Bytes(), bloomFilterData, compress.Lz4); err != nil {
-		return nil, nil, err
-	}
-	bloomFilterExtent := NewExtent(compress.Lz4, offset, uint32(len(bloomFilterData)), uint32(dataLen))
-	return bloomFilterData, bloomFilterExtent, nil
+	return w.WriteWithCompress(offset, bloomFilter.Bytes())
 }
 
 func (w *ObjectWriter) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	var err error
 	zoneMapArea := new(bytes.Buffer)
 	zoneMapAreaStart := uint32(0)
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
@@ -205,14 +197,7 @@ func (w *ObjectWriter) prepareZoneMapArea(blockCount uint32, offset uint32) ([]b
 			zoneMapArea.Write(block.meta.ColumnMeta(uint16(i)).ZoneMap())
 		}
 	}
-	dataLen := len(zoneMapArea.Bytes())
-	zoneMapAreaData := make([]byte, lz4.CompressBlockBound(dataLen))
-	if zoneMapAreaData, err = compress.Compress(zoneMapArea.Bytes(), zoneMapAreaData, compress.Lz4); err != nil {
-		return nil, nil, err
-	}
-	zoneMapAreaExtent := NewExtent(compress.Lz4, offset, uint32(len(zoneMapAreaData)), uint32(dataLen))
-
-	return zoneMapAreaData, zoneMapAreaExtent, nil
+	return w.WriteWithCompress(offset, zoneMapArea.Bytes())
 }
 
 func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
@@ -232,14 +217,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(columnCount)
 
-	// CHANGE ME
+	// prepare object meta and block index
 	objectMeta, blockIndex, offset := w.prepareObjectMeta(columnCount)
 	objectMetaLocation := objectMeta.BlockHeader().MetaLocation()
 	objectHeader.SetLocation(objectMetaLocation)
 	offset += HeaderSize
 	offset = w.prepareBlockMeta(offset)
-	//offset += length
 
+	// prepare bloom filter
 	bloomFilterData, bloomFilterExtent, err := w.prepareBloomFilter(blockCount, offset)
 	if err != nil {
 		return nil, err
@@ -247,6 +232,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
 	offset += uint32(len(bloomFilterData))
 
+	// prepare zone map area
 	zoneMapAreaData, zoneMapAreaExtent, err := w.prepareZoneMapArea(blockCount, offset)
 	if err != nil {
 		return nil, err
@@ -348,38 +334,39 @@ func (w *ObjectWriter) Sync(ctx context.Context, items ...WriteOptions) error {
 	return err
 }
 
-func (b *blockData) WriteWithCompress(buf []byte) (extent Extent, err error) {
+func (w *ObjectWriter) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
 	dataLen := len(buf)
-	data := make([]byte, lz4.CompressBlockBound(dataLen))
+	data = make([]byte, lz4.CompressBlockBound(dataLen))
 	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
 		return
 	}
-	b.data = append(b.data, data)
-	extent = NewExtent(compress.Lz4, 0, uint32(len(data)), uint32(dataLen))
+	extent = NewExtent(compress.Lz4, offset, uint32(len(data)), uint32(dataLen))
 	return
 }
 
-func (w *ObjectWriter) AddBlock(block BlockObject, bat *batch.Batch) error {
+func (w *ObjectWriter) AddBlock(blockMeta BlockObject, bat *batch.Batch) error {
 	w.Lock()
 	defer w.Unlock()
 	// CHANGE ME
 	// block.BlockHeader().SetBlockID(w.lastId)
-	block.BlockHeader().SetSequence(uint16(w.lastId))
+	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
 
-	data := blockData{meta: block}
+	block := blockData{meta: blockMeta}
+	var data []byte
 	for i, vec := range bat.Vecs {
 		buf, err := vec.MarshalBinary()
 		if err != nil {
 			return err
 		}
 		var ext Extent
-		if ext, err = data.WriteWithCompress(buf); err != nil {
+		if data, ext, err = w.WriteWithCompress(0, buf); err != nil {
 			return err
 		}
-		block.ColumnMeta(uint16(i)).setLocation(ext)
-		block.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
+		block.data = append(block.data, data)
+		blockMeta.ColumnMeta(uint16(i)).setLocation(ext)
+		blockMeta.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
 	}
-	w.blocks = append(w.blocks, data)
+	w.blocks = append(w.blocks, block)
 	w.lastId++
 	return nil
 }
