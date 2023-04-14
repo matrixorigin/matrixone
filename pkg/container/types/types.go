@@ -653,6 +653,9 @@ func IsFloat(t T) bool {
 
 // isString: return true if the types.T is string type
 func IsString(t T) bool {
+	// Don't replace this with t.FixedLength()<0
+	// The t.FixedLength()<0 logic includes T_Json, which is not a MySQL string type.
+	// https://dev.mysql.com/doc/refman/8.0/en/string-types.html
 	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
 		return true
 	}
