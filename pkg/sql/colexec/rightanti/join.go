@@ -161,7 +161,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[i])
 		}
 	}
-	rbat.ExpandNulls()
 	analyze.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil
