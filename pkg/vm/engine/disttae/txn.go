@@ -128,7 +128,7 @@ func (txn *Transaction) WriteBatch(
 
 func (txn *Transaction) CleanNilBatch() {
 	for i := 0; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
 			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			i--
 		}
@@ -144,6 +144,9 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	}
 	txn.Lock()
 	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].bat == nil {
+			continue
+		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			size += uint64(txn.writes[i].bat.Size())
 		}
@@ -154,7 +157,8 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	}
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		// TODO: after shrink, we should update workspace size
+		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
@@ -169,7 +173,6 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			// maybe this will cause that the log imcrements unlimitly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
-			txn.writes[i].bat.Clean(txn.proc.GetMPool())
 			txn.writes[i].bat = nil
 		}
 	}
@@ -198,6 +201,10 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
+		}
+		// free batches
+		for _, bat := range mp[key] {
+			bat.Clean(txn.proc.GetMPool())
 		}
 	}
 	txn.workspaceSize -= size
@@ -296,7 +303,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	min1 := uint32(math.MaxUint32)
 	max1 := uint32(0)
-	for _, rowid := range rowids {
+	cnRowIdOffsets := make([]int64, 0, len(rowids))
+	for i, rowid := range rowids {
 		// process cn block deletes
 		uid := rowid.GetSegid()
 		blkid := rowid.GetBlockid()
@@ -304,6 +312,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		rowOffset := rowid.GetRowOffset()
 		if colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
 			txn.cnBlockDeletesMap.PutCnBlockDeletes(string(blkid[:]), []int64{int64(rowOffset)})
+			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
 		if rowOffset < (min1) {
@@ -315,10 +324,17 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		}
 		// update workspace
 	}
-
+	// cn rowId antiShrink
+	bat.AntiShrink(cnRowIdOffsets)
+	if bat.Length() == 0 {
+		return bat
+	}
 	sels := txn.proc.Mp().GetSels()
 	txn.Lock()
 	for _, e := range txn.writes {
+		if e.bat == nil {
+			continue
+		}
 		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			continue
 		}
@@ -345,6 +361,10 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			}
 			if len(sels) != len(vs) {
 				e.bat.Shrink(sels)
+				rowIds := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
+				for i := range rowIds {
+					(&rowIds[i]).SetRowOffset(uint32(i))
+				}
 			}
 		}
 	}

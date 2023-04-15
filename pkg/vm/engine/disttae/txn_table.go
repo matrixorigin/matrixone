@@ -566,9 +566,10 @@ func (tbl *txnTable) compaction() error {
 		}
 		if tbl.idxs == nil {
 			idxs := make([]uint16, 0, len(tbl.tableDef.Cols)-1)
-			for i := 0; i < len(tbl.tableDef.Cols); i++ {
+			for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 				idxs = append(idxs, uint16(i))
 			}
+			tbl.idxs = idxs
 		}
 		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
 		if err != nil {
@@ -581,27 +582,27 @@ func (tbl *txnTable) compaction() error {
 		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
 		// and make sure one block has as close as possible to 8192 rows
+		// if the batch is little we should not flush, improve this in next pr.
 		s3writer.WriteBlock(bat)
 		batchNums++
 	}
-	if batchNums == 0 {
-		return nil
-	}
-	metaLocs, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
-	if err != nil {
-		return err
-	}
-	new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
-	new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-	for _, metaLoc := range metaLocs {
-		vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
-	}
-	new_bat.SetZs(len(metaLocs), tbl.db.txn.proc.GetMPool())
-	err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, name.String(), new_bat, tbl.db.txn.dnStores[0])
-	if err != nil {
-		return err
-	}
 
+	if batchNums > 0 {
+		metaLocs, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
+		if err != nil {
+			return err
+		}
+		new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		for _, metaLoc := range metaLocs {
+			vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
+		}
+		new_bat.SetZs(len(metaLocs), tbl.db.txn.proc.GetMPool())
+		err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, name.String(), new_bat, tbl.db.txn.dnStores[0])
+		if err != nil {
+			return err
+		}
+	}
 	remove_batch := make(map[*batch.Batch]bool)
 	// delete old block info
 	for idx, offsets := range mp {

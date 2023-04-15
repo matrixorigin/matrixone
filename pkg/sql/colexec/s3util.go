@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -579,9 +577,6 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
 			blocks[j].GetID(),
 		).String()
 		metaLocs = append(metaLocs, metaLoc)
-		if metaLoc == "" {
-			fmt.Println("error")
-		}
 	}
 	return metaLocs, err
 }
