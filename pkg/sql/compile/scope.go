@@ -315,43 +315,43 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
-	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel32 := make(chan *[]int32)
-		channel8 := make(chan *[]uint8)
+		channel := make(chan *[]uint8)
 		for i := range s.PreScopes {
 			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
 			case *right.Argument:
-				arg.Channel = channel32
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 
 			case *rightsemi.Argument:
-				arg.Channel = channel8
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 
 			case *rightanti.Argument:
-				arg.Channel = channel8
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 			}
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, left_scope)
-	s.PreScopes = append(s.PreScopes, right_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
+	s.PreScopes = append(s.PreScopes, build_scope)
 
 	return s.MergeRun(c)
 }
+
 func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }

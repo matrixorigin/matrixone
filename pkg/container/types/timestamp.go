@@ -88,6 +88,10 @@ func (ts Timestamp) UnixToFloat() float64 {
 	return float64(int64(ts)-unixEpochMicroSecs) / microSecsPerSec
 }
 
+func (ts Timestamp) UnixToDecimal64() (Decimal64, error) {
+	return Decimal64(int64(ts) - unixEpochMicroSecs), nil
+}
+
 func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
 	return Decimal128{uint64(int64(ts) - unixEpochMicroSecs), 0}, nil
 }

@@ -139,14 +139,6 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (bat *Batch) ExpandNulls() {
-	if len(bat.Zs) > 0 {
-		for i := range bat.Vecs {
-			bat.Vecs[i].TryExpandNulls(len(bat.Zs))
-		}
-	}
-}
-
 // I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
 	mp := make(map[*vector.Vector]uint8)
@@ -291,12 +283,8 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
 	fault.TriggerFault("panic_in_batch_append")
 
-	flags := make([]uint8, b.Vecs[0].Length())
-	for i := range flags {
-		flags[i]++
-	}
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), flags[:b.Vecs[i].Length()], mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
 		}
 	}

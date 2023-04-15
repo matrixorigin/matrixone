@@ -67,6 +67,9 @@ type ClientConn interface {
 	ConnID() uint32
 	// GetSalt returns the salt value of this connection.
 	GetSalt() []byte
+	// GetHandshakePack returns the handshake response packet
+	// which is received from client.
+	GetHandshakePack() *frontend.Packet
 	// RawConn return the raw connection.
 	RawConn() net.Conn
 	// GetTenant returns the tenant which this connection belongs to.
@@ -83,6 +86,8 @@ type ClientConn interface {
 	// finished already.
 	// If handshake is false, ignore the handshake phase.
 	BuildConnWithServer(handshake bool) (ServerConn, error)
+	// HandleEvent handles event that comes from tunnel data flow.
+	HandleEvent(ctx context.Context, e IEventReq, resp chan<- []byte) error
 	// Close closes the client connection.
 	Close() error
 }
@@ -160,6 +165,11 @@ func (c *clientConn) GetSalt() []byte {
 	return c.mysqlProto.GetSalt()
 }
 
+// GetHandshakePack implements the ClientConn interface.
+func (c *clientConn) GetHandshakePack() *frontend.Packet {
+	return c.handshakePack
+}
+
 // RawConn implements the ClientConn interface.
 func (c *clientConn) RawConn() net.Conn {
 	if c != nil {
@@ -209,6 +219,62 @@ func (c *clientConn) BuildConnWithServer(handshake bool) (ServerConn, error) {
 	return conn, nil
 }
 
+// HandleEvent implements the ClientConn interface.
+func (c *clientConn) HandleEvent(ctx context.Context, e IEventReq, resp chan<- []byte) error {
+	switch ev := e.(type) {
+	case *killQueryEvent:
+		return c.handleKillQuery(ev, resp)
+	default:
+	}
+	return nil
+}
+
+// handleKillQuery handles the kill query event.
+func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) error {
+	sendErr := func(errMsg string) {
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		payload := c.mysqlProto.MakeErrPayload(
+			fail.ErrorCode, fail.SqlStates[0], errMsg)
+		r := &frontend.Packet{
+			Length:     0,
+			SequenceID: 1,
+			Payload:    payload,
+		}
+		sendResp(packetToBytes(r), resp)
+	}
+
+	cn, err := c.router.SelectByConnID(e.connID)
+	if err != nil {
+		c.log.Error("failed to select CN server", zap.Error(err))
+		sendErr(err.Error())
+		return err
+	}
+	// Before connect to backend server, update the salt.
+	cn.salt = c.mysqlProto.GetSalt()
+
+	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
+	if err != nil {
+		c.log.Error("failed to connect to backend server", zap.Error(err))
+		sendErr(err.Error())
+		return err
+	}
+	defer func() { _ = sc.Close() }()
+
+	if !isOKPacket(r) {
+		c.log.Error("failed to connect to cn to handle kill query event",
+			zap.String("query", e.stmt), zap.String("error", string(r)))
+		sendResp(r, resp)
+		return moerr.NewInternalErrorNoCtx("access error")
+	}
+
+	err = sc.ExecStmt(e.stmt, resp)
+	if err != nil {
+		c.log.Error("failed to send query %s to server",
+			zap.String("query", e.stmt), zap.Error(err))
+	}
+	return nil
+}
+
 // Close implements the ClientConn interface.
 func (c *clientConn) Close() error {
 	return nil
@@ -228,7 +294,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	// Select the best CN server from backend.
 	//
 	// NB: The selected CNServer must have label hash in it.
-	cn, err := c.router.Select(c.labelInfo)
+	cn, err := c.router.SelectByLabel(c.labelInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +306,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 	if sendToClient {
 		// r is the packet received from CN server, send r to client.
-		if err := c.mysqlProto.WritePacket(r); err != nil {
+		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
 			return nil, err
 		}
 	}
