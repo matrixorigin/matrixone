@@ -201,8 +201,6 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
 begin;
 insert into t select * from t;
 delete from t where a > 1;

@@ -241,7 +241,49 @@ select count(*) from t;
 count(*)
 8387584
 rollback;
+begin;
+insert into t select * from t;
+delete from t where a = 1;
 select count(*) from t;
 count(*)
-4194304
+8387584
+commit;
+select count(*) from t;
+count(*)
+8387584
+drop database if exists test;
+create database test;
+use test;
+create table temp(a int);
+insert into temp select * from generate_series(1,8192) g;
+create table t(a int);
+insert into t select * from temp;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+begin;
+insert into t select * from t;
+delete from t where a > 1;
+select count(*) from t;
+count(*)
+512
+rollback;
+select count(*) from t;
+count(*)
+2097152
+begin;
+insert into t select * from t;
+delete from t where a > 1;
+select count(*) from t;
+count(*)
+512
+commit;
+select count(*) from t;
+count(*)
+512
 drop database if exists test;
