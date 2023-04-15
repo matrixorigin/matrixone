@@ -531,6 +531,9 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
 		txn.writes[i].bat.Clean(e.mp)
 	}
 	txn.tableMap = nil

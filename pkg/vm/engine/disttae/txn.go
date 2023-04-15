@@ -169,6 +169,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			// maybe this will cause that the log imcrements unlimitly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
+			txn.writes[i].bat.Clean(txn.proc.GetMPool())
 			txn.writes[i].bat = nil
 		}
 	}

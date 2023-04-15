@@ -620,6 +620,7 @@ func (tbl *txnTable) compaction() error {
 			// maybe this will cause that the log imcrements unlimitly.
 			// tbl.db.txn.writes = append(tbl.db.txn.writes[:i], tbl.db.txn.writes[i+1:]...)
 			// i--
+			tbl.db.txn.writes[i].bat.Clean(tbl.db.txn.proc.GetMPool())
 			tbl.db.txn.writes[i].bat = nil
 		}
 	}
