@@ -18,9 +18,7 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/pierrec/lz4"
 )
 
 // ObjectBuffer is the buffer prepared before writing to
@@ -43,7 +41,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	return buffer
 }
 
-func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error) {
+func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int) {
 	offset := int64(0)
 	le := len(b.vector.Entries)
 	if len(b.vector.Entries) > 0 {
@@ -56,22 +54,7 @@ func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error
 		Data:   buf,
 	}
 	b.vector.Entries = append(b.vector.Entries, entry)
-	return int(offset), len(buf), nil
-}
-
-func (b *ObjectBuffer) WriteWithIndex(buf []byte, index uint32) (int, int, error) {
-	offset := int64(0)
-	if len(b.vector.Entries) > 0 {
-		offset = b.vector.Entries[index-1].Offset +
-			b.vector.Entries[index-1].Size
-	}
-	entry := fileservice.IOEntry{
-		Offset: offset,
-		Size:   int64(len(buf)),
-		Data:   buf,
-	}
-	b.vector.Entries[index] = entry
-	return int(offset), len(buf), nil
+	return int(offset), len(buf)
 }
 
 func (b *ObjectBuffer) Length() int {
@@ -95,18 +78,4 @@ func (b *ObjectBuffer) SetDataOptions(items ...WriteOptions) {
 			continue
 		}
 	}
-}
-
-func (b *ObjectBuffer) WriteWithCompress(buf []byte) (ext Extent, err error) {
-	dataLen := len(buf)
-	data := make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
-		return
-	}
-	offset, length, err := b.Write(data)
-	if err != nil {
-		return
-	}
-	ext = NewExtent(0, uint32(offset), uint32(length), uint32(dataLen))
-	return
 }

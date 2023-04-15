@@ -145,7 +145,7 @@ func (w *ObjectWriter) prepareObjectMeta(columnCount uint16) (ObjectMeta, BlockI
 		blockIndex.SetBlockMetaPos(uint32(i), offset, n)
 		offset += n
 	}
-	extent := NewExtent(0, HeaderSize, offset, offset)
+	extent := NewExtent(compress.None, HeaderSize, offset, offset)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 	return objectMeta, blockIndex, offset
 }
@@ -241,52 +241,28 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	// begin write
 
 	// writer object header
-	_, _, err = w.buffer.Write(objectHeader)
-	if err != nil {
-		return nil, err
-	}
+	w.buffer.Write(objectHeader)
 	// writer object metadata
-	_, _, err = w.buffer.Write(objectMeta)
-	if err != nil {
-		return nil, err
-	}
-
+	w.buffer.Write(objectMeta)
 	// writer block index
-	_, _, err = w.buffer.Write(blockIndex)
-	if err != nil {
-		return nil, err
-	}
+	w.buffer.Write(blockIndex)
 
 	// writer block metadata
 	for _, block := range w.blocks {
-		_, _, err = w.buffer.Write(block.meta)
-		if err != nil {
-			return nil, err
-		}
-
+		w.buffer.Write(block.meta)
 	}
 
 	// writer data& bloom filter
 	for _, block := range w.blocks {
 		for _, data := range block.data {
-			_, _, err = w.buffer.Write(data)
-			if err != nil {
-				return nil, err
-			}
+			w.buffer.Write(data)
 		}
-
 	}
 
 	// writer bloom filter
-	_, _, err = w.buffer.Write(bloomFilterData)
-	if err != nil {
-		return nil, err
-	}
+	w.buffer.Write(bloomFilterData)
 
-	_, _, err = w.buffer.Write(zoneMapAreaData)
-	if err != nil {
-		return nil, err
-	}
+	w.buffer.Write(zoneMapAreaData)
 
 	// write footer
 	footer := Footer{
@@ -295,9 +271,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		magic:      Magic,
 	}
 
-	if _, _, err = w.buffer.Write(footer.Marshal()); err != nil {
-		return nil, err
-	}
+	w.buffer.Write(footer.Marshal())
 	if err != nil {
 		return nil, err
 	}

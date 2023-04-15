@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -188,7 +187,6 @@ func (r *ObjectReader) ReadBloomFilter(
 
 		ToObject: readFunc(int64(extent.OriginSize())),
 	}
-	logutil.Infof("ReadBloomFilter %v", extent.String())
 	err := r.object.fs.Read(ctx, metas)
 	if err != nil {
 		return nil, err

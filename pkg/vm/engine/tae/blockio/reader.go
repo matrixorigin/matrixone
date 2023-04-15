@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -198,7 +197,6 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	logutil.Infof("meta name %v; %v; blockcount %d", meta.BlockHeader().BlockID().String(), meta.BlockHeader().BloomFilter(), meta.BlockCount())
 	if err != nil {
 		return nil, err
 	}
