@@ -62,19 +62,14 @@ func NewObjectWriterSpecial(wt WriterType, fileName string, fs fileservice.FileS
 	switch wt {
 	case WriterNormal:
 		name = BuildNormalName()
-		break
 	case WriterCheckpoint:
 		name = BuildCheckpointName()
-		break
 	case WriterQueryResult:
 		name = BuildQueryResultName()
-		break
 	case WriterGC:
 		name = BuildDiskCleanerName()
-		break
 	case WriterETL:
 		name = BuildETLName()
-		break
 	}
 	writer := &ObjectWriter{
 		fileName: fileName,
