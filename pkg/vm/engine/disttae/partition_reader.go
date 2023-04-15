@@ -110,6 +110,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if p.blockBatch == nil {
 		p.blockBatch = &BlockBatch{}
 	}
+	// dumpBatch or compaction will set some batches as nil
+	if len(p.inserts) > 0 && p.inserts[0] == nil {
+		p.inserts = p.inserts[1:]
+		return &batch.Batch{}, nil
+	}
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block

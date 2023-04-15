@@ -126,6 +126,15 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
+func (txn *Transaction) CleanNilBatch() {
+	for i := 0; i < len(txn.writes); i++ {
+		if txn.writes[i].bat == nil {
+			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			i--
+		}
+	}
+}
+
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 
@@ -145,6 +154,9 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	}
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].bat == nil {
+			continue
+		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
 			bat := txn.writes[i].bat
@@ -152,8 +164,12 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			bat.Attrs = bat.Attrs[1:]
 			bat.Vecs = bat.Vecs[1:]
 			mp[key] = append(mp[key], bat)
-			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			i--
+			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+			// maybe this will cause that the log imcrements unlimitly
+			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			// i--
+			txn.writes[i].bat = nil
 		}
 	}
 	txn.Unlock()
@@ -225,6 +241,20 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	return -1, attrs, tbl, nil
 }
 
+func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
+	metaLocs := vector.MustStrCol(vec)
+	for i, metaLoc := range metaLocs {
+		if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
+			return err
+		} else {
+			sid := location.Name().Sid()
+			blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+			txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
+		}
+	}
+	return nil
+}
+
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
@@ -234,16 +264,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	if typ == COMPACTION_CN {
 		typ = INSERT
 	} else if typ == INSERT {
-		metaLocs := vector.MustStrCol(bat.GetVector(0))
-		for i, metaLoc := range metaLocs {
-			if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
-				return err
-			} else {
-				sid := location.Name().Sid()
-				blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-				txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
-			}
-		}
+		txn.updatePosForCNBlock(bat.GetVector(0), idx)
 	}
 	txn.readOnly = false
 	txn.writes = append(txn.writes, Entry{
@@ -272,12 +293,18 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 	mp := make(map[types.Rowid]uint8)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
-
 	min1 := uint32(math.MaxUint32)
 	max1 := uint32(0)
 	for _, rowid := range rowids {
+		// process cn block deletes
+		uid := rowid.GetSegid()
+		blkid := rowid.GetBlockid()
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
+		if colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
+			txn.cnBlockDeletesMap.PutCnBlockDeletes(string(blkid[:]), []int64{int64(rowOffset)})
+			continue
+		}
 		if rowOffset < (min1) {
 			min1 = rowOffset
 		}

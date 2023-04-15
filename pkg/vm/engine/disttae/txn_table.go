@@ -539,9 +539,15 @@ func (tbl *txnTable) compaction() error {
 	if err != nil {
 		return err
 	}
+
 	for id, deleteOffsets := range tbl.db.txn.cnBlockDeletesMap.mp {
 		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
 		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
+		// just do compaction for current txnTable
+		entry := tbl.db.txn.writes[pos.idx]
+		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
+			continue
+		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
 		delete(tbl.db.txn.cnBlockDeletesMap.mp, id)
 		if len(deleteOffsets) == 0 {
@@ -558,7 +564,13 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, location.ID(), tbl.db.txn.proc.GetMPool())
+		if tbl.idxs == nil {
+			idxs := make([]uint16, 0, len(tbl.tableDef.Cols)-1)
+			for i := 0; i < len(tbl.tableDef.Cols); i++ {
+				idxs = append(idxs, uint16(i))
+			}
+		}
+		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
 		if err != nil {
 			return err
 		}
@@ -582,9 +594,6 @@ func (tbl *txnTable) compaction() error {
 	new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
 	new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 	for _, metaLoc := range metaLocs {
-		if metaLoc == "" {
-			fmt.Println("error")
-		}
 		vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
 	}
 	new_bat.SetZs(len(metaLocs), tbl.db.txn.proc.GetMPool())
@@ -596,15 +605,22 @@ func (tbl *txnTable) compaction() error {
 	remove_batch := make(map[*batch.Batch]bool)
 	// delete old block info
 	for idx, offsets := range mp {
-		tbl.db.txn.writes[idx].bat.AntiShrink(offsets)
-		if tbl.db.txn.writes[idx].bat.Length() == 0 {
-			remove_batch[tbl.db.txn.writes[idx].bat] = true
+		bat := tbl.db.txn.writes[idx].bat
+		bat.AntiShrink(offsets)
+		// update txn.cnBlkId_Pos
+		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
+		if bat.Length() == 0 {
+			remove_batch[bat] = true
 		}
 	}
 	for i := 0; i < len(tbl.db.txn.writes); i++ {
 		if remove_batch[tbl.db.txn.writes[i].bat] {
-			tbl.db.txn.writes = append(tbl.db.txn.writes[:i], tbl.db.txn.writes[i+1:]...)
-			i--
+			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+			// maybe this will cause that the log imcrements unlimitly.
+			// tbl.db.txn.writes = append(tbl.db.txn.writes[:i], tbl.db.txn.writes[i+1:]...)
+			// i--
+			tbl.db.txn.writes[i].bat = nil
 		}
 	}
 	return nil

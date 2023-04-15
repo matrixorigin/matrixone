@@ -211,9 +211,9 @@ type txnTable struct {
 	db        *txnDatabase
 	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs     []engine.TableDef
-	tableDef *plan.TableDef
-
+	defs         []engine.TableDef
+	tableDef     *plan.TableDef
+	idxs         []uint16
 	setPartsOnce sync.Once
 	_parts       []*PartitionState
 
