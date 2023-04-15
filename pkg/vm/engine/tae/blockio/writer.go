@@ -39,7 +39,7 @@ type BlockWriter struct {
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriter(name, fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterETL, name, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 }
 
 func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriterNew(name, fs)
+	writer, err := objectio.NewObjectWriter(name, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		return blocks, objectio.Extent{}, err
 	}
 	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
-	return blocks, *blocks[0].BlockHeader().MetaLocation(), err
+	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
 
 func (w *BlockWriter) GetName() objectio.ObjectName {

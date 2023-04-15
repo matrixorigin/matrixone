@@ -16,46 +16,67 @@ package objectio
 
 import (
 	"fmt"
-	"unsafe"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type Extent struct {
-	id         uint32
-	offset     uint32
-	length     uint32
-	originSize uint32
+type Extent []byte
+
+const (
+	extentAlgLen    = 1
+	extentOffsetOff = extentAlgLen
+	extentOffsetLen = 4
+	extentLengthOff = extentOffsetOff + extentOffsetLen
+	extentLengthLen = 4
+	extentOriginOff = extentLengthOff + extentLengthLen
+	extentOriginLen = 4
+	ExtentSize      = extentOriginOff + extentOriginLen
+)
+
+func NewExtent(alg uint8, offset, length, originSize uint32) Extent {
+	var extent [ExtentSize]byte
+	copy(extent[:extentAlgLen], types.EncodeUint8(&alg))
+	copy(extent[extentOffsetOff:extentLengthOff], types.EncodeUint32(&offset))
+	copy(extent[extentLengthOff:extentOriginOff], types.EncodeUint32(&length))
+	copy(extent[extentOriginOff:ExtentSize], types.EncodeUint32(&originSize))
+	return extent[:]
 }
 
-func NewExtent(id, offset, length, originSize uint32) Extent {
-	return Extent{
-		id:         id,
-		offset:     offset,
-		length:     length,
-		originSize: originSize,
-	}
+func (ex Extent) Alg() uint8 {
+	return types.DecodeUint8(ex[:extentAlgLen])
 }
 
-func (ex Extent) Id() uint32 { return ex.id }
-
-func (ex Extent) End() uint32 { return ex.offset + ex.length }
-
-func (ex Extent) Offset() uint32 { return ex.offset }
-
-func (ex Extent) Length() uint32 { return ex.length }
-
-func (ex Extent) OriginSize() uint32 { return ex.originSize }
-
-func (ex Extent) Marshal() []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&ex)), ExtentSize)
+func (ex Extent) SetAlg(alg uint8) {
+	copy(ex[:extentAlgLen], types.EncodeUint8(&alg))
 }
-func (ex *Extent) Unmarshal(data []byte) {
-	e := *(*Extent)(unsafe.Pointer(&data[0]))
-	ex.id = e.id
-	ex.offset = e.offset
-	ex.length = e.length
-	ex.originSize = e.originSize
+
+func (ex Extent) End() uint32 {
+	return ex.Offset() + ex.Length()
+}
+
+func (ex Extent) Offset() uint32 {
+	return types.DecodeUint32(ex[extentOffsetOff:extentLengthOff])
+}
+
+func (ex Extent) SetOffset(offset uint32) {
+	copy(ex[extentOffsetOff:extentLengthOff], types.EncodeUint32(&offset))
+}
+
+func (ex Extent) Length() uint32 {
+	return types.DecodeUint32(ex[extentLengthOff:extentOriginOff])
+}
+
+func (ex Extent) SetLength(length uint32) {
+	copy(ex[extentLengthOff:extentOriginOff], types.EncodeUint32(&length))
+}
+
+func (ex Extent) OriginSize() uint32 {
+	return types.DecodeUint32(ex[extentOriginOff:ExtentSize])
+}
+
+func (ex Extent) SetOriginSize(originSize uint32) {
+	copy(ex[extentOriginOff:ExtentSize], types.EncodeUint32(&originSize))
 }
 
 func (ex Extent) String() string {
-	return fmt.Sprintf("%d_%d_%d_%d", ex.id, ex.offset, ex.length, ex.originSize)
+	return fmt.Sprintf("%d_%d_%d_%d", ex.Alg(), ex.Offset(), ex.Length(), ex.OriginSize())
 }
