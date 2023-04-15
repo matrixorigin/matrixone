@@ -279,6 +279,13 @@ func (nsp *Nulls) Contains(row uint64) bool {
 	return nsp != nil && nsp.Np != nil && nsp.Np.Contains(row)
 }
 
+func (nsp *Nulls) Count() int {
+	if nsp == nil || nsp.Np == nil {
+		return 0
+	}
+	return nsp.Np.Count()
+}
+
 func (nsp *Nulls) Show() ([]byte, error) {
 	if nsp == nil || nsp.Np == nil {
 		return nil, nil

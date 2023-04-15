@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -147,13 +146,6 @@ func (v *Vector) GetStringAt(i int) string {
 	}
 	bs := v.col.([]types.Varlena)
 	return bs[i].GetString(v.area)
-}
-
-func (v *Vector) TryExpandNulls(n int) {
-	if v.nsp == nil {
-		v.nsp = &nulls.Nulls{Np: bitmap.New(0)}
-	}
-	nulls.TryExpand(v.nsp, n)
 }
 
 func NewVec(typ types.Type) *Vector {
@@ -954,25 +946,41 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		var err error
 		vCol := v.col.([]types.Varlena)
 		wCol := w.col.([]types.Varlena)
-		for i, sel := range sels {
-			if nulls.Contains(w.GetNulls(), uint64(sel)) {
-				nulls.Add(v.GetNulls(), uint64(oldLen+i))
-				continue
+		if w.nsp != nil && w.nsp.Np != nil {
+			for i, sel := range sels {
+				if w.nsp.Np.Contains(uint64(sel)) {
+					nulls.Add(v.nsp, uint64(oldLen+i))
+					continue
+				}
+				bs := wCol[sel].GetByteSlice(w.area)
+				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				if err != nil {
+					return err
+				}
 			}
-			bs := wCol[sel].GetByteSlice(w.area)
-			vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
-			if err != nil {
-				return err
+		} else {
+			for i, sel := range sels {
+				bs := wCol[sel].GetByteSlice(w.area)
+				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		for i, sel := range sels {
-			if nulls.Contains(w.GetNulls(), uint64(sel)) {
-				nulls.Add(v.GetNulls(), uint64(oldLen+i))
-				continue
+		if w.nsp != nil && w.nsp.Np != nil {
+			for i, sel := range sels {
+				if w.nsp.Np.Contains(uint64(sel)) {
+					nulls.Add(v.nsp, uint64(oldLen+i))
+					continue
+				}
+				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
 			}
-			copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+		} else {
+			for i, sel := range sels {
+				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			}
 		}
 	}
 
@@ -981,8 +989,12 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
 	addCnt := 0
-	for i := range flags {
-		addCnt += int(flags[i])
+	if flags == nil {
+		addCnt = cnt
+	} else {
+		for i := range flags {
+			addCnt += int(flags[i])
+		}
 	}
 
 	if addCnt == 0 {
@@ -997,7 +1009,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		oldLen := v.length
 		v.length += addCnt
 		if w.IsConstNull() {
-			nulls.AddRange(v.GetNulls(), uint64(oldLen), uint64(v.length))
+			nulls.AddRange(v.nsp, uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
@@ -1024,33 +1036,99 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		var err error
 		vCol := v.col.([]types.Varlena)
 		wCol := w.col.([]types.Varlena)
-		for i := range flags {
-			if flags[i] == 0 {
-				continue
-			}
-			if nulls.Contains(w.GetNulls(), uint64(offset)+uint64(i)) {
-				nulls.Add(v.GetNulls(), uint64(v.length))
+		if w.nsp != nil && w.nsp.Np != nil {
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					if w.nsp.Np.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.nsp, uint64(v.length))
+					} else {
+						bs := wCol[int(offset)+i].GetByteSlice(w.area)
+						vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+						if err != nil {
+							return err
+						}
+					}
+					v.length++
+				}
 			} else {
-				bs := wCol[int(offset)+i].GetByteSlice(w.area)
-				vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
-				if err != nil {
-					return err
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					if w.nsp.Np.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.nsp, uint64(v.length))
+					} else {
+						bs := wCol[int(offset)+i].GetByteSlice(w.area)
+						vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+						if err != nil {
+							return err
+						}
+					}
+					v.length++
 				}
 			}
-			v.length++
+		} else {
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					bs := wCol[int(offset)+i].GetByteSlice(w.area)
+					vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+					if err != nil {
+						return err
+					}
+					v.length++
+				}
+			} else {
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					bs := wCol[int(offset)+i].GetByteSlice(w.area)
+					vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+					if err != nil {
+						return err
+					}
+					v.length++
+				}
+			}
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		for i := range flags {
-			if flags[i] == 0 {
-				continue
-			}
-			if nulls.Contains(w.GetNulls(), uint64(offset)+uint64(i)) {
-				nulls.Add(v.GetNulls(), uint64(v.length))
+		if w.nsp != nil && w.nsp.Np != nil {
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					if w.nsp.Np.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.nsp, uint64(v.length))
+					} else {
+						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+					}
+					v.length++
+				}
 			} else {
-				copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					if w.nsp.Np.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.nsp, uint64(v.length))
+					} else {
+						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+					}
+					v.length++
+				}
 			}
-			v.length++
+		} else {
+			if flags == nil {
+				copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
+				v.length += cnt
+			} else {
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+					v.length++
+				}
+			}
 		}
 	}
 
@@ -1548,7 +1626,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			vCol := v.col.([]types.Varlena)
 			wCol := w.col.([]types.Varlena)
 			for i := start; i < end; i++ {
-				if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				if !nulls.Contains(v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
 					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
 					if err != nil {

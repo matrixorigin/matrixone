@@ -89,10 +89,6 @@ func NewService(
 		},
 	}
 
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
-	}
-
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
@@ -108,10 +104,13 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
+	srv.pu = pu
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
-	srv.pu = pu
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage,
@@ -345,6 +344,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
+		s.pu.HAKeeperClient = client
 		s.initClusterService()
 		s.initLockService()
 	})
