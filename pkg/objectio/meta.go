@@ -117,23 +117,29 @@ func BuildObjectColumnMeta() ColumnMeta {
 }
 
 const (
-	sequenceLen     = 2
-	tableIDLen      = 8
-	blockIDOff      = tableIDLen
-	blockIDLen      = types.BlockidSize
-	rowsOff         = blockIDOff + blockIDLen
-	rowsLen         = 4
-	columnCountOff  = rowsOff + rowsLen
-	columnCountLen  = 2
-	headerDummyOff  = columnCountOff + columnCountLen
-	headerDummyLen  = 18
-	metaLocationOff = headerDummyOff + headerDummyLen
-	metaLocationLen = ExtentSize
-	bloomFilterOff  = metaLocationOff + metaLocationLen
-	bloomFilterLen  = ExtentSize
-	zoneMapAreaOff  = bloomFilterOff + bloomFilterLen
-	zoneMapAreaLen  = ZoneMapSize
-	headerLen       = zoneMapAreaOff + zoneMapAreaLen
+	sequenceLen        = 2
+	dbIDLen            = 8
+	tableIDOff         = dbIDLen
+	tableIDLen         = 8
+	blockIDOff         = tableIDOff + tableIDLen
+	blockIDLen         = types.BlockidSize
+	rowsOff            = blockIDOff + blockIDLen
+	rowsLen            = 4
+	columnCountOff     = rowsOff + rowsLen
+	columnCountLen     = 2
+	metaLocationOff    = columnCountOff + columnCountLen
+	metaLocationLen    = ExtentSize
+	bloomFilterOff     = metaLocationOff + metaLocationLen
+	bloomFilterLen     = ExtentSize
+	bloomCheckSumOff   = bloomFilterOff + bloomFilterLen
+	bloomCheckSumLen   = 4
+	zoneMapAreaOff     = bloomCheckSumOff + bloomCheckSumLen
+	zoneMapAreaLen     = ZoneMapSize
+	zoneMapCheckSumOff = zoneMapAreaOff + zoneMapAreaLen
+	zoneMapCheckSumLen = 4
+	headerDummyOff     = zoneMapCheckSumOff + zoneMapCheckSumLen
+	headerDummyLen     = 39
+	headerLen          = headerDummyOff + headerDummyLen
 )
 
 type BlockObject []byte
