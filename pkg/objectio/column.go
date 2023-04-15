@@ -52,7 +52,7 @@ func BuildColumnMeta() ColumnMeta {
 	var buf [colMetaLen]byte
 	meta := ColumnMeta(buf[:])
 	meta.setVersion(Version)
-	meta.setType(Version)
+	meta.setType(0)
 	return meta
 }
 

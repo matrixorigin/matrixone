@@ -28,6 +28,8 @@ type ObjectMeta []byte
 func BuildObjectMeta(count uint16) ObjectMeta {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
+	meta := ObjectMeta(buf)
+	meta.BlockHeader().setVersion(Version)
 	return buf[:]
 }
 
@@ -118,8 +120,9 @@ func BuildObjectColumnMeta() ColumnMeta {
 
 const (
 	sequenceLen        = 2
+	dbIDOff            = versionOff + versionLen
 	dbIDLen            = 8
-	tableIDOff         = dbIDLen
+	tableIDOff         = dbIDOff + dbIDLen
 	tableIDLen         = 8
 	blockIDOff         = tableIDOff + tableIDLen
 	blockIDLen         = types.BlockidSize
@@ -147,7 +150,9 @@ type BlockObject []byte
 func BuildBlockMeta(count uint16) BlockObject {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
-	return buf[:]
+	meta := BlockObject(buf)
+	meta.BlockHeader().setVersion(Version)
+	return meta
 }
 
 func (bm BlockObject) BlockHeader() BlockHeader {
@@ -176,6 +181,14 @@ type BlockHeader []byte
 func BuildBlockHeader() BlockHeader {
 	var buf [headerLen]byte
 	return buf[:]
+}
+
+func (bh BlockHeader) Version() uint16 {
+	return types.DecodeUint16(bh[:typeLen])
+}
+
+func (bh BlockHeader) setVersion(version uint16) {
+	copy(bh[:typeLen], types.EncodeUint16(&version))
 }
 
 func (bh BlockHeader) TableID() uint64 {
