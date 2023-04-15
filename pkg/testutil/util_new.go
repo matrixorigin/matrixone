@@ -298,10 +298,10 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var rowId [2]int64
+		var blockId [2]int64
 
-		rowId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+		blockId[1] = int64(i)
+		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&blockId[0])), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

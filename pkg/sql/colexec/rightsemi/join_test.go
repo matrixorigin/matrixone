@@ -240,12 +240,12 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) jo
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Right_typs:  ts,
-			Result:      rp,
-			Conditions:  cs,
-			NumCPU:      1,
-			Is_receiver: true,
-			Cond:        cond,
+			RightTypes: ts,
+			Result:     rp,
+			Conditions: cs,
+			NumCPU:     1,
+			IsMerger:   true,
+			Cond:       cond,
 		},
 		barg: &hashbuild.Argument{
 			Typs:        ts,

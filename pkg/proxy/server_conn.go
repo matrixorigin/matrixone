@@ -30,11 +30,17 @@ var serverBaseConnID uint32 = 1000
 
 // ServerConn is the connection to the backend server.
 type ServerConn interface {
+	// ConnID returns connection ID of the backend CN server.
+	ConnID() uint32
 	// RawConn return the raw connection.
 	RawConn() net.Conn
 	// HandleHandshake handles the handshake communication with CN server.
 	// handshakeResp is a auth packet received from client.
 	HandleHandshake(handshakeResp *frontend.Packet) (*frontend.Packet, error)
+	// ExecStmt executes a simple statement, it sends a query to backend server.
+	// After it finished, server connection should be closed immediately because
+	// it is a temp connection.
+	ExecStmt(stmt string, resp chan<- []byte) error
 	// Close closes the connection to CN server.
 	Close() error
 }
@@ -45,8 +51,11 @@ type serverConn struct {
 	cnServer *CNServer
 	// conn is the raw TCP connection between proxy and server.
 	conn goetty.IOSession
-	// connID records the connection ID.
+	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
+	// backendConnID is the connection generated be backend CN
+	// server. It is tracked by connManager.
+	backendConnID uint32
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
@@ -70,9 +79,6 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer) (ServerConn, error)
 		rebalancer: r,
 		tun:        tun,
 	}
-	// Track the connection.
-	r.connManager.connect(s.cnServer, tun)
-
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	s.mysqlProto = frontend.NewMysqlClientProtocol(s.connID, c, 0, &fp)
@@ -93,6 +99,11 @@ func (w *wrappedConn) Close() error {
 		w.Once.Do(w.closeFn)
 	}
 	return w.Conn.Close()
+}
+
+// ConnID implements the ServerConn interface.
+func (s *serverConn) ConnID() uint32 {
+	return s.backendConnID
 }
 
 // RawConn implements the ServerConn interface.
@@ -124,6 +135,30 @@ func (s *serverConn) HandleHandshake(handshakeResp *frontend.Packet) (*frontend.
 		return nil, err
 	}
 	return r, nil
+}
+
+// ExecStmt implements the ServerConn interface.
+func (s *serverConn) ExecStmt(stmt string, resp chan<- []byte) error {
+	req := make([]byte, 1, len(stmt)+1)
+	req[0] = byte(cmdQuery)
+	req = append(req, []byte(stmt)...)
+	s.mysqlProto.SetSequenceID(0)
+	if err := s.mysqlProto.WritePacket(req); err != nil {
+		return err
+	}
+	for {
+		// readPacket makes sure return value is a whole MySQL packet.
+		res, err := s.readPacket()
+		if err != nil {
+			return err
+		}
+		bs := packetToBytes(res)
+		sendResp(bs, resp)
+		if isEOFPacket(bs) || isOKPacket(bs) || isErrPacket(bs) {
+			break
+		}
+	}
+	return nil
 }
 
 // Close implements the ServerConn interface.
