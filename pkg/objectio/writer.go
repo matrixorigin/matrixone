@@ -121,33 +121,39 @@ func (w *ObjectWriter) WriteObjectMeta(ctx context.Context, totalrow uint32, met
 	w.colmeta = metas
 }
 
-func (w *ObjectWriter) prepareObjectMeta(columnCount uint16) (ObjectMeta, BlockIndex, uint32) {
-	offset := uint32(0)
+func (w *ObjectWriter) prepareObjectMeta(objectMeta ObjectMeta, offset uint32) ([]byte, Extent, error) {
+	length := uint32(0)
 	blockCount := uint32(len(w.blocks))
-	objectMeta := BuildObjectMeta(columnCount)
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	sid := w.name.SegmentId()
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
 	objectMeta.BlockHeader().SetBlockID(&blockId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
-	objectMeta.BlockHeader().SetColumnCount(columnCount)
 	// write column meta
 	for i, colMeta := range w.colmeta {
 		objectMeta.AddColumnMeta(uint16(i), colMeta)
 	}
-	offset += objectMeta.Length()
+	length += objectMeta.Length()
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
-	offset += blockIndex.Length()
+	length += blockIndex.Length()
 	blockIndex.SetBlockCount(blockCount)
 	for i, block := range w.blocks {
 		n := uint32(len(block.meta))
-		blockIndex.SetBlockMetaPos(uint32(i), offset, n)
-		offset += n
+		blockIndex.SetBlockMetaPos(uint32(i), length, n)
+		length += n
 	}
-	extent := NewExtent(compress.None, HeaderSize, offset, offset)
+	extent := NewExtent(compress.None, offset, 0, length)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
-	return objectMeta, blockIndex, offset
+
+	metadata := new(bytes.Buffer)
+	metadata.Write(objectMeta)
+	metadata.Write(blockIndex)
+	// writer block metadata
+	for _, block := range w.blocks {
+		metadata.Write(block.meta)
+	}
+	return w.WriteWithCompress(offset, metadata.Bytes())
 }
 
 func (w *ObjectWriter) prepareBlockMeta(offset uint32) uint32 {
@@ -216,13 +222,9 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	blockCount := uint32(len(w.blocks))
 	objectMeta := BuildObjectMeta(columnCount)
+	objectMeta.BlockHeader().SetColumnCount(columnCount)
 
-	// prepare object meta and block index
-	objectMeta, blockIndex, offset := w.prepareObjectMeta(columnCount)
-	objectMetaLocation := objectMeta.BlockHeader().MetaLocation()
-	objectHeader.SetLocation(objectMetaLocation)
-	offset += HeaderSize
-	offset = w.prepareBlockMeta(offset)
+	offset := w.prepareBlockMeta(HeaderSize)
 
 	// prepare bloom filter
 	bloomFilterData, bloomFilterExtent, err := w.prepareBloomFilter(blockCount, offset)
@@ -230,7 +232,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		return nil, err
 	}
 	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
-	offset += uint32(len(bloomFilterData))
+	offset += bloomFilterExtent.Length()
 
 	// prepare zone map area
 	zoneMapAreaData, zoneMapAreaExtent, err := w.prepareZoneMapArea(blockCount, offset)
@@ -238,21 +240,17 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 		return nil, err
 	}
 	objectMeta.BlockHeader().SetZoneMapArea(zoneMapAreaExtent)
+	offset += zoneMapAreaExtent.Length()
+
+	// prepare object meta and block index
+	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset)
+	objectHeader.SetLocation(metaExtent)
 	// begin write
 
 	// writer object header
 	w.buffer.Write(objectHeader)
-	// writer object metadata
-	w.buffer.Write(objectMeta)
-	// writer block index
-	w.buffer.Write(blockIndex)
 
-	// writer block metadata
-	for _, block := range w.blocks {
-		w.buffer.Write(block.meta)
-	}
-
-	// writer data& bloom filter
+	// writer data
 	for _, block := range w.blocks {
 		for _, data := range block.data {
 			w.buffer.Write(data)
@@ -264,9 +262,12 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	w.buffer.Write(zoneMapAreaData)
 
+	// writer object metadata
+	w.buffer.Write(meta)
+
 	// write footer
 	footer := Footer{
-		metaExtent: objectMetaLocation,
+		metaExtent: metaExtent,
 		version:    Version,
 		magic:      Magic,
 	}
@@ -278,7 +279,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		header := w.blocks[i].meta.BlockHeader()
-		header.SetMetaLocation(objectMeta.BlockHeader().MetaLocation())
+		header.SetMetaLocation(objectHeader.Location())
 		blockObjects = append(blockObjects, w.blocks[i].meta)
 	}
 	err = w.Sync(ctx, items...)

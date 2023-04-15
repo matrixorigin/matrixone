@@ -72,18 +72,9 @@ func (r *ObjectReader) ReadMeta(
 
 	metas.Entries[0] = fileservice.IOEntry{
 		Offset: int64(extent.Offset()),
-		Size:   int64(extent.OriginSize()),
+		Size:   int64(extent.Length()),
 
-		ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-			if len(data) == 0 {
-				var err error
-				data, err = io.ReadAll(reader)
-				if err != nil {
-					return nil, 0, err
-				}
-			}
-			return data, int64(len(data)), nil
-		},
+		ToObject: newObjectMetaToObject(int64(extent.OriginSize())),
 	}
 
 	err := r.object.fs.Read(ctx, metas)
@@ -318,6 +309,28 @@ func newDecompressToObject(size int64) ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
+		return decompressed, int64(len(decompressed)), nil
+	}
+}
+
+// newDecompressToObject the decompression function passed to fileservice
+func newObjectMetaToObject(size int64) ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
+		var err error
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		objectMeta := ObjectMeta(decompressed)
+		objectMeta.BlockHeader().MetaLocation().SetLength(uint32(len(data)))
 		return decompressed, int64(len(decompressed)), nil
 	}
 }

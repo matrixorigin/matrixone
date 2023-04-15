@@ -50,7 +50,10 @@ type ColumnMeta []byte
 
 func BuildColumnMeta() ColumnMeta {
 	var buf [colMetaLen]byte
-	return buf[:]
+	meta := ColumnMeta(buf[:])
+	meta.setVersion(Version)
+	meta.setType(Version)
+	return meta
 }
 
 func (cm ColumnMeta) Type() uint16 {
