@@ -7258,7 +7258,7 @@ func TestDoCreatePublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7316,7 +7316,7 @@ func TestDoDropPublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7358,7 +7358,7 @@ func TestDoAlterPublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7491,7 +7491,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,

@@ -278,7 +278,7 @@ func (rt *Routine) cleanup() {
 		//step A: release the mempool related to the session
 		ses := rt.getSession()
 		if ses != nil {
-			ses.Dispose()
+			ses.Close()
 		}
 
 		//step B: cancel the query

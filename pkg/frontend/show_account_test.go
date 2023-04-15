@@ -131,7 +131,7 @@ func TestDoShowAccounts(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:   sysAccountName,

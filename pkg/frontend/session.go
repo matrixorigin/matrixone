@@ -251,20 +251,6 @@ func (ses *Session) pushQueryId(uuid string) {
 	ses.QueryId = append(ses.QueryId, uuid)
 }
 
-// Clean up all resources hold by the session.  As of now, the mpool
-func (ses *Session) Dispose() {
-	if ses.flag {
-		mp := ses.GetMemPool()
-		mpool.DeleteMPool(mp)
-		ses.SetMemPool(mp)
-	}
-	ses.cleanCache()
-
-	ses.statsCache = nil
-	// Clean sequence record data.
-	ses.seqCurValues = nil
-}
-
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
@@ -350,12 +336,17 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	}
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
-		ss.Dispose()
+		ss.Close()
 	})
 	return ses
 }
 
 func (ses *Session) Close() {
+	if ses.flag {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(nil)
+	}
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -372,10 +363,7 @@ func (ses *Session) Close() {
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
-	ses.errInfo.codes = nil
-	ses.errInfo.msgs = nil
 	ses.errInfo = nil
-	ses.cache.invalidate()
 	ses.cache = nil
 	ses.debugStr = ""
 	ses.sqlSourceType = nil
@@ -385,9 +373,7 @@ func (ses *Session) Close() {
 	ses.rs = nil
 	ses.QueryId = nil
 	ses.p = nil
-	ses.planCache.clean()
 	ses.planCache = nil
-	ses.cleanCache()
 	ses.statsCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = ""
