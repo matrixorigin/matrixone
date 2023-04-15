@@ -214,6 +214,9 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		delete(ctr.blockId_rowIdBatch, blkid)
 	}
 	metaLocs, err := s3writer.WriteEndBlocks(proc)
+	if err != nil {
+		return 0, err
+	}
 	for i, metaLoc := range metaLocs {
 		if _, ok := ctr.blockId_metaLoc[blkids[i]]; !ok {
 			bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})

@@ -109,7 +109,10 @@ func (txn *Transaction) WriteBatch(
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-		txn.blockId_raw_batch[txn.getCurrentBlockId()] = bat
+		// for TestPrimaryKeyCheck
+		if txn.blockId_raw_batch != nil {
+			txn.blockId_raw_batch[txn.getCurrentBlockId()] = bat
+		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
 	txn.Lock()
@@ -310,7 +313,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		blkid := rowid.GetBlockid()
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
+		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
 			txn.cnBlockDeletesMap.PutCnBlockDeletes(string(blkid[:]), []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue

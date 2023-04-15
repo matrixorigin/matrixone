@@ -47,12 +47,12 @@ type Server struct {
 	id uint64
 	mp map[uint64]*process.WaitRegister
 
-	hakeeper          logservice.CNHAKeeperClient
-	CNSegmentId       types.Uuid
-	InitSegmentId     bool
-	currentFileOffset uint16
-	uuidCsChanMap     UuidCsChanMap
-	cnSegmentMap      CnSegmentMap
+	hakeeper      logservice.CNHAKeeperClient
+	CNSegmentId   types.Uuid
+	InitSegmentId bool
+	// currentFileOffset uint16
+	uuidCsChanMap UuidCsChanMap
+	cnSegmentMap  CnSegmentMap
 }
 
 type UuidCsChanMap struct {
