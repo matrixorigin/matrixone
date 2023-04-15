@@ -1,6 +1,6 @@
 drop user `foo" or "1"="1`;
 drop user `foo"; drop table foo; select "1`;
 create role 'foo"; drop table foo; select "1';
-alter database `foo"; drop table foo; select "1` set mysql_compatbility_mode = '{"lower_case_table_names": 1}';
+alter database `foo"; drop table foo; select "1` set mysql_compatibility_mode = '{"lower_case_table_names": 1}';
 drop database `system";drop table system.statement_info;select "`;
 create database `drop database system";drop table system.statement_info;select "`;

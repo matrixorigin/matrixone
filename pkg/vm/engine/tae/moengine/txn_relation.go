@@ -17,7 +17,7 @@ package moengine
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -55,8 +55,8 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 
 func (rel *txnRelation) AddBlksWithMetaLoc(
 	ctx context.Context,
-	zm []dataio.Index,
-	metaLocs []string,
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location,
 ) error {
 	return rel.handle.AddBlksWithMetaLoc(zm, metaLocs)
 }

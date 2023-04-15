@@ -23,10 +23,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -219,11 +219,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		var metaLocABlk string
-		metaLocABlk, err = blockio.EncodeLocation(
+		metaLocABlk := blockio.EncodeLocation(
+			ablockTask.name,
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
-			ablockTask.blocks)
+			ablockTask.blocks[0].GetID())
 		if err != nil {
 			return
 		}
@@ -231,11 +231,11 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			var deltaLoc string
-			deltaLoc, err = blockio.EncodeLocation(
+			deltaLoc := blockio.EncodeLocation(
+				ablockTask.name,
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
-				ablockTask.blocks)
+				ablockTask.blocks[1].GetID())
 			if err != nil {
 				return
 			}
@@ -309,10 +309,11 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
-	metaLoc, err := blockio.EncodeLocation(
+	metaLoc := blockio.EncodeLocation(
+		ioTask.name,
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
-		ioTask.blocks)
+		ioTask.blocks[0].GetID())
 	if err != nil {
 		return
 	}
@@ -321,11 +322,11 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if deletes != nil {
-		var deltaLoc string
-		deltaLoc, err = blockio.EncodeLocation(
+		deltaLoc := blockio.EncodeLocation(
+			ioTask.name,
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
-			ioTask.blocks)
+			ioTask.blocks[1].GetID())
 		if err != nil {
 			return
 		}

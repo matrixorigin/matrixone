@@ -482,19 +482,19 @@ select @@sql_mode;
 ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop database if exists test;
 create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 configuration
 {"version_compatibility": "0.7"}
 drop database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 null
 drop database if exists test;
 create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 configuration
 {"version_compatibility": "0.7"}
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 configuration
 {"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}
 drop database test;
@@ -504,7 +504,7 @@ use test;
 select version();
 version()
 0.7
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 version()
 8.0.30-MatrixOne-v0.7.0
@@ -519,7 +519,7 @@ use test;
 select version();
 version()
 0.7
-alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter database test set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 version()
 8.0.30-MatrixOne-v0.7.0
@@ -527,7 +527,7 @@ use test1;
 select version();
 version()
 0.7
-alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+alter account config abc set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
 select version();
 version()
 0.7
@@ -537,9 +537,9 @@ version()
 0.7
 drop database test;
 drop database test1;
-alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter account config sys set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 version()
 8.0.30-MatrixOne-v0.7.0
-alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+alter account config abc1 set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
 internal error: Permission change abc1's config denied

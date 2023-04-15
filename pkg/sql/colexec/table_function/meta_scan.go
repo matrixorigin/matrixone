@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -83,8 +83,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			bats[0].ReplaceVector(vec, metaVecs[i])
-			vec.Free(proc.Mp())
 		} else {
 			metaVecs[i] = vec
 		}

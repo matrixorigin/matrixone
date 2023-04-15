@@ -59,7 +59,7 @@ type InsertNode interface {
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) (any, error)
+	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
@@ -67,7 +67,7 @@ type InsertNode interface {
 	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
-	GetPersistedLoc() (string, string)
+	GetPersistedLoc() (objectio.Location, objectio.Location)
 }
 
 type appendInfo struct {
@@ -288,7 +288,7 @@ func (n *baseNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
 }
 
-func (n *baseNode) GetPersistedLoc() (string, string) {
+func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
 	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
 }
 

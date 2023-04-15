@@ -73,7 +73,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -82,9 +82,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
@@ -291,8 +291,8 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			tableID := entry.GetID()
 			commitTs := tblNode.GetEnd()
 			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))))
-				commitVec.Append(commitTs)
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
+				commitVec.Append(commitTs, false)
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
@@ -377,8 +377,8 @@ func catalogEntry2Batch[
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
+	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid, false)
+	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
 }
 
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
@@ -454,7 +454,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 	for _, node := range mvccNodes {
 		metaNode := node
-		if metaNode.BaseNode.MetaLoc != "" && !metaNode.IsAborted() {
+		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
@@ -462,12 +462,12 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	if n := len(mvccNodes); n > 0 {
 		newest := mvccNodes[n-1]
 		if e.IsAppendable() {
-			if newest.BaseNode.MetaLoc != "" {
+			if !newest.BaseNode.MetaLoc.IsEmpty() {
 				// appendable block has been flushed, no need to collect data
 				return true
 			}
 		} else {
-			if newest.BaseNode.DeltaLoc != "" && newest.GetEnd().GreaterEq(b.end) {
+			if !newest.BaseNode.DeltaLoc.IsEmpty() && newest.GetEnd().GreaterEq(b.end) {
 				// non-appendable block has newer delta data on s3, no need to collect data
 				return true
 			}
@@ -490,15 +490,15 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable(), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
@@ -506,8 +506,8 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 	}
 
 }
@@ -617,21 +617,27 @@ func LoadCheckpointEntries(
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))
 
-	readers := make([]dataio.Reader, len(locations))
+	readers := make([]*blockio.BlockReader, len(locations))
+	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
-		reader, err := blockio.NewCheckPointReader(fs, key)
+		location, err := blockio.EncodeLocationFromString(key)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, err
 		}
 		readers[i] = reader
-		err = blockio.PrefetchCkpMeta(fs, key)
+		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
 			return nil, err
 		}
+		objectLocations[i] = location
 	}
 
-	for _, key := range locations {
-		pref, err := blockio.BuildCkpPrefetch(fs, key)
+	for i := range locations {
+		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
 		if err != nil {
 			return nil, err
 		}

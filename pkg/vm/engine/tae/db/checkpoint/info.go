@@ -40,20 +40,20 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		if !entry.IsFinished() && !entry.end.Equal(end) {
 			continue
 		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()))
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true)
+		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
+		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
+		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
+		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		if !entry.IsFinished() && !entry.end.Equal(end) {
 			continue
 		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()))
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false)
+		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
+		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
+		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
+		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
 	}
 	return bat
 }

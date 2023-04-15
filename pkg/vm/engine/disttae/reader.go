@@ -16,9 +16,11 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func (r *emptyReader) Close() error {
@@ -169,6 +171,12 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 
 	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
 	return bat, nil
+}
+
+func NewMergeReader(readers []engine.Reader) *mergeReader {
+	return &mergeReader{
+		rds: readers,
+	}
 }
 
 func (r *mergeReader) Close() error {

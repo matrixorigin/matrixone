@@ -42,6 +42,8 @@ enum CmdMethod {
     ForceGC     = 6;
     // Inspect DN info
     Inspect   = 7;
+    // Label sets the CN label.
+    Label = 8;
 }
 
 // DNPingRequest ping request

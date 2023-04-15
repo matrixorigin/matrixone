@@ -267,6 +267,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetCheckerState(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_SHARD_INFO:
 		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_CN_LABEL:
+		return s.handleUpdateCNLabel(ctx, req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -436,6 +438,16 @@ func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Re
 	resp := getResponse(req)
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateCNLabel(ctx context.Context, req pb.Request) pb.Response {
+	label := req.CNStoreLabel
+	resp := getResponse(req)
+	if err := s.store.updateCNLabel(ctx, *label); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
 	}
 	return resp
 }

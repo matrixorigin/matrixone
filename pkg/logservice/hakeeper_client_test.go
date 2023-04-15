@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"testing"
 	"time"
@@ -408,4 +409,83 @@ func TestSendLogHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 		require.True(t, oldc != c.mu.client)
 	}
 	testNotHAKeeperErrorIsHandled(t, fn)
+}
+
+func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		label := pb.CNStoreLabel{
+			UUID:      s.ID(),
+			Operation: pb.SetLabel,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err = c1.UpdateCNLabel(ctx, label)
+		require.Error(t, err)
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+
+		label = pb.CNStoreLabel{
+			UUID:      s.ID(),
+			Operation: pb.SetLabel,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err = c1.UpdateCNLabel(ctx, label)
+		require.NoError(t, err)
+
+		state, err := c1.GetClusterState(ctx)
+		info, ok1 := state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+		require.NoError(t, err)
+
+		label = pb.CNStoreLabel{
+			UUID:      s.ID(),
+			Operation: pb.DeleteLabel,
+			Labels: map[string]metadata.LabelList{
+				"role": {Labels: []string{"1", "2"}},
+			},
+		}
+		err = c1.UpdateCNLabel(ctx, label)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 = state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		_, ok3 = info.Labels["role"]
+		assert.False(t, ok3)
+	}
+	runServiceTest(t, true, true, fn)
 }

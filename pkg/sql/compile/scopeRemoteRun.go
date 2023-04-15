@@ -21,19 +21,15 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -65,13 +61,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -106,7 +107,7 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
+	err := cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}
@@ -125,7 +126,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 }
 
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer) error {
+func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		var ch chan process.WrapCs
@@ -472,15 +473,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 
 func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
-	for i, u := range p.UuidsToRegIdx {
-		uid, err := uuid.FromBytes(u.GetUuid())
+	for i := range p.UuidsToRegIdx {
+		op := p.UuidsToRegIdx[i]
+		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
-			Idx:      int(u.GetIdx()),
+			Idx:      int(op.GetIdx()),
 			Uuid:     uid,
-			FromAddr: u.FromAddr,
+			FromAddr: op.FromAddr,
 		}
 	}
 	return nil
@@ -488,13 +490,16 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 
 func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
-	for i, u := range s.RemoteReceivRegInfos {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		uid, _ := op.Uuid.MarshalBinary()
 		ret[i] = &pipeline.UuidToRegIdx{
-			Idx:      int32(u.Idx),
-			Uuid:     u.Uuid[:],
-			FromAddr: u.FromAddr,
+			Idx:      int32(op.Idx),
+			Uuid:     uid,
+			FromAddr: op.FromAddr,
 		}
 	}
+
 	return ret
 }
 
@@ -694,8 +699,28 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:    rels,
 			ColList:    poses,
 			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.Left_typs),
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightsemi.Argument:
+		in.RightSemiJoin = &pipeline.RightSemiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightanti.Argument:
+		in.RightAntiJoin = &pipeline.RightAntiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -979,8 +1004,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
-			Left_typs:  convertToTypes(t.LeftTypes),
-			Right_typs: convertToTypes(t.RightTypes),
+			LeftTypes:  convertToTypes(t.LeftTypes),
+			RightTypes: convertToTypes(t.RightTypes),
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}

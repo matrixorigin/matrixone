@@ -93,10 +93,10 @@ type Block interface {
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
-	//	metaLoc string, rowmask *roaring.Bitmap, precommit bool) error
+	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
+	GetValue(txn txnif.AsyncTxn, row, col int) (any, bool, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error

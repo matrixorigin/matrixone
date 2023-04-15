@@ -36,8 +36,10 @@ const (
 	Single
 	LoopSingle
 	Semi
+	RightSemi
 	LoopSemi
 	Anti
+	RightAnti
 	LoopAnti
 	Mark
 	LoopMark
