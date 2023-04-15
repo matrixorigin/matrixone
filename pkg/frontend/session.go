@@ -392,8 +392,6 @@ func (ses *Session) Close() {
 	ses.seqCurValues = nil
 	ses.seqLastValue = ""
 	ses.sqlHelper = nil
-	// Clean sequence record data.
-	ses.seqCurValues = nil
 }
 
 // BackgroundSession executing the sql in background
