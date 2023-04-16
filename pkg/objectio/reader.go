@@ -68,13 +68,13 @@ func (r *ObjectReader) ReadMeta(
 
 func (r *ObjectReader) Read(
 	ctx context.Context,
-	extent Extent,
+	metaExt Extent,
 	idxs []uint16,
 	id uint16,
 	m *mpool.MPool,
 	constructor CacheConstructorFactory,
 ) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, extent, m)
+	meta, err := r.ReadMeta(ctx, metaExt, m)
 	if err != nil {
 		return nil, err
 	}
@@ -103,12 +103,12 @@ func (r *ObjectReader) Read(
 
 func (r *ObjectReader) ReadAll(
 	ctx context.Context,
-	extent Extent,
+	metaExt Extent,
 	idxs []uint16,
 	m *mpool.MPool,
 	constructor CacheConstructorFactory,
 ) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, extent, m)
+	meta, err := r.ReadMeta(ctx, metaExt, m)
 	if err != nil {
 		return nil, err
 	}
@@ -175,13 +175,13 @@ func (r *ObjectReader) ReadExtent(
 
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
-	extent Extent,
+	metaExt Extent,
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
 	constructor CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta ObjectMeta
-	if meta, err = r.ReadMeta(ctx, extent, m); err != nil {
+	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
 		return
 	}
 	return ReadColumnsWithMeta(
