@@ -1324,6 +1324,9 @@ func (ses *Session) getSqlType(sql string) {
 	ses.sqlSourceType = nil
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		if tenant != nil {
+			tenant.SetUser("")
+		}
 		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
