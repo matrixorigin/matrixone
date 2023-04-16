@@ -36,15 +36,15 @@ type BlockReader struct {
 	reader  *objectio.ObjectReader
 	key     objectio.Location
 	name    string
-	meta    *objectio.Extent
+	meta    objectio.Extent
 	manager *IoPipeline
 }
 
-type fetch struct {
+type fetchParams struct {
 	name   string
-	meta   *objectio.Extent
+	meta   objectio.Extent
 	idxes  []uint16
-	id     uint32
+	id     uint16
 	pool   *mpool.MPool
 	reader *objectio.ObjectReader
 }
@@ -86,12 +86,12 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 }
 
 func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
-	id uint32, m *mpool.MPool) (*batch.Batch, error) {
+	id uint16, m *mpool.MPool) (*batch.Batch, error) {
 	var bat *batch.Batch
 	if r.meta.End() == 0 {
 		return bat, nil
 	}
-	proc := fetch{
+	proc := fetchParams{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxes,
@@ -111,9 +111,8 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 	return bat, nil
 }
 
-func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
-	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, size, m)
+func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +144,13 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	id uint32, m *mpool.MPool) ([]objectio.ZoneMap, error) {
+	id uint16, m *mpool.MPool) ([]objectio.ZoneMap, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
 
-	block := meta.GetBlockMeta(id)
+	block := meta.GetBlockMeta(uint32(id))
 	blocksZoneMap, err := r.LoadZoneMap(ctx, idxs, block, m)
 	if err != nil {
 		return nil, err
@@ -163,8 +162,8 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objec
 	return r.reader.ReadMeta(ctx, r.meta, m)
 }
 
-func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, size, m)
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
@@ -189,24 +188,23 @@ func (r *BlockReader) LoadZoneMap(
 		if err != nil {
 			return nil, err
 		}
-		zoneMapList[i] = index.DecodeZM(column.GetMeta().ZoneMap())
+		zoneMapList[i] = index.DecodeZM(column.ZoneMap())
 	}
 
 	return zoneMapList, nil
 }
 
 func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
-	id uint32, m *mpool.MPool) (objectio.StaticFilter, error) {
+	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
 	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
 	if err != nil {
 		return nil, err
 	}
-	column := meta.GetColumnMeta(idx, id)
-	bf, err := column.GetIndex(ctx, r.reader.GetObject(), LoadBloomFilterFunc, m)
+	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), LoadBloomFilterFunc)
 	if err != nil {
 		return nil, err
 	}
-	return bf, nil
+	return bf[id], nil
 }
 
 func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
@@ -223,7 +221,7 @@ func (r *BlockReader) GetName() string {
 	return r.name
 }
 
-func (r *BlockReader) GetObjectExtent() *objectio.Extent {
+func (r *BlockReader) GetObjectExtent() objectio.Extent {
 	return r.meta
 }
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
@@ -245,11 +243,22 @@ func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		bf, err := index.DecodeBloomFilter(decompressed)
-		if err != nil {
-			return nil, 0, err
+		indexes := make([]objectio.StaticFilter, 0)
+		bf := objectio.BloomFilter(decompressed)
+		count := bf.BlockCount()
+		for i := uint32(0); i < count; i++ {
+			buf := bf.GetBloomFilter(i)
+			if len(buf) == 0 {
+				indexes = append(indexes, nil)
+				continue
+			}
+			index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
+			if err != nil {
+				return nil, 0, err
+			}
+			indexes = append(indexes, index)
 		}
-		return bf, int64(len(decompressed)), nil
+		return indexes, int64(len(decompressed)), nil
 	}
 }
 
@@ -277,44 +286,44 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 }
 
 // The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(pref prefetch) error {
-	return pipeline.Prefetch(pref)
+func PrefetchWithMerged(params prefetchParams) error {
+	return pipeline.Prefetch(params)
 }
 
-func Prefetch(idxes []uint16, ids []uint32, service fileservice.FileService, key objectio.Location) error {
+func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
 
-	pref, err := BuildPrefetch(service, key)
+	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	pref.AddBlock(idxes, ids)
-	return pipeline.Prefetch(pref)
+	params.AddBlock(idxes, ids)
+	return pipeline.Prefetch(params)
 }
 
 func PrefetchMeta(service fileservice.FileService, key objectio.Location) error {
-	pref, err := BuildPrefetch(service, key)
+	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	return pipeline.Prefetch(pref)
+	return pipeline.Prefetch(params)
 }
 
-func PrefetchFile(service fileservice.FileService, size int64, name string) error {
+func PrefetchFile(service fileservice.FileService, name string) error {
 	reader, err := NewFileReader(service, name)
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(context.Background(), size, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(context.Background(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
-	pref := buildPrefetchNew(reader)
+	params := buildPrefetchParams2(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
 			idxes[a] = a
 		}
-		pref.AddBlock(idxes, []uint32{bs[i].GetID()})
+		params.AddBlock(idxes, []uint16{bs[i].GetID()})
 	}
-	return PrefetchWithMerged(pref)
+	return PrefetchWithMerged(params)
 }

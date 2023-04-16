@@ -84,7 +84,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: common.NewSegmentid(),
+		ID: objectio.NewSegmentid(),
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
@@ -296,12 +296,12 @@ func (entry *SegmentEntry) CreateBlock(
 	defer entry.Unlock()
 	var id types.Blockid
 	if opts != nil && opts.Id != nil {
-		id = common.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
 			entry.nextObjectIdx = opts.Id.Filen + 1
 		}
 	} else {
-		id = common.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
+		id = objectio.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
 		entry.nextObjectIdx += 1
 	}
 	if entry.nextObjectIdx == math.MaxUint16 {

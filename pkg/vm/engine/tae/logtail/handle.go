@@ -637,7 +637,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range locations {
-		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
+		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
 		if err != nil {
 			return nil, err
 		}
@@ -646,7 +646,7 @@ func LoadCheckpointEntries(
 			for col := range item.attrs {
 				idxes[col] = uint16(col)
 			}
-			pref.AddBlock(idxes, []uint32{uint32(idx)})
+			pref.AddBlock(idxes, []uint16{uint16(idx)})
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
@@ -659,7 +659,7 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
 			if err != nil {
 				return nil, err
 			}

@@ -405,7 +405,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	if err != nil {
 		return nil
 	}
-	pref, err := blockio.BuildPrefetch(h.eng.GetTAE(ctx).Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.eng.GetTAE(ctx).Fs.Service, loc)
 	if err != nil {
 		return nil
 	}
@@ -415,7 +415,7 @@ func (h *Handle) prefetch(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint32{location.ID()})
+		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
