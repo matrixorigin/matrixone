@@ -23,10 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,29 +68,29 @@ func TestMergeDelete(t *testing.T) {
 		},
 		Zs: []int64{1},
 	}
-	uuid1 := common.MustUuid1()
-	blkId1 := common.NewBlockid(&uuid1, 0, 0)
+	uuid1 := objectio.NewSegmentid()
+	blkId1 := objectio.NewBlockid(&uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
 		Attrs: []string{
 			catalog.Row_ID,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeRowIdVector([]types.Rowid{
-				common.NewRowid(&blkId1, 0),
-				common.NewRowid(&blkId1, 1),
-				common.NewRowid(&blkId1, 2),
-				common.NewRowid(&blkId1, 3),
-				common.NewRowid(&blkId1, 4),
-				common.NewRowid(&blkId1, 5),
-				common.NewRowid(&blkId1, 6),
-				common.NewRowid(&blkId1, 7),
-				common.NewRowid(&blkId1, 8),
-				common.NewRowid(&blkId1, 9),
-				common.NewRowid(&blkId1, 10),
-				common.NewRowid(&blkId1, 11),
-				common.NewRowid(&blkId1, 12),
-				common.NewRowid(&blkId1, 13),
-				common.NewRowid(&blkId1, 14),
+				objectio.NewRowid(&blkId1, 0),
+				objectio.NewRowid(&blkId1, 1),
+				objectio.NewRowid(&blkId1, 2),
+				objectio.NewRowid(&blkId1, 3),
+				objectio.NewRowid(&blkId1, 4),
+				objectio.NewRowid(&blkId1, 5),
+				objectio.NewRowid(&blkId1, 6),
+				objectio.NewRowid(&blkId1, 7),
+				objectio.NewRowid(&blkId1, 8),
+				objectio.NewRowid(&blkId1, 9),
+				objectio.NewRowid(&blkId1, 10),
+				objectio.NewRowid(&blkId1, 11),
+				objectio.NewRowid(&blkId1, 12),
+				objectio.NewRowid(&blkId1, 13),
+				objectio.NewRowid(&blkId1, 14),
 			}, nil),
 		},
 	}
