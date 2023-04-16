@@ -118,7 +118,7 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.ReadBlocks(ctx,
+			ioVectors, err := params.reader.ReadMultiBlocks(ctx,
 				params.meta, params.ids, nil, objectio.ColumnConstructorFactory)
 			if err != nil {
 				res.Err = err
@@ -155,7 +155,7 @@ type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
-	return params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
+	return params.reader.ReadOneBlock(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
 }
 
 func noopPrefetch(params prefetchParams) error {

@@ -85,7 +85,34 @@ func ReadObjectMeta(
 	return
 }
 
-func ReadColumnsWithMeta(
+func ReadOneBlockWithMeta(
+	ctx context.Context,
+	meta *ObjectMeta,
+	name string,
+	id uint16,
+	idxs []uint16,
+	m *mpool.MPool,
+	fs fileservice.FileService,
+	factory CacheConstructorFactory,
+) (ioVec *fileservice.IOVector, err error) {
+	ioVec = &fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 0),
+	}
+	for _, idx := range idxs {
+		col := meta.GetColumnMeta(idx, uint32(id))
+		ext := col.Location()
+		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+			Offset:   int64(ext.Offset()),
+			Size:     int64(ext.Length()),
+			ToObject: factory(int64(ext.OriginSize())),
+		})
+	}
+	err = fs.Read(ctx, ioVec)
+	return
+}
+
+func ReadMultiBlocksWithMeta(
 	ctx context.Context,
 	name string,
 	meta *ObjectMeta,

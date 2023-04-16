@@ -66,39 +66,19 @@ func (r *ObjectReader) ReadMeta(
 	return ReadObjectMeta(ctx, r.name, &extent, r.noCache, r.object.fs)
 }
 
-func (r *ObjectReader) Read(
+func (r *ObjectReader) ReadOneBlock(
 	ctx context.Context,
 	metaExt Extent,
 	idxs []uint16,
 	id uint16,
 	m *mpool.MPool,
-	constructor CacheConstructorFactory,
-) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, metaExt, m)
-	if err != nil {
-		return nil, err
+	factory CacheConstructorFactory,
+) (ioVec *fileservice.IOVector, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
+		return
 	}
-	data := &fileservice.IOVector{
-		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0),
-		NoCache:  r.noCache,
-	}
-	for _, idx := range idxs {
-		col := meta.GetColumnMeta(idx, uint32(id))
-		ext := col.Location()
-		data.Entries = append(data.Entries, fileservice.IOEntry{
-			Offset: int64(ext.Offset()),
-			Size:   int64(ext.Length()),
-
-			ToObject: constructor(int64(ext.OriginSize())),
-		})
-	}
-
-	err = r.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, id, idxs, m, r.object.fs, factory)
 }
 
 func (r *ObjectReader) ReadAll(
@@ -173,7 +153,7 @@ func (r *ObjectReader) ReadExtent(
 	return ReadExtent(ctx, r.name, &extent, r.noCache, r.object.fs)
 }
 
-func (r *ObjectReader) ReadBlocks(
+func (r *ObjectReader) ReadMultiBlocks(
 	ctx context.Context,
 	metaExt Extent,
 	opts map[uint16]*ReadBlockOptions,
@@ -184,7 +164,7 @@ func (r *ObjectReader) ReadBlocks(
 	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
 		return
 	}
-	return ReadColumnsWithMeta(
+	return ReadMultiBlocksWithMeta(
 		ctx,
 		r.name,
 		&meta,
