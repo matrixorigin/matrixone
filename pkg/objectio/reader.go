@@ -58,6 +58,22 @@ func (r *ObjectReader) GetObject() *Object {
 	return r.object
 }
 
+func (r *ObjectReader) ReadZM(
+	ctx context.Context,
+	blk uint16,
+	cols []uint16,
+	metaExt Extent,
+	m *mpool.MPool,
+) (zms []ZoneMap, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
+		return
+	}
+	blkMeta := meta.GetBlockMeta(uint32(blk))
+	zms = blkMeta.ToColumnZoneMaps(cols)
+	return
+}
+
 func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
 	extent Extent,

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BlockReader struct {
@@ -147,19 +146,13 @@ func (r *BlockReader) LoadAllColumns(
 	return bats, nil
 }
 
-func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	id uint16, m *mpool.MPool) ([]objectio.ZoneMap, error) {
-	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	if err != nil {
-		return nil, err
-	}
-
-	block := meta.GetBlockMeta(uint32(id))
-	blocksZoneMap, err := r.LoadZoneMap(ctx, idxs, block, m)
-	if err != nil {
-		return nil, err
-	}
-	return blocksZoneMap, nil
+func (r *BlockReader) LoadZoneMaps(
+	ctx context.Context,
+	idxs []uint16,
+	id uint16,
+	m *mpool.MPool,
+) ([]objectio.ZoneMap, error) {
+	return r.reader.ReadZM(ctx, id, idxs, r.meta, m)
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
@@ -186,16 +179,7 @@ func (r *BlockReader) LoadZoneMap(
 	idxs []uint16,
 	block objectio.BlockObject,
 	m *mpool.MPool) ([]objectio.ZoneMap, error) {
-	zoneMapList := make([]objectio.ZoneMap, len(idxs))
-	for i, idx := range idxs {
-		column, err := block.GetColumn(idx)
-		if err != nil {
-			return nil, err
-		}
-		zoneMapList[i] = index.DecodeZM(column.ZoneMap())
-	}
-
-	return zoneMapList, nil
+	return block.ToColumnZoneMaps(idxs), nil
 }
 
 func (r *BlockReader) LoadBloomFilter(

@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 const FooterSize = 64
@@ -174,6 +175,15 @@ func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
 
 func (bm BlockObject) IsEmpty() bool {
 	return len(bm) == 0
+}
+
+func (bm BlockObject) ToColumnZoneMaps(cols []uint16) []ZoneMap {
+	zms := make([]ZoneMap, len(cols))
+	for i, idx := range cols {
+		column := bm.MustGetColumn(idx)
+		zms[i] = index.DecodeZM(column.ZoneMap())
+	}
+	return zms
 }
 
 type BlockHeader []byte
