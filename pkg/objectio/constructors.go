@@ -60,8 +60,8 @@ func noDecompressConstructorFactory(size int64) CacheConstructor {
 	}
 }
 
-// defaultConstructorFactory the decompression function passed to fileservice
-func defaultConstructorFactory(size int64) CacheConstructor {
+// decompressConstructorFactory the decompression function passed to fileservice
+func decompressConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error

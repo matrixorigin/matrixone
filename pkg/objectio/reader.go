@@ -159,7 +159,7 @@ func (r *ObjectReader) ReadExtent(
 		&extent,
 		r.noCache,
 		r.fs,
-		defaultConstructorFactory)
+		decompressConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
