@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionReader struct {
@@ -161,8 +160,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if colNames[len(colNames)-1] == catalog.Row_ID {
 				hasRowId = true
 			}
-			sid := location.Name().Sid()
-			blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+			sid := location.Name().SegmentId()
+			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
 			if hasRowId {
 				// add rowId col for rbat
 				lens := rbat.Length()

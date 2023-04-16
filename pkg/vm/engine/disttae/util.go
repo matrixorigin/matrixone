@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 
@@ -36,7 +37,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -788,5 +788,5 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 */
 // SegmentId = Uuid + fileId
 func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
-	return common.NewRowid(blkid, offset)
+	return objectio.NewRowid(blkid, offset)
 }

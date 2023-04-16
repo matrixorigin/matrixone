@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -258,8 +258,8 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 		if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
 			return err
 		} else {
-			sid := location.Name().Sid()
-			blkid := common.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+			sid := location.Name().SegmentId()
+			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
 			txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
 		}
 	}

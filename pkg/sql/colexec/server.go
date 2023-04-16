@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -104,7 +103,7 @@ func (srv *Server) GetCnSegmentType(segmentName string) int32 {
 func (srv *Server) GenerateSegment() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
-	return objectio.BuildObjectName(common.MustUuid1(), 0)
+	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	// for future fileOffset
 	// if srv.InitSegmentId {
 	// 	srv.incrementSegmentId()

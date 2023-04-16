@@ -625,7 +625,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID(), proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -753,14 +753,14 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
 	var err error
 	if param.Extern.QueryResult {
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
 	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}

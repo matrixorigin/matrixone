@@ -42,7 +42,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := objectio.NewObjectWriter(name, service)
+	objectWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterNormal, name, service)
 	assert.Nil(t, err)
 	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
