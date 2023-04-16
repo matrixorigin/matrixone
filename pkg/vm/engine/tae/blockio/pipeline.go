@@ -53,10 +53,10 @@ func putJob(job *tasks.Job) {
 
 // At present, the read and write operations of all modules of mo-service use blockio.
 // I have started/stopped IoPipeline when mo is initialized/stopped, but in order to
-// be compatible with the UT of each module, I must add simpleFetch and noopPrefetch.
+// be compatible with the UT of each module, I must add readColumns and noopPrefetch.
 
 // Most UT cases do not call Start(), so in order to be compatible with these cases,
-// the pipeline uses simpleFetch and noopPrefetch.In order to avoid the data race of UT,
+// the pipeline uses readColumns and noopPrefetch.In order to avoid the data race of UT,
 // I did not switch pipeline.fetchFun and pipeline.prefetchFunc when
 // I stopped, so I need to execute ResetPipeline again
 
@@ -98,12 +98,12 @@ func jobFactory(
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
-			if err != nil {
+			ioVectors, err := readColumns(ctx, params)
+			if err == nil {
+				res.Res = ioVectors
+			} else {
 				res.Err = err
-				return
 			}
-			res.Res = ioVectors
 			return
 		},
 	)
@@ -154,12 +154,8 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
-func simpleFetch(ctx context.Context, params fetchParams) (any, error) {
-	ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
-	if err != nil {
-		return nil, err
-	}
-	return ioVectors, nil
+func readColumns(ctx context.Context, params fetchParams) (any, error) {
+	return params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
 }
 
 func noopPrefetch(params prefetchParams) error {
@@ -221,7 +217,7 @@ func NewIOPipeline(
 		p.onFetch)
 	p.fetch.scheduler = tasks.NewParallelJobScheduler(p.options.fetchParallism)
 
-	p.fetchFun = simpleFetch
+	p.fetchFun = readColumns
 	p.prefetchFunc = noopPrefetch
 	return p
 }
