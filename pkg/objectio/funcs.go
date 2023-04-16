@@ -86,24 +86,11 @@ func ReadObjectMeta(
 	noCache bool,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
-	ioVec := &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  noCache,
-	}
-
-	ioVec.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.Offset()),
-		Size:   int64(extent.Length()),
-
-		ToObject: objectMetaConstructorFactory(int64(extent.OriginSize())),
-	}
-
-	if err = fs.Read(ctx, ioVec); err != nil {
+	var v any
+	if v, err = ReadExtent(ctx, name, extent, noCache, fs, objectMetaConstructorFactory); err != nil {
 		return
 	}
-
-	meta = ObjectMeta(ioVec.Entries[0].Object.([]byte))
+	meta = ObjectMeta(v.([]byte))
 	return
 }
 
