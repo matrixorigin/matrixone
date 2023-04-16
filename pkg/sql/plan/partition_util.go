@@ -127,7 +127,7 @@ func partitionValueTypeCheck(ctx context.Context, funcTyp *Type, valueTyp *Type)
 }
 
 func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionByDef) error {
-	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
+	unsignedFlag := types.T(info.PartitionExpr.Expr.Typ.Id).IsUnsignedInt()
 	if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 		exprs := valuesIn.ValueList
 		for _, exp := range exprs {
@@ -258,7 +258,7 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *
 }
 
 func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionByDef) error {
-	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
+	unsignedFlag := types.T(info.PartitionExpr.Expr.Typ.Id).IsUnsignedInt()
 	if valuesLess, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLess.ValueList
 		for _, exp := range exprs {

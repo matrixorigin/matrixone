@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -166,6 +169,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
+	if s.IsLoad {
+		return s.LoadRun(c)
+	}
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
@@ -218,11 +224,39 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
+		} else {
+			rds = append(rds, mainRds...)
+		}
+
+		// get readers of partitioned tables
+		if s.DataSource.PartitionRelationNames != nil {
+			for _, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				if err != nil {
+					return err
+				}
+				rds = append(rds, memRds...)
+			}
 		}
 		s.NodeInfo.Data = nil
 	}
+
+	if len(rds) != mcpu {
+		newRds := make([]engine.Reader, 0, mcpu)
+		step := len(rds) / mcpu
+		for i := 0; i < len(rds); i += step {
+			m := disttae.NewMergeReader(rds[i : i+step])
+			newRds = append(newRds, m)
+		}
+		rds = newRds
+	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -286,45 +320,68 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
-	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel32 := make(chan *[]int32)
-		channel8 := make(chan *[]uint8)
+		channel := make(chan *[]uint8)
 		for i := range s.PreScopes {
 			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
 			case *right.Argument:
-				arg.Channel = channel32
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 
 			case *rightsemi.Argument:
-				arg.Channel = channel8
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 
 			case *rightanti.Argument:
-				arg.Channel = channel8
+				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
 				if i == 0 {
-					arg.Is_receiver = true
+					arg.IsMerger = true
 				}
 			}
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, left_scope)
-	s.PreScopes = append(s.PreScopes, right_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
+	s.PreScopes = append(s.PreScopes, build_scope)
 
 	return s.MergeRun(c)
 }
+
 func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
+}
+
+func (s *Scope) LoadRun(c *Compile) error {
+	mcpu := s.NodeInfo.Mcpu
+	ss := make([]*Scope, mcpu)
+	bat := batch.NewWithSize(1)
+	{
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
+		bat.InitZsOne(1)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				Bat: bat,
+			},
+			NodeInfo: s.NodeInfo,
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+	}
+	newScope := newParallelScope(s, ss)
+
+	return newScope.MergeRun(c)
 }
 
 func newParallelScope(s *Scope, ss []*Scope) *Scope {
@@ -447,8 +504,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			}
 		case vm.Output:
 		default:
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
+			for j := range ss {
+				ss[j].Instructions = append(ss[j].Instructions, dupInstruction(&in, nil, j))
 			}
 		}
 	}

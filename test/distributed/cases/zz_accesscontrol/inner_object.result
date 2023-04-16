@@ -84,8 +84,8 @@ system
 system_metrics
 information_schema
 mysql
-account_db
 mo_catalog
+account_db
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
@@ -147,7 +147,7 @@ name    type    name    is_visible    hidden    comment    column_name    ordina
 deptno    UNIQUE    deptno    1    0        deptno    1    null
 desc mo_catalog.mo_indexes;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO        null        
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
 table_id    BIGINT UNSIGNED(64)    NO        null        
 database_id    BIGINT UNSIGNED(64)    NO        null        
 name    VARCHAR(64)    NO        null        
@@ -155,7 +155,7 @@ type    VARCHAR(11)    NO        null
 is_visible    TINYINT(8)    NO        null        
 hidden    TINYINT(8)    NO        null        
 comment    VARCHAR(2048)    NO        null        
-column_name    VARCHAR(256)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
 ordinal_position    INT UNSIGNED(32)    NO        null        
 options    TEXT(0)    YES        null        
 index_table_name    VARCHAR(5000)    YES        null        
@@ -164,7 +164,7 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
 desc mo_catalog.mo_indexes;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO        null        
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
 table_id    BIGINT UNSIGNED(64)    NO        null        
 database_id    BIGINT UNSIGNED(64)    NO        null        
 name    VARCHAR(64)    NO        null        
@@ -172,7 +172,7 @@ type    VARCHAR(11)    NO        null
 is_visible    TINYINT(8)    NO        null        
 hidden    TINYINT(8)    NO        null        
 comment    VARCHAR(2048)    NO        null        
-column_name    VARCHAR(256)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
 ordinal_position    INT UNSIGNED(32)    NO        null        
 options    TEXT(0)    YES        null        
 index_table_name    VARCHAR(5000)    YES        null        

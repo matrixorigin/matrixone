@@ -19,17 +19,18 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestTransferPage(t *testing.T) {
-	sid := common.NewSegmentid()
+	sid := objectio.NewSegmentid()
 	src := common.ID{
-		BlockID: common.NewBlockid(&sid, 1, 0),
+		BlockID: objectio.NewBlockid(&sid, 1, 0),
 	}
 	dest := common.ID{
-		BlockID: common.NewBlockid(&sid, 2, 0),
+		BlockID: objectio.NewBlockid(&sid, 2, 0),
 	}
 	prefix := dest.BlockID[:]
 
@@ -73,10 +74,10 @@ func TestTransferTable(t *testing.T) {
 	ttl := time.Minute
 	table := NewTransferTable[*TransferHashPage](ttl)
 	defer table.Close()
-	sid := common.NewSegmentid()
+	sid := objectio.NewSegmentid()
 
-	id1 := common.ID{BlockID: common.NewBlockid(&sid, 1, 0)}
-	id2 := common.ID{BlockID: common.NewBlockid(&sid, 2, 0)}
+	id1 := common.ID{BlockID: objectio.NewBlockid(&sid, 1, 0)}
+	id2 := common.ID{BlockID: objectio.NewBlockid(&sid, 2, 0)}
 
 	prefix := id2.BlockID[:]
 

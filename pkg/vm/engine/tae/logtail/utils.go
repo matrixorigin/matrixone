@@ -453,7 +453,7 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint32, reader *blockio.BlockReader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
@@ -484,7 +484,7 @@ func (data *CheckpointData) PrefetchFrom(
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 
-	pref, err := blockio.BuildPrefetch(service, key)
+	pref, err := blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
@@ -493,7 +493,7 @@ func (data *CheckpointData) PrefetchFrom(
 		for i := range item.attrs {
 			idxes[i] = uint16(i)
 		}
-		pref.AddBlock(idxes, []uint32{uint32(idx)})
+		pref.AddBlock(idxes, []uint16{uint16(idx)})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -507,7 +507,7 @@ func (data *CheckpointData) ReadFrom(
 
 	for idx, item := range checkpointDataRefer {
 		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), reader)
+		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
 		if err != nil {
 			return
 		}
