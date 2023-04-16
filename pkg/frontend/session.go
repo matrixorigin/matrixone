@@ -258,20 +258,6 @@ func (ses *Session) pushQueryId(uuid string) {
 	ses.QueryId = append(ses.QueryId, uuid)
 }
 
-// Clean up all resources hold by the session.  As of now, the mpool
-func (ses *Session) Dispose() {
-	if ses.flag {
-		mp := ses.GetMemPool()
-		mpool.DeleteMPool(mp)
-		ses.SetMemPool(mp)
-	}
-	ses.cleanCache()
-
-	ses.statsCache = nil
-	// Clean sequence record data.
-	ses.seqCurValues = nil
-}
-
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
@@ -357,9 +343,48 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	}
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
-		ss.Dispose()
+		ss.Close()
 	})
 	return ses
+}
+
+func (ses *Session) Close() {
+	if ses.flag {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(nil)
+	}
+	ses.mrs = nil
+	ses.data = nil
+	ses.ep = nil
+	ses.txnHandler = nil
+	ses.txnCompileCtx = nil
+	ses.storage = nil
+	ses.sql = ""
+	ses.sysVars = nil
+	ses.userDefinedVars = nil
+	ses.gSysVars = nil
+	ses.prepareStmts = nil
+	ses.requestCtx = nil
+	ses.connectCtx = nil
+	ses.allResultSet = nil
+	ses.tenant = nil
+	ses.priv = nil
+	ses.errInfo = nil
+	ses.cache = nil
+	ses.debugStr = ""
+	ses.sqlSourceType = nil
+	ses.tempTablestorage = nil
+	ses.tStmt = nil
+	ses.ast = nil
+	ses.rs = nil
+	ses.QueryId = nil
+	ses.p = nil
+	ses.planCache = nil
+	ses.statsCache = nil
+	ses.seqCurValues = nil
+	ses.seqLastValue = ""
+	ses.sqlHelper = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -401,16 +426,7 @@ func (bgs *BackgroundSession) Close() {
 	}
 
 	if bgs.Session != nil {
-		bgs.Session.ep = nil
-		bgs.Session.errInfo.codes = nil
-		bgs.Session.errInfo.msgs = nil
-		bgs.Session.errInfo = nil
-		bgs.Session.cache.invalidate()
-		bgs.Session.cache = nil
-		bgs.Session.txnCompileCtx = nil
-		bgs.Session.txnHandler = nil
-		bgs.Session.gSysVars = nil
-		bgs.Session.statsCache = nil
+		bgs.Session.Close()
 	}
 	bgs = nil
 }

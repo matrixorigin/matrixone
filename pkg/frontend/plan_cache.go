@@ -36,13 +36,15 @@ type planCache struct {
 
 func newPlanCache(capacity int) *planCache {
 	return &planCache{
-		capacity:  capacity,
-		lruList:   list.New(),
-		cachePool: make(map[string]*list.Element),
+		capacity: capacity,
 	}
 }
 
 func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+	if pc.cachePool == nil {
+		pc.cachePool = make(map[string]*list.Element)
+		pc.lruList = list.New()
+	}
 	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
@@ -54,6 +56,9 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 
 // get gets a cached plan by its sql
 func (pc *planCache) get(sql string) *cachedPlan {
+	if pc.cachePool == nil {
+		return nil
+	}
 	if element, ok := pc.cachePool[sql]; ok {
 		pc.lruList.MoveToFront(element)
 		cp := element.Value.(*cachedPlan)
@@ -63,11 +68,14 @@ func (pc *planCache) get(sql string) *cachedPlan {
 }
 
 func (pc *planCache) isCached(sql string) bool {
+	if pc.cachePool == nil {
+		return false
+	}
 	_, isCached := pc.cachePool[sql]
 	return isCached
 }
 
 func (pc *planCache) clean() {
-	pc.lruList = list.New()
-	pc.cachePool = make(map[string]*list.Element)
+	pc.lruList = nil
+	pc.cachePool = nil
 }

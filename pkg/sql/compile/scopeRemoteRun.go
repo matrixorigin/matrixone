@@ -1014,6 +1014,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+	case vm.RightSemi:
+		t := opr.GetRightSemiJoin()
+		v.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightAnti:
+		t := opr.GetRightAntiJoin()
+		v.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
