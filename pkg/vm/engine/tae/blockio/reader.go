@@ -126,7 +126,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpoo
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, objectio.LoadColumnFunc)
+	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, objectio.ColumnConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	if err != nil {
 		return nil, err
 	}
-	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), objectio.LoadBloomFilterFunc)
+	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), objectio.BloomFilterConstructorFactory)
 	if err != nil {
 		return nil, err
 	}

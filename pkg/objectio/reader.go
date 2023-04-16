@@ -72,7 +72,7 @@ func (r *ObjectReader) Read(
 	idxs []uint16,
 	id uint16,
 	m *mpool.MPool,
-	constructor ReadObjectFunc,
+	constructor CacheConstructorFactory,
 ) (*fileservice.IOVector, error) {
 	meta, err := r.ReadMeta(ctx, extent, m)
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *ObjectReader) ReadAll(
 	extent Extent,
 	idxs []uint16,
 	m *mpool.MPool,
-	constructor ReadObjectFunc,
+	constructor CacheConstructorFactory,
 ) (*fileservice.IOVector, error) {
 	meta, err := r.ReadMeta(ctx, extent, m)
 	if err != nil {
@@ -144,7 +144,7 @@ func (r *ObjectReader) ReadAll(
 func (r *ObjectReader) ReadBloomFilter(
 	ctx context.Context,
 	extent Extent,
-	constructor ReadObjectFunc,
+	constructor CacheConstructorFactory,
 ) ([]StaticFilter, error) {
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
@@ -178,7 +178,7 @@ func (r *ObjectReader) ReadBlocks(
 	extent Extent,
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
-	constructor ReadObjectFunc,
+	constructor CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta ObjectMeta
 	if meta, err = r.ReadMeta(ctx, extent, m); err != nil {

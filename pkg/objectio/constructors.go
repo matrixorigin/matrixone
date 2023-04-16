@@ -23,11 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
-type ReadObjectFunc = func(size int64) ToObjectFunc
+type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
+type CacheConstructorFactory = func(size int64) CacheConstructor
 
-// newDecompressToObject the decompression function passed to fileservice
-func newObjectMetaToObject(size int64) ToObjectFunc {
+func objectMetaConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -48,8 +47,8 @@ func newObjectMetaToObject(size int64) ToObjectFunc {
 	}
 }
 
-// newDecompressToObject the decompression function passed to fileservice
-func newDecompressToObject(size int64) ToObjectFunc {
+// defaultConstructorFactory the decompression function passed to fileservice
+func defaultConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -68,7 +67,7 @@ func newDecompressToObject(size int64) ToObjectFunc {
 	}
 }
 
-func LoadBloomFilterFunc(size int64) ToObjectFunc {
+func BloomFilterConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -102,7 +101,7 @@ func LoadBloomFilterFunc(size int64) ToObjectFunc {
 	}
 }
 
-func LoadColumnFunc(size int64) ToObjectFunc {
+func ColumnConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error

@@ -37,7 +37,7 @@ func ReadExtent(
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:   int64(extent.Offset()),
 		Size:     int64(extent.Length()),
-		ToObject: newDecompressToObject(int64(extent.OriginSize())),
+		ToObject: defaultConstructorFactory(int64(extent.OriginSize())),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
@@ -74,7 +74,7 @@ func ReadObjectMeta(
 		Offset: int64(extent.Offset()),
 		Size:   int64(extent.Length()),
 
-		ToObject: newObjectMetaToObject(int64(extent.OriginSize())),
+		ToObject: objectMetaConstructorFactory(int64(extent.OriginSize())),
 	}
 
 	if err = fs.Read(ctx, ioVec); err != nil {
@@ -93,7 +93,7 @@ func ReadColumnsWithMeta(
 	noCache bool,
 	m *mpool.MPool,
 	fs fileservice.FileService,
-	constructor ReadObjectFunc,
+	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
@@ -106,7 +106,7 @@ func ReadColumnsWithMeta(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToObject: constructor(int64(col.Location().OriginSize())),
+				ToObject: factory(int64(col.Location().OriginSize())),
 			})
 		}
 	}

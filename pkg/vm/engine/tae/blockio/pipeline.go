@@ -98,7 +98,7 @@ func jobFactory(
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.LoadColumnFunc)
+			ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
 			if err != nil {
 				res.Err = err
 				return
@@ -119,7 +119,7 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := params.reader.ReadBlocks(ctx,
-				params.meta, params.ids, nil, objectio.LoadColumnFunc)
+				params.meta, params.ids, nil, objectio.ColumnConstructorFactory)
 			if err != nil {
 				res.Err = err
 				return
@@ -155,7 +155,7 @@ type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
 func simpleFetch(ctx context.Context, params fetchParams) (any, error) {
-	ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.LoadColumnFunc)
+	ioVectors, err := params.reader.Read(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
