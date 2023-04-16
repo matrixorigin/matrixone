@@ -64,8 +64,8 @@ func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {
-	return o.GetBlockMeta(id).ColumnMeta(idx)
+func (o ObjectMeta) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
+	return o.GetBlockMeta(blk).ColumnMeta(col)
 }
 
 const (

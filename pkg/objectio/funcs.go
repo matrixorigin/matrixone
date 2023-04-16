@@ -89,7 +89,7 @@ func ReadOneBlockWithMeta(
 	ctx context.Context,
 	meta *ObjectMeta,
 	name string,
-	id uint16,
+	blk uint16,
 	idxs []uint16,
 	m *mpool.MPool,
 	fs fileservice.FileService,
@@ -99,8 +99,8 @@ func ReadOneBlockWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
-	for _, idx := range idxs {
-		col := meta.GetColumnMeta(idx, uint32(id))
+	for _, col := range idxs {
+		col := meta.GetColumnMeta(uint32(blk), col)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:   int64(ext.Offset()),
@@ -127,8 +127,8 @@ func ReadMultiBlocksWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, opt := range options {
-		for idx := range opt.Idxes {
-			col := meta.GetColumnMeta(idx, uint32(opt.Id))
+		for col := range opt.Idxes {
+			col := meta.GetColumnMeta(uint32(opt.Id), col)
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -157,9 +157,9 @@ func ReadAllBlocksWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
 		NoCache:  noCache,
 	}
-	for id := uint32(0); id < meta.BlockCount(); id++ {
-		for _, idx := range cols {
-			col := meta.GetColumnMeta(idx, id)
+	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
+		for _, colIdx := range cols {
+			col := meta.GetColumnMeta(blk, colIdx)
 			ext := col.Location()
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 				Offset: int64(ext.Offset()),
