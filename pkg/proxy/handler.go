@@ -45,13 +45,22 @@ var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN serve
 
 // newProxyHandler creates a new proxy handler.
 func newProxyHandler(
-	ctx context.Context, runtime runtime.Runtime, cfg Config, stopper *stopper.Stopper,
+	ctx context.Context,
+	runtime runtime.Runtime,
+	cfg Config,
+	st *stopper.Stopper,
+	testHAKeeperClient logservice.ClusterHAKeeperClient,
 ) (*handler, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	c, err := logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
-	if err != nil {
-		return nil, err
+
+	var err error
+	c := testHAKeeperClient
+	if c == nil {
+		c, err = logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Create the MO cluster.
@@ -67,7 +76,7 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(stopper, runtime.Logger(), mc, opts...)
+	re, err := newRebalancer(st, runtime.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +85,7 @@ func newProxyHandler(
 		ctx:       context.Background(),
 		logger:    runtime.Logger(),
 		config:    cfg,
-		stopper:   stopper,
+		stopper:   st,
 		moCluster: mc,
 		router:    newRouter(mc, re, false),
 	}, nil
@@ -96,8 +105,6 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}
 	defer func() { _ = cc.Close() }()
 
-	// TODO(volgariver6): white list handling.
-
 	// client builds connections with a best CN server and returns
 	// the server connection.
 	sc, err := cc.BuildConnWithServer(true)
@@ -112,8 +119,38 @@ func (h *handler) handle(c goetty.IOSession) error {
 		zap.String("server", sc.RawConn().RemoteAddr().String()),
 	)
 
-	// TODO(volgariver6): Is the handshake packet available for long time?
 	if err := t.run(cc, sc); err != nil {
+		return err
+	}
+
+	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
+	defer st.Stop()
+	// Starts the event handler go-routine to handle the events comes from tunnel data flow,
+	// such as, kill connection event.
+	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
+		for {
+			select {
+			case e := <-t.reqC:
+				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
+					h.logger.Error("failed to handle event",
+						zap.Any("event", e), zap.Error(err))
+				}
+			case r := <-t.respC:
+				if len(r) > 0 {
+					t.mu.Lock()
+					// We must call this method because it locks writeMu.
+					if err := t.mu.serverConn.writeDataDirectly(cc.RawConn(), r); err != nil {
+						h.logger.Error("failed to write event response",
+							zap.Any("response", r), zap.Error(err))
+					}
+					t.mu.Unlock()
+				}
+			case <-ctx.Done():
+				h.logger.Info("event handler stopped.")
+				return
+			}
+		}
+	}); err != nil {
 		return err
 	}
 

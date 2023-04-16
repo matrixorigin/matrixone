@@ -61,7 +61,7 @@ func (r *ObjectReader) GetObject() *Object {
 
 func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	m *mpool.MPool,
 ) (ObjectMeta, error) {
 	metas := &fileservice.IOVector{
@@ -71,19 +71,10 @@ func (r *ObjectReader) ReadMeta(
 	}
 
 	metas.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.offset),
-		Size:   int64(extent.originSize),
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.Length()),
 
-		ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-			if len(data) == 0 {
-				var err error
-				data, err = io.ReadAll(reader)
-				if err != nil {
-					return nil, 0, err
-				}
-			}
-			return data, int64(len(data)), nil
-		},
+		ToObject: newObjectMetaToObject(int64(extent.OriginSize())),
 	}
 
 	err := r.object.fs.Read(ctx, metas)
@@ -97,9 +88,9 @@ func (r *ObjectReader) ReadMeta(
 
 func (r *ObjectReader) Read(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	idxs []uint16,
-	id uint32,
+	id uint16,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
@@ -113,7 +104,7 @@ func (r *ObjectReader) Read(
 		NoCache:  r.noCache,
 	}
 	for _, idx := range idxs {
-		col := meta.GetColumnMeta(idx, id)
+		col := meta.GetColumnMeta(idx, uint32(id))
 		ext := col.Location()
 		data.Entries = append(data.Entries, fileservice.IOEntry{
 			Offset: int64(ext.Offset()),
@@ -132,7 +123,7 @@ func (r *ObjectReader) Read(
 
 func (r *ObjectReader) ReadAll(
 	ctx context.Context,
-	extent *Extent,
+	extent Extent,
 	idxs []uint16,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
@@ -170,10 +161,59 @@ func (r *ObjectReader) ReadAll(
 	return data, nil
 }
 
+func (r *ObjectReader) ReadBloomFilter(
+	ctx context.Context,
+	extent Extent,
+	readFunc ReadObjectFunc,
+) ([]StaticFilter, error) {
+	metas := &fileservice.IOVector{
+		FilePath: r.nameStr,
+		Entries:  make([]fileservice.IOEntry, 1),
+		NoCache:  r.noCache,
+	}
+
+	metas.Entries[0] = fileservice.IOEntry{
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.Length()),
+
+		ToObject: readFunc(int64(extent.OriginSize())),
+	}
+	err := r.object.fs.Read(ctx, metas)
+	if err != nil {
+		return nil, err
+	}
+
+	return metas.Entries[0].Object.([]StaticFilter), err
+}
+
+func (r *ObjectReader) ReadZoneMapArea(
+	ctx context.Context,
+	extent Extent,
+) (ZoneMapArea, error) {
+	metas := &fileservice.IOVector{
+		FilePath: r.nameStr,
+		Entries:  make([]fileservice.IOEntry, 1),
+		NoCache:  r.noCache,
+	}
+
+	metas.Entries[0] = fileservice.IOEntry{
+		Offset: int64(extent.Offset()),
+		Size:   int64(extent.Length()),
+
+		ToObject: newDecompressToObject(int64(extent.OriginSize())),
+	}
+	err := r.object.fs.Read(ctx, metas)
+	if err != nil {
+		return nil, err
+	}
+
+	return metas.Entries[0].Object.([]byte), err
+}
+
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
-	extent *Extent,
-	ids map[uint32]*ReadBlockOptions,
+	extent Extent,
+	ids map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
 	readFunc ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
@@ -187,7 +227,7 @@ func (r *ObjectReader) ReadBlocks(
 	}
 	for _, block := range ids {
 		for idx := range block.Idxes {
-			col := meta.GetColumnMeta(idx, block.Id)
+			col := meta.GetColumnMeta(idx, uint32(block.Id))
 			data.Entries = append(data.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -206,27 +246,25 @@ func (r *ObjectReader) ReadBlocks(
 
 func (r *ObjectReader) ReadAllMeta(
 	ctx context.Context,
-	fileSize int64,
 	m *mpool.MPool,
 ) (ObjectMeta, error) {
-	footer, err := r.readFooter(ctx, fileSize, m)
+	header, err := r.readHeader(ctx, m)
 	if err != nil {
 		return nil, err
 	}
-	extent := Extent{offset: footer.metaStart, length: footer.metaLen, originSize: footer.metaLen}
-	return r.ReadMeta(ctx, &extent, m)
+	return r.ReadMeta(ctx, header.Location(), m)
 }
 
-func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
-	return r.readFooterAndUnMarshal(ctx, fileSize, FooterSize, m)
+func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (Header, error) {
+	return r.readHeaderAndUnMarshal(ctx, HeaderSize, m)
 }
 
-func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
+func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m *mpool.MPool) (Header, error) {
 	data := &fileservice.IOVector{
 		FilePath: r.nameStr,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset: fileSize - size,
+				Offset: 0,
 				Size:   size,
 
 				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
@@ -238,12 +276,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 							return nil, 0, err
 						}
 					}
-					footer := &Footer{}
-					err := footer.Unmarshal(data)
-					if err != nil {
-						return footer, 0, nil
-					}
-					return footer, int64(len(data)), nil
+					return data, int64(len(data)), nil
 				},
 			},
 		},
@@ -254,7 +287,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 		return nil, err
 	}
 
-	return data.Entries[0].Object.(*Footer), nil
+	return data.Entries[0].Object.([]byte), nil
 }
 
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
@@ -276,6 +309,28 @@ func newDecompressToObject(size int64) ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
+		return decompressed, int64(len(decompressed)), nil
+	}
+}
+
+// newDecompressToObject the decompression function passed to fileservice
+func newObjectMetaToObject(size int64) ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
+		var err error
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		objectMeta := ObjectMeta(decompressed)
+		objectMeta.BlockHeader().MetaLocation().SetLength(uint32(len(data)))
 		return decompressed, int64(len(decompressed)), nil
 	}
 }

@@ -19,28 +19,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-// prefetch is the parameter of the executed IoPipeline.Prefetch, which
-// provides the merge function, which can merge the prefetch requests of
+// prefetchParams is the parameter of the executed IoPipeline.prefetchParams, which
+// provides the merge function, which can merge the prefetchParams requests of
 // multiple blocks in an object/file
-type prefetch struct {
+type prefetchParams struct {
 	name    objectio.ObjectName
 	nameStr string
-	meta    *objectio.Extent
-	ids     map[uint32]*objectio.ReadBlockOptions
+	meta    objectio.Extent
+	ids     map[uint16]*objectio.ReadBlockOptions
 	reader  *objectio.ObjectReader
 }
 
-func BuildPrefetch(service fileservice.FileService, key objectio.Location) (prefetch, error) {
+func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (prefetchParams, error) {
 	reader, err := NewObjectReader(service, key)
 	if err != nil {
-		return prefetch{}, err
+		return prefetchParams{}, err
 	}
-	return buildPrefetch(reader), nil
+	return buildPrefetchParams(reader), nil
 }
 
-func buildPrefetch(reader *BlockReader) prefetch {
-	ids := make(map[uint32]*objectio.ReadBlockOptions)
-	return prefetch{
+func buildPrefetchParams(reader *BlockReader) prefetchParams {
+	ids := make(map[uint16]*objectio.ReadBlockOptions)
+	return prefetchParams{
 		name:    reader.GetObjectName(),
 		nameStr: reader.GetObjectName().String(),
 		meta:    reader.GetObjectExtent(),
@@ -48,9 +48,9 @@ func buildPrefetch(reader *BlockReader) prefetch {
 		reader:  reader.GetObjectReader(),
 	}
 }
-func buildPrefetchNew(reader *BlockReader) prefetch {
-	ids := make(map[uint32]*objectio.ReadBlockOptions)
-	return prefetch{
+func buildPrefetchParams2(reader *BlockReader) prefetchParams {
+	ids := make(map[uint16]*objectio.ReadBlockOptions)
+	return prefetchParams{
 		nameStr: reader.GetName(),
 		meta:    reader.GetObjectExtent(),
 		ids:     ids,
@@ -58,8 +58,8 @@ func buildPrefetchNew(reader *BlockReader) prefetch {
 	}
 }
 
-func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
-	blocks := make(map[uint32]*objectio.ReadBlockOptions)
+func (p *prefetchParams) AddBlock(idxes []uint16, ids []uint16) {
+	blocks := make(map[uint16]*objectio.ReadBlockOptions)
 	columns := make(map[uint16]bool)
 	for _, idx := range idxes {
 		columns[idx] = true
@@ -73,7 +73,7 @@ func (p *prefetch) AddBlock(idxes []uint16, ids []uint32) {
 	p.mergeIds(blocks)
 }
 
-func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
+func (p *prefetchParams) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
 	for id, block := range ids2 {
 		if p.ids[id] == nil {
 			p.ids[id] = block
@@ -85,8 +85,8 @@ func (p *prefetch) mergeIds(ids2 map[uint32]*objectio.ReadBlockOptions) {
 	}
 }
 
-func mergePrefetch(processes []prefetch) map[string]prefetch {
-	pc := make(map[string]prefetch)
+func mergePrefetch(processes []prefetchParams) map[string]prefetchParams {
+	pc := make(map[string]prefetchParams)
 	for _, p := range processes {
 		if pc[p.nameStr].name == nil {
 			pc[p.nameStr] = p

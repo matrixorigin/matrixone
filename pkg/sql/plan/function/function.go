@@ -312,7 +312,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 
 	// if implicit type conversion happens, set the right scale for target types.
 	targetTypes := getTypeSlice(targetTs)
-	if len(targetTypes) == 2 && types.IsDecimal(args[0].Oid) && types.IsDecimal(args[1].Oid) {
+	if len(targetTypes) == 2 && args[0].Oid.IsDecimal() && args[1].Oid.IsDecimal() {
 		setDefaultScale(&targetTypes[0], args[0])
 		setDefaultScale(&targetTypes[1], args[1])
 		targetTypes[0].Scale = args[0].Scale
@@ -418,7 +418,7 @@ func rewriteTypesIfNecessary(targets []types.Type, name string, sources []types.
 		for i := range targets {
 			if !hasSet[i] && targets[i].Oid != ScalarNull {
 				setDefaultScale(&targets[i], sources[i])
-			} else if types.IsDecimal(targets[i].Oid) {
+			} else if targets[i].Oid.IsDecimal() {
 				if targets[i].Width == 0 {
 					if targets[i].Oid == types.T_decimal64 {
 						targets[i].Width = 18

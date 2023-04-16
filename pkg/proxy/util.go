@@ -19,14 +19,76 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
+
+// makeOKPacket returns an OK packet
+func makeOKPacket() []byte {
+	l := 1
+	data := make([]byte, l+4)
+	data[4] = 0
+	data[0] = byte(l)
+	data[1] = byte(l >> 8)
+	data[2] = byte(l >> 16)
+	data[3] = 0
+	return data
+}
 
 // isOKPacket returns true if []byte is a MySQL OK packet.
 func isOKPacket(p []byte) bool {
-	if len(p) > 0 && p[0] == 0 {
+	if len(p) > 4 && p[4] == 0 {
 		return true
 	}
 	return false
+}
+
+// isOKPacket returns true if []byte is a MySQL EOF packet.
+func isEOFPacket(p []byte) bool {
+	if len(p) > 4 && p[0] == 0xFE {
+		return true
+	}
+	return false
+}
+
+// isErrPacket returns true if []byte is a MySQL Err packet.
+func isErrPacket(p []byte) bool {
+	if len(p) > 4 && p[4] == 0xFF {
+		return true
+	}
+	return false
+}
+
+// packetToBytes convert Packet to bytes.
+func packetToBytes(p *frontend.Packet) []byte {
+	if p == nil || len(p.Payload) == 0 {
+		return nil
+	}
+	res := make([]byte, 4, 4+len(p.Payload))
+	length := len(p.Payload)
+	res[0] = byte(length)
+	res[1] = byte(length >> 8)
+	res[2] = byte(length >> 16)
+	res[3] = byte(p.SequenceID)
+	return append(res, p.Payload...)
+}
+
+// bytesToPacket convert bytes to Packet.
+func bytesToPacket(bs []byte) *frontend.Packet {
+	if len(bs) < 4 {
+		return nil
+	}
+	p := &frontend.Packet{
+		Length:     int32(bs[0]) | int32(bs[1])<<8 | int32(bs[2])<<8,
+		SequenceID: int8(bs[3]),
+		Payload:    bs[4:],
+	}
+	return p
+}
+
+// getStatement gets a statement from message bytes which is MySQL protocol.
+func getStatement(msg []byte) string {
+	return string(msg[5:])
 }
 
 // pickTunnels pick N tunnels from the given tunnels. Simply, just

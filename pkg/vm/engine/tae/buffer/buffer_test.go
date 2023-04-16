@@ -17,6 +17,7 @@ package buffer
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -57,14 +58,14 @@ func TestHandle(t *testing.T) {
 	evicter := NewSimpleEvictHolder()
 	mgr := NewNodeManager(maxsize, evicter)
 	id1 := common.ID{}
-	seg := common.NewSegmentid()
-	id1.BlockID = common.NewBlockid(&seg, 0, 1)
+	seg := objectio.NewSegmentid()
+	id1.BlockID = objectio.NewBlockid(&seg, 0, 1)
 	id2 := id1
-	id2.BlockID = common.NewBlockid(&seg, 0, 2)
+	id2.BlockID = objectio.NewBlockid(&seg, 0, 2)
 	id3 := id1
-	id3.BlockID = common.NewBlockid(&seg, 0, 3)
+	id3.BlockID = objectio.NewBlockid(&seg, 0, 3)
 	id4 := id1
-	id4.BlockID = common.NewBlockid(&seg, 0, 4)
+	id4.BlockID = objectio.NewBlockid(&seg, 0, 4)
 	sz1, sz2, sz3, sz4 := uint64(30), uint64(30), uint64(50), uint64(80)
 	n1 := newTestNodeHandle(mgr, id1, sz1, t)
 	n2 := newTestNodeHandle(mgr, id2, sz2, t)

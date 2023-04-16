@@ -701,8 +701,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:    rels,
 			ColList:    poses,
 			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.Left_typs),
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -712,7 +712,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -722,7 +722,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -1009,8 +1009,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
-			Left_typs:  convertToTypes(t.LeftTypes),
-			Right_typs: convertToTypes(t.RightTypes),
+			LeftTypes:  convertToTypes(t.LeftTypes),
+			RightTypes: convertToTypes(t.RightTypes),
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}

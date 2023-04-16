@@ -64,7 +64,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// check child on restrict, if is not all null, throw error
 	for _, idx := range updateCtx.OnRestrictIdx {
-		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Np.Count() {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Count() {
 			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}

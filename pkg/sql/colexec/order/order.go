@@ -123,7 +123,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	if !ovec.IsConst() {
 		nullCnt := nulls.Length(ovec.GetNulls())
 		if nullCnt < ovec.Length() {
-			if ovec.GetType().IsString() {
+			if ovec.GetType().IsVarlen() {
 				strCol = vector.MustStrCol(ovec)
 			} else {
 				strCol = nil
@@ -148,7 +148,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		if !vec.IsConst() {
 			nullCnt := nulls.Length(vec.GetNulls())
 			if nullCnt < vec.Length() {
-				if vec.GetType().IsString() {
+				if vec.GetType().IsVarlen() {
 					strCol = vector.MustStrCol(vec)
 				} else {
 					strCol = nil
