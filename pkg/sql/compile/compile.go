@@ -1604,7 +1604,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 
 	rs := make([]*Scope, 0, len(ss2))
 	uuids := make([]uuid.UUID, 0, len(ss2))
-	for i := 0; i < len(rs); i++ {
+	for i := 0; i < len(ss2); i++ {
 		rs = append(rs, new(Scope))
 		uuids = append(uuids, uuid.New())
 	}
@@ -1612,7 +1612,6 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 	// for every scope, it should dispatch its
 	// batch to other cn
 	for i := 0; i < len(ss2); i++ {
-		rs = append(rs, new(Scope))
 		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
 	}
 	delete := &vm.Instruction{
@@ -2088,7 +2087,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
+			if c.cnList[j].Addr == c.addr {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
