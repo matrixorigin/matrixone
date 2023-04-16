@@ -90,7 +90,11 @@ func (srv *Server) DeleteTxnSegmentIds(segmentNames []string) {
 func (srv *Server) GetCnSegmentMap() map[string]int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	return srv.cnSegmentMap.mp
+	new_mp := make(map[string]int32)
+	for k, v := range srv.cnSegmentMap.mp {
+		new_mp[k] = v
+	}
+	return new_mp
 }
 
 func (srv *Server) GetCnSegmentType(segmentName string) int32 {

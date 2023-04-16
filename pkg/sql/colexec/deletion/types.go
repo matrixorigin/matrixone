@@ -15,8 +15,6 @@
 package deletion
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -64,7 +62,6 @@ type container struct {
 	batch_size     uint32
 	deleted_length uint32
 	pool           *BatchPool
-	wrapSegmentMap *WrapSegmentMap
 }
 type Argument struct {
 	Ts           uint64
@@ -79,17 +76,6 @@ type Argument struct {
 	IBucket      uint32
 	Nbucket      uint32
 	ctr          *container
-}
-
-type WrapSegmentMap struct {
-	sync.RWMutex
-	segmentMap map[string]int32
-}
-
-func (mp *WrapSegmentMap) getBlockType(blkid string) int {
-	mp.RLock()
-	defer mp.RUnlock()
-	return int(mp.segmentMap[blkid])
 }
 
 type DeleteCtx struct {
@@ -156,10 +142,10 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		} else {
 			bitmap.Np.Add(uint64(rowOffset))
 		}
-		if arg.ctr.wrapSegmentMap.getBlockType(string(segid[:])) == colexec.TxnWorkSpaceIdType {
+		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
 			arg.ctr.blockId_type[str] = RawBatchOffset
 			offsetFlag = true
-		} else if arg.ctr.wrapSegmentMap.getBlockType(string(segid[:])) == colexec.CnBlockIdType {
+		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
 			arg.ctr.blockId_type[str] = CNBlockOffset
 			offsetFlag = true
 		} else {
