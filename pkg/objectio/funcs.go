@@ -21,6 +21,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
+func ReadExtent(
+	ctx context.Context,
+	name string,
+	extent *Extent,
+	noCache bool,
+	fs fileservice.FileService,
+) (buf []byte, err error) {
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 1),
+		NoCache:  noCache,
+	}
+
+	ioVec.Entries[0] = fileservice.IOEntry{
+		Offset:   int64(extent.Offset()),
+		Size:     int64(extent.Length()),
+		ToObject: newDecompressToObject(int64(extent.OriginSize())),
+	}
+	if err = fs.Read(ctx, ioVec); err != nil {
+		return
+	}
+	buf = ioVec.Entries[0].Object.([]byte)
+	return
+}
+
 func ReadObjectMetaWithLocation(
 	ctx context.Context,
 	location *Location,
@@ -60,7 +85,7 @@ func ReadObjectMeta(
 	return
 }
 
-func ReadObjectColumnsWithMeta(
+func ReadColumnsWithMeta(
 	ctx context.Context,
 	name string,
 	meta *ObjectMeta,

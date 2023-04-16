@@ -167,28 +167,11 @@ func (r *ObjectReader) ReadBloomFilter(
 	return metas.Entries[0].Object.([]StaticFilter), err
 }
 
-func (r *ObjectReader) ReadZoneMapArea(
+func (r *ObjectReader) ReadExtent(
 	ctx context.Context,
 	extent Extent,
-) (ZoneMapArea, error) {
-	metas := &fileservice.IOVector{
-		FilePath: r.nameStr,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  r.noCache,
-	}
-
-	metas.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.Offset()),
-		Size:   int64(extent.Length()),
-
-		ToObject: newDecompressToObject(int64(extent.OriginSize())),
-	}
-	err := r.object.fs.Read(ctx, metas)
-	if err != nil {
-		return nil, err
-	}
-
-	return metas.Entries[0].Object.([]byte), err
+) ([]byte, error) {
+	return ReadExtent(ctx, r.nameStr, &extent, r.noCache, r.object.fs)
 }
 
 func (r *ObjectReader) ReadBlocks(
@@ -202,7 +185,7 @@ func (r *ObjectReader) ReadBlocks(
 	if meta, err = r.ReadMeta(ctx, extent, m); err != nil {
 		return
 	}
-	return ReadObjectColumnsWithMeta(
+	return ReadColumnsWithMeta(
 		ctx,
 		r.nameStr,
 		&meta,
