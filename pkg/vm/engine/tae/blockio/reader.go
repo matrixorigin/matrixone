@@ -112,11 +112,11 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 }
 
 func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, m)
+	location, meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
-	if meta.BlockHeader().MetaLocation().End() == 0 {
+	if location.End() == 0 {
 		return nil, nil
 	}
 	block := meta.GetBlockMeta(0)
@@ -129,7 +129,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpoo
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, LoadColumnFunc)
+	ioVectors, err := r.reader.ReadAll(ctx, location, idxs, nil, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objec
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	meta, err := r.reader.ReadAllMeta(ctx, m)
+	location, meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 		blocks[i] = meta.GetBlockMeta(uint32(i))
 	}
 	if r.meta == nil && len(blocks) > 0 {
-		r.meta = meta.BlockHeader().MetaLocation()
+		r.meta = location
 	}
 	return blocks, nil
 }

@@ -247,12 +247,16 @@ func (r *ObjectReader) ReadBlocks(
 func (r *ObjectReader) ReadAllMeta(
 	ctx context.Context,
 	m *mpool.MPool,
-) (ObjectMeta, error) {
+) (Extent, ObjectMeta, error) {
 	header, err := r.readHeader(ctx, m)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return r.ReadMeta(ctx, header.Location(), m)
+	meta, err := r.ReadMeta(ctx, header.Location(), m)
+	if err != nil {
+		return nil, nil, err
+	}
+	return header.Location(), meta, nil
 }
 
 func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (Header, error) {
@@ -329,8 +333,6 @@ func newObjectMetaToObject(size int64) ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		objectMeta := ObjectMeta(decompressed)
-		objectMeta.BlockHeader().MetaLocation().SetLength(uint32(len(data)))
 		return decompressed, int64(len(decompressed)), nil
 	}
 }
