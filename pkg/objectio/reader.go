@@ -63,27 +63,8 @@ func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
 	extent Extent,
 	m *mpool.MPool,
-) (ObjectMeta, error) {
-	metas := &fileservice.IOVector{
-		FilePath: r.nameStr,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  r.noCache,
-	}
-
-	metas.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.Offset()),
-		Size:   int64(extent.Length()),
-
-		ToObject: newObjectMetaToObject(int64(extent.OriginSize())),
-	}
-
-	err := r.object.fs.Read(ctx, metas)
-	if err != nil {
-		return nil, err
-	}
-
-	meta := ObjectMeta(metas.Entries[0].Object.([]byte))
-	return meta, err
+) (meta ObjectMeta, err error) {
+	return ReadObjectMeta(ctx, r.nameStr, &extent, r.noCache, r.object.fs)
 }
 
 func (r *ObjectReader) Read(
@@ -252,7 +233,7 @@ func (r *ObjectReader) ReadAllMeta(
 	if err != nil {
 		return nil, err
 	}
-	return r.ReadMeta(ctx, header.Location(), m)
+	return r.ReadMeta(ctx, header.Extent(), m)
 }
 
 func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (Header, error) {

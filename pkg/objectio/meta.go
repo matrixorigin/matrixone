@@ -300,11 +300,11 @@ func BuildHeader() Header {
 	return buf[:]
 }
 
-func (h Header) SetLocation(location Extent) {
+func (h Header) SetExtent(location Extent) {
 	copy(h[8+2:8+2+ExtentSize], location)
 }
 
-func (h Header) Location() Extent {
+func (h Header) Extent() Extent {
 	return Extent(h[8+2 : 8+2+ExtentSize])
 }
 
