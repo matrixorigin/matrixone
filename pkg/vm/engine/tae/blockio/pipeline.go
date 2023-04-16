@@ -155,7 +155,7 @@ type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
-	return params.reader.ReadOneBlock(ctx, params.meta, params.idxes, params.id, nil, objectio.ColumnConstructorFactory)
+	return params.reader.ReadOneBlock(ctx, params.meta, params.idxes, params.blk, nil, objectio.ColumnConstructorFactory)
 }
 
 func noopPrefetch(params prefetchParams) error {

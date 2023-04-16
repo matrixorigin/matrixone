@@ -41,7 +41,7 @@ type fetchParams struct {
 	name   string
 	meta   objectio.Extent
 	idxes  []uint16
-	id     uint16
+	blk    uint16
 	pool   *mpool.MPool
 	reader *objectio.ObjectReader
 }
@@ -82,33 +82,40 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
-	id uint16, m *mpool.MPool) (*batch.Batch, error) {
-	var bat *batch.Batch
+func (r *BlockReader) LoadColumns(
+	ctx context.Context,
+	idxes []uint16,
+	blk uint16,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
 	if r.meta.End() == 0 {
-		return bat, nil
+		return
 	}
 	proc := fetchParams{
 		name:   r.name,
 		meta:   r.meta,
 		idxes:  idxes,
-		id:     id,
+		blk:    blk,
 		pool:   m,
 		reader: r.reader,
 	}
-	v, err := r.aio.Fetch(ctx, proc)
-	if err != nil {
-		return nil, err
+	var v any
+	if v, err = r.aio.Fetch(ctx, proc); err != nil {
+		return
 	}
 	ioVectors := v.(*fileservice.IOVector)
 	bat = batch.NewWithSize(len(idxes))
 	for i := range idxes {
 		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
 	}
-	return bat, nil
+	return
 }
 
-func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
+func (r *BlockReader) LoadAllColumns(
+	ctx context.Context,
+	idxs []uint16,
+	m *mpool.MPool,
+) ([]*batch.Batch, error) {
 	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
