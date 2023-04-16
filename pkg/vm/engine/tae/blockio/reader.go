@@ -33,11 +33,11 @@ import (
 )
 
 type BlockReader struct {
-	reader  *objectio.ObjectReader
-	key     objectio.Location
-	name    string
-	meta    objectio.Extent
-	manager *IoPipeline
+	reader *objectio.ObjectReader
+	key    objectio.Location
+	name   string
+	meta   objectio.Extent
+	aio    *IoPipeline
 }
 
 type fetchParams struct {
@@ -55,10 +55,10 @@ func NewObjectReader(service fileservice.FileService, key objectio.Location) (*B
 		return nil, err
 	}
 	return &BlockReader{
-		reader:  reader,
-		key:     key,
-		meta:    key.Extent(),
-		manager: pipeline,
+		reader: reader,
+		key:    key,
+		meta:   key.Extent(),
+		aio:    pipeline,
 	}, nil
 }
 
@@ -68,9 +68,9 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 		return nil, err
 	}
 	return &BlockReader{
-		reader:  reader,
-		name:    name,
-		manager: pipeline,
+		reader: reader,
+		name:   name,
+		aio:    pipeline,
 	}, nil
 }
 
@@ -99,7 +99,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
 		pool:   m,
 		reader: r.reader,
 	}
-	v, err := r.manager.Fetch(ctx, proc)
+	v, err := r.aio.Fetch(ctx, proc)
 	if err != nil {
 		return nil, err
 	}
