@@ -73,7 +73,7 @@ func (r *ObjectReader) Read(
 	idxs []uint16,
 	id uint16,
 	m *mpool.MPool,
-	readFunc ReadObjectFunc,
+	constructor ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
 	meta, err := r.ReadMeta(ctx, extent, m)
 	if err != nil {
@@ -91,7 +91,7 @@ func (r *ObjectReader) Read(
 			Offset: int64(ext.Offset()),
 			Size:   int64(ext.Length()),
 
-			ToObject: readFunc(int64(ext.OriginSize())),
+			ToObject: constructor(int64(ext.OriginSize())),
 		})
 	}
 
@@ -107,7 +107,7 @@ func (r *ObjectReader) ReadAll(
 	extent Extent,
 	idxs []uint16,
 	m *mpool.MPool,
-	readFunc ReadObjectFunc,
+	constructor ReadObjectFunc,
 ) (*fileservice.IOVector, error) {
 	meta, err := r.ReadMeta(ctx, extent, m)
 	if err != nil {
@@ -130,7 +130,7 @@ func (r *ObjectReader) ReadAll(
 				Offset: int64(ext.Offset()),
 				Size:   int64(ext.Length()),
 
-				ToObject: readFunc(int64(ext.OriginSize())),
+				ToObject: constructor(int64(ext.OriginSize())),
 			})
 		}
 	}
@@ -145,7 +145,7 @@ func (r *ObjectReader) ReadAll(
 func (r *ObjectReader) ReadBloomFilter(
 	ctx context.Context,
 	extent Extent,
-	readFunc ReadObjectFunc,
+	constructor ReadObjectFunc,
 ) ([]StaticFilter, error) {
 	metas := &fileservice.IOVector{
 		FilePath: r.nameStr,
@@ -157,7 +157,7 @@ func (r *ObjectReader) ReadBloomFilter(
 		Offset: int64(extent.Offset()),
 		Size:   int64(extent.Length()),
 
-		ToObject: readFunc(int64(extent.OriginSize())),
+		ToObject: constructor(int64(extent.OriginSize())),
 	}
 	err := r.object.fs.Read(ctx, metas)
 	if err != nil {
@@ -194,35 +194,23 @@ func (r *ObjectReader) ReadZoneMapArea(
 func (r *ObjectReader) ReadBlocks(
 	ctx context.Context,
 	extent Extent,
-	ids map[uint16]*ReadBlockOptions,
+	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
-	readFunc ReadObjectFunc,
-) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, extent, m)
-	if err != nil {
-		return nil, err
+	constructor ReadObjectFunc,
+) (ioVec *fileservice.IOVector, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, extent, m); err != nil {
+		return
 	}
-	data := &fileservice.IOVector{
-		FilePath: r.nameStr,
-		Entries:  make([]fileservice.IOEntry, 0),
-	}
-	for _, block := range ids {
-		for idx := range block.Idxes {
-			col := meta.GetColumnMeta(idx, uint32(block.Id))
-			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
-
-				ToObject: readFunc(int64(col.Location().OriginSize())),
-			})
-		}
-	}
-
-	err = r.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return ReadObjectColumnsWithMeta(
+		ctx,
+		r.nameStr,
+		&meta,
+		opts,
+		false,
+		m,
+		r.object.fs,
+		constructor)
 }
 
 func (r *ObjectReader) ReadAllMeta(
