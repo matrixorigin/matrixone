@@ -188,7 +188,7 @@ func (entry *TableEntry) CreateSegment(
 	if opts != nil && opts.Id != nil {
 		id = *opts.Id
 	} else {
-		id = common.NewSegmentid()
+		id = objectio.NewSegmentid()
 	}
 	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)

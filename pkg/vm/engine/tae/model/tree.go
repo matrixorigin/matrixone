@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package model
 
 import (
 	"bytes"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type TreeVisitor interface {
@@ -396,7 +397,7 @@ func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	var tmpn int64
 	for i := 0; i < int(cnt); i++ {
-		seg := NewSegmentTree(NewSegmentid())
+		seg := NewSegmentTree(objectio.NewSegmentid())
 		if tmpn, err = seg.ReadFrom(r); err != nil {
 			return
 		}
