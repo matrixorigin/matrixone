@@ -19,7 +19,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -240,51 +239,6 @@ func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m
 	}
 
 	return data.Entries[0].Object.([]byte), nil
-}
-
-type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
-type ReadObjectFunc = func(size int64) ToObjectFunc
-
-// newDecompressToObject the decompression function passed to fileservice
-func newDecompressToObject(size int64) ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		return decompressed, int64(len(decompressed)), nil
-	}
-}
-
-// newDecompressToObject the decompression function passed to fileservice
-func newObjectMetaToObject(size int64) ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		objectMeta := ObjectMeta(decompressed)
-		objectMeta.BlockHeader().MetaLocation().SetLength(uint32(len(data)))
-		return decompressed, int64(len(decompressed)), nil
-	}
 }
 
 type ReaderOptions struct {

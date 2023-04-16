@@ -16,15 +16,12 @@ package blockio
 
 import (
 	"context"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -129,7 +126,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpoo
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, LoadColumnFunc)
+	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, objectio.LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +197,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	if err != nil {
 		return nil, err
 	}
-	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), LoadBloomFilterFunc)
+	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), objectio.LoadBloomFilterFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -226,63 +223,6 @@ func (r *BlockReader) GetObjectExtent() objectio.Extent {
 }
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
-}
-
-func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		indexes := make([]objectio.StaticFilter, 0)
-		bf := objectio.BloomFilter(decompressed)
-		count := bf.BlockCount()
-		for i := uint32(0); i < count; i++ {
-			buf := bf.GetBloomFilter(i)
-			if len(buf) == 0 {
-				indexes = append(indexes, nil)
-				continue
-			}
-			index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-			if err != nil {
-				return nil, 0, err
-			}
-			indexes = append(indexes, index)
-		}
-		return indexes, int64(len(decompressed)), nil
-	}
-}
-
-func LoadColumnFunc(size int64) objectio.ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		vec := vector.NewVec(types.Type{})
-		if err = vec.UnmarshalBinary(decompressed); err != nil {
-			return nil, 0, err
-		}
-		return vec, int64(len(decompressed)), nil
-	}
 }
 
 // The caller has merged the block information that needs to be prefetched
