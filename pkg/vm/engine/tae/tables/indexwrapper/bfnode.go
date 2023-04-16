@@ -50,7 +50,7 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, r.bfKey.ID(), nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.bfKey.ID(), r.idx, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err

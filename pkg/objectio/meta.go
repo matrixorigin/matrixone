@@ -247,11 +247,11 @@ func (bh BlockHeader) SetZoneMapArea(location Extent) {
 	copy(bh[zoneMapAreaOff:zoneMapAreaOff+zoneMapAreaLen], location)
 }
 
-func (bh BlockHeader) BloomFilter() Extent {
+func (bh BlockHeader) BFExtent() Extent {
 	return Extent(bh[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 }
 
-func (bh BlockHeader) SetBloomFilter(location Extent) {
+func (bh BlockHeader) SetBFExtent(location Extent) {
 	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
 }
 

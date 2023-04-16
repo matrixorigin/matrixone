@@ -27,7 +27,8 @@ func ReadExtent(
 	extent *Extent,
 	noCache bool,
 	fs fileservice.FileService,
-) (buf []byte, err error) {
+	factory CacheConstructorFactory,
+) (v any, err error) {
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -37,12 +38,33 @@ func ReadExtent(
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:   int64(extent.Offset()),
 		Size:     int64(extent.Length()),
-		ToObject: defaultConstructorFactory(int64(extent.OriginSize())),
+		ToObject: factory(int64(extent.OriginSize())),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	buf = ioVec.Entries[0].Object.([]byte)
+	v = ioVec.Entries[0].Object
+	return
+}
+
+func ReadBloomFilter(
+	ctx context.Context,
+	name string,
+	extent *Extent,
+	noCache bool,
+	fs fileservice.FileService,
+) (filters []StaticFilter, err error) {
+	var v any
+	if v, err = ReadExtent(
+		ctx,
+		name,
+		extent,
+		noCache,
+		fs,
+		BloomFilterConstructorFactory); err != nil {
+		return
+	}
+	filters = v.([]StaticFilter)
 	return
 }
 

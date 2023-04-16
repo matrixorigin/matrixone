@@ -226,7 +226,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
+	objectMeta.BlockHeader().SetBFExtent(bloomFilterExtent)
 	offset += bloomFilterExtent.Length()
 
 	// prepare zone map area

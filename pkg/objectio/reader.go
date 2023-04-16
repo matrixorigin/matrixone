@@ -95,36 +95,40 @@ func (r *ObjectReader) ReadAll(
 	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noCache, m, r.object.fs, factory)
 }
 
-func (r *ObjectReader) ReadBloomFilter(
+func (r *ObjectReader) ReadOneBF(
 	ctx context.Context,
-	extent Extent,
-	constructor CacheConstructorFactory,
-) ([]StaticFilter, error) {
-	metas := &fileservice.IOVector{
-		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  r.noCache,
+	metaExt Extent,
+	blk uint16,
+	m *mpool.MPool,
+) (bf StaticFilter, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
+		return
 	}
-
-	metas.Entries[0] = fileservice.IOEntry{
-		Offset: int64(extent.Offset()),
-		Size:   int64(extent.Length()),
-
-		ToObject: constructor(int64(extent.OriginSize())),
-	}
-	err := r.object.fs.Read(ctx, metas)
+	extent := meta.BlockHeader().BFExtent()
+	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noCache, r.object.fs)
 	if err != nil {
-		return nil, err
+		return
 	}
-
-	return metas.Entries[0].Object.([]StaticFilter), err
+	bf = bfs[blk]
+	return
 }
 
 func (r *ObjectReader) ReadExtent(
 	ctx context.Context,
 	extent Extent,
 ) ([]byte, error) {
-	return ReadExtent(ctx, r.name, &extent, r.noCache, r.object.fs)
+	v, err := ReadExtent(
+		ctx,
+		r.name,
+		&extent,
+		r.noCache,
+		r.object.fs,
+		defaultConstructorFactory)
+	if err != nil {
+		return nil, err
+	}
+	return v.([]byte), nil
 }
 
 func (r *ObjectReader) ReadMultiBlocks(

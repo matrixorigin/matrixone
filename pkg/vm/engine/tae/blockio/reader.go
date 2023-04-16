@@ -191,17 +191,12 @@ func (r *BlockReader) LoadZoneMap(
 	return zoneMapList, nil
 }
 
-func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
-	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
-	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	if err != nil {
-		return nil, err
-	}
-	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), objectio.BloomFilterConstructorFactory)
-	if err != nil {
-		return nil, err
-	}
-	return bf[id], nil
+func (r *BlockReader) LoadBloomFilter(
+	ctx context.Context,
+	blk, col uint16,
+	m *mpool.MPool,
+) (objectio.StaticFilter, error) {
+	return r.reader.ReadOneBF(ctx, r.meta, blk, m)
 }
 
 func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
