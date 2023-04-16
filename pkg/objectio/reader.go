@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
@@ -136,10 +135,9 @@ func (r *ObjectReader) ReadAll(
 func (r *ObjectReader) ReadOneBF(
 	ctx context.Context,
 	blk uint16,
-	m *mpool.MPool,
 ) (bf StaticFilter, err error) {
 	var meta ObjectMeta
-	if meta, err = r.ReadMeta(ctx, m); err != nil {
+	if meta, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
 	extent := meta.BlockHeader().BFExtent()
@@ -194,7 +192,7 @@ func (r *ObjectReader) ReadAllMeta(
 	m *mpool.MPool,
 ) (ObjectMeta, error) {
 	if r.metaExt == nil {
-		header, err := r.readHeader(ctx, m)
+		header, err := r.ReadHeader(ctx, m)
 		if err != nil {
 			return nil, err
 		}
@@ -204,39 +202,14 @@ func (r *ObjectReader) ReadAllMeta(
 	return r.ReadMeta(ctx, m)
 }
 
-func (r *ObjectReader) readHeader(ctx context.Context, m *mpool.MPool) (Header, error) {
-	return r.readHeaderAndUnMarshal(ctx, HeaderSize, m)
-}
-
-func (r *ObjectReader) readHeaderAndUnMarshal(ctx context.Context, size int64, m *mpool.MPool) (Header, error) {
-	data := &fileservice.IOVector{
-		FilePath: r.name,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   size,
-
-				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-					// unmarshal
-					if len(data) == 0 {
-						var err error
-						data, err = io.ReadAll(reader)
-						if err != nil {
-							return nil, 0, err
-						}
-					}
-					return data, int64(len(data)), nil
-				},
-			},
-		},
-		NoCache: r.noCache,
-	}
-	err := r.fs.Read(ctx, data)
+func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
+	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noCache, r.fs, noDecompressConstructorFactory)
 	if err != nil {
-		return nil, err
+		return
 	}
-
-	return data.Entries[0].Object.([]byte), nil
+	h = Header(v.([]byte))
+	return
 }
 
 type ReaderOptions struct {

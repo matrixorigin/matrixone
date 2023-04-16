@@ -19,13 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 type BlockReader struct {
@@ -76,7 +74,7 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 
 func (r *BlockReader) LoadColumns(
 	ctx context.Context,
-	idxes []uint16,
+	cols []uint16,
 	blk uint16,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
@@ -85,7 +83,7 @@ func (r *BlockReader) LoadColumns(
 		return
 	}
 	proc := fetchParams{
-		idxes:  idxes,
+		idxes:  cols,
 		blk:    blk,
 		pool:   m,
 		reader: r.reader,
@@ -95,8 +93,8 @@ func (r *BlockReader) LoadColumns(
 		return
 	}
 	ioVectors := v.(*fileservice.IOVector)
-	bat = batch.NewWithSize(len(idxes))
-	for i := range idxes {
+	bat = batch.NewWithSize(len(cols))
+	for i := range cols {
 		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
 	}
 	return
@@ -171,18 +169,11 @@ func (r *BlockReader) LoadZoneMap(
 	return block.ToColumnZoneMaps(idxs), nil
 }
 
-func (r *BlockReader) LoadBloomFilter(
+func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
-	blk, col uint16,
-	m *mpool.MPool,
+	blk uint16,
 ) (objectio.StaticFilter, error) {
-	return r.reader.ReadOneBF(ctx, blk, m)
-}
-
-func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
-	ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(len(idxs))
-	return bat, nil
+	return r.reader.ReadOneBF(ctx, blk)
 }
 
 func (r *BlockReader) GetObjectName() *objectio.ObjectName {

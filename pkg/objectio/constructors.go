@@ -47,6 +47,19 @@ func objectMetaConstructorFactory(size int64) CacheConstructor {
 	}
 }
 
+func noDecompressConstructorFactory(size int64) CacheConstructor {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		if len(data) == 0 {
+			var err error
+			data, err = io.ReadAll(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		return data, int64(len(data)), nil
+	}
+}
+
 // defaultConstructorFactory the decompression function passed to fileservice
 func defaultConstructorFactory(size int64) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
