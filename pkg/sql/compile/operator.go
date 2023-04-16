@@ -1039,7 +1039,7 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
 	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
-	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(ss)-1)
+	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 	// use arg.RemoteRegs to know the uuid,
 	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
 	// So how to use this?
@@ -1059,13 +1059,14 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 			// just use this uuid in dispatch, we need to
 			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
 			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
-				Uuid: uuids[i],
+				Uuid:     uuids[i],
+				NodeAddr: ss[i].NodeInfo.Addr,
 			})
 			// let remote scope knows it need to recieve bacth from
 			// remote CN, it will use this to send PrepareDoneNotifyMessage
 			// and then to recieve batches from remote CNs
 			rs[currentIdx].RemoteReceivRegInfos = append(rs[currentIdx].RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Uuid: uuids[i],
+				Uuid: uuids[currentIdx],
 				// I use i to tag, scope should send the batches (recieved from remote CNs)
 				// to process.MergeRecievers[i]
 				Idx:      i,

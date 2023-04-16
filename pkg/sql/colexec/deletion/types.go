@@ -62,6 +62,7 @@ type container struct {
 	batch_size     uint32
 	deleted_length uint32
 	pool           *BatchPool
+	debug_len      uint32
 }
 type Argument struct {
 	Ts           uint64
@@ -122,7 +123,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 	vs := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	var bitmap *nulls.Nulls
-	arg.ctr.deleted_length += uint32(len(vs))
+	arg.ctr.debug_len += uint32(len(vs))
 	for _, rowId := range vs {
 		blkid := rowId.GetBlockid()
 		segid := rowId.GetSegid()
@@ -131,6 +132,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		if blkOffset%uint16(arg.Nbucket) != uint16(arg.IBucket) {
 			continue
 		}
+		arg.ctr.deleted_length += 1
 		str := string(blkid[:])
 		offsetFlag := false
 		if arg.ctr.blockId_bitmap[str] == nil {
