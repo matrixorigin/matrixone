@@ -103,14 +103,15 @@ func TestNewObjectWriter(t *testing.T) {
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
-	meta, err := objectReader.ReadMeta(context.Background(), extents[0], pool)
+	objectReader.CacheMetaExtent(&extents[0])
+	meta, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(2), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.ReadOneBlock(context.Background(), extents[0], idxs, 0, pool, defaultConstructorFactory)
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, defaultConstructorFactory)
 	assert.Nil(t, err)
 	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -140,7 +141,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.ReadOneBlock(context.Background(), meta.BlockHeader().MetaLocation(), idxs, 0, pool, defaultConstructorFactory)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, defaultConstructorFactory)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -200,7 +201,9 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
-	meta, err := objectReader.ReadMeta(context.Background(), blocks[0].BlockHeader().MetaLocation(), nil)
+	ext := blocks[0].BlockHeader().MetaLocation()
+	objectReader.CacheMetaExtent(&ext)
+	meta, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
 	return meta
 }

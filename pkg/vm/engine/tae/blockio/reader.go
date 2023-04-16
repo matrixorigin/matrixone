@@ -30,15 +30,10 @@ import (
 
 type BlockReader struct {
 	reader *objectio.ObjectReader
-	key    objectio.Location
-	name   string
-	meta   objectio.Extent
 	aio    *IoPipeline
 }
 
 type fetchParams struct {
-	name   string
-	meta   objectio.Extent
 	idxes  []uint16
 	blk    uint16
 	pool   *mpool.MPool
@@ -46,14 +41,14 @@ type fetchParams struct {
 }
 
 func NewObjectReader(service fileservice.FileService, key objectio.Location) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReader(key.Name(), service)
+	name := key.Name()
+	metaExt := key.Extent()
+	reader, err := objectio.NewObjectReader(&name, &metaExt, service)
 	if err != nil {
 		return nil, err
 	}
 	return &BlockReader{
 		reader: reader,
-		key:    key,
-		meta:   key.Extent(),
 		aio:    pipeline,
 	}, nil
 }
@@ -65,7 +60,6 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}
 	return &BlockReader{
 		reader: reader,
-		name:   name,
 		aio:    pipeline,
 	}, nil
 }
@@ -77,7 +71,6 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	}
 	return &BlockReader{
 		reader: reader,
-		name:   name,
 	}, nil
 }
 
@@ -87,12 +80,11 @@ func (r *BlockReader) LoadColumns(
 	blk uint16,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
-	if r.meta.End() == 0 {
+	metaExt := r.reader.GetMetaExtent()
+	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
 	proc := fetchParams{
-		name:   r.name,
-		meta:   r.meta,
 		idxes:  idxes,
 		blk:    blk,
 		pool:   m,
@@ -132,7 +124,7 @@ func (r *BlockReader) LoadAllColumns(
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, objectio.ColumnConstructorFactory)
+	ioVectors, err := r.reader.ReadAll(ctx, idxs, nil, objectio.ColumnConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +144,11 @@ func (r *BlockReader) LoadZoneMaps(
 	id uint16,
 	m *mpool.MPool,
 ) ([]objectio.ZoneMap, error) {
-	return r.reader.ReadZM(ctx, id, idxs, r.meta, m)
+	return r.reader.ReadZM(ctx, id, idxs, m)
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	return r.reader.ReadMeta(ctx, r.meta, m)
+	return r.reader.ReadMeta(ctx, m)
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -167,9 +159,6 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 	blocks := make([]objectio.BlockObject, meta.BlockCount())
 	for i := 0; i < int(meta.BlockCount()); i++ {
 		blocks[i] = meta.GetBlockMeta(uint32(i))
-	}
-	if r.meta == nil && len(blocks) > 0 {
-		r.meta = meta.BlockHeader().MetaLocation()
 	}
 	return blocks, nil
 }
@@ -187,7 +176,7 @@ func (r *BlockReader) LoadBloomFilter(
 	blk, col uint16,
 	m *mpool.MPool,
 ) (objectio.StaticFilter, error) {
-	return r.reader.ReadOneBF(ctx, r.meta, blk, m)
+	return r.reader.ReadOneBF(ctx, blk, m)
 }
 
 func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
@@ -196,17 +185,14 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 	return bat, nil
 }
 
-func (r *BlockReader) GetObjectName() objectio.ObjectName {
-	return r.key.Name()
+func (r *BlockReader) GetObjectName() *objectio.ObjectName {
+	return r.reader.GetObjectName()
 }
 
 func (r *BlockReader) GetName() string {
-	return r.name
+	return r.reader.GetName()
 }
 
-func (r *BlockReader) GetObjectExtent() objectio.Extent {
-	return r.meta
-}
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
 }
