@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -166,6 +168,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
 		return s.JoinRun(c)
+	}
+	if s.IsLoad {
+		return s.LoadRun(c)
 	}
 	if s.DataSource == nil {
 		return s.MergeRun(c)
@@ -356,6 +361,29 @@ func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
 
+func (s *Scope) LoadRun(c *Compile) error {
+	mcpu := s.NodeInfo.Mcpu
+	ss := make([]*Scope, mcpu)
+	bat := batch.NewWithSize(1)
+	{
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
+		bat.InitZsOne(1)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				Bat: bat,
+			},
+			NodeInfo: s.NodeInfo,
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+	}
+	newScope := newParallelScope(s, ss)
+
+	return newScope.MergeRun(c)
+}
+
 func newParallelScope(s *Scope, ss []*Scope) *Scope {
 	var flg bool
 
@@ -476,8 +504,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			}
 		case vm.Output:
 		default:
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
+			for j := range ss {
+				ss[j].Instructions = append(ss[j].Instructions, dupInstruction(&in, nil, j))
 			}
 		}
 	}
