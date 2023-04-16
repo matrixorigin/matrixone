@@ -147,6 +147,10 @@ func (b *Blockid) Segment() Uuid {
 	return DecodeUuid(b[:UuidSize])
 }
 
+func (b *Blockid) Sequence() uint16 {
+	return DecodeUint16(b[ObjectBytesSize:BlockidSize])
+}
+
 func (b *Blockid) ObjectString() string {
 	uuid := (*uuid.UUID)(b[:UuidSize])
 	filen, _ := b.Offsets()

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -769,10 +770,14 @@ func (c *Compile) getStepRegs(step int32) ([]*process.WaitRegister, bool) {
 	}
 }
 
-func (c *Compile) constructScopeForExternal() *Scope {
+func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	ds := &Scope{Magic: Normal}
-	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.NumCPU()}
+	if parallel {
+		ds.Magic = Remote
+	}
+	ds.NodeInfo = engine.Node{Addr: addr, Mcpu: c.NumCPU()}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
@@ -786,7 +791,13 @@ func (c *Compile) constructScopeForExternal() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
-	mcpu := c.NumCPU()
+	ID2Addr := make(map[int]int, 0)
+	mcpu := 0
+	for i := 0; i < len(c.cnList); i++ {
+		tmp := mcpu
+		mcpu += c.cnList[i].Mcpu
+		ID2Addr[i] = mcpu - tmp
+	}
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
@@ -800,8 +811,16 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			return nil, err
 		}
 		if param.Parallel {
-			if mcpu > external.S3_PARALLEL_MAXNUM {
-				mcpu = external.S3_PARALLEL_MAXNUM
+			mcpu = 0
+			ID2Addr = make(map[int]int, 0)
+			for i := 0; i < len(c.cnList); i++ {
+				tmp := mcpu
+				if c.cnList[i].Mcpu > external.S3_PARALLEL_MAXNUM {
+					mcpu += external.S3_PARALLEL_MAXNUM
+				} else {
+					mcpu += c.cnList[i].Mcpu
+				}
+				ID2Addr[i] = mcpu - tmp
 			}
 		}
 	} else {
@@ -844,7 +863,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		fileList = []string{param.Filepath}
 	}
 
-	var fileOffset [][][2]int
+	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
@@ -855,37 +874,35 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			}
 		}
 	}
-
-	cnt := len(fileList) / mcpu
-	tag := len(fileList) % mcpu
-	index := 0
-	currentFirstFlag := c.anal.isFirst
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = c.constructScopeForExternal()
-		var fileListTmp []string
-		if i < tag {
-			fileListTmp = fileList[index : index+cnt+1]
-			index += cnt + 1
-		} else {
-			fileListTmp = fileList[index : index+cnt]
-			index += cnt
-		}
-		offset := make([][2]int, 0)
-		for j := 0; j < len(fileOffset); j++ {
-			offset = append(offset, [2]int{fileOffset[j][i][0], fileOffset[j][i][1]})
+	ss := make([]*Scope, 1)
+	if param.Parallel {
+		ss = make([]*Scope, len(c.cnList))
+	}
+	pre := 0
+	for i := range ss {
+		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		ss[i].IsLoad = true
+		count := ID2Addr[i]
+		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+		for j := range fileOffsetTmp {
+			preIndex := pre
+			fileOffsetTmp[j] = &pipeline.FileOffset{}
+			fileOffsetTmp[j].Offset = make([]int64, 0)
+			if param.Parallel {
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+			} else {
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
+			}
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.External,
 			Idx:     c.anal.curr,
-			IsFirst: currentFirstFlag,
-			Arg:     constructExternal(n, param, c.ctx, fileListTmp, fileSize, offset),
+			IsFirst: c.anal.isFirst,
+			Arg:     constructExternal(n, param, c.ctx, fileList, fileSize, fileOffsetTmp),
 		})
-		if param.Parallel {
-			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
-		}
+		pre += count
 	}
-	c.anal.isFirst = false
+
 	return ss, nil
 }
 
@@ -1497,7 +1514,7 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		Arg: arg,
 	}
 	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
 	return c.newMergeScope(ss2)
 }

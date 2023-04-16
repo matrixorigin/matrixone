@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package model
 
 import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,11 +26,11 @@ import (
 func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
-	seg1 := NewSegmentid()
-	tree.AddSegment(1, 2, NewSegmentid())
-	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 0, 0))
-	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 1, 0))
-	tree.AddBlock(4, 5, seg1, NewBlockid(&seg1, 2, 0))
+	seg1 := objectio.NewSegmentid()
+	tree.AddSegment(1, 2, objectio.NewSegmentid())
+	tree.AddBlock(4, 5, seg1, objectio.NewBlockid(&seg1, 0, 0))
+	tree.AddBlock(4, 5, seg1, objectio.NewBlockid(&seg1, 1, 0))
+	tree.AddBlock(4, 5, seg1, objectio.NewBlockid(&seg1, 2, 0))
 	t.Log(tree.String())
 	assert.Equal(t, 2, tree.TableCount())
 
