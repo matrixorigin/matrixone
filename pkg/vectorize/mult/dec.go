@@ -20,7 +20,7 @@ package mult
 #cgo CFLAGS: -I../../../cgo
 #cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
-import "C"
+
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"

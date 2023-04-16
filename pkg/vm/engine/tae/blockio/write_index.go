@@ -23,13 +23,13 @@ import (
 
 type ObjectColumnMetasBuilder struct {
 	totalRow uint32
-	metas    []objectio.ObjectColumnMeta
+	metas    []objectio.ColumnMeta
 	sks      []*hll.Sketch
 	zms      []*index.ZM
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
-	metas := make([]objectio.ObjectColumnMeta, colIdx)
+	metas := make([]objectio.ColumnMeta, colIdx)
 	for i := range metas {
 		metas[i] = objectio.BuildObjectColumnMeta()
 	}
@@ -76,7 +76,7 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
 	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
 }
 
-func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ObjectColumnMeta) {
+func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ColumnMeta) {
 	for i := range b.metas {
 		if b.sks[i] != nil { // rowid or types.TS
 			b.metas[i].SetNdv(uint32(b.sks[i].Estimate()))

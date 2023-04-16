@@ -591,7 +591,7 @@ message Node {
 		PRE_INSERT_UK = 61;
 	}
 
-	enum JoinFlag {
+	enum JoinType {
 		INNER	= 0;
 		LEFT	= 1;
 		RIGHT	= 2;
@@ -618,7 +618,7 @@ message Node {
 	repeated Expr project_list = 5;
 
 	// JOIN
-	JoinFlag join_type = 6;
+	JoinType join_type = 6;
 	repeated Expr on_list = 7;
 	bool build_on_left = 8;
 

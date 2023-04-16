@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -466,7 +465,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 func (w *S3Writer) generateWriter(proc *process.Process) error {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	id := common.NewSegmentid()
+	id := objectio.NewSegmentid()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
@@ -493,7 +492,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
-	if ovec.GetType().IsString() {
+	if ovec.GetType().IsVarlen() {
 		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil

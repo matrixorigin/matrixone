@@ -387,6 +387,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
+	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
@@ -515,6 +516,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		Magic:    int(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
+		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
 	}
@@ -699,8 +701,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:    rels,
 			ColList:    poses,
 			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.Left_typs),
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -710,7 +712,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -720,7 +722,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -886,11 +888,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			i++
 		}
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:         t.Es.Attrs,
-			Cols:          t.Es.Cols,
-			Name2ColIndex: name2ColIndexSlice,
-			CreateSql:     t.Es.CreateSql,
-			FileList:      t.Es.FileList,
+			Attrs:           t.Es.Attrs,
+			Cols:            t.Es.Cols,
+			FileSize:        t.Es.FileSize,
+			FileOffsetTotal: t.Es.FileOffsetTotal,
+			Name2ColIndex:   name2ColIndexSlice,
+			CreateSql:       t.Es.CreateSql,
+			FileList:        t.Es.FileList,
+			Filter:          t.Es.Filter.FilterExpr,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1004,8 +1009,28 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
-			Left_typs:  convertToTypes(t.LeftTypes),
-			Right_typs: convertToTypes(t.RightTypes),
+			LeftTypes:  convertToTypes(t.LeftTypes),
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightSemi:
+		t := opr.GetRightSemiJoin()
+		v.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightAnti:
+		t := opr.GetRightAntiJoin()
+		v.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
@@ -1177,14 +1202,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &external.Argument{
 			Es: &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:         t.Attrs,
-					Cols:          t.Cols,
-					CreateSql:     t.CreateSql,
-					Name2ColIndex: name2ColIndex,
-					FileList:      t.FileList,
+					Attrs:           t.Attrs,
+					FileSize:        t.FileSize,
+					FileOffsetTotal: t.FileOffsetTotal,
+					Cols:            t.Cols,
+					CreateSql:       t.CreateSql,
+					Name2ColIndex:   name2ColIndex,
+					FileList:        t.FileList,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
+					Filter: &external.FilterParam{
+						FilterExpr: t.Filter,
+					},
 				},
 			},
 		}

@@ -313,7 +313,7 @@ func TestTunnelReplaceConn(t *testing.T) {
 	require.NoError(t, scp.pause(ctx))
 
 	newServerProxy, newServer := net.Pipe()
-	tu.replaceServerConn(newMySQLConn("server", newServerProxy, 0))
+	tu.replaceServerConn(newMySQLConn("server", newServerProxy, 0, nil, nil))
 	require.NoError(t, tu.kickoff())
 
 	go func() {
@@ -344,8 +344,8 @@ func TestPipeCancelError(t *testing.T) {
 	defer clientProxy.Close()
 	defer serverProxy.Close()
 
-	cc := newMySQLConn("client", clientProxy, 0)
-	sc := newMySQLConn("server", serverProxy, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
 	p := newPipe("client to server", cc, sc)
 	err := p.kickoff(ctx)
 	require.EqualError(t, err, context.Canceled.Error())
@@ -368,8 +368,8 @@ func TestPipeStart(t *testing.T) {
 	clientProxy, serverProxy := net.Pipe()
 	defer clientProxy.Close()
 	defer serverProxy.Close()
-	cc := newMySQLConn("client", clientProxy, 0)
-	sc := newMySQLConn("server", serverProxy, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
 	p := newPipe("client to server", cc, sc)
 
 	errCh := make(chan error)
@@ -407,8 +407,8 @@ func TestPipeStartAndPause(t *testing.T) {
 	defer clientProxy.Close()
 	defer serverProxy.Close()
 
-	cc := newMySQLConn("client", clientProxy, 0)
-	sc := newMySQLConn("server", serverProxy, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
 	p := newPipe("client to server", cc, sc)
 
 	errCh := make(chan error, 2)
@@ -454,8 +454,8 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 	defer serverProxy.Close()
 	defer server.Close()
 
-	cc := newMySQLConn("client", clientProxy, 0)
-	sc := newMySQLConn("server", serverProxy, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
 	p := newPipe("client to server", cc, sc)
 
 	const (
@@ -480,7 +480,7 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 
 	packetCh := make(chan []byte, queryCount)
 	go func() {
-		receiver := newMySQLConn("receiver", server, 0)
+		receiver := newMySQLConn("receiver", server, 0, nil, nil)
 		for {
 			ret, err := receiver.receive()
 			if err != nil {
@@ -631,7 +631,7 @@ func TestReplaceServerConn(t *testing.T) {
 	newServerProxy, newServer := net.Pipe()
 	newSC := newMockServerConn(newServerProxy)
 	require.NotNil(t, sc)
-	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0)
+	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0, nil, nil)
 	tu.replaceServerConn(newServerC)
 	_, newMysqlSC := tu.getConns()
 	require.Equal(t, newServerC, newMysqlSC)

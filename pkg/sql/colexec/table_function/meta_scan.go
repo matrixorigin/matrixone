@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,13 +50,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	uuid := vector.MustFixedCol[types.Uuid](v)[0]
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
-	e, err := proc.FileService.StatFile(proc.Ctx, path)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return false, moerr.NewResultFileNotFound(proc.Ctx, path)
-		}
-		return false, err
-	}
 	// read meta's meta
 	reader, err := blockio.NewFileReader(proc.FileService, path)
 	if err != nil {
@@ -72,7 +64,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}
 	// read meta's data
-	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
 		return false, err
 	}

@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/tidwall/btree"
 )
 
@@ -45,16 +45,16 @@ type DirtyEntryInterceptor = catalog.Processor
 type DirtyTreeEntry struct {
 	sync.RWMutex
 	start, end types.TS
-	tree       *common.Tree
+	tree       *model.Tree
 }
 
 func NewEmptyDirtyTreeEntry() *DirtyTreeEntry {
 	return &DirtyTreeEntry{
-		tree: common.NewTree(),
+		tree: model.NewTree(),
 	}
 }
 
-func NewDirtyTreeEntry(start, end types.TS, tree *common.Tree) *DirtyTreeEntry {
+func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 	entry := NewEmptyDirtyTreeEntry()
 	entry.start = start
 	entry.end = end
@@ -80,7 +80,7 @@ func (entry *DirtyTreeEntry) GetTimeRange() (from, to types.TS) {
 	return entry.start, entry.end
 }
 
-func (entry *DirtyTreeEntry) GetTree() (tree *common.Tree) {
+func (entry *DirtyTreeEntry) GetTree() (tree *model.Tree) {
 	return entry.tree
 }
 
@@ -334,7 +334,7 @@ func (d *dirtyCollector) cleanupStorage() {
 // iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
 func (d *dirtyCollector) tryCompactTree(
 	interceptor DirtyEntryInterceptor,
-	tree *common.Tree) (err error) {
+	tree *model.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry

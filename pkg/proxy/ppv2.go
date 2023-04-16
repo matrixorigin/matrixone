@@ -17,13 +17,12 @@ package proxy
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
-	"log"
 	"net"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -90,7 +89,6 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 
 	// verify the signature of the header
 	if string(header.Signature[:]) != ProxyProtocolV2Signature {
-		log.Print("header signature not match")
 		return nil, false, nil
 	}
 

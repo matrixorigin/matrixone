@@ -730,29 +730,15 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 	}
 
 	switch node.JoinType {
-	case plan.Node_LEFT:
-		//right join does not support non equal join for now
+	case plan.Node_INNER, plan.Node_OUTER:
+		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+
+		}
+
+	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+		//right joins does not support non equal join for now
 		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
-			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-			node.JoinType = plan.Node_RIGHT
-		}
-
-	case plan.Node_RIGHT:
-		//right join does not support non equal join for now
-		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*kLeftRightRatio {
-			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-			node.JoinType = plan.Node_LEFT
-		}
-
-	case plan.Node_INNER:
-		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
-			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-
-		}
-
-	case plan.Node_SEMI, plan.Node_ANTI:
-		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
-			//node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 			node.BuildOnLeft = true
 		}
 	}

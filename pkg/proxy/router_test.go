@@ -81,12 +81,12 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Select(li1)
+	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 }
 
-func TestRouter_Select(t *testing.T) {
+func TestRouter_SelectByLabel(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
@@ -116,7 +116,7 @@ func TestRouter_Select(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Select(li1)
+	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
@@ -126,7 +126,7 @@ func TestRouter_Select(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Select(li2)
+	cn, err = ru.SelectByLabel(li2)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -136,9 +136,47 @@ func TestRouter_Select(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Select(li3)
+	cn, err = ru.SelectByLabel(li3)
 	require.Error(t, err)
 	require.Nil(t, cn)
+}
+
+func TestRouter_SelectByConnID(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	re := testRebalancer(t, st, logger, nil)
+
+	addr1 := "127.0.0.1:38001"
+	stopFn1 := startTestCNServer(t, ctx, addr1)
+	defer func() {
+		require.NoError(t, stopFn1())
+	}()
+	ru := newRouter(nil, re, true)
+
+	cn1 := &CNServer{
+		connID: 10,
+		addr:   addr1,
+		uuid:   "uuid1",
+	}
+	_, _, err := ru.Connect(cn1, nil, nil)
+	require.NoError(t, err)
+
+	cn2, err := ru.SelectByConnID(10)
+	require.NoError(t, err)
+	require.NotNil(t, cn2)
+	require.Equal(t, cn1.uuid, cn2.uuid)
+	require.Equal(t, cn1.addr, cn2.addr)
+
+	cn3, err := ru.SelectByConnID(20)
+	require.Error(t, err)
+	require.Nil(t, cn3)
 }
 
 func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
@@ -201,7 +239,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Select(li1)
+	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu1 := newTunnel(context.TODO(), nil)
@@ -215,7 +253,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Select(li2)
+	cn, err = ru.SelectByLabel(li2)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu2 := newTunnel(context.TODO(), nil)
@@ -229,7 +267,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Select(li3)
+	cn, err = ru.SelectByLabel(li3)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu3 := newTunnel(context.TODO(), nil)
@@ -298,7 +336,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Select(li1)
+	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu1 := newTunnel(context.TODO(), nil)
@@ -312,7 +350,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Select(li2)
+	cn, err = ru.SelectByLabel(li2)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu2 := newTunnel(context.TODO(), nil)
@@ -326,7 +364,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Select(li3)
+	cn, err = ru.SelectByLabel(li3)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	tu3 := newTunnel(context.TODO(), nil)

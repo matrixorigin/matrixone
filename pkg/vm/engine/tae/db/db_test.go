@@ -4050,6 +4050,10 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
+	infos := make([][]*pkgcatalog.BlockInfo, 0)
+	infos = append(infos, []*pkgcatalog.BlockInfo{info})
+	err = blockio.PrefetchInner(colIdxs, fs, infos)
+	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
 		beforeDel, fs, pool,
@@ -4704,7 +4708,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	metalocs := make([]objectio.Location, 0, 100)
 	// write only one segment
 	for i := 0; i < 1; i++ {
-		objName1 := common.NewSegmentid().ToString() + "-0"
+		objName1 := objectio.NewSegmentid().ToString() + "-0"
 		writer, err := blockio.NewBlockWriter(tae.Fs.Service, objName1)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)

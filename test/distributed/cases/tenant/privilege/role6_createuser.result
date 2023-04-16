@@ -10,3 +10,23 @@ create role r1;
 create user u9 identified by '111', u10 identified by '111' default role r1;
 drop user if exists u1,u2,u3,u4,u5,u6,u7,u8,u9,u10;
 drop role r1;
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create database db1;
+use db1;
+drop table if exists t;
+create table t(
+a int,
+b int,
+c int,
+primary key(a)
+);
+show tables;
+Tables_in_db1
+t
+alter user 'root' identified by '111';
+use db1;
+show tables;
+Tables_in_db1
+t
+drop database db1;
+drop account acc_idx;

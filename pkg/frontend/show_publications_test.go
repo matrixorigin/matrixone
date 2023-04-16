@@ -54,7 +54,7 @@ func TestDoShowPublications(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:   sysAccountName,
@@ -88,7 +88,7 @@ func TestDoShowCreatePublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:   sysAccountName,

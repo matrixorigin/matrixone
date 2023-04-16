@@ -283,7 +283,7 @@ func Test_mce(t *testing.T) {
 		}
 
 		resp, err = mce.ExecRequest(ctx, ses, req)
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeError)
 		convey.So(resp, convey.ShouldBeNil)
 
 	})
