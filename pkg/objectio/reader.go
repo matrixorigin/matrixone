@@ -86,39 +86,13 @@ func (r *ObjectReader) ReadAll(
 	metaExt Extent,
 	idxs []uint16,
 	m *mpool.MPool,
-	constructor CacheConstructorFactory,
-) (*fileservice.IOVector, error) {
-	meta, err := r.ReadMeta(ctx, metaExt, m)
-	if err != nil {
-		return nil, err
+	factory CacheConstructorFactory,
+) (ioVec *fileservice.IOVector, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, metaExt, m); err != nil {
+		return
 	}
-	data := &fileservice.IOVector{
-		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0),
-		NoCache:  r.noCache,
-	}
-	ids := make([]uint32, meta.BlockCount())
-	for i := range ids {
-		ids[i] = uint32(i)
-	}
-	for _, id := range ids {
-		for _, idx := range idxs {
-			col := meta.GetColumnMeta(idx, id)
-			ext := col.Location()
-			data.Entries = append(data.Entries, fileservice.IOEntry{
-				Offset: int64(ext.Offset()),
-				Size:   int64(ext.Length()),
-
-				ToObject: constructor(int64(ext.OriginSize())),
-			})
-		}
-	}
-
-	err = r.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noCache, m, r.object.fs, factory)
 }
 
 func (r *ObjectReader) ReadBloomFilter(

@@ -141,3 +141,35 @@ func ReadMultiBlocksWithMeta(
 	err = fs.Read(ctx, ioVec)
 	return
 }
+
+func ReadAllBlocksWithMeta(
+	ctx context.Context,
+	meta *ObjectMeta,
+	name string,
+	cols []uint16,
+	noCache bool,
+	m *mpool.MPool,
+	fs fileservice.FileService,
+	factory CacheConstructorFactory,
+) (ioVec *fileservice.IOVector, err error) {
+	ioVec = &fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
+		NoCache:  noCache,
+	}
+	for id := uint32(0); id < meta.BlockCount(); id++ {
+		for _, idx := range cols {
+			col := meta.GetColumnMeta(idx, id)
+			ext := col.Location()
+			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+				Offset: int64(ext.Offset()),
+				Size:   int64(ext.Length()),
+
+				ToObject: factory(int64(ext.OriginSize())),
+			})
+		}
+	}
+
+	err = fs.Read(ctx, ioVec)
+	return
+}
