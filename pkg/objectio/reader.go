@@ -162,6 +162,21 @@ func (r *ObjectReader) ReadOneBF(
 	return
 }
 
+func (r *ObjectReader) ReadAllBF(
+	ctx context.Context,
+) (bfs []StaticFilter, size uint32, err error) {
+	var meta ObjectMeta
+	if meta, err = r.ReadMeta(ctx, nil); err != nil {
+		return
+	}
+	extent := meta.BlockHeader().BFExtent()
+	if bfs, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
+		return
+	}
+	size = extent.OriginSize()
+	return
+}
+
 func (r *ObjectReader) ReadExtent(
 	ctx context.Context,
 	extent Extent,

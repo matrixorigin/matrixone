@@ -50,7 +50,17 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	return r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
+	// return r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
+	v, ok := r.indexCache.Get(r.reader.GetName())
+	if ok {
+		return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
+	}
+	v, size, err := r.reader.LoadAllBF(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	r.indexCache.Set(r.reader.GetName(), v, int64(size))
+	return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
