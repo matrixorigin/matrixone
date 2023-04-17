@@ -15,8 +15,12 @@
 package fileservice
 
 import (
+	"context"
+	"crypto/rand"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -69,4 +73,75 @@ func BenchmarkLocalFS(b *testing.B) {
 		assert.Nil(b, err)
 		return fs
 	})
+}
+
+func TestLocalFSWithDiskCache(t *testing.T) {
+	ctx := context.Background()
+	var counter perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counter)
+	const (
+		n       = 128
+		dataLen = 128
+	)
+
+	// new fs
+	fs, err := NewLocalFS(
+		"foo",
+		t.TempDir(),
+		CacheConfig{
+			DiskPath:                  t.TempDir(),
+			DiskCapacity:              dataLen * n / 32,
+			enableDiskCacheForLocalFS: true,
+		},
+		nil,
+	)
+	assert.Nil(t, err)
+
+	// prepare data
+	datas := make([][]byte, 0, n)
+	for i := 0; i < n; i++ {
+		data := make([]byte, dataLen)
+		_, err := rand.Read(data)
+		assert.Nil(t, err)
+		datas = append(datas, data)
+	}
+
+	// write
+	for i := 0; i < n; i++ {
+		data := datas[i]
+		vec := IOVector{
+			FilePath: fmt.Sprintf("%d", i),
+			Entries: []IOEntry{
+				{
+					Data: data,
+					Size: int64(len(data)),
+				},
+			},
+		}
+		err := fs.Write(ctx, vec)
+		assert.Nil(t, err)
+	}
+
+	// read
+	for i := 0; i < n*10; i++ {
+		idx := i % n
+		expected := datas[idx]
+		length := 8
+		for j := 0; j < dataLen/length; j++ {
+			offset := j * length
+			vec := IOVector{
+				FilePath: fmt.Sprintf("%d", idx),
+				Entries: []IOEntry{
+					{
+						Offset: int64(offset),
+						Size:   int64(length),
+					},
+				},
+			}
+			err := fs.Read(ctx, &vec)
+			assert.Nil(t, err)
+			assert.Equal(t, expected[offset:offset+length], vec.Entries[0].Data)
+		}
+	}
+
 }

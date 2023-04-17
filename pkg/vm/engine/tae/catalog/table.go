@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -180,14 +181,14 @@ func (entry *TableEntry) CreateSegment(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory SegmentDataFactory,
-	opts *common.CreateSegOpt) (created *SegmentEntry, err error) {
+	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id types.Uuid
 	if opts != nil && opts.Id != nil {
 		id = *opts.Id
 	} else {
-		id = common.NewSegmentid()
+		id = objectio.NewSegmentid()
 	}
 	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)

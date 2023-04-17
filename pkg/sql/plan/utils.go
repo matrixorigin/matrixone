@@ -962,122 +962,6 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	return e, nil
 }
 
-func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) error {
-	//var err error
-	//newTableAliasMap := make(map[string]string)
-	//newColAliasMap := make(map[string]string)
-	//col2Table := make(map[string]string)
-	//for i := range tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables {
-	//	alias := string(tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).As.Alias)
-	//	if len(alias) == 0 {
-	//		alias = string(tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).Expr.(*tree.TableName).ObjectName)
-	//	}
-	//	newAlias := fmt.Sprintf("%s_tbl_%d", alias, i)
-	//	tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).As.Alias = tree.Identifier(newAlias)
-	//	//newTableAliasMap[alias] = newAlias
-	//}
-	for i := range tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs {
-		selectExpr := tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i] //take care, this is not a pointer
-		expr := selectExpr.Expr.(*tree.UnresolvedName)
-		_, tableName, colName := expr.GetNames()
-		if len(tableName) == 0 {
-			if binding, ok := leftCtx.bindingByCol[colName]; ok {
-				tableName = binding.table
-				expr.Parts[1] = tableName
-			} else {
-				return moerr.NewInternalError(leftCtx.binder.GetContext(), "cannot find column '%s'", colName)
-			}
-		}
-		//newTableName = newTableAliasMap[tableName]
-		//newColAlias = fmt.Sprintf("%s_%d", colName, i)
-		//newColAliasMap[colName] = newColAlias
-		//col2Table[newColAlias] = newTableName
-		//newName, err := tree.NewUnresolvedName(newTableName, colName)
-		//if err != nil {
-		//	return err
-		//}
-		//tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i].Expr = newName
-		//tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i].As = tree.UnrestrictedIdentifier(newColAlias)
-	}
-
-	//for i, _ := range tblFunc.Func.Exprs {
-	//	tblFunc.Func.Exprs[i], err = rewriteTableFunctionExpr(tblFunc.Func.Exprs[i], newTableAliasMap, newColAliasMap, col2Table)
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
-	return nil
-}
-
-//
-//func rewriteTableFunctionExpr(ast tree.Expr, tableAlias map[string]string, colAlias map[string]string, col2Table map[string]string) (tree.Expr, error) {
-//	var err error
-//	switch item := ast.(type) {
-//	case *tree.UnresolvedName:
-//		_, tblName, colName := item.GetNames()
-//		if len(tblName) > 0 {
-//			if alias, ok := tableAlias[tblName]; ok {
-//				item.Parts[1] = alias
-//			}
-//		} else {
-//			newColName := colAlias[colName]
-//			newTblName := col2Table[newColName]
-//			item.Parts[1] = newTblName
-//		}
-//	case *tree.FuncExpr:
-//		for i, _ := range item.Exprs {
-//			item.Exprs[i], err = rewriteTableFunctionExpr(item.Exprs[i], tableAlias, colAlias, col2Table)
-//			if err != nil {
-//				return nil, err
-//			}
-//		}
-//	case *tree.NumVal:
-//		break
-//	default:
-//		return nil, moerr.NewNotSupported("table function expr '%s' not supported", item)
-//	}
-//	return ast, nil
-//}
-
-// lookUpFnCols looks up the columns in the function expression
-func lookUpFnCols(ret tree.SelectExprs, fn interface{}) tree.SelectExprs {
-	switch fnExpr := fn.(type) { //TODO add more cases
-	case *tree.UnresolvedName:
-		ret = append(ret, tree.SelectExpr{Expr: fnExpr})
-	case *tree.FuncExpr:
-		for _, arg := range fnExpr.Exprs {
-			ret = lookUpFnCols(ret, arg)
-		}
-	case *tree.BinaryExpr:
-		ret = lookUpFnCols(ret, fnExpr.Left)
-		ret = lookUpFnCols(ret, fnExpr.Right)
-	case *tree.UnaryExpr:
-		ret = lookUpFnCols(ret, fnExpr.Expr)
-	}
-	return ret
-}
-func buildTableFunctionStmt(tbl *tree.TableFunction, left tree.TableExpr, leftCtx *BindContext) error {
-	var selectExprs tree.SelectExprs
-	selectExprs = lookUpFnCols(selectExprs, tbl.Func)
-	tbl.SelectStmt = &tree.Select{
-		Select: &tree.SelectClause{
-			From: &tree.From{
-				Tables: []tree.TableExpr{left},
-			},
-			Exprs: selectExprs,
-		},
-	}
-	return rewriteTableFunction(tbl, leftCtx)
-}
-
-func clearBinding(ctx *BindContext) {
-	ctx.bindingByCol = make(map[string]*Binding)
-	ctx.bindingByTable = make(map[string]*Binding)
-	ctx.bindingByTag = make(map[int32]*Binding)
-	ctx.bindingTree = &BindingTreeNode{}
-	ctx.bindings = make([]*Binding, 0)
-}
-
 func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
 	if idx == len(leftExprs)-1 {
 		return bindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
@@ -1528,4 +1412,19 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 	}
 
 	return checkExpr, nil
+}
+func onlyContainsTag(filter *Expr, tag int32) bool {
+	switch ex := filter.Expr.(type) {
+	case *plan.Expr_Col:
+		return ex.Col.RelPos == tag
+	case *plan.Expr_F:
+		for _, arg := range ex.F.Args {
+			if !onlyContainsTag(arg, tag) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
 }

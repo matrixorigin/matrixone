@@ -54,9 +54,9 @@ func (mr *MockTxnClientMockRecorder) Close() *gomock.Call {
 }
 
 // New mocks base method.
-func (m *MockTxnClient) New(options ...client.TxnOption) (client.TxnOperator, error) {
+func (m *MockTxnClient) New(ctx context.Context, commitTS timestamp.Timestamp, options ...client.TxnOption) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
-	varargs := []interface{}{}
+	varargs := []interface{}{ctx, commitTS}
 	for _, a := range options {
 		varargs = append(varargs, a)
 	}
@@ -67,9 +67,10 @@ func (m *MockTxnClient) New(options ...client.TxnOption) (client.TxnOperator, er
 }
 
 // New indicates an expected call of New.
-func (mr *MockTxnClientMockRecorder) New(options ...interface{}) *gomock.Call {
+func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockTxnClient)(nil).New), options...)
+	varargs := append([]interface{}{ctx, commitTS}, options...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockTxnClient)(nil).New), varargs...)
 }
 
 // NewWithSnapshot mocks base method.
@@ -471,4 +472,66 @@ func (m *MockTxnIDGenerator) Generate() []byte {
 func (mr *MockTxnIDGeneratorMockRecorder) Generate() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Generate", reflect.TypeOf((*MockTxnIDGenerator)(nil).Generate))
+}
+
+// MockTimestampWaiter is a mock of TimestampWaiter interface.
+type MockTimestampWaiter struct {
+	ctrl     *gomock.Controller
+	recorder *MockTimestampWaiterMockRecorder
+}
+
+// MockTimestampWaiterMockRecorder is the mock recorder for MockTimestampWaiter.
+type MockTimestampWaiterMockRecorder struct {
+	mock *MockTimestampWaiter
+}
+
+// NewMockTimestampWaiter creates a new mock instance.
+func NewMockTimestampWaiter(ctrl *gomock.Controller) *MockTimestampWaiter {
+	mock := &MockTimestampWaiter{ctrl: ctrl}
+	mock.recorder = &MockTimestampWaiterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockTimestampWaiter) EXPECT() *MockTimestampWaiterMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockTimestampWaiter) Close() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Close")
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockTimestampWaiterMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockTimestampWaiter)(nil).Close))
+}
+
+// GetTimestamp mocks base method.
+func (m *MockTimestampWaiter) GetTimestamp(arg0 context.Context, arg1 timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTimestamp", arg0, arg1)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetTimestamp indicates an expected call of GetTimestamp.
+func (mr *MockTimestampWaiterMockRecorder) GetTimestamp(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTimestamp", reflect.TypeOf((*MockTimestampWaiter)(nil).GetTimestamp), arg0, arg1)
+}
+
+// NotifyLatestCommitTS mocks base method.
+func (m *MockTimestampWaiter) NotifyLatestCommitTS(arg0 timestamp.Timestamp) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "NotifyLatestCommitTS", arg0)
+}
+
+// NotifyLatestCommitTS indicates an expected call of NotifyLatestCommitTS.
+func (mr *MockTimestampWaiterMockRecorder) NotifyLatestCommitTS(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyLatestCommitTS", reflect.TypeOf((*MockTimestampWaiter)(nil).NotifyLatestCommitTS), arg0)
 }

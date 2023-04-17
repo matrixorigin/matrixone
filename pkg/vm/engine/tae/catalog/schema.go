@@ -172,6 +172,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if _, err = r.Read(types.EncodeInt8(&s.Partitioned)); err != nil {
+		return
+	}
+	n += 1
 	if s.Partition, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -277,6 +281,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeInt8(&s.Partitioned)); err != nil {
 		return
 	}
 	if _, err = common.WriteString(s.Partition, &w); err != nil {

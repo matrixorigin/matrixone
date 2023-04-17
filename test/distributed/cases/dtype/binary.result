@@ -35,3 +35,6 @@ cast(timestamp(2022-01-22 21:45:33) as binary(6))
 select cast('12345' as binary);
 case(12345 as binary)
 12345
+select concat(binary('ab'), binary('cd'));
+concat(binary(ab), binary(cd))
+abcd

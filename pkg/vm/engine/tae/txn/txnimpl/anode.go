@@ -53,7 +53,7 @@ func (n *anode) GetAppends() []*appendInfo {
 func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.storage.mnode.appends)
 	info := &appendInfo{
-		dest:    dest,
+		dest:    *dest,
 		destOff: destOff,
 		destLen: destLen,
 		dbid:    dbid,
@@ -164,9 +164,10 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 	return offset
 }
 
-func (n *anode) GetValue(col int, row uint32) (any, error) {
+func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
 	if !n.IsPersisted() {
-		return n.storage.mnode.data.Vecs[col].Get(int(row)), nil
+		vec := n.storage.mnode.data.Vecs[col]
+		return vec.Get(int(row)), vec.IsNull(int(row)), nil
 	}
 	//TODO:: get value from S3/FS
 	panic("not implemented yet :GetValue from FS/S3 ")

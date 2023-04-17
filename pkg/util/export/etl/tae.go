@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 const BatchSize = 8192
@@ -332,7 +332,7 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 }
 
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.filesize, r.mp)
+	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
 		return nil, err
 	}

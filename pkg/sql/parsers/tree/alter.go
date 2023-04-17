@@ -138,7 +138,7 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 func (node *AlterView) GetStatementType() string { return "Alter View" }
 func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
 
-// alter configuration for mo_mysql_compatbility_mode
+// alter configuration for mo_mysql_compatibility_mode
 type AlterDataBaseConfig struct {
 	statementImpl
 	AccountName    string

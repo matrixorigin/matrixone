@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func getQueryResultDir() string {
@@ -48,7 +48,7 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == "internal_sql" || isSimpleResultQuery(ses.ast) {
+	if ses.tStmt.SqlSourceType == "internal_sql" {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
@@ -93,53 +93,6 @@ func initQueryResulConfig(ses *Session) error {
 	return nil
 }
 
-func isSimpleResultQuery(ast tree.Statement) bool {
-	switch stmt := ast.(type) {
-	case *tree.Select:
-		if stmt.With != nil || stmt.OrderBy != nil || stmt.Ep != nil {
-			return false
-		}
-		if clause, ok := stmt.Select.(*tree.SelectClause); ok {
-			if len(clause.From.Tables) > 1 || clause.Where != nil || clause.Having != nil || len(clause.GroupBy) > 0 {
-				return false
-			}
-			t := clause.From.Tables[0]
-			// judge table
-			if j, ok := t.(*tree.JoinTableExpr); ok {
-				if j.Right != nil {
-					return false
-				}
-				if a, ok := j.Left.(*tree.AliasedTableExpr); ok {
-					if f, ok := a.Expr.(*tree.TableFunction); ok {
-						if f.Id() != "result_scan" && f.Id() != "meta_scan" {
-							return false
-						}
-						// judge proj
-						for _, selectExpr := range clause.Exprs {
-							switch selectExpr.Expr.(type) {
-							case tree.UnqualifiedStar:
-								continue
-							case *tree.UnresolvedName:
-								continue
-							default:
-								return false
-							}
-						}
-						return true
-					}
-					return false
-				}
-				return false
-			}
-			return false
-		}
-		return false
-	case *tree.ParenSelect:
-		return isSimpleResultQuery(stmt)
-	}
-	return false
-}
-
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
@@ -148,7 +101,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	fs := ses.GetParameterUnit().FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
-	writer, err := objectio.NewObjectWriter(path, fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
 	}
@@ -191,10 +144,14 @@ func saveQueryResultMeta(ses *Session) error {
 		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
 	}
 
-	sp, err := ses.p.Marshal()
-	if err != nil {
-		return err
+	var sp []byte
+	if ses.p != nil {
+		sp, err = ses.p.Marshal()
+		if err != nil {
+			return err
+		}
 	}
+
 	st, err := simpleAstMarshal(ses.ast)
 	if err != nil {
 		return nil
@@ -220,7 +177,7 @@ func saveQueryResultMeta(ses *Session) error {
 		return err
 	}
 	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
-	metaWriter, err := objectio.NewObjectWriter(metaPath, fs)
+	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {
 		return err
 	}
@@ -291,19 +248,12 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		e, err := f.StatFile(requestCtx, path)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return moerr.NewResultFileNotFound(requestCtx, path)
-			}
-			return err
-		}
 		reader, err := blockio.NewFileReader(f, path)
 		if err != nil {
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, ses.GetMemPool())
+		bats, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
@@ -526,6 +476,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	//prepare output queue
 	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
 	oq.reset()
+	oq.ep.OutTofile = true
 	//prepare export param
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
@@ -568,11 +519,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bats, err := reader.LoadColumns(ctx, indexes, []uint32{block.GetExtent().Id()}, ses.GetMemPool())
+			bat, err := reader.LoadColumns(ctx, indexes, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}
-			tmpBatch = bats[0]
+			tmpBatch = bat
 			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string
@@ -620,13 +571,6 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		return nil, moerr.NewInternalError(ctx, "modump does not work without the account info")
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
-	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, moerr.NewResultFileNotFound(ctx, metaFile)
-		}
-		return nil, err
-	}
 	// read meta's meta
 	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, metaFile)
 	if err != nil {
@@ -635,7 +579,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, ses.GetMemPool())
+	bats, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +629,7 @@ func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize
 	if err != nil {
 		return nil, nil, err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, fileSize, ses.GetMemPool())
+	bs, err := reader.LoadAllBlocks(ctx, ses.GetMemPool())
 	if err != nil {
 		return nil, nil, err
 	}

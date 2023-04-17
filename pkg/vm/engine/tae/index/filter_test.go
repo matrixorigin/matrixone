@@ -37,20 +37,20 @@ func TestStaticFilterNumeric(t *testing.T) {
 	var res bool
 	var exist bool
 
-	res, err = sf.MayContainsKey(types.EncodeValue(int32(1209), typ))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(1209), typ.Oid))
 	require.NoError(t, err)
 	require.True(t, res)
 
-	res, err = sf.MayContainsKey(types.EncodeValue(int32(5555), typ))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(5555), typ.Oid))
 	require.NoError(t, err)
 	require.True(t, res)
 
-	res, err = sf.MayContainsKey(types.EncodeValue(int32(40000), typ))
+	res, err = sf.MayContainsKey(types.EncodeValue(int32(40000), typ.Oid))
 	require.NoError(t, err)
 	require.False(t, res)
 
 	require.Panics(t, func() {
-		res, err = sf.MayContainsKey(types.EncodeValue(int16(0), typ))
+		res, err = sf.MayContainsKey(types.EncodeValue(int16(0), typ.Oid))
 	})
 
 	query := containers.MockVector2(typ, 2000, 1000)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -294,6 +295,10 @@ type FrontendParameters struct {
 	PrintDebug bool `toml:"printDebug"`
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
+
+	// ProxyEnabled indicates that proxy module is enabled and something extra
+	// is needed, such as update the salt.
+	ProxyEnabled bool `toml:"proxy-enabled"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -641,13 +646,18 @@ type ParameterUnit struct {
 
 	// LockService instance
 	LockService lockservice.LockService
+
+	// HAKeeper client, which is used to get connection ID
+	// from HAKeeper currently.
+	HAKeeperClient logservice.CNHAKeeperClient
 }
 
 func NewParameterUnit(
 	sv *FrontendParameters,
 	storageEngine engine.Engine,
 	txnClient client.TxnClient,
-	clusterNodes engine.Nodes) *ParameterUnit {
+	clusterNodes engine.Nodes,
+) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		StorageEngine: storageEngine,

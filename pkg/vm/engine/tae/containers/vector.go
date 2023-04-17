@@ -36,9 +36,6 @@ type vector[T any] struct {
 
 	// Used in Append()
 	mpool *mpool.MPool
-
-	// isOwner is used to implement the SharedMemory Logic from the previous DN vector implementation.
-	isOwner bool
 }
 
 func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
@@ -56,17 +53,10 @@ func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 	}
 	vec.mpool = alloc
 
-	// So far no mpool allocation. So isOwner defaults to false.
-	vec.isOwner = false
-
 	return vec
 }
 
 func (vec *vector[T]) Get(i int) any {
-	if vec.IsNull(i) {
-		return types.Null{}
-	}
-
 	if vec.GetType().IsVarlen() {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
@@ -78,9 +68,6 @@ func (vec *vector[T]) Get(i int) any {
 }
 
 func (vec *vector[T]) ShallowGet(i int) any {
-	if vec.IsNull(i) {
-		return types.Null{}
-	}
 	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 
@@ -88,10 +75,9 @@ func (vec *vector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *vector[T]) Append(v any) {
+func (vec *vector[T]) Append(v any, isNull bool) {
 	vec.tryCoW()
 
-	_, isNull := v.(types.Null)
 	var err error
 	if isNull {
 		err = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
@@ -123,9 +109,9 @@ func (vec *vector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec *vector[T]) Update(i int, v any) {
+func (vec *vector[T]) Update(i int, v any, isNull bool) {
 	vec.tryCoW()
-	UpdateValue(vec.downstreamVector, uint32(i), v)
+	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
 
 func (vec *vector[T]) Slice() any {
@@ -200,14 +186,13 @@ func (vec *vector[T]) Close() {
 }
 
 func (vec *vector[T]) releaseDownstream() {
-	if vec.isOwner {
+	if !vec.downstreamVector.NeedDup() {
 		vec.downstreamVector.Free(vec.mpool)
-		vec.isOwner = false
 	}
 }
 
 func (vec *vector[T]) Allocated() int {
-	if !vec.isOwner {
+	if vec.downstreamVector.NeedDup() {
 		return 0
 	}
 	return vec.downstreamVector.Size()
@@ -215,29 +200,27 @@ func (vec *vector[T]) Allocated() int {
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
 func (vec *vector[T]) tryCoW() {
-
-	if !vec.isOwner {
-		newCnVector, err := vec.downstreamVector.Dup(vec.mpool)
-		if err != nil {
-			panic(err)
-		}
-		vec.downstreamVector = newCnVector
-		vec.isOwner = true
+	if !vec.downstreamVector.NeedDup() {
+		return
 	}
+
+	newCnVector, err := vec.downstreamVector.Dup(vec.mpool)
+	if err != nil {
+		panic(err)
+	}
+	vec.downstreamVector = newCnVector
 }
 
 func (vec *vector[T]) Window(offset, length int) Vector {
-
-	// In DN Vector, we are using SharedReference for Window.
-	// In CN Vector, we are creating a new Clone for Window.
-	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
-	return &vectorWindow[T]{
-		ref: vec,
-		windowBase: &windowBase{
-			offset: offset,
-			length: length,
-		},
+	var err error
+	win := new(vector[T])
+	win.mpool = vec.mpool
+	win.downstreamVector, err = vec.downstreamVector.Window(offset, offset+length)
+	if err != nil {
+		panic(err)
 	}
+
+	return win
 }
 
 func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
@@ -254,7 +237,6 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	if err != nil {
 		panic(err)
 	}
-	cloned.isOwner = true
 
 	return cloned
 }
@@ -288,7 +270,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 					isNull := false
 					if vec.IsNull(i + offset + bias) {
 						isNull = true
-						vv = types.Null{}
+						vv = nil
 					} else {
 						vv = elem
 					}
@@ -310,7 +292,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 					isNull := false
 					if vec.IsNull(int(idx) + bias) {
 						isNull = true
-						vv = types.Null{}
+						vv = nil
 					} else {
 						vv = slice[int(idx)-offset]
 					}
@@ -378,7 +360,6 @@ func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 }
 
 func (vec *vector[T]) setDownstreamVector(dsVec *cnVector.Vector) {
-	vec.isOwner = false
 	vec.downstreamVector = dsVec
 }
 
@@ -445,9 +426,9 @@ func (vec *vector[T]) PPString(num int) string {
 
 // AppendMany appends multiple values
 // Deprecated: Only use for test functions
-func (vec *vector[T]) AppendMany(vs ...any) {
-	for _, v := range vs {
-		vec.Append(v)
+func (vec *vector[T]) AppendMany(vs []any, isNulls []bool) {
+	for i, v := range vs {
+		vec.Append(v, isNulls[i])
 	}
 }
 

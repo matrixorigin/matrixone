@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -111,7 +112,7 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 	return nil
 }
 
-func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, right *BindContext) (*plan.Expr, error) {
+func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
 		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left table", col)
@@ -187,7 +188,10 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		exprs := make([]tree.SelectExpr, 0)
 		names := make([]string, 0)
 
-		for _, col := range binding.cols {
+		for i, col := range binding.cols {
+			if binding.colIsHidden[i] {
+				continue
+			}
 			if catalog.ContainExternalHidenCol(col) {
 				continue
 			}
@@ -209,7 +213,10 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		return
 	}
 	if root.binding != nil {
-		for _, col := range root.binding.cols {
+		for i, col := range root.binding.cols {
+			if root.binding.colIsHidden[i] {
+				continue
+			}
 			if catalog.ContainExternalHidenCol(col) {
 				continue
 			}

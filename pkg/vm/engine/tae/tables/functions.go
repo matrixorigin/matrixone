@@ -61,20 +61,20 @@ var dedupNABlkFunctions = map[types.T]any{
 
 var dedupAlkFunctions = map[types.T]any{
 	types.T_bool:       dedupABlkFuncFactory[bool](compute.CompareBool),
-	types.T_int8:       dedupABlkFuncFactory[int8](compute.CompareOrdered2[int8]),
-	types.T_int16:      dedupABlkFuncFactory[int16](compute.CompareOrdered2[int16]),
-	types.T_int32:      dedupABlkFuncFactory[int32](compute.CompareOrdered2[int32]),
-	types.T_int64:      dedupABlkFuncFactory[int64](compute.CompareOrdered2[int64]),
-	types.T_uint8:      dedupABlkFuncFactory[uint8](compute.CompareOrdered2[uint8]),
-	types.T_uint16:     dedupABlkFuncFactory[uint16](compute.CompareOrdered2[uint16]),
-	types.T_uint32:     dedupABlkFuncFactory[uint32](compute.CompareOrdered2[uint32]),
-	types.T_uint64:     dedupABlkFuncFactory[uint64](compute.CompareOrdered2[uint64]),
-	types.T_float32:    dedupABlkFuncFactory[float32](compute.CompareOrdered2[float32]),
-	types.T_float64:    dedupABlkFuncFactory[float64](compute.CompareOrdered2[float64]),
-	types.T_timestamp:  dedupABlkFuncFactory[types.Timestamp](compute.CompareOrdered2[types.Timestamp]),
-	types.T_date:       dedupABlkFuncFactory[types.Date](compute.CompareOrdered2[types.Date]),
-	types.T_time:       dedupABlkFuncFactory[types.Time](compute.CompareOrdered2[types.Time]),
-	types.T_datetime:   dedupABlkFuncFactory[types.Datetime](compute.CompareOrdered2[types.Datetime]),
+	types.T_int8:       dedupABlkFuncFactory[int8](compute.CompareOrdered[int8]),
+	types.T_int16:      dedupABlkFuncFactory[int16](compute.CompareOrdered[int16]),
+	types.T_int32:      dedupABlkFuncFactory[int32](compute.CompareOrdered[int32]),
+	types.T_int64:      dedupABlkFuncFactory[int64](compute.CompareOrdered[int64]),
+	types.T_uint8:      dedupABlkFuncFactory[uint8](compute.CompareOrdered[uint8]),
+	types.T_uint16:     dedupABlkFuncFactory[uint16](compute.CompareOrdered[uint16]),
+	types.T_uint32:     dedupABlkFuncFactory[uint32](compute.CompareOrdered[uint32]),
+	types.T_uint64:     dedupABlkFuncFactory[uint64](compute.CompareOrdered[uint64]),
+	types.T_float32:    dedupABlkFuncFactory[float32](compute.CompareOrdered[float32]),
+	types.T_float64:    dedupABlkFuncFactory[float64](compute.CompareOrdered[float64]),
+	types.T_timestamp:  dedupABlkFuncFactory[types.Timestamp](compute.CompareOrdered[types.Timestamp]),
+	types.T_date:       dedupABlkFuncFactory[types.Date](compute.CompareOrdered[types.Date]),
+	types.T_time:       dedupABlkFuncFactory[types.Time](compute.CompareOrdered[types.Time]),
+	types.T_datetime:   dedupABlkFuncFactory[types.Datetime](compute.CompareOrdered[types.Datetime]),
 	types.T_decimal64:  dedupABlkFuncFactory[types.Decimal64](types.CompareDecimal64),
 	types.T_decimal128: dedupABlkFuncFactory[types.Decimal128](types.CompareDecimal128),
 	types.T_decimal256: dedupABlkFuncFactory[types.Decimal256](types.CompareDecimal256),
@@ -133,7 +133,7 @@ func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(
 				comp,
 				mask,
 			); existed {
-				entry := common.TypeStringValue(*vec.GetType(), any(v))
+				entry := common.TypeStringValue(*vec.GetType(), any(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}
 			return
@@ -150,7 +150,7 @@ func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 			v,
 			mask,
 		); existed {
-			entry := common.TypeStringValue(*vec.GetType(), any(v))
+			entry := common.TypeStringValue(*vec.GetType(), any(v), false)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return
@@ -167,7 +167,7 @@ func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) err
 			v,
 			mask,
 		); existed {
-			entry := common.TypeStringValue(*vec.GetType(), any(v))
+			entry := common.TypeStringValue(*vec.GetType(), any(v), false)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return
@@ -205,9 +205,9 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
-				entry := common.TypeStringValue(vec.GetType(), any(v1))
+				entry := common.TypeStringValue(vec.GetType(), any(v1), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-			})
+			}, nil)
 	}
 }
 
@@ -242,9 +242,9 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 					if commitTS.Greater(txn.GetStartTS()) {
 						return txnif.ErrTxnWWConflict
 					}
-					entry := common.TypeStringValue(vec.GetType(), any(v1))
+					entry := common.TypeStringValue(vec.GetType(), any(v1), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-				})
+				}, nil)
 		}
 	}
 }
@@ -256,7 +256,7 @@ func dedupNABlkClosure(
 	def *catalog.ColDef) func(any, bool, int) error {
 	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(vec.GetType(), v)
+			entry := common.TypeStringValue(vec.GetType(), v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return nil
@@ -285,7 +285,7 @@ func dedupABlkClosureFactory(
 				if mask != nil && mask.ContainsInt(row) {
 					return
 				}
-				if compute.CompareGeneric(v1, v2, vec.GetType()) != 0 {
+				if compute.CompareGeneric(v1, v2, vec.GetType().Oid) != 0 {
 					return
 				}
 				if tsVec == nil {
@@ -298,7 +298,7 @@ func dedupABlkClosureFactory(
 				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
-				entry := common.TypeStringValue(vec.GetType(), v1)
+				entry := common.TypeStringValue(vec.GetType(), v1, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}, nil)
 		}
