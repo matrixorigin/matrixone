@@ -70,6 +70,7 @@ func (node *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
+			node.block.indexCache,
 			node.block.fs,
 			metaloc,
 			schema.ColDefs[i]); err != nil {

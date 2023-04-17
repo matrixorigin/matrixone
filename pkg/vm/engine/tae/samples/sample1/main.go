@@ -104,5 +104,4 @@ func main() {
 	for i := 0; i < 5; i++ {
 		time.Sleep(waitTime)
 	}
-	logutil.Info(tae.TxnBufMgr.String())
 }

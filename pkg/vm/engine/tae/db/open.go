@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -69,7 +68,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	opts = opts.FillDefaults(dirname)
 
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
-	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
@@ -79,11 +77,11 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:       dirname,
-		Opts:      opts,
-		TxnBufMgr: txnBufMgr,
-		Fs:        fs,
-		Closed:    new(atomic.Value),
+		Dir:        dirname,
+		Opts:       opts,
+		IndexCache: indexCache,
+		Fs:         fs,
+		Closed:     new(atomic.Value),
 	}
 
 	switch opts.LogStoreT {
@@ -105,7 +103,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.Opts.Catalog,
 		db.Wal,
 		db.TransferTable,
-		txnBufMgr,
+		indexCache,
 		dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)

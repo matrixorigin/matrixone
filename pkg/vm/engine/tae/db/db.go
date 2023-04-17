@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
@@ -52,7 +51,6 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	TxnBufMgr  base.INodeManager
 	IndexCache model.LRUCache
 
 	TxnMgr        *txnbase.TxnManager

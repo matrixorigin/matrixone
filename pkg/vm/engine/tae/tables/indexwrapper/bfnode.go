@@ -23,25 +23,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BfReader struct {
-	bfKey  objectio.Location
-	reader *blockio.BlockReader
-	typ    types.T
+	bfKey      objectio.Location
+	reader     *blockio.BlockReader
+	typ        types.T
+	indexCache model.LRUCache
 }
 
 func NewBfReader(
 	typ types.T,
 	metaLoc objectio.Location,
+	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
 ) *BfReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
-		bfKey:  metaLoc,
-		reader: reader,
-		typ:    typ,
+		indexCache: indexCache,
+		bfKey:      metaLoc,
+		reader:     reader,
+		typ:        typ,
 	}
 }
 

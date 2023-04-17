@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 var _ Index = (*immutableIndex)(nil)
@@ -108,6 +109,7 @@ func (index *immutableIndex) Destroy() (err error) {
 }
 
 func (index *immutableIndex) ReadFrom(
+	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
 	location objectio.Location,
 	colDef *catalog.ColDef,
@@ -121,6 +123,7 @@ func (index *immutableIndex) ReadFrom(
 		index.bfReader = NewBfReader(
 			colDef.Type.Oid,
 			location,
+			indexCache,
 			fs,
 		)
 	}
