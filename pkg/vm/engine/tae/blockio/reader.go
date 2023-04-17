@@ -38,10 +38,14 @@ type fetchParams struct {
 	reader *objectio.ObjectReader
 }
 
-func NewObjectReader(service fileservice.FileService, key objectio.Location) (*BlockReader, error) {
+func NewObjectReader(
+	service fileservice.FileService,
+	key objectio.Location,
+	opts ...objectio.ReaderOptionFunc,
+) (*BlockReader, error) {
 	name := key.Name()
 	metaExt := key.Extent()
-	reader, err := objectio.NewObjectReader(&name, &metaExt, service)
+	reader, err := objectio.NewObjectReader(&name, &metaExt, service, opts...)
 	if err != nil {
 		return nil, err
 	}
