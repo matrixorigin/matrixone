@@ -222,17 +222,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
-	if cw != nil {
-		copy(stmID[:], cw.GetUUID())
-		statement = cw.GetAst()
-		ses.ast = statement
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		statement.Format(fmtCtx)
-		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	} else {
-		stmID = uuid.New()
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	}
+	stmID = uuid.New()
+	text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	stm := &motrace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
