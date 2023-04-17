@@ -49,7 +49,18 @@ const (
 	ShuffleToAllLocalFunc
 )
 
+func releaseBats(bat *batch.Batch, proc *process.Process) {
+	for i := range bat.Vecs {
+		bat.Vecs[i].Free(proc.Mp())
+	}
+	bat = nil
+}
+
 func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
+
+	//release old bats
+	defer releaseBats(bat, proc)
+
 	lenVecs := len(bat.Vecs)
 	preAllocLen := bat.Length() / lenRegs
 	if preAllocLen < 1024 {
@@ -58,12 +69,8 @@ func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*b
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels := make([][]int32, lenRegs)
 	lenShuffledSels := make([]int, lenRegs)
-	for i := range shuffledBats {
-		shuffledBats[i] = batch.NewWithSize(lenVecs)
+	for i := range sels {
 		sels[i] = make([]int32, preAllocLen)
-		for j := range shuffledBats[i].Vecs {
-			shuffledBats[i].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
-		}
 	}
 
 	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
@@ -77,18 +84,26 @@ func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*b
 		lenShuffledSels[regIndex]++
 	}
 
+	//generate new shuffled bats
 	for regIndex := range shuffledBats {
-		b := shuffledBats[regIndex]
-		for vecIndex := range b.Vecs {
-			v := b.Vecs[vecIndex]
-			err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
-			if err != nil {
-				return nil, err
+		if lenShuffledSels[regIndex] > 0 {
+			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+			for j := range shuffledBats[regIndex].Vecs {
+				shuffledBats[regIndex].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
 			}
-		}
-		b.Zs = make([]int64, lenShuffledSels[regIndex])
-		for i := 0; i < lenShuffledSels[regIndex]; i++ {
-			b.Zs[i] = bat.Zs[sels[regIndex][i]]
+
+			b := shuffledBats[regIndex]
+			for vecIndex := range b.Vecs {
+				v := b.Vecs[vecIndex]
+				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+			}
+			b.Zs = make([]int64, lenShuffledSels[regIndex])
+			for i := 0; i < lenShuffledSels[regIndex]; i++ {
+				b.Zs[i] = bat.Zs[sels[regIndex][i]]
+			}
 		}
 	}
 
@@ -103,10 +118,12 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 	}
 
 	for i, reg := range ap.LocalRegs {
-		select {
-		case <-reg.Ctx.Done():
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-		case reg.Ch <- shuffledBats[i]:
+		if shuffledBats[i] != nil {
+			select {
+			case <-reg.Ctx.Done():
+				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			case reg.Ch <- shuffledBats[i]:
+			}
 		}
 	}
 
@@ -146,12 +163,14 @@ func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	// send to remote regs
 	for i, r := range ap.ctr.remoteReceivers {
-		encodeData, errEncode := types.Encode(shuffledBats[i])
-		if errEncode != nil {
-			return false, errEncode
-		}
-		if err := sendBatchToClientSession(encodeData, r); err != nil {
-			return false, err
+		if shuffledBats[i] != nil {
+			encodeData, errEncode := types.Encode(shuffledBats[i])
+			if errEncode != nil {
+				return false, errEncode
+			}
+			if err := sendBatchToClientSession(encodeData, r); err != nil {
+				return false, err
+			}
 		}
 	}
 	return false, nil
