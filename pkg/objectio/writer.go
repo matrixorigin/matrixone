@@ -226,7 +226,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
+	objectMeta.BlockHeader().SetBFExtent(bloomFilterExtent)
 	offset += bloomFilterExtent.Length()
 
 	// prepare zone map area
@@ -239,7 +239,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	// prepare object meta and block index
 	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset)
-	objectHeader.SetLocation(metaExtent)
+	objectHeader.SetExtent(metaExtent)
 	// begin write
 
 	// writer object header
@@ -274,7 +274,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		header := w.blocks[i].meta.BlockHeader()
-		header.SetMetaLocation(objectHeader.Location())
+		header.SetMetaLocation(objectHeader.Extent())
 		blockObjects = append(blockObjects, w.blocks[i].meta)
 	}
 	err = w.Sync(ctx, items...)

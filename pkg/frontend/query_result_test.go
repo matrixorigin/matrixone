@@ -103,7 +103,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	//prepare session
 	ses := newTestSession(t, ctrl)
 	_ = ses.SetGlobalVar("save_query_result", int8(1))
-	defer ses.Dispose()
+	defer ses.Close()
 	const blockCnt int = 3
 
 	tenant := &TenantInfo{
