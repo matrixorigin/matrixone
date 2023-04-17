@@ -735,7 +735,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		rs := c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
+		// updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Merge
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		scp, err := constructDeletion(n, c.e, c.proc)

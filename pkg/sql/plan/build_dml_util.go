@@ -702,6 +702,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightRowIdPos,
+						Name:   catalog.Row_ID,
 					},
 				},
 			}, &plan.Expr{
@@ -710,6 +711,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightPkPos,
+						Name:   catalog.IndexTableIndexColName,
 					},
 				},
 			})
@@ -720,6 +722,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightPkPos,
+						Name:   catalog.IndexTableIndexColName,
 					},
 				},
 			}
@@ -737,6 +740,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 						Col: &plan.ColRef{
 							RelPos: baseTag,
 							ColPos: int32(posMap[orginIndexColumnName]),
+							Name:   orginIndexColumnName,
 						},
 					},
 				}
@@ -750,6 +754,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 							Col: &plan.ColRef{
 								RelPos: baseTag,
 								ColPos: int32(posMap[column]),
+								Name:   column,
 							},
 						},
 					}
