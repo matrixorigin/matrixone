@@ -1,0 +1,13 @@
+create database fake_pk;
+use fake_pk;
+create table fake_pk(id int);
+insert into fake_pk(id) values(1);
+select * from fake_pk order by id;
+insert into fake_pk(id) values(2);
+select * from fake_pk order by id;
+insert into fake_pk values(3);
+select * from fake_pk order by id;
+update fake_pk set id = 11 where id = 1;
+select * from fake_pk order by id;
+delete from fake_pk where id = 1;
+select * from fake_pk order by id;

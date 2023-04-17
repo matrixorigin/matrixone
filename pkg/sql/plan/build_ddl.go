@@ -331,6 +331,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, err
 	}
 
+	maybeAddPrimaryKey(createTable)
+
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -2024,4 +2026,32 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		}
 	}
 	return &fkData, nil
+}
+
+// maybeAddPrimaryKey for tables that do not have a primary key, we need to create a hidden
+// auto-increment column primary key. In pessimistic transactionm mode, locks arithmetic requires
+// a primary key. To avoid conflicts with Cluster-By, this primary key needs to be disabled from
+// sorting inside TAE.
+func maybeAddPrimaryKey(def *plan.CreateTable) {
+	if def.TableDef.Pkey == nil {
+		def.TableDef.Cols = append(def.TableDef.Cols,
+			&ColDef{
+				Name:   catalog.FakePrimaryKeyColName,
+				Hidden: true,
+				Typ: &Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+				NotNull: true,
+			})
+		def.TableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FakePrimaryKeyColName},
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		}
+	}
 }
