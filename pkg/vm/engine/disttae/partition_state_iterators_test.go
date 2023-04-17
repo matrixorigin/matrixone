@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,10 +56,10 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	const num = 128
 
-	sid := common.NewSegmentid()
+	sid := objectio.NewSegmentid()
 	buildRowID := func(i int) types.Rowid {
-		blk := common.NewBlockid(&sid, uint16(i), 0)
-		return common.NewRowid(&blk, uint32(0))
+		blk := objectio.NewBlockid(&sid, uint16(i), 0)
+		return objectio.NewRowid(&blk, uint32(0))
 	}
 
 	{

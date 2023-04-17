@@ -88,8 +88,8 @@ func (view *ColumnView) String() string {
 	return "empty"
 }
 
-func (view *ColumnView) GetValue(row int) any {
-	return view.data.Get(row)
+func (view *ColumnView) GetValue(row int) (any, bool) {
+	return view.data.Get(row), view.data.IsNull(row)
 }
 
 func (view *ColumnView) IsDeleted(row int) bool {

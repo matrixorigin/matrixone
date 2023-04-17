@@ -420,7 +420,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 	tbl.txnEntries.Append(entry)
 	for _, id := range readed {
 		// warChecker skip non-block read
-		if common.IsEmptyBlkid(&id.BlockID) {
+		if objectio.IsEmptyBlkid(&id.BlockID) {
 			continue
 		}
 
@@ -742,14 +742,14 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	return
 }
 
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment != nil && tbl.localSegment.entry.ID == id.SegmentID {
 		return tbl.localSegment.GetValue(row, col)
 	}

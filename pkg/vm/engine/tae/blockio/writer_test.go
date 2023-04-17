@@ -16,10 +16,10 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -39,7 +39,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
-	name := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
@@ -62,7 +62,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(2)
 	assert.Nil(t, err)
-	colZoneMap := col.GetMeta().ZoneMap()
+	colZoneMap := col.ZoneMap()
 	zm := index.DecodeZM(colZoneMap)
 
 	require.NoError(t, err)
@@ -86,11 +86,21 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	zm = meta.ObjectColumnMeta(2).ZoneMap()
 	require.True(t, zm.Contains(int32(40000)))
 	require.False(t, zm.Contains(int32(100000)))
-	zm = meta.GetColumnMeta(2, 0).ZoneMap()
+	zm = meta.GetColumnMeta(0, 2).ZoneMap()
 	require.True(t, zm.Contains(int32(39999)))
 	require.False(t, zm.Contains(int32(40000)))
-	zm = meta.GetColumnMeta(2, 1).ZoneMap()
+	zm = meta.GetColumnMeta(1, 2).ZoneMap()
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
+}
+
+func TestMergeDeleteRows(t *testing.T) {
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, nil), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows(nil, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{2, 3, 7, 8, 9}, []int64{1, 2, 3}), []int64{1, 2, 3, 7, 8, 9})
+	require.Equal(t, mergeDeleteRows([]int64{2}, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1, 2, 3}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1}), []int64{1, 2, 3})
+	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{3}), []int64{1, 2, 3})
 }

@@ -286,7 +286,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c := &Compile{
 		proc: proc,
 		e:    cnInfo.storeEngine,
-		anal: &anaylze{},
+		anal: &anaylze{analInfos: proc.AnalInfos},
 		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)

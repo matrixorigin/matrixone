@@ -220,7 +220,7 @@ func TestHidden2(t *testing.T) {
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
 			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
+			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
@@ -256,7 +256,7 @@ func TestHidden2(t *testing.T) {
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
 			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
+			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {

@@ -73,7 +73,7 @@ func TestNewObjectWriter(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -81,7 +81,7 @@ func TestNewObjectWriter(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+		fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -98,19 +98,20 @@ func TestNewObjectWriter(t *testing.T) {
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 2)
 	for i, blk := range blocks {
-		extents[i] = NewExtent(blk.GetID(), blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
+		extents[i] = NewExtent(1, blk.GetExtent().Offset(), blk.GetExtent().Length(), blk.GetExtent().OriginSize())
 	}
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
-	meta, err := objectReader.ReadMeta(context.Background(), &extents[0], pool)
+	objectReader.CacheMetaExtent(&extents[0])
+	meta, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(2), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(context.Background(), &extents[0], idxs, extents[0].id, pool, newDecompressToObject)
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, decompressConstructorFactory)
 	assert.Nil(t, err)
 	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -131,7 +132,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
 	assert.Nil(t, err)
-	meta, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool)
+	meta, err = objectReader.ReadAllMeta(context.Background(), pool)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(2), meta.BlockCount())
 	assert.Nil(t, err)
@@ -140,7 +141,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, 0, pool, newDecompressToObject)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, decompressConstructorFactory)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -154,7 +155,12 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
-
+	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea())
+	assert.Nil(t, err)
+	zma := ZoneMapArea(buf1)
+	buf = zma.GetZoneMap(0, 0)
+	assert.Equal(t, uint8(0x1), buf[31])
+	assert.Equal(t, uint8(0xa), buf[63])
 }
 
 func getObjectMeta(t *testing.B) ObjectMeta {
@@ -173,7 +179,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	for y := 0; y < 1; y++ {
 		fd, err := objectWriter.Write(bat)
@@ -182,7 +188,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 			zbuf := make([]byte, 64)
 			zbuf[31] = 1
 			zbuf[63] = 10
-			fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+			fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 		}
 	}
 	ts := time.Now()
@@ -195,7 +201,9 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
-	meta, err := objectReader.ReadMeta(context.Background(), blocks[0].BlockHeader().MetaLocation(), nil)
+	ext := blocks[0].BlockHeader().MetaLocation()
+	objectReader.CacheMetaExtent(&ext)
+	meta, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
 	return meta
 }
@@ -241,7 +249,7 @@ func TestNewObjectReader(t *testing.T) {
 	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name, service)
+	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -249,7 +257,7 @@ func TestNewObjectReader(t *testing.T) {
 		zbuf := make([]byte, 64)
 		zbuf[31] = 1
 		zbuf[63] = 10
-		fd.ColumnMeta(uint16(i)).setZoneMap(zbuf)
+		fd.ColumnMeta(uint16(i)).SetZoneMap(zbuf)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)

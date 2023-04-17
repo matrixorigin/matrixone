@@ -39,7 +39,7 @@ type NodeT interface {
 		colIdx int,
 	) (vec containers.Vector, err error)
 
-	GetValueByRow(row, col int) (v any)
+	GetValueByRow(row, col int) (v any, isNull bool)
 	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
 		keys containers.Vector,

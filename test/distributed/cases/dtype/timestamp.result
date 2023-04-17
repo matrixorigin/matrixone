@@ -239,3 +239,27 @@ select * from t1;
 a	b
 2022-01-01 00:00:00	apple
 2022-01-02 00:00:00	apple
+set time_zone = '+8:00';
+drop table if exists t1;
+create table t1(t timestamp(6));
+insert into t1 values('2020-01-01 23:59:59.999999'),('2021-02-03 04:05:06.070809');
+select t + 1 from t1;
+t + 1
+1577894400.999999
+1612296307.070809
+select t - 1 from t1;
+t - 1
+1577894398.999999
+1612296305.070809
+select t * 10 from t1;
+t * 10
+15778943999.999990
+16122963060.708090
+select t / 10 from t1;
+t / 10
+157789439.999999900000
+161229630.607080900000
+select t % 5 from t1;
+t % 5
+4.999999
+1.070809

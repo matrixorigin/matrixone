@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -101,7 +100,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	var blkMetas []string
 	offset := 0
 	for i := 0; i < 100; i++ {
-		name := objectio.BuildObjectName(common.NewSegmentid(), 0)
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriterNew(fs, objNames[i])
 		assert.Nil(t, err)
@@ -189,7 +188,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	for _, obj := range objNames {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
-			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]))
+			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
 		}
 		offset += 50
 		metaLocMoBat := containers.CopyToMoBatch(metaLocBat)
@@ -269,7 +268,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[3] = containers.CopyToMoBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
-	objName1 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(fs, objName1)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -299,7 +298,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write taeBats[3] into file service
-	objName2 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName2 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err = blockio.NewBlockWriterNew(fs, objName2)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -381,8 +380,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	metaLocBat1.Vecs[0].Append([]byte(metaLoc1))
-	metaLocBat1.Vecs[0].Append([]byte(metaLoc2))
+	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
+	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
 	metaLocMoBat1 := containers.CopyToMoBatch(metaLocBat1)
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
@@ -395,7 +394,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	metaLocBat2.Vecs[0].Append([]byte(metaLoc3))
+	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
 	metaLocMoBat2 := containers.CopyToMoBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName2.String(), metaLocMoBat2)
@@ -463,7 +462,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
-	objName3 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName3 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err = blockio.NewBlockWriterNew(fs, objName3)
 	assert.Nil(t, err)
 	for _, bat := range hideBats {
@@ -511,10 +510,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	delLocBat.Vecs[0].Append([]byte(delLoc1))
-	delLocBat.Vecs[0].Append([]byte(delLoc2))
-	delLocBat.Vecs[0].Append([]byte(delLoc3))
-	delLocBat.Vecs[0].Append([]byte(delLoc4))
+	delLocBat.Vecs[0].Append([]byte(delLoc1), false)
+	delLocBat.Vecs[0].Append([]byte(delLoc2), false)
+	delLocBat.Vecs[0].Append([]byte(delLoc3), false)
+	delLocBat.Vecs[0].Append([]byte(delLoc4), false)
 
 	delLocMoBat := containers.CopyToMoBatch(delLocBat)
 	var delApiEntries []*api.Entry

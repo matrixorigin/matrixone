@@ -15,7 +15,6 @@
 package mergesort
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -94,9 +93,9 @@ func Merge[T any](
 			top := heapPop(&heap)
 			(*src)[k] = top.src
 			if top.isNull {
-				ret[i].Append(types.Null{})
+				ret[i].Append(nil, true)
 			} else {
-				ret[i].Append(top.data)
+				ret[i].Append(top.data, false)
 			}
 			mapping[offset[top.src]+top.next-1] = uint32(k)
 			k++
@@ -115,7 +114,7 @@ func Merge[T any](
 func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
 	ret := containers.MakeVector(col.GetType())
 	for _, j := range idx {
-		ret.Append(col.Get(int(j)))
+		ret.Append(col.Get(int(j)), col.IsNull(int(j)))
 	}
 	col.Close()
 	return ret
@@ -130,7 +129,7 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 		ret[i] = containers.MakeVector(col[0].GetType())
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			ret[i].Append(col[s].Get(cursors[s]))
+			ret[i].Append(col[s].Get(cursors[s]), col[s].IsNull(cursors[s]))
 			cursors[s]++
 			k++
 		}

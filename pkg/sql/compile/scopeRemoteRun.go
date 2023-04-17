@@ -21,19 +21,15 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -65,13 +61,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -106,7 +107,7 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
+	err := cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}
@@ -125,7 +126,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 }
 
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer) error {
+func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		var ch chan process.WrapCs
@@ -386,6 +387,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
+	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
@@ -514,6 +516,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		Magic:    int(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
+		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
 	}
@@ -698,8 +701,28 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:    rels,
 			ColList:    poses,
 			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.Left_typs),
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightsemi.Argument:
+		in.RightSemiJoin = &pipeline.RightSemiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightanti.Argument:
+		in.RightAntiJoin = &pipeline.RightAntiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -865,11 +888,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			i++
 		}
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:         t.Es.Attrs,
-			Cols:          t.Es.Cols,
-			Name2ColIndex: name2ColIndexSlice,
-			CreateSql:     t.Es.CreateSql,
-			FileList:      t.Es.FileList,
+			Attrs:           t.Es.Attrs,
+			Cols:            t.Es.Cols,
+			FileSize:        t.Es.FileSize,
+			FileOffsetTotal: t.Es.FileOffsetTotal,
+			Name2ColIndex:   name2ColIndexSlice,
+			CreateSql:       t.Es.CreateSql,
+			FileList:        t.Es.FileList,
+			Filter:          t.Es.Filter.FilterExpr,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -983,8 +1009,28 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
-			Left_typs:  convertToTypes(t.LeftTypes),
-			Right_typs: convertToTypes(t.RightTypes),
+			LeftTypes:  convertToTypes(t.LeftTypes),
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightSemi:
+		t := opr.GetRightSemiJoin()
+		v.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightAnti:
+		t := opr.GetRightAntiJoin()
+		v.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
@@ -1156,14 +1202,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &external.Argument{
 			Es: &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:         t.Attrs,
-					Cols:          t.Cols,
-					CreateSql:     t.CreateSql,
-					Name2ColIndex: name2ColIndex,
-					FileList:      t.FileList,
+					Attrs:           t.Attrs,
+					FileSize:        t.FileSize,
+					FileOffsetTotal: t.FileOffsetTotal,
+					Cols:            t.Cols,
+					CreateSql:       t.CreateSql,
+					Name2ColIndex:   name2ColIndex,
+					FileList:        t.FileList,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
+					Filter: &external.FilterParam{
+						FilterExpr: t.Filter,
+					},
 				},
 			},
 		}

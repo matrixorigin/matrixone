@@ -85,7 +85,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
 	meta := catalog.NewStandaloneBlockWithLoc(
 		seg.entry,
-		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
@@ -105,7 +105,7 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 func (seg *localSegment) registerANode() {
 	meta := catalog.NewStandaloneBlock(
 		seg.entry,
-		common.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewANode(
@@ -246,7 +246,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
 	blkn := metaloc.ID()
-	sid := metaloc.Name().Sid()
+	sid := metaloc.Name().SegmentId()
 	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {
@@ -355,7 +355,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
-		v, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v, _, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 		if err != nil {
 			return err
 		}
@@ -508,7 +508,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
-func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
+func (seg *localSegment) GetValue(row uint32, col uint16) (any, bool, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	return n.GetValue(int(col), noffset)

@@ -55,3 +55,7 @@ service-address = "127.0.0.1:7003"
 [cn.rpc]
 send-queue-size = 2
 busy-queue-size = 1
+
+[cn.txn]
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true

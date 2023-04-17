@@ -89,10 +89,6 @@ func NewService(
 		},
 	}
 
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
-	}
-
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
@@ -108,10 +104,13 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
+	srv.pu = pu
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
-	srv.pu = pu
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage,
@@ -345,6 +344,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
+		s.pu.HAKeeperClient = client
 		s.initClusterService()
 		s.initLockService()
 	})
@@ -442,6 +442,8 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
+		s.timestampWaiter = client.NewTimestampWaiter()
+
 		rt := runtime.ProcessLevelRuntime()
 		client.SetupRuntimeTxnOptions(
 			rt,
@@ -453,10 +455,19 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
+		var opts []client.TxnClientCreateOption
+		if s.cfg.Txn.EnableSacrificingFreshness {
+			opts = append(opts,
+				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+		}
+		if s.cfg.Txn.EnableCNBasedConsistency {
+			opts = append(opts,
+				client.WithEnableCNBasedConsistency())
+		}
+		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
-			rt,
 			sender,
-			client.WithLockService(s.lockService))
+			opts...)
 		s._txnClient = c
 	})
 	c = s._txnClient

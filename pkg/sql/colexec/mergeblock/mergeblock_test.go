@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"reflect"
 	"testing"
 
@@ -43,7 +42,7 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 func TestMergeBlock(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Ctx = context.TODO()
-	segmentid := common.NewSegmentid()
+	segmentid := objectio.NewSegmentid()
 	name1 := objectio.BuildObjectName(segmentid, 0)
 	name2 := objectio.BuildObjectName(segmentid, 1)
 	name3 := objectio.BuildObjectName(segmentid, 2)
@@ -54,10 +53,7 @@ func TestMergeBlock(t *testing.T) {
 		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 1, 2}, nil),
-			testutil.MakeTextVector([]string{
-				string(loc1),
-				string(loc2),
-				string(loc3)}, nil),
+			testutil.MakeTextVector([]string{loc1.String(), loc2.String(), loc3.String()}, nil),
 		},
 		Zs: []int64{1, 1, 1},
 	}
