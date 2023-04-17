@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,7 +36,7 @@ func Prepare(_ *process.Process, _ any) error {
 // the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 
 	// last batch of block
 	if bat == nil {
@@ -98,6 +100,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	**/
+	newBat := batch.NewWithSize(len(bat.Vecs))
+	for j := range bat.Vecs {
+		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+	}
+	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+		return false, err
+	}
+	proc.SetInputBatch(newBat)
 
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)
