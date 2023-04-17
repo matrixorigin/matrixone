@@ -35,7 +35,7 @@ type Argument struct {
 	Tbl engine.Relation
 	// 2. unique index tables
 	Unique_tbls  []engine.Relation
-	AffectedRows uint64
+	affectedRows uint64
 	// 3. used for ut_test, otherwise the batch will free,
 	// and we can't get the result to check
 	notFreeBatch bool
@@ -75,7 +75,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				if err != nil {
 					return err
 				}
-				arg.AffectedRows += uint64(location.Rows())
+				arg.affectedRows += uint64(location.Rows())
 			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {
@@ -85,7 +85,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			if idx == 0 {
-				arg.AffectedRows += uint64(bat.Length())
+				arg.affectedRows += uint64(bat.Length())
 			}
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
 		}
@@ -94,4 +94,8 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
 	}
 	return nil
+}
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.affectedRows
 }

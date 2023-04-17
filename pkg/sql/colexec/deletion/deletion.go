@@ -54,7 +54,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
 	affectedRows = uint64(delBatch.Length())
 	if affectedRows > 0 {
-		err = delCtx.Source.Delete(proc.Ctx, bat, catalog.Row_ID)
+		err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 		if err != nil {
 			return false, err
 		}
@@ -100,6 +100,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	**/
 
-	atomic.AddUint64(&p.AffectedRows, affectedRows)
+	atomic.AddUint64(&p.affectedRows, affectedRows)
 	return false, nil
 }
