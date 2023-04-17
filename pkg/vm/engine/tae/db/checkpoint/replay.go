@@ -66,7 +66,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	if err != nil {
 		return
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, dir.Size, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
 	if err != nil {
 		return
 	}

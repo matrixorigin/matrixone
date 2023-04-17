@@ -93,6 +93,10 @@ func (ti *TenantInfo) GetUser() string {
 	return ti.User
 }
 
+func (ti *TenantInfo) SetUser(user string) {
+	ti.User = user
+}
+
 func (ti *TenantInfo) GetUserID() uint32 {
 	return ti.UserID
 }

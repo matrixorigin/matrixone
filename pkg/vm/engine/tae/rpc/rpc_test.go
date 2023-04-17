@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -101,7 +100,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	var blkMetas []string
 	offset := 0
 	for i := 0; i < 100; i++ {
-		name := objectio.BuildObjectName(common.NewSegmentid(), 0)
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriterNew(fs, objNames[i])
 		assert.Nil(t, err)
@@ -269,7 +268,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[3] = containers.CopyToMoBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
-	objName1 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(fs, objName1)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -299,7 +298,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write taeBats[3] into file service
-	objName2 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName2 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err = blockio.NewBlockWriterNew(fs, objName2)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -463,7 +462,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
-	objName3 := objectio.BuildObjectName(common.NewSegmentid(), 0)
+	objName3 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err = blockio.NewBlockWriterNew(fs, objName3)
 	assert.Nil(t, err)
 	for _, bat := range hideBats {
