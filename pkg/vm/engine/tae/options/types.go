@@ -17,7 +17,6 @@ package options
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -27,11 +26,7 @@ import (
 )
 
 const (
-	// Temp unlimit the txn cache size.
-	// In v0.6, we will limit the cache to a reasonable value
-	DefaultTxnCacheSize   = mpool.TB
-	DefaultIndexCacheSize = 128 * common.M
-	DefaultMTCacheSize    = 4 * common.G
+	DefaultIndexCacheSize = 256 * common.M
 
 	DefaultBlockMaxRows     = uint32(8192)
 	DefaultBlocksPerSegment = uint16(256)

@@ -482,8 +482,6 @@ func TestApp1(t *testing.T) {
 	option := new(options.Options)
 	option.CacheCfg = new(options.CacheCfg)
 	option.CacheCfg.IndexCapacity = common.G
-	option.CacheCfg.InsertCapacity = common.G
-	option.CacheCfg.TxnCapacity = common.G
 	db := initDB(t, option)
 	defer db.Close()
 	mgr := db.TxnMgr
