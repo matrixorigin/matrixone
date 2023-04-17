@@ -373,3 +373,63 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }
+
+func NewFunctionResultWrapper2(typ types.Type, mp *mpool.MPool) (FunctionResultWrapper, error) {
+	v := NewVec(typ)
+	err := v.PreExtend(16, mp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+		// IF STRING type.
+		return newResultFunc[types.Varlena](v, mp), nil
+	case types.T_json:
+		return newResultFunc[types.Varlena](v, mp), nil
+	}
+
+	switch typ.Oid {
+	case types.T_bool:
+		return newResultFunc[bool](v, mp), nil
+	case types.T_int8:
+		return newResultFunc[int8](v, mp), nil
+	case types.T_int16:
+		return newResultFunc[int16](v, mp), nil
+	case types.T_int32:
+		return newResultFunc[int32](v, mp), nil
+	case types.T_int64:
+		return newResultFunc[int64](v, mp), nil
+	case types.T_uint8:
+		return newResultFunc[uint8](v, mp), nil
+	case types.T_uint16:
+		return newResultFunc[uint16](v, mp), nil
+	case types.T_uint32:
+		return newResultFunc[uint32](v, mp), nil
+	case types.T_uint64:
+		return newResultFunc[uint64](v, mp), nil
+	case types.T_float32:
+		return newResultFunc[float32](v, mp), nil
+	case types.T_float64:
+		return newResultFunc[float64](v, mp), nil
+	case types.T_date:
+		return newResultFunc[types.Date](v, mp), nil
+	case types.T_datetime:
+		return newResultFunc[types.Datetime](v, mp), nil
+	case types.T_time:
+		return newResultFunc[types.Time](v, mp), nil
+	case types.T_timestamp:
+		return newResultFunc[types.Timestamp](v, mp), nil
+	case types.T_decimal64:
+		return newResultFunc[types.Decimal64](v, mp), nil
+	case types.T_decimal128:
+		return newResultFunc[types.Decimal128](v, mp), nil
+	case types.T_TS:
+		return newResultFunc[types.TS](v, mp), nil
+	case types.T_Rowid:
+		return newResultFunc[types.Rowid](v, mp), nil
+	case types.T_uuid:
+		return newResultFunc[types.Uuid](v, mp), nil
+	}
+	panic(fmt.Sprintf("unexpected type %s for function result", typ))
+}

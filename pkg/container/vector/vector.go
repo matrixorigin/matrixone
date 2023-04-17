@@ -109,6 +109,17 @@ func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
 }
 
+// Reset the memory of vector but do not release
+func (v *Vector) Reset() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+	if v.nsp != nil && v.nsp.Np != nil {
+		v.nsp.Np.Clear()
+	}
+	v.SetLength(0)
+}
+
 func (v *Vector) NeedDup() bool {
 	return v.cantFreeArea || v.cantFreeData
 }
