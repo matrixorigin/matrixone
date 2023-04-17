@@ -289,6 +289,8 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		c.maxBufferCnt = cfg.BufferCnt
 		if c.maxBufferCnt == -1 {
 			c.maxBufferCnt = math.MaxInt32
+		} else if c.maxBufferCnt == 0 {
+			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
 	})
 }
