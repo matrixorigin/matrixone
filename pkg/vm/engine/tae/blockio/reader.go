@@ -16,49 +16,38 @@ package blockio
 
 import (
 	"context"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BlockReader struct {
-	reader  *objectio.ObjectReader
-	key     objectio.Location
-	name    string
-	meta    objectio.Extent
-	manager *IoPipeline
+	reader *objectio.ObjectReader
+	aio    *IoPipeline
 }
 
 type fetchParams struct {
-	name   string
-	meta   objectio.Extent
 	idxes  []uint16
-	id     uint16
+	blk    uint16
 	pool   *mpool.MPool
 	reader *objectio.ObjectReader
 }
 
 func NewObjectReader(service fileservice.FileService, key objectio.Location) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReader(key.Name(), service)
+	name := key.Name()
+	metaExt := key.Extent()
+	reader, err := objectio.NewObjectReader(&name, &metaExt, service)
 	if err != nil {
 		return nil, err
 	}
 	return &BlockReader{
-		reader:  reader,
-		key:     key,
-		meta:    key.Extent(),
-		manager: pipeline,
+		reader: reader,
+		aio:    pipeline,
 	}, nil
 }
 
@@ -68,9 +57,8 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 		return nil, err
 	}
 	return &BlockReader{
-		reader:  reader,
-		name:    name,
-		manager: pipeline,
+		reader: reader,
+		aio:    pipeline,
 	}, nil
 }
 
@@ -81,37 +69,42 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	}
 	return &BlockReader{
 		reader: reader,
-		name:   name,
 	}, nil
 }
 
-func (r *BlockReader) LoadColumns(ctx context.Context, idxes []uint16,
-	id uint16, m *mpool.MPool) (*batch.Batch, error) {
-	var bat *batch.Batch
-	if r.meta.End() == 0 {
-		return bat, nil
+func (r *BlockReader) LoadColumns(
+	ctx context.Context,
+	cols []uint16,
+	blk uint16,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	metaExt := r.reader.GetMetaExtent()
+	if metaExt == nil || metaExt.End() == 0 {
+		return
 	}
 	proc := fetchParams{
-		name:   r.name,
-		meta:   r.meta,
-		idxes:  idxes,
-		id:     id,
+		idxes:  cols,
+		blk:    blk,
 		pool:   m,
 		reader: r.reader,
 	}
-	v, err := r.manager.Fetch(ctx, proc)
-	if err != nil {
-		return nil, err
+	var v any
+	if v, err = r.aio.Fetch(ctx, proc); err != nil {
+		return
 	}
 	ioVectors := v.(*fileservice.IOVector)
-	bat = batch.NewWithSize(len(idxes))
-	for i := range idxes {
+	bat = batch.NewWithSize(len(cols))
+	for i := range cols {
 		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
 	}
-	return bat, nil
+	return
 }
 
-func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
+func (r *BlockReader) LoadAllColumns(
+	ctx context.Context,
+	idxs []uint16,
+	m *mpool.MPool,
+) ([]*batch.Batch, error) {
 	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
 		return nil, err
@@ -129,7 +122,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpoo
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, meta.BlockHeader().MetaLocation(), idxs, nil, LoadColumnFunc)
+	ioVectors, err := r.reader.ReadAll(ctx, idxs, nil, objectio.ColumnConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -143,23 +136,17 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16, m *mpoo
 	return bats, nil
 }
 
-func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	id uint16, m *mpool.MPool) ([]objectio.ZoneMap, error) {
-	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	if err != nil {
-		return nil, err
-	}
-
-	block := meta.GetBlockMeta(uint32(id))
-	blocksZoneMap, err := r.LoadZoneMap(ctx, idxs, block, m)
-	if err != nil {
-		return nil, err
-	}
-	return blocksZoneMap, nil
+func (r *BlockReader) LoadZoneMaps(
+	ctx context.Context,
+	idxs []uint16,
+	id uint16,
+	m *mpool.MPool,
+) ([]objectio.ZoneMap, error) {
+	return r.reader.ReadZM(ctx, id, idxs, m)
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	return r.reader.ReadMeta(ctx, r.meta, m)
+	return r.reader.ReadMeta(ctx, m)
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -171,9 +158,6 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 	for i := 0; i < int(meta.BlockCount()); i++ {
 		blocks[i] = meta.GetBlockMeta(uint32(i))
 	}
-	if r.meta == nil && len(blocks) > 0 {
-		r.meta = meta.BlockHeader().MetaLocation()
-	}
 	return blocks, nil
 }
 
@@ -182,107 +166,26 @@ func (r *BlockReader) LoadZoneMap(
 	idxs []uint16,
 	block objectio.BlockObject,
 	m *mpool.MPool) ([]objectio.ZoneMap, error) {
-	zoneMapList := make([]objectio.ZoneMap, len(idxs))
-	for i, idx := range idxs {
-		column, err := block.GetColumn(idx)
-		if err != nil {
-			return nil, err
-		}
-		zoneMapList[i] = index.DecodeZM(column.ZoneMap())
-	}
-
-	return zoneMapList, nil
+	return block.ToColumnZoneMaps(idxs), nil
 }
 
-func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
-	id uint16, m *mpool.MPool) (objectio.StaticFilter, error) {
-	meta, err := r.reader.ReadMeta(ctx, r.meta, m)
-	if err != nil {
-		return nil, err
-	}
-	bf, err := r.reader.ReadBloomFilter(ctx, meta.BlockHeader().BloomFilter(), LoadBloomFilterFunc)
-	if err != nil {
-		return nil, err
-	}
-	return bf[id], nil
+func (r *BlockReader) LoadOneBF(
+	ctx context.Context,
+	blk uint16,
+) (objectio.StaticFilter, error) {
+	return r.reader.ReadOneBF(ctx, blk)
 }
 
-func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
-	ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(len(idxs))
-	return bat, nil
-}
-
-func (r *BlockReader) GetObjectName() objectio.ObjectName {
-	return r.key.Name()
+func (r *BlockReader) GetObjectName() *objectio.ObjectName {
+	return r.reader.GetObjectName()
 }
 
 func (r *BlockReader) GetName() string {
-	return r.name
+	return r.reader.GetName()
 }
 
-func (r *BlockReader) GetObjectExtent() objectio.Extent {
-	return r.meta
-}
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
-}
-
-func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		indexes := make([]objectio.StaticFilter, 0)
-		bf := objectio.BloomFilter(decompressed)
-		count := bf.BlockCount()
-		for i := uint32(0); i < count; i++ {
-			buf := bf.GetBloomFilter(i)
-			if len(buf) == 0 {
-				indexes = append(indexes, nil)
-				continue
-			}
-			index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-			if err != nil {
-				return nil, 0, err
-			}
-			indexes = append(indexes, index)
-		}
-		return indexes, int64(len(decompressed)), nil
-	}
-}
-
-func LoadColumnFunc(size int64) objectio.ToObjectFunc {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		vec := vector.NewVec(types.Type{})
-		if err = vec.UnmarshalBinary(decompressed); err != nil {
-			return nil, 0, err
-		}
-		return vec, int64(len(decompressed)), nil
-	}
 }
 
 // The caller has merged the block information that needs to be prefetched
