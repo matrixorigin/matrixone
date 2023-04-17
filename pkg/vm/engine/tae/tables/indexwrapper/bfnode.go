@@ -21,20 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BfReader struct {
 	bfKey  objectio.Location
-	idx    uint16
 	reader *blockio.BlockReader
 	typ    types.T
 }
 
 func NewBfReader(
-	id *common.ID,
 	typ types.T,
 	metaLoc objectio.Location,
 	fs *objectio.ObjectFS,
@@ -42,7 +39,6 @@ func NewBfReader(
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
-		idx:    id.Idx,
 		bfKey:  metaLoc,
 		reader: reader,
 		typ:    typ,
