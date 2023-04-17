@@ -47,6 +47,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	if len(inputBat.Zs) == 0 {
 		return false, nil
 	}
+	defer inputBat.Clean(proc.Mp())
 
 	var insertUniqueBat *batch.Batch
 	var vec *vector.Vector
