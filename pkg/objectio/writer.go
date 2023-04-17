@@ -152,8 +152,12 @@ func (w *ObjectWriter) prepareObjectMeta(objectMeta ObjectMeta, offset uint32) (
 }
 
 func (w *ObjectWriter) prepareBlockMeta(offset uint32) uint32 {
-	for i, block := range w.blocks {
-		for idx := range block.data {
+	maxIndex := w.getMaxIndex()
+	for idx := uint16(0); idx < maxIndex; idx++ {
+		for i, block := range w.blocks {
+			if block.meta.BlockHeader().ColumnCount() <= idx {
+				continue
+			}
 			location := w.blocks[i].meta.ColumnMeta(uint16(idx)).Location()
 			location.SetOffset(offset)
 			w.blocks[i].meta.ColumnMeta(uint16(idx)).setLocation(location)
@@ -201,6 +205,32 @@ func (w *ObjectWriter) prepareZoneMapArea(blockCount uint32, offset uint32) ([]b
 	return w.WriteWithCompress(offset, zoneMapArea.Bytes())
 }
 
+func (w *ObjectWriter) getMaxIndex() uint16 {
+	if len(w.blocks) == 0 {
+		return 0
+	}
+	maxIndex := len(w.blocks[0].data)
+	for _, block := range w.blocks {
+		idxes := len(block.data)
+		if idxes > maxIndex {
+			maxIndex = idxes
+		}
+	}
+	return uint16(maxIndex)
+}
+
+func (w *ObjectWriter) writerBlocks() {
+	maxIndex := w.getMaxIndex()
+	for idx := uint16(0); idx < maxIndex; idx++ {
+		for _, block := range w.blocks {
+			if block.meta.BlockHeader().ColumnCount() <= idx {
+				continue
+			}
+			w.buffer.Write(block.data[idx])
+		}
+	}
+}
+
 func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
 	var err error
 	w.RLock()
@@ -226,7 +256,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	if err != nil {
 		return nil, err
 	}
-	objectMeta.BlockHeader().SetBloomFilter(bloomFilterExtent)
+	objectMeta.BlockHeader().SetBFExtent(bloomFilterExtent)
 	offset += bloomFilterExtent.Length()
 
 	// prepare zone map area
@@ -239,18 +269,14 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 
 	// prepare object meta and block index
 	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset)
-	objectHeader.SetLocation(metaExtent)
+	objectHeader.SetExtent(metaExtent)
 	// begin write
 
 	// writer object header
 	w.buffer.Write(objectHeader)
 
 	// writer data
-	for _, block := range w.blocks {
-		for _, data := range block.data {
-			w.buffer.Write(data)
-		}
-	}
+	w.writerBlocks()
 
 	// writer bloom filter
 	w.buffer.Write(bloomFilterData)
@@ -274,7 +300,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		header := w.blocks[i].meta.BlockHeader()
-		header.SetMetaLocation(objectHeader.Location())
+		header.SetMetaLocation(objectHeader.Extent())
 		blockObjects = append(blockObjects, w.blocks[i].meta)
 	}
 	err = w.Sync(ctx, items...)
