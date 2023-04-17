@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -101,12 +102,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
 
-	Deletion:       deletion.String,
-	Insert:         insert.String,
-	OnDuplicateKey: onduplicatekey.String,
-	PreInsert:      preinsert.String,
-	Update:         update.String,
-	External:       external.String,
+	Deletion:        deletion.String,
+	Insert:          insert.String,
+	OnDuplicateKey:  onduplicatekey.String,
+	PreInsert:       preinsert.String,
+	PreInsertUnique: preinsertunique.String,
+	Update:          update.String,
+	External:        external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,

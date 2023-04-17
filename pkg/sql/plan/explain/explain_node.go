@@ -109,6 +109,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = ndesc.Node.TableDef.TblFunc.Name
+	case plan.Node_PRE_INSERT:
+		pname = "PreInsert"
+	case plan.Node_PRE_INSERT_UK:
+		pname = "PreInsert UniqueKey"
 	default:
 		panic("error node type")
 	}

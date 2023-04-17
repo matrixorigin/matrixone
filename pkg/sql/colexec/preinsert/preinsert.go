@@ -16,8 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,7 +33,10 @@ func Prepare(_ *proc, _ any) error {
 }
 
 func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
-	defer analyze(idx, proc)()
+	analy := proc.GetAnalyze(idx)
+	analy.Start()
+	defer analy.Stop()
+
 	var err error
 
 	arg := x.(*Argument)
@@ -107,14 +108,4 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 		return nil
 	}
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
-}
-
-func analyze(idx int, proc *proc) func() {
-	t := time.Now()
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	return func() {
-		anal.Stop()
-		anal.AddInsertTime(t)
-	}
 }
