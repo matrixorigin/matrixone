@@ -124,7 +124,7 @@ func Test_mergeResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	outputBatch := batch.NewWithSize(finalColumnCount)
 	accountInfo, err := newAccountInfo(ses.mp)

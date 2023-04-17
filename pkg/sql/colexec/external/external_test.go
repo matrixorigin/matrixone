@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -181,7 +182,11 @@ func Test_Call(t *testing.T) {
 			param.Extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
-			param.FileOffset = [][2]int{{0, -1}}
+			param.FileOffsetTotal = []*pipeline.FileOffset{
+				{
+					Offset: []int64{0, -1},
+				},
+			}
 			param.FileSize = []int64{1}
 			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
