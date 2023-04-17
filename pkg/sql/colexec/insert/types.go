@@ -16,34 +16,33 @@ package insert
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	Affected  uint64
-	Engine    engine.Engine
-	IsRemote  bool // mark if this insert is cn2s3 directly
-	s3Writers []*colexec.S3Writer
+	Affected uint64
+	Engine   engine.Engine
+	IsRemote bool // mark if this insert is cn2s3 directly
+	// s3Writers []*colexec.S3Writer
 	InsertCtx *InsertCtx
 }
 
 type InsertCtx struct {
 	//insert data into Rels.
-	Rels []engine.Relation
-	Ref  *plan.ObjectRef
+	Rel             engine.Relation
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool
 	//origin table's def.
-	TableDef *plan.TableDef
-
-	ParentIdx    map[string]int32
-	ClusterTable *plan.ClusterTable
-
-	IdxIdx []int32
+	// TableDef *plan.TableDef
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
+}
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.Affected
 }

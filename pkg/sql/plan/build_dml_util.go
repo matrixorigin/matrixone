@@ -34,7 +34,7 @@ func buildInsertPlans(
 	for i := range tableDef.Cols {
 		idx[i] = int32(i)
 	}
-	sourceStep, err := makePreInsertPlan(builder, bindCtx, idx, lastNodeId, tableDef)
+	sourceStep, err := makePreInsertPlan(builder, bindCtx, objRef, tableDef, idx, lastNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func buildInsertPlans(
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 	}
-	err = makeInsertPlan(ctx, builder, bindCtx, objRef, tableDef, sourceStep)
+	err = makeInsertPlan(ctx, builder, bindCtx, objRef, tableDef, sourceStep, true)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func buildDeletePlans(
 					ObjName:    indexdef.IndexTableName,
 					Obj:        int64(idxTableDef.TblId),
 				}
-				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId)
+				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId, false)
 				if err != nil {
 					return -1, err
 				}
@@ -135,7 +135,7 @@ func buildDeletePlans(
 			break
 		}
 	}
-	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId, true)
 	if err != nil {
 		return -1, err
 	}
@@ -170,7 +170,7 @@ func haveUniqueKey(tableDef *TableDef) bool {
 func makeOneDeletePlan(
 	builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, lastNodeId int32) (int32, error) {
+	deleteIdx int, lastNodeId int32, addAffectedRows bool) (int32, error) {
 	// todo: append predelete node to build partition id
 
 	// todo: append lock & filter
@@ -182,9 +182,10 @@ func makeOneDeletePlan(
 		BindingTags: []int32{deleteTag},
 		Children:    []int32{lastNodeId},
 		DeleteCtx: &plan.DeleteCtx{
-			RowIdIdx:    int32(deleteIdx),
-			Ref:         objRef,
-			CanTruncate: false,
+			RowIdIdx:        int32(deleteIdx),
+			Ref:             objRef,
+			CanTruncate:     false,
+			AddAffectedRows: addAffectedRows,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
@@ -194,7 +195,9 @@ func makeOneDeletePlan(
 
 // makePreInsertPlan  build preinsert plan.
 // xx -> preinsert -> sink
-func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32, lastNodeId int32, tableDef *TableDef) (int32, error) {
+func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef,
+	idx []int32, lastNodeId int32) (int32, error) {
 	preNode := builder.qry.Nodes[lastNodeId]
 	preTag := preNode.BindingTags[0]
 	preInsertTag := builder.genNewTag()
@@ -207,12 +210,22 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32,
 			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: preTag,
+					RelPos: preInsertTag, //xxx need check
 					ColPos: int32(i + preProjectLength),
 					Name:   hiddenColumnName[i],
 				},
 			},
 		})
+	}
+
+	hashAutoCol := false
+	for _, col := range tableDef.Cols {
+		if col.Typ.AutoIncr {
+			// for insert allways set true when col.Typ.AutoIncr
+			// todo for update
+			hashAutoCol = true
+			break
+		}
 	}
 
 	preInsertNode := &Node{
@@ -223,6 +236,9 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext, idx []int32,
 			Idx:              idx,
 			HiddenColumnTyp:  hiddenColumnTyp,
 			HiddenColumnName: hiddenColumnName,
+			Ref:              objRef,
+			TableDef:         tableDef,
+			HasAutoCol:       hashAutoCol,
 		},
 	}
 	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
@@ -335,19 +351,20 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 
 // makeInsertPlan  build insert plan for one table
 /**
-[o]sink_scan -> lock -> filter -> [project(if update)] -> join(check fk) -> filter -> insert -> sink  // insert origin table
+[o]sink_scan -> lock -> filter -> [project(if update)] -> join(check fk) -> filter -> insert -> sink/project  // insert origin table
 			[u1]sink_scan->preinsert_uk->sink
-				[u1]sink_scan -> lock -> filter -> insert
-				[u1]sink_scan -> group_by -> filter  //check if pk is unique in rows
-				[u1]sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
+				[u1]sink_scan -> lock -> filter -> insert -> project
+				[u1]sink_scan -> group_by -> filter -> project  //check if pk is unique in rows
+				[u1]sink_scan -> join -> filter -> project	// check if pk is unique in rows & snapshot
 			[u2]sink_scan->preinsert_uk[根据计算过的0，4，生成一个新的batch]->sink
-				[u2]sink_scan -> lock -> filter -> insert
-				[u2]sink_scan -> group_by -> filter  //check if pk is unique in rows
-				[u2]sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-[o]sink_scan -> group_by -> filter  //check if pk is unique in rows
-[o]sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
+				[u2]sink_scan -> lock -> filter -> insert -> project
+				[u2]sink_scan -> group_by -> filter -> project  //check if pk is unique in rows
+				[u2]sink_scan -> join -> filte -> projectr	// check if pk is unique in rows & snapshot
+[o]sink_scan -> group_by -> filter -> project  //check if pk is unique in rows
+[o]sink_scan -> join -> filter -> project	// check if pk is unique in rows & snapshot
 */
-func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, sourceStep int32) error {
+func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef, sourceStep int32, addAffectedRows bool) error {
 
 	var lastNodeId int32
 	var err error
@@ -416,7 +433,8 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			NodeType: plan.Node_INSERT,
 			ObjRef:   objRef,
 			InsertCtx: &plan.InsertCtx{
-				Columns: insertIdx,
+				Ref:             objRef,
+				AddAffectedRows: addAffectedRows,
 			},
 			Children: []int32{lastNodeId},
 		}
@@ -458,7 +476,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					}
 
 					//make insert plans(for unique key table)
-					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, newSourceStep)
+					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, newSourceStep, false)
 					if err != nil {
 						return err
 					}
@@ -702,6 +720,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightRowIdPos,
+						Name:   catalog.Row_ID,
 					},
 				},
 			}, &plan.Expr{
@@ -710,6 +729,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightPkPos,
+						Name:   catalog.IndexTableIndexColName,
 					},
 				},
 			})
@@ -720,6 +740,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 					Col: &plan.ColRef{
 						RelPos: rightTag,
 						ColPos: rightPkPos,
+						Name:   catalog.IndexTableIndexColName,
 					},
 				},
 			}
@@ -737,6 +758,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 						Col: &plan.ColRef{
 							RelPos: baseTag,
 							ColPos: int32(posMap[orginIndexColumnName]),
+							Name:   orginIndexColumnName,
 						},
 					},
 				}
@@ -750,6 +772,7 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 							Col: &plan.ColRef{
 								RelPos: baseTag,
 								ColPos: int32(posMap[column]),
+								Name:   column,
 							},
 						},
 					}

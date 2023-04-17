@@ -601,27 +601,22 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:     t.IsRemote,
-			Affected:     t.Affected,
-			Ref:          t.InsertCtx.Ref,
-			TableDef:     t.InsertCtx.TableDef,
-			ClusterTable: t.InsertCtx.ClusterTable,
-			ParentIdx:    t.InsertCtx.ParentIdx,
-			IdxIdx:       t.InsertCtx.IdxIdx,
+			IsRemote:        t.IsRemote,
+			Affected:        t.Affected,
+			Ref:             t.InsertCtx.Ref,
+			AddAffectedRows: t.InsertCtx.AddAffectedRows,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:         t.SchemaName,
-			TableDef:           t.TableDef,
-			ParentIdxPreInsert: t.ParentIdx,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			Idx:        t.Idx,
 		}
 	case *preinsertunique.Argument:
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
@@ -918,10 +913,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Ref:          t.Ref,
-				TableDef:     t.TableDef,
-				ParentIdx:    t.ParentIdx,
-				ClusterTable: t.ClusterTable,
+				Ref:             t.Ref,
+				AddAffectedRows: t.AddAffectedRows,
 			},
 		}
 	case vm.PreInsert:
@@ -929,7 +922,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
-			ParentIdx:  t.GetParentIdxPreInsert(),
+			Idx:        t.GetIdx(),
 		}
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
@@ -939,8 +932,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,

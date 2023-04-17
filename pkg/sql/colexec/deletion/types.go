@@ -23,7 +23,7 @@ import (
 type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
-	AffectedRows uint64
+	affectedRows uint64
 	Engine       engine.Engine
 	// when detele data in a remote CN,
 	// IsRemote is true, and we need IBucket
@@ -37,11 +37,16 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	CanTruncate bool
-	RowIdIdx    int
-	Source      engine.Relation
-	Ref         *plan.ObjectRef
+	CanTruncate     bool
+	RowIdIdx        int
+	Source          engine.Relation
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+}
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.affectedRows
 }

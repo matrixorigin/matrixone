@@ -66,7 +66,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.AffectedRows, nil
+	return arg.AffectedRows(), nil
 }
 
 func (s *Scope) Insert(c *Compile) (uint64, error) {
@@ -75,7 +75,7 @@ func (s *Scope) Insert(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.Affected, nil
+	return arg.AffectedRows(), nil
 }
 
 func (s *Scope) Update(c *Compile) (uint64, error) {
@@ -84,5 +84,5 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.AffectedRows, nil
+	return arg.AffectedRows(), nil
 }

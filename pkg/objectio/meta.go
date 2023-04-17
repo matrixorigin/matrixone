@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 const FooterSize = 64
@@ -64,8 +65,8 @@ func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {
-	return o.GetBlockMeta(id).ColumnMeta(idx)
+func (o ObjectMeta) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
+	return o.GetBlockMeta(blk).ColumnMeta(col)
 }
 
 const (
@@ -176,6 +177,15 @@ func (bm BlockObject) IsEmpty() bool {
 	return len(bm) == 0
 }
 
+func (bm BlockObject) ToColumnZoneMaps(cols []uint16) []ZoneMap {
+	zms := make([]ZoneMap, len(cols))
+	for i, idx := range cols {
+		column := bm.MustGetColumn(idx)
+		zms[i] = index.DecodeZM(column.ZoneMap())
+	}
+	return zms
+}
+
 type BlockHeader []byte
 
 func BuildBlockHeader() BlockHeader {
@@ -247,11 +257,11 @@ func (bh BlockHeader) SetZoneMapArea(location Extent) {
 	copy(bh[zoneMapAreaOff:zoneMapAreaOff+zoneMapAreaLen], location)
 }
 
-func (bh BlockHeader) BloomFilter() Extent {
+func (bh BlockHeader) BFExtent() Extent {
 	return Extent(bh[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 }
 
-func (bh BlockHeader) SetBloomFilter(location Extent) {
+func (bh BlockHeader) SetBFExtent(location Extent) {
 	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
 }
 
@@ -300,11 +310,11 @@ func BuildHeader() Header {
 	return buf[:]
 }
 
-func (h Header) SetLocation(location Extent) {
+func (h Header) SetExtent(location Extent) {
 	copy(h[8+2:8+2+ExtentSize], location)
 }
 
-func (h Header) Location() Extent {
+func (h Header) Extent() Extent {
 	return Extent(h[8+2 : 8+2+ExtentSize])
 }
 

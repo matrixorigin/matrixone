@@ -155,14 +155,25 @@ func (c *Compile) run(s *Scope) error {
 		return s.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
-		return s.MergeRun(c)
+		err := s.MergeRun(c)
+		if err != nil {
+			return err
+		}
+
+		for _, in := range s.Instructions {
+			if arg, ok := in.Arg.(vm.ModificationArgument); ok {
+				c.setAffectedRows(arg.AffectedRows())
+				break
+			}
+		}
+		return nil
 	case MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
+		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows())
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -412,32 +423,32 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
-		insertNode := qry.Nodes[qry.Steps[0]]
-		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{
-					engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(1, blkNum)},
-				}
-			} else {
-				c.cnListStrategy()
-			}
-		} else {
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				c.cnList = engine.Nodes{
-					engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(1, blkNum)},
-				}
-			} else {
-				c.cnList = engine.Nodes{engine.Node{
-					Addr: c.addr,
-					Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
-				}
-			}
-		}
+		// insertNode := qry.Nodes[qry.Steps[0]]
+		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+		// 		c.cnList = engine.Nodes{
+		// 			engine.Node{
+		// 				Addr: c.addr,
+		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
+		// 		}
+		// 	} else {
+		// 		c.cnListStrategy()
+		// 	}
+		// } else {
+		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+		// 		c.cnList = engine.Nodes{
+		// 			engine.Node{
+		// 				Addr: c.addr,
+		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
+		// 		}
+		// 	} else {
+		// 		c.cnList = engine.Nodes{engine.Node{
+		// 			Addr: c.addr,
+		// 			Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+		// 		}
+		// 	}
+		// }
 	default:
 		if blkNum < MinBlockNum {
 			c.cnList = engine.Nodes{engine.Node{
@@ -471,75 +482,77 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Deletion
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
+		// rs = c.newMergeScope(ss)
+		// updateScopesLastFlag([]*Scope{rs})
+		// rs.Magic = Deletion
+		// c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		// scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 	Op:  vm.Deletion,
+		// 	Arg: scp,
+		// })
+		return ss[0], nil
 	case plan.Query_INSERT:
-		insertNode := qry.Nodes[qry.Steps[0]]
-		insertNode.NotCacheable = true
+		return ss[0], nil
+		// insertNode := qry.Nodes[qry.Steps[0]]
+		// insertNode.NotCacheable = true
 
-		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
+		// preArg, err := constructPreInsert(insertNode, c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
 
-		arg, err := constructInsert(insertNode, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		// arg, err := constructInsert(insertNode, c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
-			// use distributed-insert
-			arg.IsRemote = true
-			for _, scope := range ss {
-				scope.Instructions = append(scope.Instructions, vm.Instruction{
-					Op:  vm.PreInsert,
-					Arg: preArg,
-				})
-			}
+		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
+		// 	// use distributed-insert
+		// 	arg.IsRemote = true
+		// 	for _, scope := range ss {
+		// 		scope.Instructions = append(scope.Instructions, vm.Instruction{
+		// 			Op:  vm.PreInsert,
+		// 			Arg: preArg,
+		// 		})
+		// 	}
 
-			rs = c.newInsertMergeScope(arg, ss)
-			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeBlock,
-				Arg: &mergeblock.Argument{
-					Tbl:         arg.InsertCtx.Rels[0],
-					Unique_tbls: arg.InsertCtx.Rels[1:],
-				},
-			})
-		} else {
-			rs = c.newMergeScope(ss)
-			rs.Magic = Insert
-			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
-				})
-			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.Insert,
-				Arg: arg,
-			})
-		}
+		// 	rs = c.newInsertMergeScope(arg, ss)
+		// 	rs.Magic = MergeInsert
+		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 		Op: vm.MergeBlock,
+		// 		Arg: &mergeblock.Argument{
+		// 			Tbl:         arg.InsertCtx.Rels[0],
+		// 			Unique_tbls: arg.InsertCtx.Rels[1:],
+		// 		},
+		// 	})
+		// } else {
+		// 	rs = c.newMergeScope(ss)
+		// 	rs.Magic = Insert
+		// 	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+		// 		onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+		// 		if err != nil {
+		// 			return nil, err
+		// 		}
+		// 		rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 			Op:  vm.OnDuplicateKey,
+		// 			Arg: onDuplicateKeyArg,
+		// 		})
+		// 	}
+		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 		Op:  vm.PreInsert,
+		// 		Arg: preArg,
+		// 	})
+		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 		Op:  vm.Insert,
+		// 		Arg: arg,
+		// 	})
+		// }
 	case plan.Query_UPDATE:
 		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
@@ -711,11 +724,70 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
-		if n.DeleteCtx.CanTruncate {
-			return nil, nil
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
 		}
-		return c.compilePlanScope(ctx, step, n.Children[0], ns)
-	case plan.Node_INSERT, plan.Node_UPDATE:
+		rs := c.newMergeScope(ss)
+		// updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Merge
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		scp, err := constructDeletion(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Deletion,
+			Arg: scp,
+		})
+		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_PRE_INSERT:
+		curr := c.anal.curr
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		preInsertArg, err := constructPreInsert(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.PreInsert,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     preInsertArg,
+			})
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_INSERT:
+		curr := c.anal.curr
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		insertArg, err := constructInsert(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Insert,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     insertArg,
+			})
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_UPDATE:
 		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
@@ -728,9 +800,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
-			Magic:    Merge,
-			NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
-			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil

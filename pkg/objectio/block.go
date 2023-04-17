@@ -35,6 +35,14 @@ func (bm BlockObject) GetExtent() Extent {
 	return bm.BlockHeader().MetaLocation()
 }
 
+func (bm BlockObject) MustGetColumn(idx uint16) ColumnMeta {
+	meta, err := bm.GetColumn(idx)
+	if err != nil {
+		panic(err)
+	}
+	return meta
+}
+
 func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
 	if idx >= bm.BlockHeader().ColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+

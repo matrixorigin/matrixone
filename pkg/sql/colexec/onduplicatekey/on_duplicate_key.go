@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -207,36 +206,36 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	}
 
 	// delete old data
-	if delRowIdVec.Length() > 0 {
-		deleteBatch := batch.New(true, []string{catalog.Row_ID})
-		deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
-		deleteBatch.SetVector(0, delRowIdVec)
+	// if delRowIdVec.Length() > 0 {
+	// 	deleteBatch := batch.New(true, []string{catalog.Row_ID})
+	// 	deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
+	// 	deleteBatch.SetVector(0, delRowIdVec)
 
-		// delete origin rows
-		err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
-		if err != nil {
-			deleteBatch.Clean(proc.Mp())
-			return nil, err
-		}
+	// 	// delete origin rows
+	// 	err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+	// 	if err != nil {
+	// 		deleteBatch.Clean(proc.Mp())
+	// 		return nil, err
+	// 	}
 
-		// delete unique table rows
-		if len(insertArg.IdxIdx) > 0 {
-			// when refactor finish, we use these code:
-			// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
-			// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-			// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
-			// deleteUniqueBatch.SetVector(1, delUniquePkVec)
-			deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
-			deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-			deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+	// 	// delete unique table rows
+	// 	if len(insertArg.IdxIdx) > 0 {
+	// 		// when refactor finish, we use these code:
+	// 		// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
+	// 		// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+	// 		// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+	// 		// deleteUniqueBatch.SetVector(1, delUniquePkVec)
+	// 		deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
+	// 		deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+	// 		deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
 
-			err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
-			if err != nil {
-				deleteUniqueBatch.Clean(proc.Mp())
-				return nil, err
-			}
-		}
-	}
+	// 		err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
+	// 		if err != nil {
+	// 			deleteUniqueBatch.Clean(proc.Mp())
+	// 			return nil, err
+	// 		}
+	// 	}
+	// }
 	return insertBatch, nil
 
 }

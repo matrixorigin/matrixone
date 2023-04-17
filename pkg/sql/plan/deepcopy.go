@@ -57,37 +57,17 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	}
 }
 
-func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
+func DeepCopyOnDupliateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyCtx {
 	if ctx == nil {
 		return nil
 	}
-	newCtx := &plan.InsertCtx{
-		Ref:            DeepCopyObjectRef(ctx.Ref),
-		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
+	newCtx := &plan.OnDuplicateKeyCtx{
 		TableDef:       DeepCopyTableDef(ctx.TableDef),
-
-		IdxIdx: make([]int32, len(ctx.IdxIdx)),
-		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
-
-		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
-
-		Columns: make([]int32, len(ctx.Columns)),
+		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 	}
 
 	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
-	copy(newCtx.IdxIdx, ctx.IdxIdx)
-	copy(newCtx.Columns, ctx.Columns)
 
-	for i, ref := range ctx.IdxRef {
-		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
-	}
-
-	if ctx.ParentIdx != nil {
-		newCtx.ParentIdx = make(map[string]int32)
-		for k, v := range ctx.ParentIdx {
-			newCtx.ParentIdx[k] = v
-		}
-	}
 	if ctx.OnDuplicateExpr != nil {
 		newCtx.OnDuplicateExpr = make(map[string]*Expr)
 		for k, v := range ctx.OnDuplicateExpr {
@@ -98,14 +78,27 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 	return newCtx
 }
 
+func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.InsertCtx{
+		Ref:             DeepCopyObjectRef(ctx.Ref),
+		AddAffectedRows: ctx.AddAffectedRows,
+	}
+
+	return newCtx
+}
+
 func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	if ctx == nil {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate: ctx.CanTruncate,
-		RowIdIdx:    ctx.RowIdIdx,
-		Ref:         DeepCopyObjectRef(ctx.Ref),
+		CanTruncate:     ctx.CanTruncate,
+		AddAffectedRows: ctx.AddAffectedRows,
+		RowIdIdx:        ctx.RowIdIdx,
+		Ref:             DeepCopyObjectRef(ctx.Ref),
 	}
 	return newCtx
 }
@@ -230,15 +223,12 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Idx:              make([]int32, len(ctx.Idx)),
-		HiddenColumnTyp:  make([]*plan.Type, len(ctx.HiddenColumnTyp)),
-		HiddenColumnName: make([]string, len(ctx.HiddenColumnName)),
+		Idx:        make([]int32, len(ctx.Idx)),
+		Ref:        DeepCopyObjectRef(ctx.Ref),
+		TableDef:   DeepCopyTableDef(ctx.TableDef),
+		HasAutoCol: ctx.HasAutoCol,
 	}
 	copy(newCtx.Idx, ctx.Idx)
-	copy(newCtx.HiddenColumnName, ctx.HiddenColumnName)
-	for i, typ := range ctx.HiddenColumnTyp {
-		ctx.HiddenColumnTyp[i] = DeepCopyTyp(typ)
-	}
 
 	return newCtx
 }

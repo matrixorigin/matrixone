@@ -91,9 +91,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	// node3.TableDef = tableDef
 	// node3.ObjRef = objRef
 	node3.InsertCtx = &plan.InsertCtx{
-		Ref:      objRef,
-		TableDef: tableDef,
-		// ParentIdx:    map[string]int32{},
+		Ref:             objRef,
+		AddAffectedRows: true,
 	}
 
 	stmt.Param.Tail.ColumnList = nil
