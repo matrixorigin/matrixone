@@ -121,7 +121,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			var location objectio.Location
 			//var ivec *fileservice.IOVector
 			// read block
-			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
+			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge,
+			//  but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
 				p.blockBatch.setBat(p.inserts[0])
 				p.inserts = p.inserts[1:]
@@ -221,6 +222,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 		}
 	}
+
 	for p.iter.Next() {
 		entry := p.iter.Entry()
 		if _, ok := p.deletes[entry.RowID]; ok {
