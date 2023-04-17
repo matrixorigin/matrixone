@@ -63,7 +63,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 }
 
 func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoCacheReader(true))
+	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoLRUCacheOption(true))
 	if err != nil {
 		return nil, err
 	}

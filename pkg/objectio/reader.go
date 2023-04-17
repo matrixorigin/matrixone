@@ -102,7 +102,7 @@ func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
 	m *mpool.MPool,
 ) (meta ObjectMeta, err error) {
-	return ReadObjectMeta(ctx, r.name, r.metaExt, r.noCache, r.fs)
+	return ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs)
 }
 
 func (r *ObjectReader) ReadOneBlock(
@@ -129,7 +129,7 @@ func (r *ObjectReader) ReadAll(
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noCache, m, r.fs, factory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, factory)
 }
 
 func (r *ObjectReader) ReadOneBF(
@@ -141,7 +141,7 @@ func (r *ObjectReader) ReadOneBF(
 		return
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noCache, r.fs)
+	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs)
 	if err != nil {
 		return
 	}
@@ -157,7 +157,7 @@ func (r *ObjectReader) ReadExtent(
 		ctx,
 		r.name,
 		&extent,
-		r.noCache,
+		r.noLRUCache,
 		r.fs,
 		decompressConstructorFactory)
 	if err != nil {
@@ -204,7 +204,7 @@ func (r *ObjectReader) ReadAllMeta(
 
 func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noCache, r.fs, noDecompressConstructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, noDecompressConstructorFactory)
 	if err != nil {
 		return
 	}
@@ -213,14 +213,14 @@ func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header
 }
 
 type ReaderOptions struct {
-	// noCache true means NOT cache IOVector in FileService's cache
-	noCache bool
+	// noLRUCache true means NOT cache IOVector in FileService's cache
+	noLRUCache bool
 }
 
 type ReaderOptionFunc func(opt *ReaderOptions)
 
-func WithNoCacheReader(noCache bool) ReaderOptionFunc {
+func WithNoLRUCacheOption(noLRUCache bool) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.noCache = noCache
+		opt.noLRUCache = noLRUCache
 	})
 }
