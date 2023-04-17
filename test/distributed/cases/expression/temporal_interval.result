@@ -403,9 +403,11 @@ select date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_S
 date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND
 1998-01-01 01:01:01
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) AS DECIMAL(20,6));
-invalid argument operator cast, bad value [DATETIME DECIMAL128]
+cast(cast(2006-08-10 10:11:12 as datetime(26)) as decimal(20, 6))
+1155204672.000000
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) + INTERVAL 14 MICROSECOND AS DECIMAL(20,6));
-invalid argument operator cast, bad value [DATETIME DECIMAL128]
+cast(cast(2006-08-10 10:11:12 as datetime(26)) + interval(14, microsecond) as decimal(20, 6))
+1155204672.000014
 drop table if exists t1;
 drop table if exists t2;
 create table t1(i int,a datetime,b datetime,c datetime,d char(200),e varchar(50));
