@@ -81,7 +81,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db = &DB{
 		Dir:       dirname,
 		Opts:      opts,
-		MTBufMgr:  mutBufMgr,
 		TxnBufMgr: txnBufMgr,
 		Fs:        fs,
 		Closed:    new(atomic.Value),
