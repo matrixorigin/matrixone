@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -35,6 +36,7 @@ func Prepare(_ *proc, _ any) error {
 
 func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	defer analyze(idx, proc)()
+	var err error
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
@@ -46,38 +48,39 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, nil
 	}
 
-	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
-
-	//get insert batch
-	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
-	if err != nil {
+	defer bat.Clean(proc.Mp())
+	newBat := batch.NewWithSize(len(arg.Idx))
+	for _, idx := range arg.Idx {
+		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
+	}
+	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
 		return false, err
 	}
 
-	if info.HasAutoCol {
-		err := genAutoIncrCol(insertBatch, proc, arg)
+	if arg.HasAutoCol {
+		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
 			return false, err
 		}
 	}
 
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(insertBatch, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
 		return false, err
 	}
 
-	err = genCompositePrimaryKey(insertBatch, proc, arg.TableDef)
+	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
 		return false, err
 	}
 
-	err = genClusterBy(insertBatch, proc, arg.TableDef)
+	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
 		return false, err
 	}
 
-	proc.SetInputBatch(insertBatch)
+	proc.SetInputBatch(newBat)
 	return false, nil
 }
 

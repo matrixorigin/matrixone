@@ -470,21 +470,15 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
+message OnDuplicateKeyCtx {
+	TableDef table_def					= 1;
+	repeated int32 on_duplicate_idx		= 2;
+	map<string, Expr> on_duplicate_expr	= 3;
+}
+
 message InsertCtx {
-	ObjectRef ref 					= 1;
-	TableDef table_def 				= 2;
-
-	repeated int32 on_duplicate_idx		= 3;
-	map<string, Expr> on_duplicate_expr	= 4;
-
-	repeated ObjectRef idx_ref 			= 5;
-	repeated int32 idx_idx 				= 6;
-
-	map<string, int32> parent_idx 	= 7;
-
-	ClusterTable cluster_table = 8;
-
-	repeated int32 columns = 9;
+	ObjectRef ref			= 1;
+	bool add_affected_rows 	= 2;
 }
 
 message UpdateCtx {
@@ -667,12 +661,11 @@ message Node {
 	int32 current_step = 31;
 	int32 source_step = 32;
 
-	// when refactor finish. we should remove insertCtx/UpdateCtx/deleteCtx.
-	// and only keep preInsertCtx, preDeleteCtx
 	PreDeleteCtx pre_delete_ctx = 33;
 	PreInsertCtx pre_insert_ctx = 34;
 	// build unique key batch before insert into hidden table which keep the unique key
-	PreInsertUkCtx pre_insert_uk_ctx = 35; 
+	PreInsertUkCtx pre_insert_uk_ctx = 35;
+	OnDuplicateKeyCtx on_duplicate_key = 36;
 }
 
 message PreInsertUkCtx {
@@ -690,9 +683,12 @@ message PreDeleteCtx {
 
 message PreInsertCtx {
 	//the indexes of insert columns in the batch
-	repeated int32 idx 	= 1;
-	repeated Type hidden_column_typ = 2;
-	repeated string hidden_column_name = 3;
+	repeated int32 idx 					= 1;
+	repeated Type hidden_column_typ 	= 2;
+	repeated string hidden_column_name 	= 3;
+	ObjectRef ref 						= 4;
+	TableDef table_def 					= 5;
+	bool has_auto_col					= 6;
 }
 
 message IdList {

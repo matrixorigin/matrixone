@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -409,7 +408,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Eg:         t.Eg,
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
-			ParentIdx:  t.ParentIdx,
+			Idx:        t.Idx,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -444,41 +443,25 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 }
 
 func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
-	oldCtx := n.InsertCtx
-	ctx := proc.Ctx
-	if oldCtx.GetClusterTable().GetIsClusterTable() {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
-	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
-	if err != nil {
-		return nil, err
-	}
-
+	oldCtx := n.OnDuplicateKey
 	return &onduplicatekey.Argument{
-		Engine:   eg,
-		Ref:      oldCtx.Ref,
-		TableDef: oldCtx.TableDef,
-
+		Engine:          eg,
 		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
-		Source:          originRel,
-		UniqueSource:    indexRels,
-
-		IdxIdx: oldCtx.IdxIdx,
+		TableDef:        oldCtx.TableDef,
 	}, nil
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
-	insertCtx := n.InsertCtx
-	schemaName := insertCtx.Ref.SchemaName
-	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+	preCtx := n.PreInsertCtx
+	schemaName := preCtx.Ref.SchemaName
 
-	if insertCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
+	if preCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, preCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName); err != nil {
 			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
@@ -486,31 +469,26 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	return &preinsert.Argument{
 		Ctx:        proc.Ctx,
 		Eg:         eg,
+		Idx:        preCtx.Idx,
+		HasAutoCol: preCtx.HasAutoCol,
 		SchemaName: schemaName,
-		TableDef:   insertCtx.TableDef,
-		ParentIdx:  insertCtx.ParentIdx,
+		TableDef:   preCtx.TableDef,
 	}, nil
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
-	if oldCtx.GetClusterTable().GetIsClusterTable() {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
-	newCtx := &insert.InsertCtx{
-		Ref:      oldCtx.Ref,
-		TableDef: oldCtx.TableDef,
 
-		ParentIdx: oldCtx.ParentIdx,
-	}
-
-	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	originRel, _, err := getRel(ctx, proc, eg, oldCtx.Ref, nil)
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Rels = append(newCtx.Rels, originRel)
-	newCtx.Rels = append(newCtx.Rels, indexRels...)
+	newCtx := &insert.InsertCtx{
+		Ref:             oldCtx.Ref,
+		AddAffectedRows: oldCtx.AddAffectedRows,
+		Rel:             originRel,
+	}
 
 	return &insert.Argument{
 		InsertCtx: newCtx,

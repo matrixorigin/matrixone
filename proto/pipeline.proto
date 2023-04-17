@@ -77,30 +77,20 @@ message Group {
 message Insert{
   uint64 affected   = 1;
   bool IsRemote     = 2;
-
-  // InsertCtx
-  repeated int32 on_duplicate_idx           = 3;
-  map<string, plan.Expr> on_duplicate_expr  = 4;
-  plan.ObjectRef ref              = 5;
-  plan.TableDef table_def         = 6;
-  map<string, int32> parent_idx   = 7;
-  plan.ClusterTable ClusterTable  = 8;
-	repeated int32 idx_idx 				  = 9;
-
+  bool add_affected_rows = 3;
+  plan.ObjectRef ref     = 4;
 }
 
 message PreInsert {
   string             schema_name = 1;
-  plan.TableDef      table_def = 2;
-  map<string, int32> parent_idx_pre_insert   = 3;
+  plan.TableDef      table_def   = 2;
+  repeated int32  idx            = 3;
 }
 
 message OnDuplicateKey{
-  uint64 affected   = 1;
+  plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
 }
 
 message Join {

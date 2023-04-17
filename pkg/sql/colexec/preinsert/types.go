@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"context"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,10 +28,11 @@ type eng = engine.Engine
 type Argument struct {
 	Ctx context.Context
 
+	Idx        []int32
+	HasAutoCol bool
 	Eg         eng
 	SchemaName string
 	TableDef   *pb.TableDef
-	ParentIdx  map[string]int32
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}
