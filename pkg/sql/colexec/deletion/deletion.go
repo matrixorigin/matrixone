@@ -46,7 +46,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
 	var affectedRows uint64
 	var err error
 	delCtx := p.DeleteCtx
