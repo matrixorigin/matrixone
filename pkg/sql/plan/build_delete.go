@@ -53,14 +53,15 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	currentStep := sourceStep + 1
 	// append delete plans
 	beginIdx := 0
-	for _, tableDef := range tblInfo.tableDefs {
-		currentStep, err = buildDeletePlans(ctx, builder, bindCtx, tableDef, beginIdx, sourceStep, currentStep)
+	for i, tableDef := range tblInfo.tableDefs {
+		currentStep, err = buildDeletePlans(ctx, builder, bindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep, currentStep)
 		if err != nil {
 			return nil, err
 		}
 		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 	query, err := builder.createQuery()
+	query.StmtType = plan.Query_DELETE
 	if err != nil {
 		return nil, err
 	}

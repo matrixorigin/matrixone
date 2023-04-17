@@ -103,70 +103,9 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate:   ctx.CanTruncate,
-		RowIdIdx:      ctx.RowIdIdx,
-		OnRestrictIdx: make([]int32, len(ctx.OnRestrictIdx)),
-		IdxIdx:        make([]int32, len(ctx.IdxIdx)),
-		OnCascadeIdx:  make([]int32, len(ctx.OnCascadeIdx)),
-
-		Ref:    make([]*plan.ObjectRef, len(ctx.Ref)),
-		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
-
-		OnRestrictRef: make([]*plan.ObjectRef, len(ctx.OnRestrictRef)),
-
-		OnCascadeRef: make([]*plan.ObjectRef, len(ctx.OnCascadeRef)),
-
-		OnSetRef:       make([]*plan.ObjectRef, len(ctx.OnSetRef)),
-		OnSetDef:       make([]*plan.TableDef, len(ctx.OnSetDef)),
-		OnSetIdx:       make([]*plan.IdList, len(ctx.OnSetIdx)),
-		Idx:            make([]*plan.IdList, len(ctx.Idx)),
-		OnSetUpdateCol: make([]*plan.ColPosMap, len(ctx.OnSetUpdateCol)),
-	}
-
-	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
-	copy(newCtx.IdxIdx, ctx.IdxIdx)
-	copy(newCtx.OnCascadeIdx, ctx.OnCascadeIdx)
-
-	for i, ref := range ctx.Ref {
-		newCtx.Ref[i] = DeepCopyObjectRef(ref)
-	}
-	for i, ref := range ctx.IdxRef {
-		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
-	}
-	for i, ref := range ctx.OnRestrictRef {
-		newCtx.OnRestrictRef[i] = DeepCopyObjectRef(ref)
-	}
-	for i, ref := range ctx.OnCascadeRef {
-		newCtx.OnCascadeRef[i] = DeepCopyObjectRef(ref)
-	}
-	for i, ref := range ctx.OnSetRef {
-		newCtx.OnSetRef[i] = DeepCopyObjectRef(ref)
-	}
-	for i, def := range ctx.OnSetDef {
-		newCtx.OnSetDef[i] = DeepCopyTableDef(def)
-	}
-	for i, list := range ctx.Idx {
-		if list != nil {
-			newCtx.Idx[i] = &plan.IdList{
-				List: make([]int64, len(list.List)),
-			}
-			copy(newCtx.Idx[i].List, list.List)
-		}
-	}
-	for i, list := range ctx.OnSetIdx {
-		if list != nil {
-			newCtx.OnSetIdx[i] = &plan.IdList{
-				List: make([]int64, len(list.List)),
-			}
-			copy(newCtx.OnSetIdx[i].List, list.List)
-		}
-	}
-	for i, m := range ctx.OnSetUpdateCol {
-		newMap := make(map[string]int32)
-		for k, v := range m.Map {
-			newMap[k] = v
-		}
-		newCtx.OnSetUpdateCol[i] = &plan.ColPosMap{Map: newMap}
+		CanTruncate: ctx.CanTruncate,
+		RowIdIdx:    ctx.RowIdIdx,
+		Ref:         DeepCopyObjectRef(ctx.Ref),
 	}
 	return newCtx
 }

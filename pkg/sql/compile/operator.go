@@ -426,82 +426,15 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
-		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
-		DelRef:    oldCtx.Ref,
-		DelIdx:    make([][]int32, len(oldCtx.Idx)),
-
-		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    oldCtx.IdxIdx,
-
-		OnRestrictIdx: oldCtx.OnRestrictIdx,
-
-		OnCascadeIdx:    oldCtx.OnCascadeIdx,
-		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
-
-		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
-		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetTableDef:     oldCtx.OnSetDef,
-		OnSetRef:          oldCtx.OnSetRef,
-		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
-
+		Ref:         oldCtx.Ref,
+		RowIdIdx:    int(oldCtx.RowIdIdx),
 		CanTruncate: oldCtx.CanTruncate,
 	}
-
-	if delCtx.CanTruncate {
-		for i, ref := range oldCtx.Ref {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.DelSource[i] = rel
-		}
-	} else {
-		for i, list := range oldCtx.Idx {
-			delCtx.DelIdx[i] = make([]int32, len(list.List))
-			for j, id := range list.List {
-				delCtx.DelIdx[i][j] = int32(id)
-			}
-		}
-		for i, list := range oldCtx.OnSetIdx {
-			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
-			for j, id := range list.List {
-				delCtx.OnSetIdx[i][j] = int32(id)
-			}
-		}
-		for i, ref := range oldCtx.Ref {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.DelSource[i] = rel
-		}
-		for i, ref := range oldCtx.IdxRef {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.IdxSource[i] = rel
-		}
-		for i, ref := range oldCtx.OnCascadeRef {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.OnCascadeSource[i] = rel
-		}
-		for i, ref := range oldCtx.OnSetRef {
-			rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
-			if err != nil {
-				return nil, err
-			}
-			delCtx.OnSetSource[i] = rel
-			delCtx.OnSetUniqueSource[i] = uniqueRels
-		}
-		for i, idxMap := range oldCtx.OnSetUpdateCol {
-			delCtx.OnSetUpdateCol[i] = idxMap.Map
-		}
+	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
+	if err != nil {
+		return nil, err
 	}
+	delCtx.Source = rel
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,

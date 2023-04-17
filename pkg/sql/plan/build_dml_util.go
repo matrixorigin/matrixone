@@ -63,8 +63,11 @@ func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info 
 }
 
 // buildDeletePlans  build preinsert plan.
-// sink_scan -> join[unique key] -> predelete[build partition] -> [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
-func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, beginIdx int, sourceStep int32, currentStep int32) (int32, error) {
+// sink_scan -> project -> join[unique key] -> predelete[build partition] -> [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
+func buildDeletePlans(
+	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef,
+	beginIdx int, sourceStep int32, currentStep int32) (int32, error) {
 	var err error
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep, currentStep)
 	sinkScanTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
@@ -109,8 +112,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		deleteIdx := len(tableDef.Cols)
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
-				_, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
-				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxTableDef, deleteIdx, lastNodeId)
+				_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
+				idxObjRef := &ObjectRef{
+					SchemaName: objRef.SchemaName,
+					ObjName:    indexdef.IndexTableName,
+					Obj:        int64(idxTableDef.TblId),
+				}
+				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId)
 				if err != nil {
 					return -1, err
 				}
@@ -127,7 +135,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			break
 		}
 	}
-	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, tableDef, deleteIdx, lastNodeId)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId)
 	if err != nil {
 		return -1, err
 	}
@@ -159,7 +167,10 @@ func haveUniqueKey(tableDef *TableDef) bool {
 
 // makeOneDeletePlan
 // predelete[build partition] -> lock -> filter -> delete
-func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, deleteIdx int, lastNodeId int32) (int32, error) {
+func makeOneDeletePlan(
+	builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef,
+	deleteIdx int, lastNodeId int32) (int32, error) {
 	// todo: append predelete node to build partition id
 
 	// todo: append lock & filter
@@ -170,7 +181,11 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *Ta
 		NodeType:    plan.Node_DELETE,
 		BindingTags: []int32{deleteTag},
 		Children:    []int32{lastNodeId},
-		DeleteCtx:   &plan.DeleteCtx{RowIdIdx: int32(deleteIdx)},
+		DeleteCtx: &plan.DeleteCtx{
+			RowIdIdx:    int32(deleteIdx),
+			Ref:         objRef,
+			CanTruncate: false,
+		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
 
@@ -643,48 +658,6 @@ func getHiddenColumnForPreInsert(tableDef *TableDef) ([]*Type, []string) {
 		names = append(names, tableDef.ClusterBy.Name)
 	}
 	return typs, names
-}
-
-func getProjectionByTableDef(tableDef *TableDef, preTag int32, nowTag int32) []*Expr {
-	var projection []*Expr
-	for i, col := range tableDef.Cols {
-		projection = append(projection, &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: preTag,
-					ColPos: int32(i),
-					Name:   col.Name,
-				},
-			},
-		})
-	}
-
-	lastIdx := int32(len(tableDef.Cols))
-	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		projection = append(projection, &plan.Expr{
-			Typ: makeHiddenColTyp(),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: nowTag,
-					ColPos: lastIdx,
-					Name:   catalog.CPrimaryKeyColName,
-				},
-			},
-		})
-	} else if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-		projection = append(projection, &plan.Expr{
-			Typ: makeHiddenColTyp(),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: nowTag,
-					ColPos: lastIdx,
-					Name:   tableDef.ClusterBy.Name,
-				},
-			},
-		})
-	}
-	return projection
 }
 
 func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, baseNodeId int32) (int32, error) {

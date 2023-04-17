@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -51,6 +51,16 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	var err error
 	delCtx := p.DeleteCtx
 
+	delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+	affectedRows = uint64(delBatch.Length())
+	if affectedRows > 0 {
+		err = delCtx.Source.Delete(proc.Ctx, bat, catalog.Row_ID)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	/**
 	// check OnRestrict, if is not all null, throw error
 	for _, idx := range delCtx.OnRestrictIdx {
 		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Count() {
@@ -87,6 +97,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if err != nil {
 		return false, err
 	}
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
+	**/
 
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil

@@ -35,7 +35,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	objRef := tblInfo.objRef[0]
 	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	if err != nil {
 		return nil, err
@@ -56,20 +55,22 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, err
 	}
 
-	var query *Query
-	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		query, err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		query, err = buildInsertPlans(builder, bindCtx, objRef, tableDef, ctx, rewriteInfo.rootId)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// new logic
+	// objRef := tblInfo.objRef[0]
+	// var query *Query
+	// if len(rewriteInfo.onDuplicateIdx) > 0 {
+	// 	query, err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// } else {
+	// 	query, err = buildInsertPlans(builder, bindCtx, objRef, tableDef, ctx, rewriteInfo.rootId)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+	// new logic
 
-	/**
 	if tblInfo.haveConstraint {
 		for i, tableDef := range tblInfo.tableDefs {
 			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
@@ -121,12 +122,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	query.Steps[len(query.Steps)-1] = node.NodeId
 	query.StmtType = plan.Query_INSERT
 
-	return &Plan{
-		Plan: &plan.Plan_Query{
-			Query: query,
-		},
-	}, err
-	**/
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

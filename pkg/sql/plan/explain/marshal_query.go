@@ -190,16 +190,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		}
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
-			first := true
-			for _, ctx := range m.node.DeleteCtx.Ref {
-				if !first {
-					result += ", "
-				}
-				result += ctx.SchemaName + "." + ctx.ObjName
-				if first {
-					first = false
-				}
-			}
+			ctx := m.node.DeleteCtx.Ref
+			result += ctx.SchemaName + "." + ctx.ObjName
 		} else {
 			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -695,9 +687,8 @@ func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, op
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range deleteCtx.Ref {
-		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
-	}
+	ref := deleteCtx.Ref
+	result = append(result, ref.SchemaName+"."+ref.ObjName)
 	return result
 }
 

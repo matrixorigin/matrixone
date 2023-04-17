@@ -44,7 +44,7 @@ type TableInfo struct {
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
 	var affectedRows uint64
 	for i, idx := range idxList {
-		delBatch := filterRowIdForDel(proc, bat, int(idx))
+		delBatch := FilterRowIdForDel(proc, bat, int(idx))
 		affectedRows = affectedRows + uint64(delBatch.Length())
 		if delBatch.Length() > 0 {
 			err := rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
@@ -228,7 +228,7 @@ func WriteUniqueTable(s3Writers []*S3Writer, proc *process.Process, updateBatch 
 	return nil
 }
 
-func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
+func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
 	retVec := vector.NewVec(types.T_Rowid.ToType())
 	rowIdMap := make(map[types.Rowid]struct{})
 	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
