@@ -860,7 +860,6 @@ func (tbl *txnTable) newReader(
 		}
 	}
 	// get append block deletes rowids
-	// just only one DN
 	for _, blk := range tbl.meta.blocks[0] {
 		// append block
 		if blk.Info.EntryState {
