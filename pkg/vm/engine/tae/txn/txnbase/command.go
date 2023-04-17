@@ -85,6 +85,7 @@ type DeleteBitmapCmd struct {
 }
 
 type TxnCmd struct {
+	version uint16
 	*ComposedCmd
 	*TxnCtx
 	Txn txnif.AsyncTxn
@@ -260,9 +261,10 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
 		return
 	}
-	// if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
-	// 	return
-	// }
+	n += 2
+	if _, err = w.Write(types.EncodeUint16(&c.version)); err != nil {
+		return
+	}
 	n += 2
 	var sn int64
 	sn, err = c.ComposedCmd.WriteTo(w)
@@ -303,6 +305,10 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	if _, err = r.Read(types.EncodeUint16(&c.version)); err != nil {
+		return
+	}
+	n += 2
 	var sn int64
 	var cmd txnif.TxnCmd
 	cmd, sn, err = BuildCommandFrom(r)

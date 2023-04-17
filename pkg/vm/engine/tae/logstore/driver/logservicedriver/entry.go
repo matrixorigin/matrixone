@@ -162,6 +162,7 @@ func (m *meta) Marshal() (buf []byte, err error) {
 // read: logrecord -> meta+payload -> entry
 // write: entries+meta -> payload -> record
 type recordEntry struct {
+	EntryType uint16
 	*meta
 	entries []*entry.Entry
 	cmd     *ReplayCmd
@@ -201,9 +202,13 @@ func (r *recordEntry) append(e *entry.Entry) {
 }
 
 func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if _, err = w.Write(types.EncodeUint16(&r.EntryType)); err != nil {
+		return 0, err
+	}
+	n += 2
 	n1, err := r.meta.WriteTo(w)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
 	n += n1
 	switch r.meta.metaType {
@@ -228,6 +233,10 @@ func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
+	if _, err = reader.Read(types.EncodeUint16(&r.EntryType)); err != nil {
+		return 0, err
+	}
+	n += 2
 	n1, err := r.meta.ReadFrom(reader)
 	if err != nil {
 		return 0, err

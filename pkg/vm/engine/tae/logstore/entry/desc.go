@@ -21,10 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// version uint16
+// type    uint16
+// payload size uint32
+// info size uint32
 const (
-	PayloadSizeOffset = int(unsafe.Sizeof(ETInvalid))
-	InfoSizeOffset    = int(unsafe.Sizeof(ETInvalid) + unsafe.Sizeof(uint32(0)))
-	DescriptorSize    = int(unsafe.Sizeof(ETInvalid) + 2*unsafe.Sizeof(uint32(0)))
+	TypeOffset        = int(unsafe.Sizeof(uint16(0)))
+	PayloadSizeOffset = TypeOffset + int(unsafe.Sizeof(ETInvalid))
+	InfoSizeOffset    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+unsafe.Sizeof(uint32(0)))
+	DescriptorSize    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+2*unsafe.Sizeof(uint32(0)))
 )
 
 // type u16, payloadsize u32, infosize u32
@@ -46,8 +51,12 @@ func (desc *descriptor) IsCheckpoint() bool {
 	return desc.GetType() == ETCheckpoint
 }
 
+func (desc *descriptor) SetVersion(t uint16) {
+	copy(desc.descBuf[:TypeOffset], types.EncodeUint16(&t))
+}
+
 func (desc *descriptor) SetType(t Type) {
-	copy(desc.descBuf[:PayloadSizeOffset], types.EncodeUint16(&t))
+	copy(desc.descBuf[TypeOffset:PayloadSizeOffset], types.EncodeUint16(&t))
 }
 
 func (desc *descriptor) SetPayloadSize(size int) {
@@ -70,8 +79,12 @@ func (desc *descriptor) GetMetaBuf() []byte {
 	return desc.descBuf
 }
 
+func (desc *descriptor) GetVersion() uint16 {
+	return types.DecodeUint16(desc.descBuf[:TypeOffset])
+}
+
 func (desc *descriptor) GetType() Type {
-	return types.DecodeUint16(desc.descBuf[:PayloadSizeOffset])
+	return types.DecodeUint16(desc.descBuf[TypeOffset:PayloadSizeOffset])
 }
 
 func (desc *descriptor) GetPayloadSize() int {
