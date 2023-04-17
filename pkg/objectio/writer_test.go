@@ -65,6 +65,8 @@ func TestNewObjectWriter(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := newBatch(mp)
 	defer bat.Clean(mp)
+	bat2 := newBatch2(mp)
+	defer bat.Clean(mp)
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
@@ -85,6 +87,8 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
+	_, err = objectWriter.Write(bat2)
+	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
 		Type: WriteTS,
@@ -92,25 +96,26 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(blocks))
+	assert.Equal(t, 3, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
-	extents := make([]Extent, 2)
+	extents := make([]Extent, 3)
 	for i, blk := range blocks {
 		extents[i] = NewExtent(1, blk.GetExtent().Offset(), blk.GetExtent().Length(), blk.GetExtent().OriginSize())
 	}
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
-	meta, err := objectReader.ReadMeta(context.Background(), extents[0], pool)
+	objectReader.CacheMetaExtent(&extents[0])
+	meta, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
-	assert.Equal(t, uint32(2), meta.BlockCount())
+	assert.Equal(t, uint32(3), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(context.Background(), extents[0], idxs, 0, pool, newDecompressToObject)
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, decompressConstructorFactory)
 	assert.Nil(t, err)
 	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -133,14 +138,14 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	meta, err = objectReader.ReadAllMeta(context.Background(), pool)
 	assert.Nil(t, err)
-	assert.Equal(t, uint32(2), meta.BlockCount())
+	assert.Equal(t, uint32(3), meta.BlockCount())
 	assert.Nil(t, err)
-	assert.Equal(t, uint32(2), meta.BlockCount())
+	assert.Equal(t, uint32(3), meta.BlockCount())
 	idxs = make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), meta.BlockHeader().MetaLocation(), idxs, 0, pool, newDecompressToObject)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, decompressConstructorFactory)
 	assert.Nil(t, err)
 	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -154,9 +159,10 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
-	zma, err := objectReader.ReadZoneMapArea(context.Background(), meta.BlockHeader().ZoneMapArea())
-	buf = zma.GetZoneMap(0, 0)
+	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea())
 	assert.Nil(t, err)
+	zma := ZoneMapArea(buf1)
+	buf = zma.GetZoneMap(0, 0)
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 }
@@ -199,7 +205,9 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
-	meta, err := objectReader.ReadMeta(context.Background(), blocks[0].BlockHeader().MetaLocation(), nil)
+	ext := blocks[0].BlockHeader().MetaLocation()
+	objectReader.CacheMetaExtent(&ext)
+	meta, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
 	return meta
 }
@@ -278,6 +286,18 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 		types.T_uint32.ToType(),
 		types.T_uint8.ToType(),
 		types.T_uint64.ToType(),
+	}
+	return testutil.NewBatch(types, false, int(40000*2), mp)
+}
+
+func newBatch2(mp *mpool.MPool) *batch.Batch {
+	types := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
 }
