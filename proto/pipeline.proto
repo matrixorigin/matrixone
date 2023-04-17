@@ -238,12 +238,20 @@ message ExternalName2ColIndex {
   int32 index = 2;
 }
 
+message file_offset {
+  repeated int64 offset = 1;
+}
+
 message ExternalScan {
   repeated string attrs = 1;
-  repeated plan.ColDef cols = 2;
-  repeated ExternalName2ColIndex name2_col_index = 3;
-  string create_sql = 4;
-  repeated string file_list = 5;
+  repeated int64 file_size = 2;
+  repeated file_offset file_offset_total = 3;
+  repeated plan.ColDef cols = 4;
+  repeated ExternalName2ColIndex name2_col_index = 5;
+  string create_sql = 6;
+  repeated string file_list = 7;
+  repeated plan.ColDef origin_cols = 8;
+  plan.Expr    filter = 9;
 }
 
 message Instruction{
@@ -352,11 +360,12 @@ message Pipeline {
 
   bool is_end = 7;
   bool is_join = 8;
-  NodeInfo node = 9;
-  int32 push_down_info = 10;
-  int32 children_count = 11;
+  bool is_load = 9;
+  NodeInfo node = 10;
+  int32 push_down_info = 11;
+  int32 children_count = 12;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 12;
+  repeated UuidToRegIdx uuids_to_reg_idx = 13;
 }
 
 message WrapNode {

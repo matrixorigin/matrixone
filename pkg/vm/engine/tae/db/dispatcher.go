@@ -17,6 +17,7 @@ package db
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -26,13 +27,13 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 		return
 	}
 	if oldScope.SegmentID != newScope.SegmentID &&
-		!common.IsEmptySegid(&oldScope.SegmentID) &&
-		!common.IsEmptySegid(&newScope.SegmentID) {
+		!objectio.IsEmptySegid(&oldScope.SegmentID) &&
+		!objectio.IsEmptySegid(&newScope.SegmentID) {
 		return
 	}
 	if oldScope.BlockID != newScope.BlockID &&
-		!common.IsEmptyBlkid(&oldScope.BlockID) &&
-		!common.IsEmptyBlkid(&newScope.BlockID) {
+		!objectio.IsEmptyBlkid(&oldScope.BlockID) &&
+		!objectio.IsEmptyBlkid(&newScope.BlockID) {
 		return
 	}
 	return tasks.ErrScheduleScopeConflict

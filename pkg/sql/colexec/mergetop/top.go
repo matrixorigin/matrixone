@@ -241,7 +241,6 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	ctr.bat.ExpandNulls()
 	anal.Output(ctr.bat, isLast)
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil

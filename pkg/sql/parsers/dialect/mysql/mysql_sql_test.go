@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		input:  "select 2",
+		output: "select 2",
 	}
 )
 

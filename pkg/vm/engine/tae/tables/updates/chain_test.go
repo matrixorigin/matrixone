@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -153,8 +154,8 @@ func TestDeleteChain1(t *testing.T) {
 func TestDeleteChain2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	seg := common.NewSegmentid()
-	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, common.NewBlockid(&seg, 0, 0), types.TS{}))
+	seg := objectio.NewSegmentid()
+	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, objectio.NewBlockid(&seg, 0, 0), types.TS{}))
 	chain := NewDeleteChain(nil, controller)
 
 	txn1 := mockTxn()

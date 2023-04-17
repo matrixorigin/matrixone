@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -214,7 +215,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		}
 	}
 
-	return nil
+	return err
 }
 
 // killQuery if there is a running query, just cancel it.
@@ -277,7 +278,7 @@ func (rt *Routine) cleanup() {
 		//step A: release the mempool related to the session
 		ses := rt.getSession()
 		if ses != nil {
-			ses.Dispose()
+			ses.Close()
 		}
 
 		//step B: cancel the query
@@ -290,6 +291,9 @@ func (rt *Routine) cleanup() {
 		if cancel != nil {
 			cancel()
 		}
+
+		//step D: clean protocol
+		rt.protocol.Quit()
 	})
 }
 

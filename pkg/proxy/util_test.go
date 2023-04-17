@@ -15,14 +15,14 @@
 package proxy
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	respOK   = 0
 	comQuery = 3
 )
 
@@ -38,22 +38,27 @@ func makeSimplePacket(payload string) []byte {
 	return data
 }
 
-func makeOKPacket() []byte {
-	l := 1
-	data := make([]byte, l+4)
-	data[4] = respOK
-	data[0] = byte(l)
-	data[1] = byte(l >> 8)
-	data[2] = byte(l >> 16)
-	data[3] = 0
-	return data
-}
-
 func packetLen(data []byte) (int32, error) {
 	if len(data) < 3 {
 		return 0, moerr.NewInternalErrorNoCtx("invalid data")
 	}
 	return int32(uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16), nil
+}
+
+func TestConvert(t *testing.T) {
+	p1 := &frontend.Packet{
+		Length:     10,
+		SequenceID: 0,
+		Payload:    []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0},
+	}
+	b1 := packetToBytes(p1)
+	p2 := bytesToPacket(b1)
+	require.Equal(t, p1, p2)
+
+	b2 := []byte{3, 0, 0, 1, 1, 2, 3}
+	p3 := bytesToPacket(b2)
+	b3 := packetToBytes(p3)
+	require.Equal(t, b2, b3)
 }
 
 func TestPickTunnels(t *testing.T) {

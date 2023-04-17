@@ -326,19 +326,19 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	bats := t.collectData(files)
 	defer t.closeBatch(bats)
 	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := blockio.NewBlockWriter(fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
 		return nil, err
 	}
 	for i := range bats {
 		bat := batch.New(true, bats[i].Attrs)
 		bat.Vecs = containers.UnmarshalToMoVecs(bats[i].Vecs)
-		if _, err := writer.WriteBatchWithOutIndex(bat); err != nil {
+		if _, err := writer.Write(bat); err != nil {
 			return nil, err
 		}
 	}
 
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.WriteEnd(context.Background())
 	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
@@ -348,23 +348,25 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	bats := t.collectData(files)
 	defer t.closeBatch(bats)
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := blockio.NewBlockWriter(fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
 		return nil, err
 	}
 	for i := range bats {
-		if _, err := writer.WriteBlockWithOutIndex(bats[i]); err != nil {
+		bat := batch.New(true, bats[i].Attrs)
+		bat.Vecs = containers.UnmarshalToMoVecs(bats[i].Vecs)
+		if _, err := writer.Write(bat); err != nil {
 			return nil, err
 		}
 	}
 
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.WriteEnd(context.Background())
 	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
 
 func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	return blockio.PrefetchFile(fs.Service, size, name)
+	return blockio.PrefetchFile(fs.Service, name)
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
@@ -373,7 +375,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, size, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

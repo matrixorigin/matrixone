@@ -105,6 +105,9 @@ type Scope struct {
 	// IsRemote means the pipeline is remote
 	IsRemote bool
 
+	// IsRemote means the pipeline is load
+	IsLoad bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
