@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -404,7 +405,7 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		if tableTree == nil {
 			return nil
 		}
-		nTree := common.NewTree()
+		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
 		dirtyCtx := new(DirtyCtx)
@@ -438,18 +439,18 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := blockio.NewBlockWriter(r.fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.fs.Service)
 	if err != nil {
 		return err
 	}
 	mobat := batch.New(true, bat.Attrs)
 	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+	if _, err = writer.Write(mobat); err != nil {
 		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, _, err = writer.Sync(context.Background())
+	_, err = writer.WriteEnd(context.Background())
 	return
 }
 
@@ -703,7 +704,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	visitor := new(common.BaseTreeVisitor)
+	visitor := new(model.BaseTreeVisitor)
 	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
 		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
 			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)

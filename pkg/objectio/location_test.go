@@ -15,8 +15,9 @@
 package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func getLocation(name ObjectName) Location {
@@ -37,10 +38,36 @@ func BenchmarkDecode(b *testing.B) {
 	b.Run("GetName", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			location.Name().Sid()
+			location.Name().SegmentId()
 			location.Name().Num()
 			location.ID()
 		}
 	})
 	b.Log(location.Name().String())
+}
+
+func BenchmarkCheckSame(b *testing.B) {
+	uid, _ := types.BuildUuid()
+	fname := BuildObjectName(uid, 0)
+	blkID := NewBlockid(&uid, 0, 0)
+	b.Run("is-same-obj", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			IsBlockInObject(&blkID, &fname)
+		}
+	})
+	var segid Segmentid
+	b.Run("is-same-seg", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			IsEmptySegid(&segid)
+		}
+	})
+	var blkid types.Blockid
+	b.Run("is-same-blk", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			IsEmptyBlkid(&blkid)
+		}
+	})
 }

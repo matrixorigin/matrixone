@@ -15,10 +15,10 @@
 package proxy
 
 import (
-	"context"
-	"crypto/tls"
-	"time"
+	"bytes"
+	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
@@ -46,15 +46,10 @@ func (c *clientConn) handleHandshakeResp() error {
 	//
 	// TODO(volgariver6): currently, only connectionAttributes in JDBC URI
 	// is supported.
-	ssl, err := c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
+	// SSL is not supported for now.
+	_, err = c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
 	if err != nil {
 		return err
-	}
-	if ssl {
-		if err = c.upgradeToTLS(); err != nil {
-			return err
-		}
-		return c.handleHandshakeResp()
 	}
 
 	// parse tenant information from client login request.
@@ -66,23 +61,35 @@ func (c *clientConn) handleHandshakeResp() error {
 	return nil
 }
 
-// upgradeToTLS upgrades the connection to TLS connection.
-func (c *clientConn) upgradeToTLS() error {
-	tlsConn := tls.Server(c.conn.RawConn(), nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return err
+func (s *serverConn) parseConnID(p *frontend.Packet) error {
+	if len(p.Payload) < 2 {
+		return moerr.NewInternalErrorNoCtx("protocol error: payload is too short")
 	}
-	c.conn.UseConn(tlsConn)
+	// From the beginning of payload.
+	pos := 0
+	// Pass the protocol version.
+	pos += 1
+	zeroPos := bytes.IndexByte(p.Payload[pos:], 0)
+	if zeroPos == -1 {
+		return moerr.NewInternalErrorNoCtx("protocol error: cannot get null string")
+	}
+	// Pass the server version string.
+	pos += zeroPos + 1
+	if pos+3 >= int(p.Length) {
+		return moerr.NewInternalErrorNoCtx("protocol error: cannot parse connection ID")
+	}
+	s.backendConnID = binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
 	return nil
 }
 
 // readInitialHandshake reads initial handshake from CN server. The result
 // is useless.
 func (s *serverConn) readInitialHandshake() error {
-	_, err := s.readPacket()
+	r, err := s.readPacket()
 	if err != nil {
+		return err
+	}
+	if err := s.parseConnID(r); err != nil {
 		return err
 	}
 	return nil

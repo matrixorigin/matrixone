@@ -1103,12 +1103,12 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
-// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+// handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
-// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+// handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
@@ -1125,6 +1125,10 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 // handleDropUser drops the user for the tenant
 func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUser) error {
 	return doDropUser(ctx, mce.GetSession(), du)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+	return doAlterUser(ctx, mce.GetSession(), au)
 }
 
 // handleCreateRole creates the new role
@@ -2589,7 +2593,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.AlterUser: //TODO
+			selfHandle = true
 			ses.InvalidatePrivilegeCache()
+			if err = mce.handleAlterUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateRole:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -3253,7 +3261,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			int(COM_QUIT),
 			nil,
 		)*/
-		return resp, nil
+		return resp, moerr.NewInternalError(requestCtx, "client send quit")
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)

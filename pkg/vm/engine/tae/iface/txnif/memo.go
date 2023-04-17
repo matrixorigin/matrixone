@@ -18,17 +18,17 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type TxnMemo struct {
-	*common.Tree
+	*model.Tree
 	isCatalogChanged bool
 }
 
 func NewTxnMemo() *TxnMemo {
 	return &TxnMemo{
-		Tree: common.NewTree(),
+		Tree: model.NewTree(),
 	}
 }
 
@@ -48,11 +48,11 @@ func (memo *TxnMemo) HasCatalogChanges() bool {
 	return memo.isCatalogChanged
 }
 
-func (memo *TxnMemo) GetDirtyTableByID(id uint64) *common.TableTree {
+func (memo *TxnMemo) GetDirtyTableByID(id uint64) *model.TableTree {
 	return memo.GetTable(id)
 }
 
-func (memo *TxnMemo) GetDirty() *common.Tree {
+func (memo *TxnMemo) GetDirty() *model.Tree {
 	return memo.Tree
 }
 

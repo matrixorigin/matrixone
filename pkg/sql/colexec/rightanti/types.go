@@ -56,13 +56,13 @@ type Argument struct {
 	Ibucket    uint64
 	Nbucket    uint64
 	Result     []int32
-	Right_typs []types.Type
+	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
-	Is_receiver bool
-	Channel     chan *[]uint8
-	NumCPU      uint64
+	IsMerger bool
+	Channel  chan *[]uint8
+	NumCPU   uint64
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

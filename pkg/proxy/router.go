@@ -25,13 +25,17 @@ import (
 )
 
 const (
-	tenantLabelKey = "account"
+	tenantLabelKey        = "account"
+	defaultConnectTimeout = 3 * time.Second
 )
 
 // Router is an interface to select CN server and connects to it.
 type Router interface {
-	// Select selects the best CN server with the selector.
-	Select(label labelInfo) (*CNServer, error)
+	// SelectByConnID selects the CN server which has the connection ID.
+	SelectByConnID(connID uint32) (*CNServer, error)
+
+	// SelectByLabel selects the best CN server with the label.
+	SelectByLabel(label labelInfo) (*CNServer, error)
 
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
@@ -41,6 +45,9 @@ type Router interface {
 
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 type CNServer struct {
+	// connID is the backend CN server's connection ID, which is global unique
+	// and is tracked in connManager.
+	connID uint32
 	// salt is generated in proxy module and will be sent to backend
 	// server when build connection.
 	salt []byte
@@ -59,7 +66,7 @@ type CNServer struct {
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect() (goetty.IOSession, error) {
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
-	err := c.Connect(s.addr, time.Second*3)
+	err := c.Connect(s.addr, defaultConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +102,22 @@ func newRouter(
 	}
 }
 
-// Select implements the CNConnector interface.
-func (r *router) Select(label labelInfo) (*CNServer, error) {
+// SelectByConnID implements the CNConnector interface.
+func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
+	cn := r.rebalancer.connManager.getCNServer(connID)
+	if cn == nil {
+		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
+	}
+	// Return a new CNServer instance for temporary connection.
+	return &CNServer{
+		salt: cn.salt,
+		uuid: cn.uuid,
+		addr: cn.addr,
+	}, nil
+}
+
+// SelectByLabel implements the CNConnector interface.
+func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
 	r.moCluster.GetCNService(label.genSelector(), func(s metadata.CNService) bool {
@@ -115,6 +136,8 @@ func (r *router) Select(label labelInfo) (*CNServer, error) {
 	})
 	if len(cns) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
+	} else if len(cns) == 1 {
+		return cns[0], nil
 	}
 
 	// getHash returns same hash for same labels.
@@ -123,10 +146,7 @@ func (r *router) Select(label labelInfo) (*CNServer, error) {
 		return nil, err
 	}
 
-	s, err := r.rebalancer.connManager.selectOne(hash, cns, cnEmpty && cnNotEmpty)
-	if err != nil {
-		return nil, err
-	}
+	s := r.rebalancer.connManager.selectOne(hash, cns, cnEmpty && cnNotEmpty)
 	if s == nil {
 		return nil, ErrNoAvailableCNServers
 	}
@@ -152,15 +172,23 @@ func (r *router) Connect(
 
 	// For test, ignore handshake phase.
 	if r.test {
+		r.rebalancer.connManager.connect(cn, t)
 		// The second value should be recognized OK packet.
-		return sc, []byte{0}, nil
+		return sc, makeOKPacket(), nil
 	}
 
 	// Use the handshakeResp, which is auth request from client, to communicate
 	// with CN server.
 	resp, err := sc.HandleHandshake(handshakeResp)
 	if err != nil {
+		r.rebalancer.connManager.disconnect(cn, t)
 		return nil, nil, err
 	}
-	return sc, resp.Payload, nil
+	// After handshake with backend CN server, set the connID of serverConn.
+	cn.connID = sc.ConnID()
+
+	// After connect succeed, track the connection.
+	r.rebalancer.connManager.connect(cn, t)
+
+	return sc, packetToBytes(resp), nil
 }

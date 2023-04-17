@@ -115,7 +115,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-	res := batch.New(true, attrs)
+	res := batch.NewWithSize(len(attrs))
+	res.SetAttributes(attrs)
 	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
 	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	for _, w := range s3Writers {
@@ -125,7 +126,6 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 			return
 		}
 	}
-	res.AddCnt(1)
 	proc.SetInputBatch(res)
 	return
 }

@@ -34,7 +34,7 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		fBacth  func([][]byte, []string, *nulls.Nulls) ([]string, error)
 	)
 	switch {
-	case types.IsString(vec.GetType().Oid):
+	case vec.GetType().Oid.IsMySQLString():
 		fSingle = json_unquote.StringSingle
 		fBacth = json_unquote.StringBatch
 	default:

@@ -15,8 +15,10 @@
 package proxy
 
 import (
+	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -58,11 +60,14 @@ type MySQLConn struct {
 	*msgBuf
 }
 
-// newMySQLConn creates a new MySQLConn.
-func newMySQLConn(name string, c net.Conn, sz int) *MySQLConn {
+// newMySQLConn creates a new MySQLConn. reqC and respC are used for client
+// connection to handle events from client.
+func newMySQLConn(
+	name string, c net.Conn, sz int, reqC chan IEventReq, respC chan []byte,
+) *MySQLConn {
 	return &MySQLConn{
 		Conn:   c,
-		msgBuf: newMsgBuf(c, sz, name),
+		msgBuf: newMsgBuf(name, c, sz, reqC, respC),
 	}
 }
 
@@ -70,24 +75,34 @@ func newMySQLConn(name string, c net.Conn, sz int) *MySQLConn {
 // identify what kind the statement is, and to check whether it is safe
 // to transfer a connection.
 type msgBuf struct {
-	src io.Reader
+	// for debug
+	name string
+	src  io.Reader
 	// buf keeps message which is read from src. It can contain multiple messages.
 	buf []byte
 	// begin, end is the range that the data is available in the buf.
 	begin, end int
-	// for debug
-	name string
+	// writeMu controls the mutex to lock when write a MySQL packet with net.Write().
+	writeMu sync.Mutex
+	// reqC is the channel of event request.
+	reqC chan IEventReq
+	// respC is the channel of event response.
+	respC chan []byte
 }
 
 // newMsgBuf creates a new message buffer.
-func newMsgBuf(src io.Reader, bufLen int, name string) *msgBuf {
+func newMsgBuf(
+	name string, src io.Reader, bufLen int, reqC chan IEventReq, respC chan []byte,
+) *msgBuf {
 	if bufLen < mysqlHeadLen {
 		bufLen = defaultBufLen
 	}
 	return &msgBuf{
-		src:  src,
-		buf:  make([]byte, bufLen),
-		name: name,
+		src:   src,
+		buf:   make([]byte, bufLen),
+		name:  name,
+		reqC:  reqC,
+		respC: respC,
 	}
 }
 
@@ -122,17 +137,34 @@ func (b *msgBuf) preRecv() (int, txnTag, error) {
 	// Recognize the statement to mark the transaction status of the pipe.
 	txnRet := txnOther
 	if cmd == byte(cmdQuery) {
-		if bodyLen == 7 && isStmtCommit(b.buf[b.begin+preRecvLen:b.end]) {
+		if isStmtCommit(b.buf[b.begin+preRecvLen:b.end]) ||
+			isStmtRollback(b.buf[b.begin+preRecvLen:b.end]) {
 			txnRet = txnEnd
-		} else if bodyLen == 9 && isStmtRollback(b.buf[b.begin+preRecvLen:b.end]) {
-			txnRet = txnEnd
-		} else if bodyLen == 6 && isStmtBegin(b.buf[b.begin+preRecvLen:b.end]) {
+		} else if isStmtBegin(b.buf[b.begin+preRecvLen : b.end]) {
 			txnRet = txnBegin
 		}
 	}
 
 	// Data length does not count header length, so header length is added to it.
 	return bodyLen + mysqlHeadLen, txnRet, nil
+}
+
+// consumeMsg consumes the MySQL packet in the buffer, handles it by event
+// mechanism. Returns true if the command is handled, means it does not need
+// to be sent through tunnel anymore; false otherwise.
+func (b *msgBuf) consumeMsg(msg []byte) bool {
+	if b.reqC == nil {
+		return false
+	}
+	e := makeEvent(msg)
+	if e == nil {
+		return false
+	}
+	sendReq(e, b.reqC)
+	// We cannot write to b.src directly here. The response has
+	// to go to the server conn buf, and lock writeMu then
+	// write to client.
+	return true
 }
 
 // sendTo sends the data in buffer to destination.
@@ -149,7 +181,17 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 		writePos = b.end
 	}
 	b.begin = writePos
+	if writePos-readPos < preRecvLen {
+		panic(fmt.Sprintf("%d bytes have to been read", preRecvLen))
+	}
 
+	// Try to consume the message synchronously.
+	if b.consumeMsg(b.buf[readPos:writePos]) {
+		return len(b.buf[readPos:writePos]), nil
+	}
+
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
 	// Write the data in buffer.
 	n, err := dst.Write(b.buf[readPos:writePos])
 	if err != nil {
@@ -220,4 +262,23 @@ func (b *msgBuf) receiveAtLeast(n int) error {
 	c, err := io.ReadAtLeast(b.src, b.buf[b.end:], minReadSize)
 	b.end += c
 	return err
+}
+
+// writeDataDirectly writes data to dst directly without put it into buffer.
+// This operation happens in server connection, and the dst is client conn.
+//
+// A call (net.Conn).Write() is go-routine safe, so we need to make sure the
+// data we are trying to write is a whole MySQL packet.
+//
+// NB: The write operation needs a lock to keep safe because in sendTo method,
+// the write operation of a whole MySQL packet may be divided in two steps.
+// The data must is a whole MySQL packet, otherwise it is not safe to write it.
+func (b *msgBuf) writeDataDirectly(dst io.Writer, data []byte) error {
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
+	_, err := dst.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
 }

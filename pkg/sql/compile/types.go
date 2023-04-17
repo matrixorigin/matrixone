@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,6 +106,9 @@ type Scope struct {
 	// IsRemote means the pipeline is remote
 	IsRemote bool
 
+	// IsRemote means the pipeline is load
+	IsLoad bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
@@ -176,6 +180,8 @@ type Compile struct {
 	stmt tree.Statement
 
 	s3CounterSet perfcounter.CounterSet
+
+	scanBlockNumber int
 
 	stepRegs map[int32][]*process.WaitRegister
 }

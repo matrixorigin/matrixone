@@ -26,7 +26,7 @@ import (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString(" right join ")
+	buf.WriteString(" right anti join ")
 }
 
 func Prepare(proc *process.Process, arg any) error {
@@ -35,9 +35,9 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.bat = batch.NewWithSize(len(ap.Right_typs))
+	ap.ctr.bat = batch.NewWithSize(len(ap.RightTypes))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.Right_typs {
+	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 	return nil
@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			return false, nil
+			continue
 
 		case SendLast:
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
@@ -119,7 +119,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 }
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
-	if !ap.Is_receiver {
+	if !ap.IsMerger {
 		ap.Channel <- &ctr.matched
 		//goto ctr.end directly
 		return true, nil
@@ -143,7 +143,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	rbat.Zs = proc.Mp().GetSels()
 
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = proc.GetVector(ap.Right_typs[pos])
+		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
 	count := ctr.bat.Length()
@@ -162,7 +162,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[i])
 		}
 	}
-	rbat.ExpandNulls()
 	analyze.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil

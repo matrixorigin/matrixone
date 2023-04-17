@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package objectio
 
 import (
 	"bytes"
@@ -20,7 +20,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -56,22 +55,4 @@ func TestWriteID(t *testing.T) {
 
 	require.True(t, sid.Eq(desid))
 	require.Equal(t, sid.ToString(), desid.ToString())
-}
-
-var global interface{}
-
-func BenchmarkUuid1(b *testing.B) {
-	var local interface{}
-	for i := 0; i < b.N; i++ {
-		local = MustUuid1()
-	}
-	global = local
-}
-
-func BenchmarkUuid4(b *testing.B) {
-	var local interface{}
-	for i := 0; i < b.N; i++ {
-		local = uuid.New()
-	}
-	global = local
 }

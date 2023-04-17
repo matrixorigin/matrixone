@@ -81,6 +81,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService
 	proc.Aicm = p.Aicm
+	proc.LoadTag = p.LoadTag
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -180,7 +181,11 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i] != nil {
-			proc.vp.putVector(bat.Vecs[i])
+			if !bat.Vecs[i].IsConst() {
+				proc.vp.putVector(bat.Vecs[i])
+			} else {
+				bat.Vecs[i].Free(proc.Mp())
+			}
 		}
 	}
 	bat.Vecs = nil

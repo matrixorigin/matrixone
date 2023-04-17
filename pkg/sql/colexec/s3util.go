@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -206,8 +205,28 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if err := w.MergeBlock(len(w.Bats), proc, false); err != nil {
-		return err
+	if w.Batsize >= TagS3Size {
+		if err := w.MergeBlock(len(w.Bats), proc, false); err != nil {
+			return err
+		}
+		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+		return nil
+	}
+	for _, bat := range w.Bats {
+		if err := vector.AppendFixed(
+			w.metaLocBat.Vecs[0], -w.idx-1,
+			false, proc.GetMPool()); err != nil {
+			return err
+		}
+		bytes, err := bat.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendBytes(
+			w.metaLocBat.Vecs[1], bytes,
+			false, proc.GetMPool()); err != nil {
+			return err
+		}
 	}
 	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return nil
@@ -445,7 +464,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 func (w *S3Writer) generateWriter(proc *process.Process) error {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	id := common.NewSegmentid()
+	id := objectio.NewSegmentid()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
@@ -472,7 +491,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
-	if ovec.GetType().IsString() {
+	if ovec.GetType().IsVarlen() {
 		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil
