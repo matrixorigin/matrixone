@@ -217,7 +217,7 @@ deallocate prepare s1    Other    external_sql
 execute s1 using @a    Other    external_sql
 set a = 2    Other    external_sql
 prepare s1 from select * from test_table where col1 = ?    Other    external_sql
-select * from unnest("{\"a\":1}") as f    DQL    external_sql
+select * from unnest("{"a":1}") as f    DQL    external_sql
 drop database db2    DDL    external_sql
 drop table table_2    DDL    external_sql
 drop view view_2    DDL    external_sql
@@ -273,7 +273,7 @@ deallocate prepare s1    Other    external_sql
 execute s1 using @a    Other    external_sql
 set a = 2    Other    external_sql
 prepare s1 from select * from test_table where col1 = ?    Other    external_sql
-select * from unnest("{\"a\":1}") as f    DQL    external_sql
+select * from unnest("{"a":1}") as f    DQL    external_sql
 drop database db2    DDL    external_sql
 drop table table_2    DDL    external_sql
 drop view view_2    DDL    external_sql
@@ -455,7 +455,7 @@ deallocate prepare s1    Other    cloud_user_sql
 execute s1 using @a    Other    cloud_user_sql
 set a = 2    Other    cloud_user_sql
 prepare s1 from select * from test_table where col1 = ?    Other    cloud_user_sql
-select * from unnest("{\"a\":1}") as f    DQL    cloud_user_sql
+select * from unnest("{"a":1}") as f    DQL    cloud_user_sql
 drop database db2    DDL    cloud_user_sql
 drop table table_2    DDL    cloud_user_sql
 drop view view_2    DDL    cloud_user_sql
@@ -638,7 +638,7 @@ deallocate prepare s1    Other    cloud_nonuser_sql
 execute s1 using @a    Other    cloud_nonuser_sql
 set a = 2    Other    cloud_nonuser_sql
 prepare s1 from select * from test_table where col1 = ?    Other    cloud_nonuser_sql
-select * from unnest("{\"a\":1}") as f    DQL    cloud_nonuser_sql
+select * from unnest("{"a":1}") as f    DQL    cloud_nonuser_sql
 drop database db2    DDL    cloud_nonuser_sql
 drop table table_2    DDL    cloud_nonuser_sql
 drop view view_2    DDL    cloud_nonuser_sql
