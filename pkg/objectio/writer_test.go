@@ -87,7 +87,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	fd, err = objectWriter.Write(bat2)
+	_, err = objectWriter.Write(bat2)
 	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
