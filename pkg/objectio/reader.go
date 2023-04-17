@@ -114,7 +114,9 @@ func (r *ObjectReader) ReadMeta(
 	if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
 		return
 	}
-	r.metaCache.Store(&meta)
+	if r.withMetaCache {
+		r.metaCache.Store(&meta)
+	}
 	return
 }
 
