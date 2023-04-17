@@ -95,6 +95,10 @@ message PreInsert {
   map<string, int32> parent_idx_pre_insert   = 3;
 }
 
+message PreInsertUnique {
+  plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
+}
+
 message OnDuplicateKey{
   uint64 affected   = 1;
   repeated int32 on_duplicate_idx           = 2;
@@ -276,19 +280,20 @@ message Instruction{
   Insert insert = 17;
   OnDuplicateKey on_duplicate_key = 18;
   PreInsert pre_insert               = 19;
-  repeated plan.OrderBySpec order_by = 20;
-  repeated plan.Expr    project_list = 21;
-  plan.Expr    filter = 22;
-  uint64    limit = 23;
-  uint64    offset = 24;
+  PreInsertUnique pre_insert_unique  = 20;
+  repeated plan.OrderBySpec order_by = 21;
+  repeated plan.Expr    project_list = 22;
+  plan.Expr    filter = 23;
+  uint64    limit = 24;
+  uint64    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 25;
+  bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 26;
+  bool isLast = 27;
   
-  RightJoin right_join = 27;
-  RightSemiJoin right_semi_join = 28;
-  RightAntiJoin right_anti_join = 29;
+  RightJoin right_join = 28;
+  RightSemiJoin right_semi_join = 29;
+  RightAntiJoin right_anti_join = 30;
 
 }
 

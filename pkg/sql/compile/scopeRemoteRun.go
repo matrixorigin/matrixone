@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -622,6 +623,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:           t.TableDef,
 			ParentIdxPreInsert: t.ParentIdx,
 		}
+	case *preinsertunique.Argument:
+		in.PreInsertUnique = &pipeline.PreInsertUnique{
+			PreInsertUkCtx: t.PreInsertCtx,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -925,6 +930,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
 			ParentIdx:  t.GetParentIdxPreInsert(),
+		}
+	case vm.PreInsertUnique:
+		t := opr.GetPreInsertUnique()
+		v.Arg = &preinsertunique.Argument{
+			PreInsertCtx: t.GetPreInsertUkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()

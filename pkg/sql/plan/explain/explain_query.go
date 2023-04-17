@@ -16,7 +16,7 @@ package explain
 
 import (
 	"context"
-
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,6 +37,12 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	nodes := e.QueryPlan.Nodes
+
+	isForest := false
+	if len(e.QueryPlan.Steps) > 1 {
+		isForest = true
+	}
+
 	for index, rootNodeID := range e.QueryPlan.Steps {
 		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
@@ -45,6 +51,12 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 			indent: 2,
 			level:  0,
 		}
+
+		if isForest {
+			title := fmt.Sprintf("Plan %v:", index)
+			settings.buffer.PushPlanTitle(title)
+		}
+
 		err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
@@ -98,6 +110,11 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 			return nil
 		}
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
+
+		if nodedescImpl.Node.NodeType == plan.Node_SINK_SCAN {
+			msg := "DataSource: " + fmt.Sprintf("Plan %v", nodedescImpl.Node.SourceStep)
+			settings.buffer.PushNewLine(msg, false, settings.level)
+		}
 
 		// Process verbose optioan information , "Output:"
 		if options.Verbose {
