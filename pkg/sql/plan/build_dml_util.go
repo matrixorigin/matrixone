@@ -118,7 +118,7 @@ func buildDeletePlans(
 					ObjName:    indexdef.IndexTableName,
 					Obj:        int64(idxTableDef.TblId),
 				}
-				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId)
+				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId, false)
 				if err != nil {
 					return -1, err
 				}
@@ -135,7 +135,7 @@ func buildDeletePlans(
 			break
 		}
 	}
-	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId, true)
 	if err != nil {
 		return -1, err
 	}
@@ -170,7 +170,7 @@ func haveUniqueKey(tableDef *TableDef) bool {
 func makeOneDeletePlan(
 	builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, lastNodeId int32) (int32, error) {
+	deleteIdx int, lastNodeId int32, addAffectedRows bool) (int32, error) {
 	// todo: append predelete node to build partition id
 
 	// todo: append lock & filter
@@ -182,9 +182,10 @@ func makeOneDeletePlan(
 		BindingTags: []int32{deleteTag},
 		Children:    []int32{lastNodeId},
 		DeleteCtx: &plan.DeleteCtx{
-			RowIdIdx:    int32(deleteIdx),
-			Ref:         objRef,
-			CanTruncate: false,
+			RowIdIdx:        int32(deleteIdx),
+			Ref:             objRef,
+			CanTruncate:     false,
+			AddAffectedRows: addAffectedRows,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)

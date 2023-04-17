@@ -704,9 +704,10 @@ message ColPosMap {
 }
 
 message DeleteCtx {
-	bool can_truncate 	= 1;
-	ObjectRef ref 		= 2;
-	int32 row_id_idx	= 3;
+	bool can_truncate 		= 1;
+	ObjectRef ref 			= 2;
+	int32 row_id_idx		= 3;
+	bool add_affected_rows 	= 4;
 }
 
 message Query {

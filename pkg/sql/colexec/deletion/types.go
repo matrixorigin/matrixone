@@ -37,10 +37,11 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	CanTruncate bool
-	RowIdIdx    int
-	Source      engine.Relation
-	Ref         *plan.ObjectRef
+	CanTruncate     bool
+	RowIdIdx        int
+	Source          engine.Relation
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

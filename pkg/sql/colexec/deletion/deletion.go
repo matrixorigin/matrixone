@@ -100,6 +100,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	**/
 
-	atomic.AddUint64(&p.affectedRows, affectedRows)
+	if delCtx.AddAffectedRows {
+		atomic.AddUint64(&p.affectedRows, affectedRows)
+	}
 	return false, nil
 }

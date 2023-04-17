@@ -103,9 +103,10 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate: ctx.CanTruncate,
-		RowIdIdx:    ctx.RowIdIdx,
-		Ref:         DeepCopyObjectRef(ctx.Ref),
+		CanTruncate:     ctx.CanTruncate,
+		AddAffectedRows: ctx.AddAffectedRows,
+		RowIdIdx:        ctx.RowIdIdx,
+		Ref:             DeepCopyObjectRef(ctx.Ref),
 	}
 	return newCtx
 }

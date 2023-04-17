@@ -426,9 +426,10 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
-		Ref:         oldCtx.Ref,
-		RowIdIdx:    int(oldCtx.RowIdIdx),
-		CanTruncate: oldCtx.CanTruncate,
+		Ref:             oldCtx.Ref,
+		RowIdIdx:        int(oldCtx.RowIdIdx),
+		CanTruncate:     oldCtx.CanTruncate,
+		AddAffectedRows: oldCtx.AddAffectedRows,
 	}
 	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
 	if err != nil {
