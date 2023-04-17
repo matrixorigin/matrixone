@@ -471,18 +471,19 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Deletion
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
+		// rs = c.newMergeScope(ss)
+		// updateScopesLastFlag([]*Scope{rs})
+		// rs.Magic = Deletion
+		// c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		// scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 	Op:  vm.Deletion,
+		// 	Arg: scp,
+		// })
+		return ss[0], nil
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
@@ -711,10 +712,50 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
-		if n.DeleteCtx.CanTruncate {
-			return nil, nil
+		// if n.DeleteCtx.CanTruncate {
+		// 	return nil, nil
+		// }
+		// return c.compilePlanScope(ctx, step, n.Children[0], ns)
+
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
 		}
-		return c.compilePlanScope(ctx, step, n.Children[0], ns)
+		rs := c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Merge
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		scp, err := constructDeletion(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Deletion,
+			Arg: scp,
+		})
+		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+
+		// curr := c.anal.curr
+		// c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		// ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// MERGE
+		// scp, err := constructDeletion(n, c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+		// 	Op:  vm.Deletion,
+		// 	Arg: scp,
+		// })
+		// c.setAnalyzeCurrent(ss, curr)
+		// return ss, nil
 	case plan.Node_INSERT, plan.Node_UPDATE:
 		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
