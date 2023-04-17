@@ -81,7 +81,7 @@ internal error: do not have privilege to execute the statement
 create table system.A(a int);
 internal error: do not have privilege to execute the statement
 update statement_info set statement_id = "1111";
-invalid input: cannot insert/update/delete from external table
+internal error: do not have privilege to execute the statement
 update error_info set err_code = "1111";
 invalid input: cannot insert/update/delete from view
 update system.error_info set err_code = "1111";
@@ -95,7 +95,7 @@ invalid input: cannot insert/update/delete from view
 delete from system.error_info;
 invalid input: cannot insert/update/delete from view
 delete from system.statement_info;
-invalid input: cannot insert/update/delete from external table
+internal error: do not have privilege to execute the statement
 use system_metrics;
 drop table sql_statement_total;
 internal error: do not have privilege to execute the statement
