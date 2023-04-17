@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
@@ -25,8 +26,9 @@ import (
 type ObjectReader struct {
 	Object
 	ReaderOptions
-	oname   *ObjectName
-	metaExt *Extent
+	oname     *ObjectName
+	metaExt   *Extent
+	metaCache atomic.Pointer[ObjectMeta]
 }
 
 func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (*ObjectReader, error) {
@@ -102,7 +104,18 @@ func (r *ObjectReader) ReadMeta(
 	ctx context.Context,
 	m *mpool.MPool,
 ) (meta ObjectMeta, err error) {
-	return ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs)
+	if r.withMetaCache {
+		cache := r.metaCache.Load()
+		if cache != nil {
+			meta = *cache
+			return
+		}
+	}
+	if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
+		return
+	}
+	r.metaCache.Store(&meta)
+	return
 }
 
 func (r *ObjectReader) ReadOneBlock(
@@ -215,6 +228,9 @@ func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header
 type ReaderOptions struct {
 	// noLRUCache true means NOT cache IOVector in FileService's cache
 	noLRUCache bool
+	// withMetaCache true means cache ObjectMeta in the Reader
+	// Note: if withMetaCache is true, cleanup is needed
+	withMetaCache bool
 }
 
 type ReaderOptionFunc func(opt *ReaderOptions)
@@ -222,5 +238,11 @@ type ReaderOptionFunc func(opt *ReaderOptions)
 func WithNoLRUCacheOption(noLRUCache bool) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
 		opt.noLRUCache = noLRUCache
+	})
+}
+
+func WithLocalMetaCacheOption(withMetaCache bool) ReaderOptionFunc {
+	return ReaderOptionFunc(func(opt *ReaderOptions) {
+		opt.withMetaCache = withMetaCache
 	})
 }

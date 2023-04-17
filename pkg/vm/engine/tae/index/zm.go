@@ -79,7 +79,7 @@ func (zm ZM) String() string {
 }
 
 func (zm ZM) Clone() ZM {
-	var cloned ZM
+	cloned := make([]byte, ZMSize)
 	copy(cloned[:], zm[:])
 	return cloned
 }
