@@ -31,12 +31,12 @@ func TestBatch1a(t *testing.T) {
 	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, opts)
-	bat.Vecs[0].Append(int32(1))
-	bat.Vecs[0].Append(int32(2))
-	bat.Vecs[0].Append(int32(3))
-	bat.Vecs[1].Append(int64(11))
-	bat.Vecs[1].Append(int64(12))
-	bat.Vecs[1].Append(int64(13))
+	bat.Vecs[0].Append(int32(1), false)
+	bat.Vecs[0].Append(int32(2), false)
+	bat.Vecs[0].Append(int32(3), false)
+	bat.Vecs[1].Append(int64(11), false)
+	bat.Vecs[1].Append(int64(12), false)
+	bat.Vecs[1].Append(int64(13), false)
 
 	assert.Equal(t, 3, bat.Length())
 	assert.False(t, bat.HasDelete())
@@ -65,12 +65,12 @@ func TestBatch1b(t *testing.T) {
 	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, opts)
-	bat.Vecs[0].Append([]byte("a"))
-	bat.Vecs[0].Append([]byte("b"))
-	bat.Vecs[0].Append([]byte("c"))
-	bat.Vecs[1].Append([]byte("1"))
-	bat.Vecs[1].Append([]byte("2"))
-	bat.Vecs[1].Append([]byte("3"))
+	bat.Vecs[0].Append([]byte("a"), false)
+	bat.Vecs[0].Append([]byte("b"), false)
+	bat.Vecs[0].Append([]byte("c"), false)
+	bat.Vecs[1].Append([]byte("1"), false)
+	bat.Vecs[1].Append([]byte("2"), false)
+	bat.Vecs[1].Append([]byte("3"), false)
 
 	assert.Equal(t, 3, bat.Length())
 	assert.False(t, bat.HasDelete())

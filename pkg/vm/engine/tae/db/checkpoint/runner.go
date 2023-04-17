@@ -23,16 +23,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -405,7 +405,7 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		if tableTree == nil {
 			return nil
 		}
-		nTree := common.NewTree()
+		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
 		dirtyCtx := new(DirtyCtx)
@@ -439,18 +439,18 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := blockio.NewBlockWriter(r.fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.fs.Service)
 	if err != nil {
 		return err
 	}
 	mobat := batch.New(true, bat.Attrs)
 	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+	if _, err = writer.Write(mobat); err != nil {
 		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, _, err = writer.Sync(context.Background())
+	_, err = writer.WriteEnd(context.Background())
 	return
 }
 
@@ -462,8 +462,9 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
+	segmentid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(segmentid, 0)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
 		return err
 	}
@@ -471,7 +472,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	return
 }
@@ -485,8 +486,9 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
+	segmentid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(segmentid, 0)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
 		return
 	}
@@ -494,7 +496,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
@@ -702,7 +704,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	visitor := new(common.BaseTreeVisitor)
+	visitor := new(model.BaseTreeVisitor)
 	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
 		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
 			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
@@ -798,7 +800,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	locs := make([]string, 0)
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
-		locs = append(locs, global.GetLocation())
+		locs = append(locs, global.GetLocation().String())
 		newStart = global.end.Next()
 		checkpointed = global.GetEnd()
 	}
@@ -832,7 +834,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				return
 			}
 			if e.HasOverlap(newStart, end) {
-				locs = append(locs, e.GetLocation())
+				locs = append(locs, e.GetLocation().String())
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -843,7 +845,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
-			locs = append(locs, e.GetLocation())
+			locs = append(locs, e.GetLocation().String())
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -869,7 +871,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			locations = strings.Join(locs, ";")
 			return
 		}
-		locs = append(locs, e.GetLocation())
+		locs = append(locs, e.GetLocation().String())
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}

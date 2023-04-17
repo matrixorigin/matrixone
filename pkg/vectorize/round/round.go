@@ -31,21 +31,24 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 )
 
 var (
-	RoundUint8   func([]uint8, []uint8, int64) []uint8
-	RoundUint16  func([]uint16, []uint16, int64) []uint16
-	RoundUint32  func([]uint32, []uint32, int64) []uint32
-	RoundUint64  func([]uint64, []uint64, int64) []uint64
-	RoundInt8    func([]int8, []int8, int64) []int8
-	RoundInt16   func([]int16, []int16, int64) []int16
-	RoundInt32   func([]int32, []int32, int64) []int32
-	RoundInt64   func([]int64, []int64, int64) []int64
-	RoundFloat32 func([]float32, []float32, int64) []float32
-	RoundFloat64 func([]float64, []float64, int64) []float64
+	RoundUint8      func([]uint8, []uint8, int64) []uint8
+	RoundUint16     func([]uint16, []uint16, int64) []uint16
+	RoundUint32     func([]uint32, []uint32, int64) []uint32
+	RoundUint64     func([]uint64, []uint64, int64) []uint64
+	RoundInt8       func([]int8, []int8, int64) []int8
+	RoundInt16      func([]int16, []int16, int64) []int16
+	RoundInt32      func([]int32, []int32, int64) []int32
+	RoundInt64      func([]int64, []int64, int64) []int64
+	RoundFloat32    func([]float32, []float32, int64) []float32
+	RoundFloat64    func([]float64, []float64, int64) []float64
+	RoundDecimal64  func([]types.Decimal64, []types.Decimal64, int64, int32) []types.Decimal64
+	RoundDecimal128 func([]types.Decimal128, []types.Decimal128, int64, int32) []types.Decimal128
 )
 
 func init() {
@@ -59,6 +62,8 @@ func init() {
 	RoundInt64 = roundInt64
 	RoundFloat32 = roundFloat32
 	RoundFloat64 = roundFloat64
+	RoundDecimal64 = roundDecimal64
+	RoundDecimal128 = roundDecimal128
 }
 
 var maxUint8digits = floor.MaxUint8digits
@@ -326,6 +331,32 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 				rs[i] = math.RoundToEven(value_div_tmp) * tmp
 			}
 		}
+	}
+	return rs
+}
+
+func roundDecimal64(xs, rs []types.Decimal64, digits int64, scale int32) []types.Decimal64 {
+	if digits > 19 {
+		digits = 19
+	}
+	if digits < -18 {
+		digits = -18
+	}
+	for i := range xs {
+		rs[i] = xs[i].Round(scale, int32(digits))
+	}
+	return rs
+}
+
+func roundDecimal128(xs, rs []types.Decimal128, digits int64, scale int32) []types.Decimal128 {
+	if digits > 39 {
+		digits = 39
+	}
+	if digits < -38 {
+		digits = -38
+	}
+	for i := range xs {
+		rs[i] = xs[i].Round(scale, int32(digits))
 	}
 	return rs
 }

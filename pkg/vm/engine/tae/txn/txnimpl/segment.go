@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -195,7 +196,7 @@ func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
 
-func (seg *txnSegment) CreateNonAppendableBlock(opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (seg *txnSegment) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID(), opts)
 }
 

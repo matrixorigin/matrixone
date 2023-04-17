@@ -15,9 +15,10 @@
 package entry
 
 import (
-	"encoding/binary"
 	"io"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -46,15 +47,17 @@ func (desc *descriptor) IsCheckpoint() bool {
 }
 
 func (desc *descriptor) SetType(t Type) {
-	binary.BigEndian.PutUint16(desc.descBuf, t)
+	copy(desc.descBuf[:PayloadSizeOffset], types.EncodeUint16(&t))
 }
 
 func (desc *descriptor) SetPayloadSize(size int) {
-	binary.BigEndian.PutUint32(desc.descBuf[PayloadSizeOffset:], uint32(size))
+	s := uint32(size)
+	copy(desc.descBuf[PayloadSizeOffset:InfoSizeOffset], types.EncodeUint32(&s))
 }
 
 func (desc *descriptor) SetInfoSize(size int) {
-	binary.BigEndian.PutUint32(desc.descBuf[InfoSizeOffset:], uint32(size))
+	s := uint32(size)
+	copy(desc.descBuf[InfoSizeOffset:], types.EncodeUint32(&s))
 }
 
 func (desc *descriptor) reset() {
@@ -68,15 +71,15 @@ func (desc *descriptor) GetMetaBuf() []byte {
 }
 
 func (desc *descriptor) GetType() Type {
-	return binary.BigEndian.Uint16(desc.descBuf)
+	return types.DecodeUint16(desc.descBuf[:PayloadSizeOffset])
 }
 
 func (desc *descriptor) GetPayloadSize() int {
-	return int(binary.BigEndian.Uint32(desc.descBuf[PayloadSizeOffset:]))
+	return int(types.DecodeUint32(desc.descBuf[PayloadSizeOffset:InfoSizeOffset]))
 }
 
 func (desc *descriptor) GetInfoSize() int {
-	return int(binary.BigEndian.Uint32(desc.descBuf[InfoSizeOffset:]))
+	return int(types.DecodeUint32(desc.descBuf[InfoSizeOffset:]))
 }
 
 func (desc *descriptor) GetMetaSize() int {

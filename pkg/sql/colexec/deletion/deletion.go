@@ -53,7 +53,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// check OnRestrict, if is not all null, throw error
 	for _, idx := range delCtx.OnRestrictIdx {
-		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Np.Count() {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Count() {
 			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}
@@ -78,9 +78,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// delete origin table
-	idxList := make([]int32, len(delCtx.DelSource))
-	for i := 0; i < len(delCtx.DelSource); i++ {
-		idxList[i] = int32(i)
+	idxList := make([]int32, len(delCtx.DelIdx))
+	for i := 0; i < len(delCtx.DelIdx); i++ {
+		// for now, we have row_id & pk. but only use row_id for delete
+		idxList[i] = delCtx.DelIdx[i][0]
 	}
 	affectedRows, err = colexec.FilterAndDelByRowId(proc, bat, idxList, delCtx.DelSource)
 	if err != nil {

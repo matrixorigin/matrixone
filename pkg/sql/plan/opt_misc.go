@@ -259,9 +259,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 			}
 
-			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
-			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
-			if canTurnInner && leftOrRightJoin {
+			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -346,14 +344,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER && node.JoinType != plan.Node_RIGHT {
+				if node.JoinType != plan.Node_OUTER {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
+				if node.JoinType == plan.Node_INNER {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
@@ -424,6 +422,24 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			//only inner join can deduce new predicate
 			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList), separateNonEquiConds)
 			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList), separateNonEquiConds)
+		}
+
+		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
+
+			for _, filter := range filters {
+				down := false
+				if builder.checkExprCanPushdown(filter, builder.qry.Nodes[node.Children[0]]) {
+					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
+					down = true
+				}
+				if builder.checkExprCanPushdown(filter, builder.qry.Nodes[node.Children[1]]) {
+					rightPushdown = append(rightPushdown, DeepCopyExpr(filter))
+					down = true
+				}
+				if !down {
+					cantPushdown = append(cantPushdown, DeepCopyExpr(filter))
+				}
+			}
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown, separateNonEquiConds)
@@ -506,16 +522,27 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_FUNCTION_SCAN:
-		node.FilterList = append(node.FilterList, filters...)
-		childId := node.Children[0]
-		childId, err := builder.pushdownFilters(childId, nil, separateNonEquiConds)
-		if err != nil {
-			return 0, err
+		for _, filter := range filters {
+			if onlyContainsTag(filter, node.BindingTags[0]) {
+				node.FilterList = append(node.FilterList, filter)
+			} else {
+				cantPushdown = append(cantPushdown, filter)
+			}
 		}
+	case plan.Node_FUNCTION_SCAN:
+		downFilters := make([]*plan.Expr, 0)
+		selfFilters := make([]*plan.Expr, 0)
+		for _, filter := range filters {
+			if onlyContainsTag(filter, node.BindingTags[0]) {
+				selfFilters = append(selfFilters, DeepCopyExpr(filter))
+			} else {
+				downFilters = append(downFilters, DeepCopyExpr(filter))
+			}
+		}
+		node.FilterList = append(node.FilterList, selfFilters...)
+		childId := node.Children[0]
+		childId, _ = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
 		node.Children[0] = childId
-
 	default:
 		if len(node.Children) > 0 {
 			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
@@ -535,4 +562,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	}
 
 	return nodeID, cantPushdown
+}
+
+func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+
+	for _, child := range node.Children {
+		builder.swapJoinChildren(child)
+	}
+
+	if node.BuildOnLeft {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+		if node.JoinType == plan.Node_LEFT {
+			node.JoinType = plan.Node_RIGHT
+		}
+	}
 }

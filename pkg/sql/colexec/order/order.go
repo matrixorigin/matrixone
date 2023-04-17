@@ -86,12 +86,13 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.NeedDup() {
-			nvec, err := bat.Vecs[i].Dup(proc.Mp())
+			oldVec := bat.Vecs[i]
+			nvec, err := oldVec.Dup(proc.Mp())
 			if err != nil {
 				return false, err
 			}
-			bat.SetVector(int32(i), nvec)
-
+			bat.ReplaceVector(oldVec, nvec)
+			oldVec.Free(proc.Mp())
 		}
 	}
 
@@ -122,7 +123,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	if !ovec.IsConst() {
 		nullCnt := nulls.Length(ovec.GetNulls())
 		if nullCnt < ovec.Length() {
-			if ovec.GetType().IsString() {
+			if ovec.GetType().IsVarlen() {
 				strCol = vector.MustStrCol(ovec)
 			} else {
 				strCol = nil
@@ -147,7 +148,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		if !vec.IsConst() {
 			nullCnt := nulls.Length(vec.GetNulls())
 			if nullCnt < vec.Length() {
-				if vec.GetType().IsString() {
+				if vec.GetType().IsVarlen() {
 					strCol = vector.MustStrCol(vec)
 				} else {
 					strCol = nil

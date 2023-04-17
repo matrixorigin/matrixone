@@ -17,6 +17,7 @@ package containers
 import (
 	"fmt"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -133,8 +134,7 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 
 var mockMp = common.DefaultAllocator
 
-func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
+func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
@@ -148,8 +148,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 	}
 }
 
-func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
+func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
 		cnNulls.Add(vec.GetNulls(), uint64(row))
 	} else {
@@ -163,53 +162,53 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	}
 }
 
-func UpdateValue(col *movec.Vector, row uint32, val any) {
+func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 	switch col.GetType().Oid {
 	case types.T_bool:
-		GenericUpdateFixedValue[bool](col, row, val)
+		GenericUpdateFixedValue[bool](col, row, val, isNull)
 	case types.T_int8:
-		GenericUpdateFixedValue[int8](col, row, val)
+		GenericUpdateFixedValue[int8](col, row, val, isNull)
 	case types.T_int16:
-		GenericUpdateFixedValue[int16](col, row, val)
+		GenericUpdateFixedValue[int16](col, row, val, isNull)
 	case types.T_int32:
-		GenericUpdateFixedValue[int32](col, row, val)
+		GenericUpdateFixedValue[int32](col, row, val, isNull)
 	case types.T_int64:
-		GenericUpdateFixedValue[int64](col, row, val)
+		GenericUpdateFixedValue[int64](col, row, val, isNull)
 	case types.T_uint8:
-		GenericUpdateFixedValue[uint8](col, row, val)
+		GenericUpdateFixedValue[uint8](col, row, val, isNull)
 	case types.T_uint16:
-		GenericUpdateFixedValue[uint16](col, row, val)
+		GenericUpdateFixedValue[uint16](col, row, val, isNull)
 	case types.T_uint32:
-		GenericUpdateFixedValue[uint32](col, row, val)
+		GenericUpdateFixedValue[uint32](col, row, val, isNull)
 	case types.T_uint64:
-		GenericUpdateFixedValue[uint64](col, row, val)
+		GenericUpdateFixedValue[uint64](col, row, val, isNull)
 	case types.T_decimal64:
-		GenericUpdateFixedValue[types.Decimal64](col, row, val)
+		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull)
 	case types.T_decimal128:
-		GenericUpdateFixedValue[types.Decimal128](col, row, val)
+		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull)
 	case types.T_float32:
-		GenericUpdateFixedValue[float32](col, row, val)
+		GenericUpdateFixedValue[float32](col, row, val, isNull)
 	case types.T_float64:
-		GenericUpdateFixedValue[float64](col, row, val)
+		GenericUpdateFixedValue[float64](col, row, val, isNull)
 	case types.T_date:
-		GenericUpdateFixedValue[types.Date](col, row, val)
+		GenericUpdateFixedValue[types.Date](col, row, val, isNull)
 	case types.T_time:
-		GenericUpdateFixedValue[types.Time](col, row, val)
+		GenericUpdateFixedValue[types.Time](col, row, val, isNull)
 	case types.T_datetime:
-		GenericUpdateFixedValue[types.Datetime](col, row, val)
+		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull)
 	case types.T_timestamp:
-		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull)
 	case types.T_uuid:
-		GenericUpdateFixedValue[types.Uuid](col, row, val)
+		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull)
 	case types.T_TS:
-		GenericUpdateFixedValue[types.TS](col, row, val)
+		GenericUpdateFixedValue[types.TS](col, row, val, isNull)
 	case types.T_Rowid:
-		GenericUpdateFixedValue[types.Rowid](col, row, val)
+		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull)
 	case types.T_Blockid:
-		GenericUpdateFixedValue[types.Blockid](col, row, val)
+		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		GenericUpdateBytes(col, row, val)
+		GenericUpdateBytes(col, row, val, isNull)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
 	}
@@ -274,10 +273,15 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
+func ForeachVector(vec Vector, op any, sel *roaring.Bitmap) (err error) {
+	return ForeachVectorWindow(vec, 0, vec.Length(), op, sel)
+}
+
 func ForeachVectorWindow(
 	vec Vector,
 	start, length int,
 	op any,
+	sel *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
@@ -285,7 +289,7 @@ func ForeachVectorWindow(
 			vec,
 			start,
 			length,
-			op.(func([]byte, bool, int) error))
+			op.(func([]byte, bool, int) error), sel)
 	}
 	switch typ.Oid {
 	case types.T_bool:
@@ -293,133 +297,133 @@ func ForeachVectorWindow(
 			vec,
 			start,
 			length,
-			op.(func(bool, bool, int) error))
+			op.(func(bool, bool, int) error), sel)
 	case types.T_int8:
 		return ForeachWindowFixed[int8](
 			vec,
 			start,
 			length,
-			op.(func(int8, bool, int) error))
+			op.(func(int8, bool, int) error), sel)
 	case types.T_int16:
 		return ForeachWindowFixed[int16](
 			vec,
 			start,
 			length,
-			op.(func(int16, bool, int) error))
+			op.(func(int16, bool, int) error), sel)
 	case types.T_int32:
 		return ForeachWindowFixed[int32](
 			vec,
 			start,
 			length,
-			op.(func(int32, bool, int) error))
+			op.(func(int32, bool, int) error), sel)
 	case types.T_int64:
 		return ForeachWindowFixed[int64](
 			vec,
 			start,
 			length,
-			op.(func(int64, bool, int) error))
+			op.(func(int64, bool, int) error), sel)
 	case types.T_uint8:
 		return ForeachWindowFixed[uint8](
 			vec,
 			start,
 			length,
-			op.(func(uint8, bool, int) error))
+			op.(func(uint8, bool, int) error), sel)
 	case types.T_uint16:
 		return ForeachWindowFixed[uint16](
 			vec,
 			start,
 			length,
-			op.(func(uint16, bool, int) error))
+			op.(func(uint16, bool, int) error), sel)
 	case types.T_uint32:
 		return ForeachWindowFixed[uint32](
 			vec,
 			start,
 			length,
-			op.(func(uint32, bool, int) error))
+			op.(func(uint32, bool, int) error), sel)
 	case types.T_uint64:
 		return ForeachWindowFixed[uint64](
 			vec,
 			start,
 			length,
-			op.(func(uint64, bool, int) error))
+			op.(func(uint64, bool, int) error), sel)
 	case types.T_decimal64:
 		return ForeachWindowFixed[types.Decimal64](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal64, bool, int) error))
+			op.(func(types.Decimal64, bool, int) error), sel)
 	case types.T_decimal128:
 		return ForeachWindowFixed[types.Decimal128](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal128, bool, int) error))
+			op.(func(types.Decimal128, bool, int) error), sel)
 	case types.T_decimal256:
 		return ForeachWindowFixed[types.Decimal256](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal256, bool, int) error))
+			op.(func(types.Decimal256, bool, int) error), sel)
 	case types.T_float32:
 		return ForeachWindowFixed[float32](
 			vec,
 			start,
 			length,
-			op.(func(float32, bool, int) error))
+			op.(func(float32, bool, int) error), sel)
 	case types.T_float64:
 		return ForeachWindowFixed[float64](
 			vec,
 			start,
 			length,
-			op.(func(float64, bool, int) error))
+			op.(func(float64, bool, int) error), sel)
 	case types.T_timestamp:
 		return ForeachWindowFixed[types.Timestamp](
 			vec,
 			start,
 			length,
-			op.(func(types.Timestamp, bool, int) error))
+			op.(func(types.Timestamp, bool, int) error), sel)
 	case types.T_date:
 		return ForeachWindowFixed[types.Date](
 			vec,
 			start,
 			length,
-			op.(func(types.Date, bool, int) error))
+			op.(func(types.Date, bool, int) error), sel)
 	case types.T_time:
 		return ForeachWindowFixed[types.Time](
 			vec,
 			start,
 			length,
-			op.(func(types.Time, bool, int) error))
+			op.(func(types.Time, bool, int) error), sel)
 	case types.T_datetime:
 		return ForeachWindowFixed[types.Datetime](
 			vec,
 			start,
 			length,
-			op.(func(types.Datetime, bool, int) error))
+			op.(func(types.Datetime, bool, int) error), sel)
 	case types.T_TS:
 		return ForeachWindowFixed[types.TS](
 			vec,
 			start,
 			length,
-			op.(func(types.TS, bool, int) error))
+			op.(func(types.TS, bool, int) error), sel)
 	case types.T_Blockid:
 		return ForeachWindowFixed[types.Blockid](
 			vec,
 			start,
 			length,
-			op.(func(types.Blockid, bool, int) error))
+			op.(func(types.Blockid, bool, int) error), sel)
 	case types.T_uuid:
 		return ForeachWindowFixed[types.Uuid](
 			vec,
 			start,
 			length,
-			op.(func(types.Uuid, bool, int) error))
+			op.(func(types.Uuid, bool, int) error), sel)
 	case types.T_Rowid:
 		return ForeachWindowFixed[types.Rowid](
 			vec,
 			start,
 			length,
-			op.(func(types.Rowid, bool, int) error))
+			op.(func(types.Rowid, bool, int) error), sel)
 	default:
 		panic(fmt.Sprintf("unsupported type: %s", typ.String()))
 	}
@@ -429,18 +433,36 @@ func ForeachWindowBytes(
 	vec Vector,
 	start, length int,
 	op ItOpT[[]byte],
+	sels *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
-		return ForeachWindowVarlen(vec, start, length, op)
+		return ForeachWindowVarlen(vec, start, length, op, sels)
 	}
 	cnVec := vec.GetDownstreamVector()
 	tsize := typ.TypeSize()
 	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
-	for i := 0; i < length; i++ {
-		if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
-			break
+	if sels == nil || sels.IsEmpty() {
+		for i := 0; i < length; i++ {
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+				break
+			}
 		}
+	} else {
+		idxes := sels.ToArray()
+		end := start + length
+		for _, idx := range idxes {
+			if int(idx) < start {
+				continue
+			} else if int(idx) >= end {
+				break
+			}
+			i := int(idx)
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+				break
+			}
+		}
+
 	}
 	return
 }
@@ -449,12 +471,29 @@ func ForeachWindowFixed[T any](
 	vec Vector,
 	start, length int,
 	op ItOpT[T],
+	sels *roaring.Bitmap,
 ) (err error) {
 	src := vec.(*vector[T])
 	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
-	for i, v := range slice {
-		if err = op(v, src.IsNull(i+start), i+start); err != nil {
-			break
+	if sels == nil || sels.IsEmpty() {
+		for i, v := range slice {
+			if err = op(v, src.IsNull(i+start), i+start); err != nil {
+				break
+			}
+		}
+	} else {
+		idxes := sels.ToArray()
+		end := start + length
+		for _, idx := range idxes {
+			if int(idx) < start {
+				continue
+			} else if int(idx) >= end {
+				break
+			}
+			v := slice[idx]
+			if err = op(v, src.IsNull(int(idx)+start), int(idx)+start); err != nil {
+				break
+			}
 		}
 	}
 	return
@@ -464,13 +503,30 @@ func ForeachWindowVarlen(
 	vec Vector,
 	start, length int,
 	op ItOpT[[]byte],
+	sels *roaring.Bitmap,
 ) (err error) {
 	src := vec.(*vector[[]byte])
 	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
 	slice = slice[start : start+length]
-	for i, v := range slice {
-		if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
-			break
+	if sels == nil || sels.IsEmpty() {
+		for i, v := range slice {
+			if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+				break
+			}
+		}
+	} else {
+		idxes := sels.ToArray()
+		end := start + length
+		for _, idx := range idxes {
+			if int(idx) < start {
+				continue
+			} else if int(idx) >= end {
+				break
+			}
+			v := slice[idx]
+			if err = op(v.GetByteSlice(area), src.IsNull(int(idx)+start), int(idx)+start); err != nil {
+				break
+			}
 		}
 	}
 	return

@@ -66,7 +66,7 @@ func toErrorCode(err error) (uint32, string) {
 
 	merr, ok := err.(*moerr.Error)
 	if ok {
-		return uint32(merr.ErrorCode()), ""
+		return uint32(merr.ErrorCode()), merr.Error()
 	}
 	return uint32(moerr.ErrDragonboatOtherSystemError), err.Error()
 }
@@ -90,8 +90,11 @@ func toError(ctx context.Context, resp pb.Response) error {
 	} else if resp.ErrorCode == uint32(moerr.ErrInvalidTruncateLsn) {
 		return moerr.NewInvalidTruncateLsn(ctx, 0, 0)
 	} else if resp.ErrorCode == uint32(moerr.ErrNotLeaseHolder) {
-		// hoder id get lost?
+		// holder id get lost?
 		return moerr.NewNotLeaseHolder(ctx, 0xDEADBEEF)
+	} else if resp.ErrorCode == uint32(moerr.ErrInternal) {
+		// internal error
+		return moerr.NewInternalError(ctx, resp.ErrorMessage)
 	} else {
 		// will logger.Panicf panic?
 		panic(moerr.NewInternalError(ctx, "unknown error code: %d", resp.ErrorCode))

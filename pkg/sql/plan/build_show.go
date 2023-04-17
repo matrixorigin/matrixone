@@ -145,14 +145,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.T(col.Typ.Id).ToType()
 		typeStr := typ.String()
-		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+		if typ.Oid.IsDecimal() { //after decimal fix,remove this
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
 			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		if types.IsFloat(typ.Oid) && col.Typ.Scale != -1 {
+		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 
@@ -917,6 +917,20 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 		return returnByRewriteSQL(ctx, sql, ddlType)
 	}
+}
+
+func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT role_name as `ROLE_NAME`, creator as `CREATOR`, created_time as `CREATED_TIME`, comments as `COMMENTS` FROM %s.mo_role;", MO_CATALOG_DB_NAME)
+
+	if stmt.Like != nil {
+		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("role_name")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {

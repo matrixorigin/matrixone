@@ -595,8 +595,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
-		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+		rowIdCol := MakeRowIdColDef()
+		rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 		rightTableDef.Name2ColIndex = map[string]int32{}
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)
@@ -752,10 +752,18 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 				})
 			}
 		} else {
+			defIdx := tblInfo.alias[alias]
 			ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, catalog.Row_ID)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
+			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
+			if pkName != "" {
+				ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, pkName)
+				selectList = append(selectList, tree.SelectExpr{
+					Expr: ret,
+				})
+			}
 		}
 	}
 
@@ -813,7 +821,6 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		return err
 	}
 
-	lastNode := builder.qry.Nodes[info.rootId]
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
 
@@ -822,10 +829,13 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	projectSeq := 0
 	for idx, tableDef := range info.tblInfo.tableDefs {
 		oldColPosMap[idx] = make(map[string]int)
+		pkName := getTablePriKeyName(tableDef.Pkey)
+		pkPos := -1
 		for j, coldef := range tableDef.Cols {
 			pos := projectSeq + j
 			oldColPosMap[idx][coldef.Name] = pos
 			if coldef.Name == catalog.Row_ID {
+				// append row_id in front of pk
 				info.projectList = append(info.projectList, &plan.Expr{
 					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
@@ -835,26 +845,27 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 						},
 					},
 				})
+			} else if pkName == coldef.Name {
+				pkPos = j
 			}
+		}
+
+		if pkPos > -1 {
+			info.projectList = append(info.projectList, &plan.Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tag,
+						ColPos: int32(projectSeq + pkPos),
+					},
+				},
+			})
 		}
 		projectSeq += len(tableDef.Cols)
 	}
 	info.tblInfo.oldColPosMap = oldColPosMap
 	info.tblInfo.newColPosMap = oldColPosMap //we donot need this field in delete statement
 
-	for idx, expr := range lastNode.ProjectList {
-		if expr.Typ.Id == int32(types.T_Rowid) {
-			info.projectList = append(info.projectList, &plan.Expr{
-				Typ: expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tag,
-						ColPos: int32(idx),
-					},
-				},
-			})
-		}
-	}
 	info.idx = int32(len(info.projectList))
 	return nil
 }
@@ -1051,7 +1062,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1060,8 +1071,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					rightTableDef := builder.qry.Nodes[rightId].TableDef
 
 					if info.typ == "insert" {
-						hiddenCol := builder.compCtx.GetHideKeyDef(idxRef.SchemaName, idxRef.ObjName)
-						rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+						rowIdCol := MakeRowIdColDef()
+						rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 
@@ -1218,7 +1229,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					joinCtx := NewBindContext(builder, bindCtx)
 					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(childTableDef.Name), tree.ObjectNamePrefix{})
-					rightId, err := builder.buildTable(astTblName, rightCtx)
+					rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 					if err != nil {
 						return err
 					}
@@ -1452,7 +1463,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			rightCtx := NewBindContext(builder, joinCtx)
 			astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
-			rightId, err := builder.buildTable(astTblName, rightCtx)
+			rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 			if err != nil {
 				return err
 			}

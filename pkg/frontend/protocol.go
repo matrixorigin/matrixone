@@ -173,11 +173,15 @@ type Protocol interface {
 
 	GetCapability() uint32
 
+	GetConnectAttrs() map[string]string
+
 	IsTlsEstablished() bool
 
 	SetTlsEstablished()
 
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+
+	Authenticate(ctx context.Context) error
 
 	SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
@@ -260,6 +264,13 @@ func (pi *ProtocolImpl) GetSalt() []byte {
 	pi.m.Lock()
 	defer pi.m.Unlock()
 	return pi.salt
+}
+
+// SetSalt updates the salt value. This happens with proxy mode enabled.
+func (pi *ProtocolImpl) SetSalt(s []byte) {
+	pi.m.Lock()
+	defer pi.m.Unlock()
+	pi.salt = s
 }
 
 func (pi *ProtocolImpl) IsEstablished() bool {
@@ -428,6 +439,10 @@ func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bo
 	return false, nil
 }
 
+func (fp *FakeProtocol) Authenticate(ctx context.Context) error {
+	return nil
+}
+
 func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
 	return fp.ioses
 }
@@ -441,6 +456,10 @@ func (fp *FakeProtocol) GetSequenceId() uint8 {
 }
 
 func (fp *FakeProtocol) SetSequenceID(value uint8) {
+}
+
+func (fp *FakeProtocol) GetConnectAttrs() map[string]string {
+	return nil
 }
 
 func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {

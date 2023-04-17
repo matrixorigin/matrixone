@@ -132,7 +132,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 			}
 		}
 		if ctr.bat != nil {
-			ctr.bat.ExpandNulls()
 			anal.Alloc(int64(ctr.bat.Size()))
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
@@ -214,7 +213,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.bat.Zs[i] = 1
 				}
 			}
-			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil

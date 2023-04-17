@@ -251,7 +251,6 @@ func (de *DeleteExecutor) Setup(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
-	ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	return nil
 }
 
@@ -265,7 +264,6 @@ func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
-	ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 	return nil
 }
 
