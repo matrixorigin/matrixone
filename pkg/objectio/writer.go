@@ -206,6 +206,9 @@ func (w *ObjectWriter) prepareZoneMapArea(blockCount uint32, offset uint32) ([]b
 }
 
 func (w *ObjectWriter) getMaxIndex() uint16 {
+	if len(w.blocks) == 0 {
+		return 0
+	}
 	maxIndex := len(w.blocks[0].data)
 	for _, block := range w.blocks {
 		idxes := len(block.data)
