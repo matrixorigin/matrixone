@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -425,11 +426,11 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	c := catalog.MockCatalog(nil)
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
-	mutBufMgr := buffer.NewNodeManager(common.G, nil)
+	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
-	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
+	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()

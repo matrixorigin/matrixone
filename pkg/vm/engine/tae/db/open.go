@@ -68,7 +68,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	opts = opts.FillDefaults(dirname)
 
-	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
+	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
 	serviceDir := path.Join(dirname, "data")
@@ -94,7 +94,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
-		db.Fs, mutBufMgr, db.Scheduler, db.Dir)
+		db.Fs, indexCache, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
 		return
 	}

@@ -105,5 +105,4 @@ func main() {
 		time.Sleep(waitTime)
 	}
 	logutil.Info(tae.TxnBufMgr.String())
-	logutil.Info(tae.MTBufMgr.String())
 }

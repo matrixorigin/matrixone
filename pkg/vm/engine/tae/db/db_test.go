@@ -989,7 +989,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
-	t.Log(db.MTBufMgr.String())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	t.Logf("GetPenddingLSNCnt: %d", db.Scheduler.GetPenddingLSNCnt())
 	t.Logf("GetCheckpointed: %d", db.Scheduler.GetCheckpointedLSN())
@@ -1338,9 +1337,6 @@ func TestUnload2(t *testing.T) {
 		}
 		_ = txn.Commit()
 	}
-
-	t.Log(db.MTBufMgr.String())
-	// t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDelete1(t *testing.T) {

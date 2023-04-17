@@ -52,8 +52,8 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	MTBufMgr  base.INodeManager
-	TxnBufMgr base.INodeManager
+	TxnBufMgr  base.INodeManager
+	IndexCache model.LRUCache
 
 	TxnMgr        *txnbase.TxnManager
 	TransferTable *model.HashPageTable

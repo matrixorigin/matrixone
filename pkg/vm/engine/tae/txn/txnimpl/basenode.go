@@ -318,7 +318,6 @@ func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, e
 	def := n.meta.GetSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
-		n.bufMgr,
 		n.fs,
 		n.meta.AsCommonID(),
 		def,
