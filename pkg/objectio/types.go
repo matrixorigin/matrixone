@@ -69,21 +69,21 @@ type Reader interface {
 		extent *Extent, idxs []uint16,
 		id uint32,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	ReadAll(
 		ctx context.Context,
 		extent *Extent,
 		idxs []uint16,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc,
+		readFunc CacheConstructorFactory,
 	) (*fileservice.IOVector, error)
 
 	ReadBlocks(ctx context.Context,
 		extent *Extent,
 		ids map[uint32]*ReadBlockOptions,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta

@@ -175,7 +175,6 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	deleteRows := make([]int64, 0)
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
 	id := info.MetaLoc.ID()
-	extent := info.MetaLoc.Extent()
 	reader, err := NewObjectReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, deleteRows, err
@@ -228,7 +227,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		meta, err := reader.reader.ReadMeta(ctx, extent, m)
+		meta, err := reader.reader.ReadMeta(ctx, m)
 		if err != nil {
 			return err
 		}
