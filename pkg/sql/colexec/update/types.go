@@ -22,7 +22,7 @@ import (
 
 type Argument struct {
 	Ts           uint64
-	AffectedRows uint64
+	affectedRows uint64
 	Engine       engine.Engine
 	UpdateCtx    *UpdateCtx
 }
@@ -59,4 +59,8 @@ type UpdateCtx struct {
 	OnSetUpdateCol    []map[string]int32
 
 	ParentIdx []map[string]int32
+}
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.affectedRows
 }

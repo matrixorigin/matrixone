@@ -47,3 +47,7 @@ type InsertCtx struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.Affected
+}

@@ -155,14 +155,25 @@ func (c *Compile) run(s *Scope) error {
 		return s.Run(c)
 	case Merge:
 		defer c.fillAnalyzeInfo()
-		return s.MergeRun(c)
+		err := s.MergeRun(c)
+		if err != nil {
+			return err
+		}
+
+		for _, in := range s.Instructions {
+			if arg, ok := in.Arg.(vm.ModificationArgument); ok {
+				c.setAffectedRows(arg.AffectedRows())
+				break
+			}
+		}
+		return nil
 	case MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
+		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows())
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -769,9 +780,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
-			Magic:    Merge,
-			NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
-			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil

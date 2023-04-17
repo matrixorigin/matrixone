@@ -118,3 +118,7 @@ func (ins *Instruction) IsBrokenNode() bool {
 	}
 	return false
 }
+
+type ModificationArgument interface {
+	AffectedRows() uint64
+}
