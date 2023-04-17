@@ -181,8 +181,6 @@ type Compile struct {
 
 	s3CounterSet perfcounter.CounterSet
 
-	scanBlockNumber int
-
 	stepRegs map[int32][]*process.WaitRegister
 }
 
