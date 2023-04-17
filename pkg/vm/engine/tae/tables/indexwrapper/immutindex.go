@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -110,13 +109,12 @@ func (index *immutableIndex) Destroy() (err error) {
 
 func (index *immutableIndex) ReadFrom(
 	fs *objectio.ObjectFS,
-	id *common.ID,
 	location objectio.Location,
-	colDef *catalog.ColDef) (err error) {
-	id.Idx = uint16(colDef.Idx)
+	colDef *catalog.ColDef,
+) (err error) {
 	index.zmReader = NewZmReader(
 		fs,
-		id.Idx,
+		uint16(colDef.Idx),
 		location)
 
 	if colDef.IsPrimary() {

@@ -71,7 +71,6 @@ func (node *persistedNode) init() {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
 			node.block.fs,
-			node.block.meta.AsCommonID(),
 			metaloc,
 			schema.ColDefs[i]); err != nil {
 			panic(err)

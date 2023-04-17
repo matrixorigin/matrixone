@@ -231,7 +231,6 @@ func (n *persistedNode) init() {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
 			n.bnode.fs,
-			n.bnode.meta.AsCommonID(),
 			n.bnode.meta.GetMetaLoc(),
 			schema.ColDefs[i]); err != nil {
 			panic(err)
