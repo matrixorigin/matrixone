@@ -78,6 +78,11 @@ func Test_mce(t *testing.T) {
 		ctx, rsStubs := mockRecordStatement(ctx)
 		defer rsStubs.Reset()
 
+		srStub := gostub.Stub(&parsers.HandleSqlForRecord, func(sql string) []string {
+			return make([]string, 7)
+		})
+		defer srStub.Reset()
+
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

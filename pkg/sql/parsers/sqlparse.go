@@ -46,7 +46,7 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 	}
 }
 
-func HandleSqlForRecord(sql string) []string {
+var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
 		// Remove /* cloud_user */ prefix
