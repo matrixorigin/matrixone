@@ -102,6 +102,7 @@ func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
 	Version          uint32
+	NextColSeqnum    uint16
 	AcInfo           accessInfo
 	Name             string
 	ColDefs          []*ColDef
@@ -171,6 +172,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn2)
 	if sn2, err = r.Read(types.EncodeUint32(&s.Version)); err != nil {
+		return
+	}
+	n += int64(sn2)
+	if sn2, err = r.Read(types.EncodeUint16(&s.NextColSeqnum)); err != nil {
 		return
 	}
 	n += int64(sn2)
@@ -291,6 +296,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&s.Version)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint16(&s.NextColSeqnum)); err != nil {
 		return
 	}
 	if _, err = s.AcInfo.WriteTo(&w); err != nil {
@@ -584,6 +592,10 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		if err = s.AppendColDef(phyAddrDef); err != nil {
 			return
 		}
+	}
+	// init column sequence. Rowid column's seqnum is uint16Max
+	if s.NextColSeqnum == 0 {
+		s.NextColSeqnum = uint16(len(s.ColDefs))
 	}
 
 	// sortColIdx is sort key index list. as of now, sort key is pk

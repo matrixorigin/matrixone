@@ -68,7 +68,10 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type TableNode struct {
-	// the latest schema
+	// the latest schema. shortcut to the schema in the last mvvcnode.
+	// TODO(aptend):
+	// use atomic.Pointer?
+	// do not writeTo or readFrom, inherit from mvvcnode in replay phrase
 	schema *Schema
 }
 
