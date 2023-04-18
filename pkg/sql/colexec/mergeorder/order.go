@@ -126,6 +126,7 @@ func receiveBatch(proc *process.Process, ctr *container) (*batch.Batch, bool, er
 	}
 	chosen, value, ok := reflect.Select(ctr.receiverListener)
 	if !ok {
+		ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 		logutil.Errorf("pipeline closed unexpectedly")
 		return nil, true, nil
 	}
