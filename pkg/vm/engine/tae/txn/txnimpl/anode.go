@@ -16,7 +16,6 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -36,12 +35,12 @@ type anode struct {
 func NewANode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
-	mgr base.INodeManager,
+	indexCache model.LRUCache,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *anode {
 	impl := new(anode)
-	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
+	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
 	impl.storage.mnode = newMemoryNode(impl.baseNode)
 	impl.storage.mnode.Ref()
 	return impl
