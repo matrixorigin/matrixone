@@ -780,3 +780,15 @@ func (node *ShowRolesStmt) Format(ctx *FmtCtx) {
 
 func (node *ShowRolesStmt) GetStatementType() string { return "Show Roles" }
 func (node *ShowRolesStmt) GetQueryType() string     { return QueryTypeOth }
+
+// ShowBackendServers indicates SHOW BACKEND SERVERS statement.
+type ShowBackendServers struct {
+	showImpl
+}
+
+func (node *ShowBackendServers) Format(ctx *FmtCtx) {
+	ctx.WriteString("show backend servers")
+}
+
+func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
+func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }

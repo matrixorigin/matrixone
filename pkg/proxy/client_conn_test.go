@@ -162,7 +162,7 @@ func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNSer
 			_, _ = client.Read(b)
 		}
 	}(tp.ctx)
-	tu := newTunnel(tp.ctx, tp.logger)
+	tu := newTunnel(tp.ctx, tp.logger, tp.counterSet)
 	sc, _, err := tp.ru.Connect(cn, nil, tu)
 	require.NoError(t, err)
 	cc := newMockClientConn(clientProxy, "t1", li, tp.ru, tu)
@@ -232,7 +232,8 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	clientBaseConnID = 90
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
-	cc, err := newClientConn(ctx, logger, s, nil, nil, nil)
+	cs := newCounterSet()
+	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {

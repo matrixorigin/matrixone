@@ -38,7 +38,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 
-	tu := newTunnel(baseCtx, logger)
+	tu := newTunnel(baseCtx, logger, nil)
 	defer func() { _ = tu.Close() }()
 
 	clientProxy, client := net.Pipe()
@@ -193,7 +193,7 @@ func TestTunnelServerClient(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 
-	tu := newTunnel(baseCtx, logger)
+	tu := newTunnel(baseCtx, logger, nil)
 	defer func() { _ = tu.Close() }()
 
 	clientProxy, client := net.Pipe()
@@ -262,7 +262,7 @@ func TestTunnelClose(t *testing.T) {
 	ctx := context.Background()
 	for _, withRun := range []bool{true, false} {
 		t.Run(fmt.Sprintf("withRun=%t", withRun), func(t *testing.T) {
-			f := newTunnel(ctx, nil)
+			f := newTunnel(ctx, nil, nil)
 			defer f.Close()
 
 			if withRun {
@@ -292,7 +292,7 @@ func TestTunnelReplaceConn(t *testing.T) {
 	clientProxy, client := net.Pipe()
 	serverProxy, server := net.Pipe()
 
-	tu := newTunnel(ctx, nil)
+	tu := newTunnel(ctx, nil, nil)
 	defer tu.Close()
 
 	cc := newMockClientConn(clientProxy, "t1", labelInfo{}, nil, tu)
@@ -606,7 +606,7 @@ func TestReplaceServerConn(t *testing.T) {
 	clientProxy, client := net.Pipe()
 	serverProxy, _ := net.Pipe()
 
-	tu := newTunnel(ctx, nil)
+	tu := newTunnel(ctx, nil, nil)
 	defer func() {
 		require.NoError(t, tu.Close())
 	}()

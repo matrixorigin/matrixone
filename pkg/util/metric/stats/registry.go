@@ -37,6 +37,11 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 	}
 }
 
+// Unregister deletes the item with familyName from map.
+func (r *Registry) Unregister(familyName string) {
+	delete(*r, familyName)
+}
+
 // ExportLog returns the snapshot of all the Family in the registry
 func (r *Registry) ExportLog() map[string][]zap.Field {
 	families := make(map[string][]zap.Field)
@@ -72,4 +77,9 @@ var DefaultRegistry = Registry{}
 // Usage: stats.Register("FamilyName", stats.WithLogExporter(customStatsLogExporter))
 func Register(familyName string, opts ...Options) {
 	DefaultRegistry.Register(familyName, opts...)
+}
+
+// Unregister unregisters the family from DefaultRegistry.
+func Unregister(familyName string) {
+	DefaultRegistry.Unregister(familyName)
 }
