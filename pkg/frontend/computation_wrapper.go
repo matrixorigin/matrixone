@@ -207,7 +207,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 	checkPri := time.Now()                                     // trace #8986
 	if elapsed := checkPri.Sub(start); elapsed > time.Second { // trace #8986
-		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("buildPlan long cost %v", elapsed), trace.ContextField(requestCtx))
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("build plan long cost %v", elapsed), trace.ContextField(requestCtx))
 	}
 	if err != nil {
 		return nil, err
@@ -221,7 +221,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 	startPrepare := time.Now()                                        // trace #8986
 	if elapsed := startPrepare.Sub(checkPri); elapsed > time.Second { // trace #8986
-		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("checkPrivilege long cost %v", elapsed), trace.ContextField(requestCtx))
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("check privilege long cost %v", elapsed), trace.ContextField(requestCtx))
 	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
@@ -318,7 +318,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	if elapsed := time.Since(startCompile); elapsed > time.Second { // trace #8986
-		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("exec Compile long cost %v", elapsed), trace.ContextField(requestCtx))
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("exec compile long cost %v", elapsed), trace.ContextField(requestCtx))
 	}
 
 	// check if it is necessary to initialize the temporary engine
