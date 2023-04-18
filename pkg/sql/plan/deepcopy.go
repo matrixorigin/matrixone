@@ -85,6 +85,7 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 	newCtx := &plan.InsertCtx{
 		Ref:             DeepCopyObjectRef(ctx.Ref),
 		AddAffectedRows: ctx.AddAffectedRows,
+		IsClusterTable:  ctx.IsClusterTable,
 	}
 
 	return newCtx
@@ -99,6 +100,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		AddAffectedRows: ctx.AddAffectedRows,
 		RowIdIdx:        ctx.RowIdIdx,
 		Ref:             DeepCopyObjectRef(ctx.Ref),
+		IsClusterTable:  ctx.IsClusterTable,
 	}
 	return newCtx
 }
@@ -478,15 +480,20 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		return nil
 	}
 	newTable := &plan.TableDef{
+		TblId:         table.TblId,
 		Name:          table.Name,
-		Cols:          make([]*plan.ColDef, len(table.Cols)),
-		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
+		Hidden:        table.Hidden,
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
+		RefChildTbls:  make([]uint64, len(table.RefChildTbls)),
+		Cols:          make([]*plan.ColDef, len(table.Cols)),
+		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
 		Name2ColIndex: table.Name2ColIndex,
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
 		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
 	}
+
+	copy(newTable.RefChildTbls, table.RefChildTbls)
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)

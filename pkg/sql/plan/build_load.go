@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -93,6 +94,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.InsertCtx = &plan.InsertCtx{
 		Ref:             objRef,
 		AddAffectedRows: true,
+		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 	}
 
 	stmt.Param.Tail.ColumnList = nil
@@ -106,8 +108,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	tableDef.Createsql = string(json_byte)
 	node1.TableDef = tableDef
 	node1.ObjRef = objRef
-	node3.TableDef = tableDef
-	node3.ObjRef = objRef
+	// node3.TableDef = tableDef
+	// node3.ObjRef = objRef
 
 	nodes := make([]*plan.Node, 3)
 	nodes[0] = node1

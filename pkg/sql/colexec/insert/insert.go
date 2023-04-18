@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -97,6 +99,14 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	// }
 
 	affectedRows := uint64(bat.Length())
+	newBat := batch.New(true, bat.Attrs)
+	for j := range bat.Vecs {
+		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+	}
+	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+		return false, err
+	}
+	proc.SetInputBatch(newBat)
 
 	// if insertArg.IsRemote {
 	// if err := collectAndOutput(proc, s3Writers); err != nil {

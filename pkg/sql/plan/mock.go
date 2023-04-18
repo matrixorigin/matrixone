@@ -620,6 +620,13 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				Cols:      colDefs,
 				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
+			if len(table.pks) == 1 {
+				tableDef.Pkey = &plan.PrimaryKeyDef{
+					PkeyColName: colDefs[table.pks[0]].Name,
+					Names:       []string{colDefs[table.pks[0]].Name},
+					CompPkeyCol: colDefs[table.pks[0]],
+				}
+			}
 
 			if table.idxs != nil {
 				for i, idx := range table.idxs {

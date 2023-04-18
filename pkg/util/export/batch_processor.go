@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -32,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+
+	"go.uber.org/zap"
 )
 
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
-
-const defaultBufferCnt = 10
 
 const LoggerNameMOCollector = "MOCollector"
 
@@ -264,7 +264,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		exporterCnt:    runtime.NumCPU(),
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
-		maxBufferCnt:   defaultBufferCnt,
+		maxBufferCnt:   int32(runtime.NumCPU()),
 	}
 	c.bufferCond = sync.NewCond(&c.bufferMux)
 	for _, opt := range opts {
@@ -287,6 +287,11 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) {
 		c.statsInterval = cfg.ShowStatsInterval.Duration
 		c.maxBufferCnt = cfg.BufferCnt
+		if c.maxBufferCnt == -1 {
+			c.maxBufferCnt = math.MaxInt32
+		} else if c.maxBufferCnt == 0 {
+			c.maxBufferCnt = int32(runtime.NumCPU())
+		}
 	})
 }
 
@@ -481,6 +486,7 @@ loop:
 		select {
 		case <-time.After(c.statsInterval):
 			fields := make([]zap.Field, 0, 16)
+			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))

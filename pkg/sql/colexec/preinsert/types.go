@@ -33,6 +33,7 @@ type Argument struct {
 	Eg         eng
 	SchemaName string
 	TableDef   *pb.TableDef
+	Attrs      []string
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}
