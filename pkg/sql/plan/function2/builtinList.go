@@ -36,7 +36,8 @@ var supportedBuiltins = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				overloadId:      0,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_timestamp.ToType()
 				},

@@ -44,6 +44,15 @@ func GetFunctionIsAggregateByName(name string) bool {
 	return f.isAggregate()
 }
 
+func GetFunctionIsWinFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	f := allSupportedFunctions[fid]
+	return len(f.Overloads) > 0 && f.testFlag(plan.Function_WIN)
+}
+
 func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
@@ -191,9 +200,29 @@ type overload struct {
 		proc *process.Process, length int) error
 
 	// if agg, should set agg id
-	aggId int
+	isAgg     bool
+	isWin     bool
+	specialId int
 	// if true, overload cannot be folded
 	volatile bool
+	// if realTimeRelated, overload cannot be folded when prepare.
+	realTimeRelated bool
+}
+
+func (ov *overload) CannotFold() bool {
+	return ov.volatile
+}
+
+func (ov *overload) IsRealTimeRelated() bool {
+	return ov.realTimeRelated
+}
+
+func (ov *overload) IsAgg() bool {
+	return ov.isAgg
+}
+
+func (ov *overload) IsWin() bool {
+	return ov.isWin
 }
 
 func (fn *FuncNew) isFunction() bool {

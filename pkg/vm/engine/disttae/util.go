@@ -16,6 +16,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"math"
 	"sort"
 	"strings"
@@ -34,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -102,7 +102,8 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	funId, returnType, _, _ := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	fGet, _ := function2.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	funId, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
 		Expr: &plan.Expr_F{

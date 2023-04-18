@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -83,14 +83,14 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, exists := function.GetFunctionByIDWithoutError(overloadID)
+	f, exists := function2.GetFunctionByIdWithoutError(overloadID)
 	if !exists {
 		return e
 	}
-	if f.Volatile { // function cannot be fold
+	if f.CannotFold() { // function cannot be fold
 		return e
 	}
-	if f.RealTimeRelated && r.isPrepared {
+	if f.IsRealTimeRelated() && r.isPrepared {
 		return e
 	}
 	for i := range ef.F.Args {
@@ -108,7 +108,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 
-	if f.RealTimeRelated {
+	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
 			Typ: &plan.Type{
 				Id:          e.Typ.Id,
@@ -312,11 +312,11 @@ func IsConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		f, exists := function2.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
 			return false
 		}
-		if f.Volatile { // function cannot be fold
+		if f.CannotFold() { // function cannot be fold
 			return false
 		}
 		for i := range ef.F.Args {

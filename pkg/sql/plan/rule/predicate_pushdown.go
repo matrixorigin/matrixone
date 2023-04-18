@@ -16,7 +16,7 @@ package rule
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 )
 
 type PredicatePushdown struct {
@@ -72,11 +72,11 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 		return relPos, expr
 	case *plan.Expr_F:
 		overloadID := e.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		f, exists := function2.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
 			return relPos, nil
 		}
-		if f.TestFlag(plan.Function_AGG) {
+		if f.IsAgg() {
 			return relPos, nil
 		}
 		args := make([]*plan.Expr, len(e.F.Args))
