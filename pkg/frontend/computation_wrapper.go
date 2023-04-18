@@ -16,7 +16,10 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"github.com/google/uuid"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -186,6 +190,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
+	start := time.Now() // trace #8986
 	if cwft.ses.IfInitedTempEngine() {
 		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
@@ -199,6 +204,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.accountId = getAccountId(requestCtx)
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
+
+	checkPri := time.Now()                                     // trace #8986
+	if elapsed := checkPri.Sub(start); elapsed > time.Second { // trace #8986
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("buildPlan long cost %v", elapsed), trace.ContextField(requestCtx))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +217,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if err = checkPrivilege(ids, requestCtx, cwft.ses); err != nil {
 			return nil, err
 		}
+	}
+
+	startPrepare := time.Now()                                        // trace #8986
+	if elapsed := startPrepare.Sub(checkPri); elapsed > time.Second { // trace #8986
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("checkPrivilege long cost %v", elapsed), trace.ContextField(requestCtx))
 	}
 	if _, ok := cwft.stmt.(*tree.Execute); ok {
 		executePlan := cwft.plan.GetDcl().GetExecute()
@@ -269,6 +284,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 	}
+	startCompile := time.Now()                                            // trace #8986
+	if elapsed := startCompile.Sub(startPrepare); elapsed > time.Second { // trace #8986
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("exec prepare long cost %v", elapsed), trace.ContextField(requestCtx))
+	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
 	if cacheHit && cwft.plan.NeedImplicitTxn() {
@@ -298,8 +317,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	if elapsed := time.Since(startCompile); elapsed > time.Second { // trace #8986
+		logInfo(cwft.ses.GetDebugString(), fmt.Sprintf("exec Compile long cost %v", elapsed), trace.ContextField(requestCtx))
+	}
+
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
+		logInfo(cwft.ses.GetDebugString(), "init temp engine", trace.ContextField(requestCtx)) // trace #8986
 		// 0. init memory-non-dist storage
 		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
