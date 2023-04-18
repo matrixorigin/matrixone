@@ -1136,7 +1136,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
-		return pwdBytes, nil
+		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
 	ses.SetTenantInfo(tenant)
