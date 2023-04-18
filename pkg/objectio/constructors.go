@@ -24,9 +24,9 @@ import (
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
-type CacheConstructorFactory = func(size int64) CacheConstructor
+type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
-func objectMetaConstructorFactory(size int64) CacheConstructor {
+func objectMetaConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -47,7 +47,7 @@ func objectMetaConstructorFactory(size int64) CacheConstructor {
 	}
 }
 
-func noDecompressConstructorFactory(size int64) CacheConstructor {
+func noDecompressConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		if len(data) == 0 {
 			var err error
@@ -61,7 +61,7 @@ func noDecompressConstructorFactory(size int64) CacheConstructor {
 }
 
 // decompressConstructorFactory the decompression function passed to fileservice
-func decompressConstructorFactory(size int64) CacheConstructor {
+func decompressConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -80,7 +80,7 @@ func decompressConstructorFactory(size int64) CacheConstructor {
 	}
 }
 
-func BloomFilterConstructorFactory(size int64) CacheConstructor {
+func BloomFilterConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error

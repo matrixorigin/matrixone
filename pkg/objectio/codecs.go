@@ -6,10 +6,11 @@ type IOEntryType = uint16
 type IOEntryVersion = uint16
 
 const (
-	IOET_Invalid = 0
+	IOET_Empty   = 0
 	IOET_ObjMeta = 1
 	IOET_ColData = 2
 	IOET_BF      = 3
+	IOET_BlkObj  = 4
 )
 
 type IOEntryHeader struct {

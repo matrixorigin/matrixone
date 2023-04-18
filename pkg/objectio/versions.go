@@ -29,5 +29,7 @@ var (
 )
 
 const (
-	IOET_ObjectMeta_CurrVer = 1
+	IOET_ObjectMeta_V1 = 1
+
+	IOET_ObjectMeta_CurrVer = IOET_ObjectMeta_V1
 )
