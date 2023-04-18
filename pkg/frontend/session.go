@@ -1309,7 +1309,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	logInfo(sessionInfo, tenant.String())
 
-	return []byte(pwd), nil
+	return GetPassWord(pwd)
 }
 
 func (ses *Session) GetPrivilege() *privilege {
