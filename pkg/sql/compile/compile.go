@@ -1594,16 +1594,34 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 }
 
 func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
-	ss := make([]*Scope, 0, len(leftScopes))
-	for i := range leftScopes {
-		tmp := new(Scope)
-		tmp.Magic = Remote
-		tmp.IsJoin = true
-		tmp.Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
-		tmp.NodeInfo = leftScopes[i].NodeInfo
-		ss = append(ss, tmp)
+	/*
+		ss := make([]*Scope, 0, len(leftScopes))
+		for i := range leftScopes {
+			tmp := new(Scope)
+			tmp.Magic = Remote
+			tmp.IsJoin = true
+			tmp.Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+			tmp.NodeInfo = leftScopes[i].NodeInfo
+			ss = append(ss, tmp)
+		}
+	*/
+
+	// Force right join to execute on one CN due to right join issue
+	// Will fix in future
+	maxCpuNum := 1
+	for _, s := range leftScopes {
+		if s.NodeInfo.Mcpu > maxCpuNum {
+			maxCpuNum = s.NodeInfo.Mcpu
+		}
 	}
 
+	ss := make([]*Scope, 1)
+	ss[0] = &Scope{
+		Magic:    Remote,
+		IsJoin:   true,
+		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
+		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(c.NumCPU(), maxCpuNum)},
+	}
 	return ss
 }
 
