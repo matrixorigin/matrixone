@@ -640,6 +640,22 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 
+	case plan.Node_VALUE_SCAN:
+		if node.RowsetData == nil {
+			node.Stats = DefaultStats()
+		} else {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			blockNumber := rowCount/8192 + 1
+			node.Stats = &plan.Stats{
+				TableCnt:    (rowCount),
+				BlockNum:    int32(blockNumber),
+				Outcnt:      rowCount,
+				Cost:        rowCount,
+				Selectivity: 1,
+			}
+		}
+
 	case plan.Node_EXTERNAL_SCAN:
 		// no good method to estimate external table
 		node.Stats = &plan.Stats{
