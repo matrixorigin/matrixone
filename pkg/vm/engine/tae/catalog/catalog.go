@@ -82,17 +82,13 @@ func genDBFullName(tenantID uint32, name string) string {
 	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
-func compareDBFn(a, b *DBEntry) int {
-	return CompareUint64(a.ID, b.ID)
-}
-
 func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList(compareDBFn),
+		link:       common.NewGenericSortedDList((*DBEntry).Less),
 		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
@@ -105,7 +101,7 @@ func NewEmptyCatalog() *Catalog {
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList(compareDBFn),
+		link:       common.NewGenericSortedDList((*DBEntry).Less),
 		scheduler:  nil,
 	}
 }
@@ -116,7 +112,7 @@ func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catal
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList(compareDBFn),
+		link:       common.NewGenericSortedDList((*DBEntry).Less),
 		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
