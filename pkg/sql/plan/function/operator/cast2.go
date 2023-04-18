@@ -2191,8 +2191,11 @@ func datetimeToDecimal64(
 				return err
 			}
 		} else {
-			result := v.ToDecimal64()
-			if err := to.Append(result, false); err != nil {
+			result, err := v.ToDecimal64().Scale(to.GetType().Scale - 6)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2214,8 +2217,11 @@ func datetimeToDecimal128(
 				return err
 			}
 		} else {
-			result := v.ToDecimal128()
-			if err := to.Append(result, false); err != nil {
+			result, err := v.ToDecimal128().Scale(to.GetType().Scale - 6)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2427,6 +2433,10 @@ func timestampToDecimal64(
 			if err != nil {
 				return err
 			}
+			result, err = result.Scale(to.GetType().Scale - 6)
+			if err != nil {
+				return err
+			}
 			if err = to.Append(result, false); err != nil {
 				return err
 			}
@@ -2450,6 +2460,10 @@ func timestampToDecimal128(
 			}
 		} else {
 			result, err := v.UnixToDecimal128()
+			if err != nil {
+				return err
+			}
+			result, err = result.Scale(to.GetType().Scale - 6)
 			if err != nil {
 				return err
 			}
