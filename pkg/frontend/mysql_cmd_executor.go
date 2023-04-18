@@ -222,8 +222,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
-	stmID = uuid.New()
-	text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		ses.ast = statement
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
 	stm := &motrace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,

@@ -55,7 +55,7 @@ var HandleSqlForRecord = func(sql string) []string {
 			split[i] = split[i][0:p0] + split[i][p0+16:len(split[i])]
 		}
 
-		// Hide secret key,
+		// Hide secret key for split[i],
 		// for example:
 		// before: create account nihao admin_name 'admin' identified with '123'
 		// after: create account nihao admin_name 'admin' identified with '******'
