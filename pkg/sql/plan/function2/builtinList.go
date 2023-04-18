@@ -16,7 +16,9 @@ package function2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var supportedBuiltins = []FuncNew{
@@ -340,6 +342,217 @@ var supportedBuiltins = []FuncNew{
 				},
 
 				NewOp: builtInStrToTime,
+			},
+		},
+	},
+
+	// function `sin`
+	{
+		functionId: SIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInSin,
+			},
+		},
+	},
+
+	// function `cos`
+	{
+		functionId: COS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInCos,
+			},
+		},
+	},
+
+	// function `cot`
+	{
+		functionId: COT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInCot,
+			},
+		},
+	},
+
+	// function `tan`
+	{
+		functionId: TAN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInTan,
+			},
+		},
+	},
+
+	// function `sinh`
+	{
+		functionId: SINH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInSinh,
+			},
+		},
+	},
+
+	// function `acos`
+	{
+		functionId: ACOS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInACos,
+			},
+		},
+	},
+
+	// function `exp`
+	{
+		functionId: EXP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInExp,
+			},
+		},
+	},
+
+	// function `ln`
+	{
+		functionId: LN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInLn,
+			},
+		},
+	},
+
+	// function `atan`
+	{
+		functionId: ATAN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInATan,
+			},
+
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInATan2,
+			},
+		},
+	},
+
+	// function `rand`, `rand(1)`
+	{
+		functionId: RANDOM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					r := new(opBuiltInRand)
+					return r.builtInRand(parameters, result, proc, length)
+				},
+			},
+
+			{
+				overloadId: 1,
+				args:       nil,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInRand,
 			},
 		},
 	},
