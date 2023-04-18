@@ -60,6 +60,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
 	query.StmtType = plan.Query_DELETE
 	if err != nil {
 		return nil, err

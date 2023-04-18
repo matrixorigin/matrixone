@@ -96,8 +96,17 @@ func buildDeletePlans(
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	haveUniqueKey := haveUniqueKey(tableDef)
-	if haveUniqueKey {
+	isPartitionTable := false
+	if tableDef.Partition != nil {
+		isPartitionTable = true
+		lastNodeId = makePreDeletePlan(builder, bindCtx, objRef, tableDef, lastNodeId)
+		lastNode := builder.qry.Nodes[lastNodeId]
+		projectTag = lastNode.BindingTags[0]
+		projectProjection = lastNode.ProjectList
+	}
+
+	hasUniqueKey := haveUniqueKey(tableDef)
+	if hasUniqueKey {
 		// append join node to get unique key table's row_id/pk for delete
 		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, tableDef, lastNodeId)
 		lastNode := builder.qry.Nodes[lastNodeId]
@@ -109,6 +118,9 @@ func buildDeletePlans(
 
 		// delete unique table
 		deleteIdx := len(tableDef.Cols)
+		if isPartitionTable {
+			deleteIdx = deleteIdx + 1
+		}
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
 				_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
@@ -141,6 +153,7 @@ func buildDeletePlans(
 
 	// append project node in the end
 	endProjectProjection := getProjectionByPreProjection(projectProjection, projectTag)
+
 	endProjectTag := builder.genNewTag()
 	endProjectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
@@ -827,4 +840,41 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 	}, bindCtx)
 
 	return lastNodeId, nil
+}
+
+// makePreDeletePlan  build predelete plan.
+// sink_scan -> project -> predelete[process partition]
+func makePreDeletePlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) int32 {
+	preNode := builder.qry.Nodes[lastNodeId] // preject Node
+	preNodeTag := preNode.BindingTags[0]
+	predeleteTag := builder.genNewTag()
+
+	projection := getProjectionByPreProjection(preNode.ProjectList, preNodeTag)
+	partitionExpr := makePartitionExprForPreDelete(tableDef, preNodeTag)
+	projection = append(projection, partitionExpr)
+
+	preDeleteNode := &Node{
+		NodeType:    plan.Node_PRE_DELETE,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{predeleteTag},
+		ProjectList: projection,
+	}
+	return builder.appendNode(preDeleteNode, bindCtx)
+}
+
+func makePartitionExprForPreDelete(tableDef *TableDef, preNodeTag int32) *Expr {
+	partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+	modifyColumnRelPos(partitionExpr, preNodeTag)
+	return partitionExpr
+}
+
+func modifyColumnRelPos(expr *plan.Expr, preNodeTag int32) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		exprImpl.Col.RelPos = preNodeTag
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			modifyColumnRelPos(arg, preNodeTag)
+		}
+	}
 }

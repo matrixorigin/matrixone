@@ -37,7 +37,8 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain select abs(N_REGIONKEY) from NATION"
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
 	//input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
-	input := "explain verbose insert into dept values (11, 'aa', 'bb')"
+	//input := "explain verbose insert into dept values (11, 'aa', 'bb')"
+	input := "explain verbose delete from dept where deptno = 20"
 	mock := plan.NewMockOptimizer(true)
 	err := runOneStmt(mock, t, input)
 	if err != nil {
