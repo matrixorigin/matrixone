@@ -1041,7 +1041,7 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 
 // the server get the auth string from HandShakeResponse
 // hpwd is SHA1(SHA1(password))
-// hash1 = XOR SHA1( slat + SHA1( SHA1( password )))
+// hash1 = AUTH XOR SHA1( slat + SHA1( SHA1( password )))
 // hash2 = SHA1(hash1)
 // check(hash2, hpwd)
 func (mp *MysqlProtocolImpl) checkPassword(hpwd, salt, auth []byte) bool {

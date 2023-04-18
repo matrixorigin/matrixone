@@ -2612,7 +2612,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			}
 
 			//2, update the password
-			sql, err = getSqlForUpdatePasswordOfUser(ctx, aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			//encryption the password
+			encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
 			if err != nil {
 				goto handleFailed
 			}
@@ -6484,8 +6486,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 		defaultPassword = d
 	}
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	//encryption the password
+	encryption := HashPassWord(defaultPassword)
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
