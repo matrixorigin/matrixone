@@ -195,6 +195,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 func (ctr *container) flush(proc *process.Process) (uint32, error) {
 	var err error
 	s3writer := &colexec.S3Writer{}
+	s3writer.SetSortIdx(-1)
 	resSize := uint32(0)
 	_, err = s3writer.GenerateWriter(proc)
 	if err != nil {

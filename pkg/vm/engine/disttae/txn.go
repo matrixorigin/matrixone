@@ -220,6 +220,7 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
+	s3Writer.SetSortIdx(-1)
 	s3Writer.Init()
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
