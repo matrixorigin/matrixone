@@ -26,23 +26,8 @@ import (
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
-func noDecompressConstructorFactory(size int64, algo uint8) CacheConstructor {
+func genericConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
-		if len(data) == 0 {
-			var err error
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		return data, int64(len(data)), nil
-	}
-}
-
-// decompressConstructorFactory the decompression function passed to fileservice
-func decompressConstructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
 		var err error
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
@@ -50,6 +35,13 @@ func decompressConstructorFactory(size int64, algo uint8) CacheConstructor {
 				return nil, 0, err
 			}
 		}
+
+		// no compress
+		if algo == 0 {
+			return data, int64(len(data)), nil
+		}
+
+		// lz4 compress
 		decompressed := make([]byte, size)
 		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
 		if err != nil {

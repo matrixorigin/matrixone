@@ -87,7 +87,7 @@ func ReadObjectMeta(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v any
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, decompressConstructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, genericConstructorFactory); err != nil {
 		return
 	}
 	meta = ObjectMeta(v.([]byte))

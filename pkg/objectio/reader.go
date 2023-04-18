@@ -189,7 +189,7 @@ func (r *objectReaderV1) ReadExtent(
 		&extent,
 		r.noLRUCache,
 		r.fs,
-		decompressConstructorFactory)
+		genericConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +234,7 @@ func (r *objectReaderV1) ReadAllMeta(
 
 func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, noDecompressConstructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, genericConstructorFactory)
 	if err != nil {
 		return
 	}
