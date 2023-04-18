@@ -21,51 +21,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+type ObjectMeta = objectMetaV1
+
+var (
+	BuildObjectMeta = buildObjectMetaV1
+)
+
+const (
+	ObjectMetaCurrVer = 1
+)
+
 const FooterSize = 64
 const HeaderSize = 64
 
-type ObjectMeta []byte
+type objectMetaV1 []byte
 
-func BuildObjectMeta(count uint16) ObjectMeta {
+func buildObjectMetaV1(count uint16) ObjectMeta {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
-	meta := ObjectMeta(buf)
+	meta := objectMetaV1(buf)
 	meta.BlockHeader().setVersion(Version)
 	return buf[:]
 }
 
-func (o ObjectMeta) BlockHeader() BlockHeader {
+func (o objectMetaV1) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
-func (o ObjectMeta) ObjectColumnMeta(idx uint16) ColumnMeta {
+func (o objectMetaV1) ObjectColumnMeta(idx uint16) ColumnMeta {
 	return GetObjectColumnMeta(idx, o[headerLen:])
 }
 
-func (o ObjectMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
+func (o objectMetaV1) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + uint32(idx)*colMetaLen
 	copy(o[offset:offset+colMetaLen], col)
 }
 
-func (o ObjectMeta) Length() uint32 {
+func (o objectMetaV1) Length() uint32 {
 	return headerLen + uint32(o.BlockHeader().ColumnCount())*colMetaLen
 }
 
-func (o ObjectMeta) BlockCount() uint32 {
+func (o objectMetaV1) BlockCount() uint32 {
 	return uint32(o.BlockHeader().Sequence())
 }
 
-func (o ObjectMeta) BlockIndex() BlockIndex {
+func (o objectMetaV1) BlockIndex() BlockIndex {
 	offset := o.Length()
 	return BlockIndex(o[offset:])
 }
 
-func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
+func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o ObjectMeta) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
+func (o objectMetaV1) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
 	return o.GetBlockMeta(blk).ColumnMeta(col)
 }
 
