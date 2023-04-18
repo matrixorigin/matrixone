@@ -30,9 +30,7 @@ const (
 )
 
 type CacheCfg struct {
-	IndexCapacity  uint64 `toml:"index-cache-size"`
-	InsertCapacity uint64 `toml:"insert-cache-size"`
-	TxnCapacity    uint64 `toml:"txn-cache-size"`
+	IndexCapacity uint64 `toml:"index-cache-size"`
 }
 
 type StorageCfg struct {
