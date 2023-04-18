@@ -190,8 +190,8 @@ func (e *DBEntry) CoarseTableCnt() int {
 	return len(e.entries)
 }
 
-func (entry *DBEntry) Less(b *DBEntry) int {
-	return CompareUint64(entry.ID, b.ID)
+func (e *DBEntry) Less(b *DBEntry) int {
+	return CompareUint64(e.ID, b.ID)
 }
 
 func (e *DBEntry) GetTenantID() uint32          { return e.acInfo.TenantID }
