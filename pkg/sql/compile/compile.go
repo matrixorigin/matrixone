@@ -411,8 +411,8 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 			// ping failed
 			if err != nil {
 				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+				i--
 			}
-			i--
 		}
 	}
 	if err != nil {
