@@ -674,7 +674,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 				err)
 		}
 	}()
-	if tbl.localSegment != nil && id.SegmentID == tbl.localSegment.entry.ID {
+	if tbl.localSegment != nil && id.SegmentID == tbl.localSegment.appendableEntry.ID {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -750,7 +750,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 }
 
 func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localSegment != nil && tbl.localSegment.entry.ID == id.SegmentID {
+	if tbl.localSegment != nil && tbl.localSegment.appendableEntry.ID == id.SegmentID {
 		return tbl.localSegment.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(

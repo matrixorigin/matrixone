@@ -106,7 +106,7 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 	if table.localSegment != nil {
 		cit := &composedSegmentIt{
 			segmentIt:   it,
-			uncommitted: table.localSegment.entry,
+			uncommitted: table.localSegment.appendableEntry,
 		}
 		return cit
 	}

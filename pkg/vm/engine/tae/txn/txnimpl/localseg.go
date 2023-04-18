@@ -43,7 +43,9 @@ const (
 // }
 
 type localSegment struct {
-	entry      *catalog.SegmentEntry
+	nonAppendableEntries []*catalog.SegmentEntry
+	appendableEntry      *catalog.SegmentEntry
+
 	appendable InsertNode
 	//index for primary key
 	index TableIndex
@@ -58,16 +60,42 @@ type localSegment struct {
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
-	entry := catalog.NewStandaloneSegment(
-		table.entry,
-		table.store.txn.GetStartTS())
 	return &localSegment{
-		entry:   entry,
+		nonAppendableEntries: make([]*catalog.SegmentEntry, 0),
+		appendableEntry: catalog.NewStandaloneSegment(
+			table.entry,
+			table.store.txn.GetStartTS()),
 		nodes:   make([]InsertNode, 0),
 		index:   NewSimpleTableIndex(),
 		appends: make([]*appendCtx, 0),
 		table:   table,
 	}
+}
+
+func (seg *localSegment) addStandaloneSegment() *catalog.SegmentEntry {
+	entry := catalog.NewStandaloneSegment(
+		seg.table.entry,
+		seg.table.store.txn.GetStartTS())
+	seg.nonAppendableEntries = append(seg.nonAppendableEntries, entry)
+	return entry
+}
+
+func (seg *localSegment) getLastStandaloneSegment() *catalog.SegmentEntry {
+	if len(seg.nonAppendableEntries) == 0 {
+		return nil
+	}
+	return seg.nonAppendableEntries[len(seg.nonAppendableEntries)-1]
+}
+
+func (seg *localSegment) getNonAppendableSegment() *catalog.SegmentEntry {
+	entry := seg.getLastStandaloneSegment()
+	if entry == nil {
+		return seg.addStandaloneSegment()
+	}
+	if entry.BlockCnt() >= int(seg.table.schema.SegmentMaxBlocks) {
+		return seg.addStandaloneSegment()
+	}
+	return entry
 }
 
 func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
@@ -83,13 +111,14 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 
 // register a non-appendable insertNode.
 func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
+	entry := seg.getNonAppendableSegment()
 	meta := catalog.NewStandaloneBlockWithLoc(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		entry,
+		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
-	seg.entry.AddEntryLocked(meta)
+	entry.AddEntryLocked(meta)
 	n := NewNode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -103,11 +132,12 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 
 // register an appendable insertNode.
 func (seg *localSegment) registerANode() {
+	entry := seg.appendableEntry
 	meta := catalog.NewStandaloneBlock(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		entry,
+		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
-	seg.entry.AddEntryLocked(meta)
+	entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -451,15 +481,30 @@ func (seg *localSegment) Rows() (n uint32) {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	id = seg.entry.AsCommonID()
 	if !seg.table.schema.HasPK() {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		id = seg.table.entry.AsCommonID()
+		id.SegmentID, id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
+	id = seg.appendableEntry.AsCommonID()
 	if v, ok := filter.Val.([]byte); ok {
 		offset, err = seg.index.Search(string(v))
 	} else {
 		offset, err = seg.index.Search(filter.Val)
+	}
+	if err != nil {
+		return
+	}
+	for _, entry := range seg.nonAppendableEntries {
+		id = entry.AsCommonID()
+		if v, ok := filter.Val.([]byte); ok {
+			offset, err = seg.index.Search(string(v))
+		} else {
+			offset, err = seg.index.Search(filter.Val)
+		}
+		if err != nil {
+			return
+		}
 	}
 	return
 }
