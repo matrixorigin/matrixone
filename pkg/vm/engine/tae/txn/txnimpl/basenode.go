@@ -22,7 +22,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -59,7 +58,7 @@ type InsertNode interface {
 	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) (any, error)
+	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
@@ -67,7 +66,7 @@ type InsertNode interface {
 	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
-	GetPersistedLoc() (string, string)
+	GetPersistedLoc() (objectio.Location, objectio.Location)
 }
 
 type appendInfo struct {
@@ -230,8 +229,8 @@ func (n *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
+			n.bnode.indexCache,
 			n.bnode.fs,
-			n.bnode.meta.AsCommonID(),
 			n.bnode.meta.GetMetaLoc(),
 			schema.ColDefs[i]); err != nil {
 			panic(err)
@@ -251,8 +250,8 @@ func (n *persistedNode) Rows() uint32 {
 }
 
 type baseNode struct {
-	bufMgr base.INodeManager
-	fs     *objectio.ObjectFS
+	indexCache model.LRUCache
+	fs         *objectio.ObjectFS
 	//scheduler is used to flush insertNode into S3/FS.
 	scheduler tasks.TaskScheduler
 	//meta for this uncommitted standalone block.
@@ -267,16 +266,16 @@ type baseNode struct {
 func newBaseNode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
-	mgr base.INodeManager,
+	indexCache model.LRUCache,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *baseNode {
 	return &baseNode{
-		bufMgr:    mgr,
-		fs:        fs,
-		scheduler: sched,
-		meta:      meta,
-		table:     tbl,
+		indexCache: indexCache,
+		fs:         fs,
+		scheduler:  sched,
+		meta:       meta,
+		table:      tbl,
 	}
 }
 
@@ -288,7 +287,7 @@ func (n *baseNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
 }
 
-func (n *baseNode) GetPersistedLoc() (string, string) {
+func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
 	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
 }
 
@@ -318,7 +317,6 @@ func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, e
 	def := n.meta.GetSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
-		n.bufMgr,
 		n.fs,
 		n.meta.AsCommonID(),
 		def,

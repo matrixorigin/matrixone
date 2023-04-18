@@ -15,85 +15,115 @@
 package objectio
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// ColumnBlock is the organizational structure of a vector in objectio
-// One batch can be written at a time, and a batch can contain multiple vectors.
-// It is a child of the block
-type ColumnBlock struct {
-	// meta is the metadata of the ColumnBlock,
-	// such as index, data location, compression algorithm...
-	meta *ColumnMeta
+const (
+	typeLen         = 2
+	versionOff      = typeLen
+	versionLen      = 2
+	dataTypeOff     = versionOff + versionLen
+	dataTypeLen     = 1
+	idxOff          = dataTypeOff + dataTypeLen
+	idxLen          = 2
+	ndvOff          = idxOff + idxLen
+	ndvLen          = 4
+	nullCntOff      = ndvOff + ndvLen
+	nullCntLen      = 4
+	locationOff     = nullCntOff + nullCntLen
+	locationLen     = ExtentSize
+	checkSumOff     = locationOff + locationLen
+	checkSumLen     = 4
+	zoneMapOff      = checkSumOff + checkSumLen
+	zoneMapLen      = 64
+	colMetaDummyOff = zoneMapOff + zoneMapLen
+	colMetaDummyLen = 32
+	colMetaLen      = colMetaDummyOff + colMetaDummyLen
+)
 
-	// object is the block.object
-	object *Object
+func GetColumnMeta(idx uint16, data []byte) ColumnMeta {
+	offset := headerLen + uint32(idx)*colMetaLen
+	return data[offset : offset+colMetaLen]
 }
 
-func NewColumnBlock(idx uint16, object *Object) *ColumnBlock {
-	meta := &ColumnMeta{
-		idx:         idx,
-		zoneMap:     ZoneMap{},
-		bloomFilter: Extent{},
-	}
-	col := &ColumnBlock{
-		object: object,
-		meta:   meta,
-	}
-	return col
+type ColumnMeta []byte
+
+func BuildColumnMeta() ColumnMeta {
+	var buf [colMetaLen]byte
+	meta := ColumnMeta(buf[:])
+	meta.setVersion(Version)
+	meta.setType(0)
+	return meta
 }
 
-func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error) {
-	var err error
-	data := &fileservice.IOVector{
-		FilePath: cb.object.name,
-		Entries:  make([]fileservice.IOEntry, 1),
-	}
-	data.Entries[0] = fileservice.IOEntry{
-		Offset: int64(cb.meta.location.Offset()),
-		Size:   int64(cb.meta.location.Length()),
-	}
-	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()))
-	err = cb.object.fs.Read(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+func (cm ColumnMeta) Type() uint16 {
+	return types.DecodeUint16(cm[:typeLen])
 }
 
-func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
-	if dataType == ZoneMapType {
-		return &cb.meta.zoneMap, nil
-	} else if dataType == BloomFilterType {
-		data := &fileservice.IOVector{
-			FilePath: cb.object.name,
-			Entries:  make([]fileservice.IOEntry, 1),
-		}
-		data.Entries[0] = fileservice.IOEntry{
-			Offset: int64(cb.meta.bloomFilter.Offset()),
-			Size:   int64(cb.meta.bloomFilter.Length()),
-		}
-		var err error
-		data.Entries[0].ToObject = readFunc(int64(cb.meta.bloomFilter.OriginSize()))
-		err = cb.object.fs.Read(ctx, data)
-		if err != nil {
-			return nil, err
-		}
-		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object), nil
-	}
-	return nil, nil
+func (cm ColumnMeta) setType(t uint16) {
+	copy(cm[:typeLen], types.EncodeUint16(&t))
 }
 
-func (cb *ColumnBlock) GetMeta() *ColumnMeta {
-	return cb.meta
+func (cm ColumnMeta) DataType() uint8 {
+	return types.DecodeUint8(cm[dataTypeOff : dataTypeOff+dataTypeLen])
 }
 
-func (cb *ColumnBlock) MarshalMeta() []byte {
-	return cb.meta.Marshal()
+func (cm ColumnMeta) setDataType(t uint8) {
+	copy(cm[dataTypeOff:dataTypeOff+dataTypeLen], types.EncodeUint8(&t))
 }
 
-func (cb *ColumnBlock) UnmarshalMate(data []byte) error {
-	return cb.meta.Unmarshal(data)
+func (cm ColumnMeta) Version() uint16 {
+	return types.DecodeUint16(cm[:typeLen])
+}
+
+func (cm ColumnMeta) setVersion(version uint16) {
+	copy(cm[:typeLen], types.EncodeUint16(&version))
+}
+
+func (cm ColumnMeta) Idx() uint16 {
+	return types.DecodeUint16(cm[idxOff : idxOff+idxLen])
+}
+
+func (cm ColumnMeta) setIdx(idx uint16) {
+	copy(cm[idxOff:idxOff+idxLen], types.EncodeUint16(&idx))
+}
+
+func (cm ColumnMeta) Ndv() uint32 {
+	return types.DecodeUint32(cm[:ndvLen])
+}
+
+func (cm ColumnMeta) SetNdv(cnt uint32) {
+	copy(cm[:ndvLen], types.EncodeUint32(&cnt))
+}
+
+func (cm ColumnMeta) NullCnt() uint32 {
+	return types.DecodeUint32(cm[nullCntOff : nullCntOff+nullCntLen])
+}
+
+func (cm ColumnMeta) SetNullCnt(cnt uint32) {
+	copy(cm[nullCntOff:nullCntOff+nullCntLen], types.EncodeUint32(&cnt))
+}
+
+func (cm ColumnMeta) Location() Extent {
+	return Extent(cm[locationOff : locationOff+locationLen])
+}
+
+func (cm ColumnMeta) setLocation(location Extent) {
+	copy(cm[locationOff:locationOff+locationLen], location)
+}
+
+func (cm ColumnMeta) ZoneMap() ZoneMap {
+	return ZoneMap(cm[zoneMapOff : zoneMapOff+zoneMapLen])
+}
+
+func (cm ColumnMeta) SetZoneMap(zm ZoneMap) {
+	copy(cm[zoneMapOff:zoneMapOff+zoneMapLen], zm)
+}
+
+func (cm ColumnMeta) Checksum() uint32 {
+	return types.DecodeUint32(cm[checkSumOff : checkSumOff+checkSumLen])
+}
+
+func (cm ColumnMeta) IsEmpty() bool {
+	return len(cm) == 0
 }

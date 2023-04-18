@@ -371,6 +371,7 @@ func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	ses := obj.(*Session)
 	bat2 := &batch.Batch{}
 	for _, vec := range bat.Vecs {
+		// XXX should we free the old vec here ?
 		tmp, _ := vec.Dup(ses.GetMemPool())
 		bat2.Vecs = append(bat2.Vecs, tmp)
 	}

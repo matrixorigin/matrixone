@@ -43,20 +43,8 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		node.Children[i] = builder.pushdownSemiAntiJoins(childID)
 	}
 
-	if node.NodeType != plan.Node_JOIN {
+	if node.NodeType != plan.Node_JOIN || (node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI) {
 		return nodeID
-	}
-
-	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
-		return nodeID
-	}
-
-	for _, filter := range node.OnList {
-		if f, ok := filter.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
-				return nodeID
-			}
-		}
 	}
 
 	var targetNode *plan.Node
@@ -64,12 +52,10 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 	joinNode := builder.qry.Nodes[node.Children[0]]
 
+	semiAntiStat := builder.qry.Nodes[node.Children[1]].Stats
+
 	for {
 		if joinNode.NodeType != plan.Node_JOIN {
-			break
-		}
-
-		if joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_LEFT {
 			break
 		}
 
@@ -88,11 +74,23 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 			joinSide |= getJoinSide(cond, leftTags, rightTags, 0)
 		}
 
+		// TODO: This logic is problematic. Use this threshold right now just for TPC-H
+		ratio := 2.0
+		if joinNode.JoinType == plan.Node_SEMI || joinNode.JoinType == plan.Node_ANTI {
+			ratio = 1.0
+		}
+
 		if joinSide == JoinSideLeft {
+			if semiAntiStat.Selectivity*ratio > builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity {
+				break
+			}
 			targetNode = joinNode
 			targetSide = 0
 			joinNode = builder.qry.Nodes[joinNode.Children[0]]
 		} else if joinNode.JoinType == plan.Node_INNER && joinSide == JoinSideRight {
+			if semiAntiStat.Selectivity*ratio > builder.qry.Nodes[joinNode.Children[0]].Stats.Selectivity {
+				break
+			}
 			targetNode = joinNode
 			targetSide = 1
 			joinNode = builder.qry.Nodes[joinNode.Children[1]]
@@ -101,7 +99,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		}
 	}
 
-	if targetNode != nil && compareStats(builder.qry.Nodes[node.Children[1]].Stats, builder.qry.Nodes[targetNode.Children[1-targetSide]].Stats) {
+	if targetNode != nil {
 		nodeID = node.Children[0]
 		node.Children[0] = targetNode.Children[targetSide]
 		targetNode.Children[targetSide] = node.NodeId

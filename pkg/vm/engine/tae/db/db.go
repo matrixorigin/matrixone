@@ -15,10 +15,10 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
@@ -52,8 +51,7 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	MTBufMgr  base.INodeManager
-	TxnBufMgr base.INodeManager
+	IndexCache model.LRUCache
 
 	TxnMgr        *txnbase.TxnManager
 	TransferTable *model.HashPageTable

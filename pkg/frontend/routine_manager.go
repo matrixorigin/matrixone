@@ -82,10 +82,30 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 	return rm.tlsConfig
 }
 
+func (rm *RoutineManager) getConnID() (uint32, error) {
+	// Only works in unit test.
+	if rm.pu.HAKeeperClient == nil {
+		return nextConnectionID(), nil
+	}
+	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
+	defer cancel()
+	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, connIDAllocKey)
+	if err != nil {
+		return 0, err
+	}
+	// Convert uint64 to uint32 to adapt MySQL protocol.
+	return uint32(connID), nil
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	pu := rm.getParameterUnit()
-	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
+	connID, err := rm.getConnID()
+	if err != nil {
+		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
+		return
+	}
+	pro := NewMysqlClientProtocol(connID, rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
@@ -107,8 +127,16 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
+	// With proxy module enabled, we try to update salt value from proxy.
+	// The MySQL protocol is broken a little: when connection is built, read
+	// the salt from proxy and update the salt, then go on with the handshake
+	// phase.
+	if rm.pu.SV.ProxyEnabled {
+		pro.tryUpdateSalt(rs)
+	}
+
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := pro.writePackets(hsV10pkt)
+	err = pro.writePackets(hsV10pkt)
 	if err != nil {
 		logErrorf(pro.GetDebugString(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
@@ -282,6 +310,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				protocol.SetTlsEstablished()
 			} else {
 				// client don't ask server to upgrade TLS
+				if err := protocol.Authenticate(ctx); err != nil {
+					return err
+				}
 				protocol.SetTlsEstablished()
 				protocol.SetEstablished()
 			}
@@ -290,6 +321,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logErrorf(protoInfo, "error:%v", err)
+				return err
+			}
+			if err = protocol.Authenticate(ctx); err != nil {
 				return err
 			}
 			protocol.SetEstablished()

@@ -51,7 +51,6 @@ func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 }
 
 func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
-	//TODO implement me
 	return nil
 }
 
@@ -123,19 +122,6 @@ func (c *CompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 
 func (c *CompilerContext) DefaultDatabase() string {
 	return c.defaultDB
-}
-
-func (c *CompilerContext) GetHideKeyDef(dbName string, tableName string) *plan.ColDef {
-	attrs, err := c.getTableAttrs(dbName, tableName)
-	if err != nil {
-		panic(err)
-	}
-	for i, attr := range attrs {
-		if attr.IsHidden {
-			return engineAttrToPlanColDef(i, attr)
-		}
-	}
-	return nil
 }
 
 func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (defs []*plan.ColDef) {

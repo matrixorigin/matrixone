@@ -127,6 +127,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
+			Partition:     node.TableDef.Partition,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -242,6 +243,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
+			Partition:     node.TableDef.Partition,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -441,7 +443,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-		} else if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
+		} else {
 			childProjList = builder.qry.Nodes[rightID].ProjectList
 			for i, globalRef := range rightRemapping.localToGlobal {
 				if colRefCnt[globalRef] == 0 {
@@ -827,11 +829,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.aggPullup(rootID, rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
-		rootID = builder.applySwapRuleByStats(rootID, true)
+		builder.applySwapRuleByStats(rootID, true)
 		SortFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
+
+		// XXX: This will be removed soon, after merging implementation of all join operators
+		builder.swapJoinChildren(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
@@ -1468,6 +1475,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
+		// rewrite right join to left join
+		builder.rewriteRightJoinToLeftJoin(nodeID)
+
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
@@ -1601,6 +1611,14 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
+
+			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					if c.I64Val < 0 {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
+					}
+				}
+			}
 		}
 		if astLimit.Count != nil {
 			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
@@ -1610,6 +1628,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
 				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					if c.I64Val < 0 {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
+					}
 					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
@@ -1752,6 +1773,19 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	ReCalcNodeStats(nodeID, builder, false, true)
 	return nodeID
+}
+
+func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+
+	for i := range node.Children {
+		builder.rewriteRightJoinToLeftJoin(node.Children[i])
+	}
+
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_RIGHT {
+		node.JoinType = plan.Node_LEFT
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
@@ -2197,7 +2231,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 }
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
-	var joinType plan.Node_JoinFlag
+	var joinType plan.Node_JoinType
 
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:

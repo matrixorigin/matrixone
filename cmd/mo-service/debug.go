@@ -36,6 +36,7 @@ import (
 var (
 	cpuProfilePathFlag         = flag.String("cpu-profile", "", "write cpu profile to the specified file")
 	allocsProfilePathFlag      = flag.String("allocs-profile", "", "write allocs profile to the specified file")
+	heapProfilePathFlag        = flag.String("heap-profile", "", "write heap profile to the specified file")
 	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
 	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
 
@@ -80,6 +81,26 @@ func writeAllocsProfile() {
 		panic(err)
 	}
 	logutil.Infof("Allocs profile written to %s", profilePath)
+}
+
+func writeHeapProfile() {
+	profile := pprof.Lookup("heap")
+	if profile == nil {
+		return
+	}
+	profilePath := *heapProfilePathFlag
+	if profilePath == "" {
+		profilePath = "heap-profile"
+	}
+	f, err := os.Create(profilePath)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if err := profile.WriteTo(f, 0); err != nil {
+		panic(err)
+	}
+	logutil.Infof("Heap profile written to %s", profilePath)
 }
 
 func startFileServiceProfile() func() {

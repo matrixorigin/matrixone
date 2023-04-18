@@ -271,6 +271,7 @@ func logGetRemoteBindFailed(
 func logRemoteBindChanged(
 	serviceID string,
 	old, new pb.LockTable) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("remote bind changed",
 			serviceIDField(serviceID),
@@ -283,6 +284,7 @@ func logLockTableCreated(
 	serviceID string,
 	bind pb.LockTable,
 	remote bool) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table created",
 			serviceIDField(serviceID),
@@ -295,6 +297,7 @@ func logLockTableClosed(
 	serviceID string,
 	bind pb.LockTable,
 	remote bool) {
+	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table closed",
 			serviceIDField(serviceID),

@@ -17,11 +17,10 @@ package txnimpl
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -38,12 +37,12 @@ type node struct {
 func NewNode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
-	mgr base.INodeManager,
+	indexCache model.LRUCache,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *node {
 	impl := new(node)
-	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
+	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
 	impl.storage.pnode = newPersistedNode(impl.baseNode)
 	impl.storage.pnode.Ref()
 	return impl
@@ -100,7 +99,7 @@ func (n *node) Window(start, end uint32) (*containers.Batch, error) {
 	panic("not implemented yet ")
 }
 
-func (n *node) GetValue(col int, row uint32) (any, error) {
+func (n *node) GetValue(col int, row uint32) (any, bool, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
@@ -152,9 +151,5 @@ func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 
 func (n *node) Prefetch(idxes []uint16) error {
 	key := n.meta.GetMetaLoc()
-	_, _, meta, _, err := blockio.DecodeLocation(key)
-	if err != nil {
-		return err
-	}
-	return blockio.Prefetch(idxes, []uint32{meta.Id()}, n.fs.Service, key)
+	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.fs.Service, key)
 }

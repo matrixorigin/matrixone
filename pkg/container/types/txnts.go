@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
@@ -153,22 +152,6 @@ func init() {
 	SystemDBTS = BuildTS(1, 0)
 }
 
-// Very opinioned code, almost surely a bug, but there you go.
-type Null struct{}
-
-func IsNull(v any) bool {
-	_, ok := v.(Null)
-	return ok
-}
-
-// TAE's own hash ...  Sigh.
-func Hash(v any, typ Type) (uint64, error) {
-	data := EncodeValue(v, typ)
-	xx := xxhash.Sum64(data)
-	return xx, nil
-}
-
-// Why don't we just do
 // var v T
 func DefaultVal[T any]() T {
 	var v T

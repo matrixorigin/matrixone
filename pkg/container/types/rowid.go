@@ -90,6 +90,10 @@ func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
+func (r Rowid) GetRowOffset() uint32 {
+	return DecodeUint32(r[BlockidSize:])
+}
+
 func (r Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
 	s := DecodeUint16(r[UuidSize:ObjectBytesSize])
@@ -137,6 +141,14 @@ func (b *Blockid) Offsets() (uint16, uint16) {
 	filen := DecodeUint16(b[UuidSize:ObjectBytesSize])
 	blkn := DecodeUint16(b[ObjectBytesSize:BlockidSize])
 	return filen, blkn
+}
+
+func (b *Blockid) Segment() Uuid {
+	return DecodeUuid(b[:UuidSize])
+}
+
+func (b *Blockid) Sequence() uint16 {
+	return DecodeUint16(b[ObjectBytesSize:BlockidSize])
 }
 
 func (b *Blockid) ObjectString() string {

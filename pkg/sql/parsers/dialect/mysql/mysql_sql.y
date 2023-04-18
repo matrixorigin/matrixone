@@ -319,7 +319,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -496,7 +496,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem
+%type <tableDef> table_elem constaint_def constraint_elem index_def
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -2583,7 +2583,7 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
@@ -2591,7 +2591,7 @@ alter_database_config_stmt:
             IsAccountLevel: false,
         }
      }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
@@ -6255,36 +6255,13 @@ table_elem:
     {
         $$ = $1
     }
-
-constaint_def:
-    constraint_keyword constraint_elem
-    {
-        if $1 != "" {
-            switch v := $2.(type) {
-            case *tree.PrimaryKeyIndex:
-                v.Name = $1
-            case *tree.ForeignKey:
-                v.Name = $1
-            }
-        }
-        $$ = $2
-    }
-|    constraint_elem
+|   index_def
     {
         $$ = $1
     }
 
-constraint_elem:
-    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
-    {
-         $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
-    }
-|    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+index_def:
+    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
     {
         $$ = &tree.FullTextIndex{
             KeyParts: $5,
@@ -6313,6 +6290,37 @@ constraint_elem:
             KeyParts: $5,
             Name: $3[0],
             KeyType: keyTyp,
+            IndexOption: $7,
+        }
+    }
+
+constaint_def:
+    constraint_keyword constraint_elem
+    {
+        if $1 != "" {
+            switch v := $2.(type) {
+            case *tree.PrimaryKeyIndex:
+                v.ConstraintSymbol = $1
+            case *tree.ForeignKey:
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                v.ConstraintSymbol = $1
+            }
+        }
+        $$ = $2
+    }
+|    constraint_elem
+    {
+        $$ = $1
+    }
+
+constraint_elem:
+    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+         $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
             IndexOption: $7,
         }
     }
@@ -9098,7 +9106,7 @@ equal_opt:
 //|   COLUMN_NUMBER
 //|   TABLE_VALUES
 //|   RETURNS
-//|   MYSQL_COMPATBILITY_MODE
+//|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT
@@ -9293,6 +9301,7 @@ non_reserved_keyword:
 |   PUBLICATION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
+|   PROPERTIES
 
 func_not_keyword:
     DATE_ADD

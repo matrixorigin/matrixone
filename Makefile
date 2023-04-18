@@ -47,7 +47,7 @@ GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
-BUILD_TIME=$(shell date --iso-8601=seconds)
+BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git describe --always --tags $(shell git rev-list --tags --max-count=1))
 GO_MODULE=$(shell go list -m)
 

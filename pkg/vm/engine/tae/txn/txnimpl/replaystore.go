@@ -143,7 +143,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if blk.GetMetaLoc() != "" {
+		if !blk.GetMetaLoc().IsEmpty() {
 			continue
 		}
 		hasActive = true
@@ -190,7 +190,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if blk.GetMetaLoc() != "" {
+		if !blk.GetMetaLoc().IsEmpty() {
 			continue
 		}
 		start := info.GetSrcOff()
@@ -262,7 +262,7 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.In
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if blk.GetMetaLoc() != "" {
+	if !blk.GetMetaLoc().IsEmpty() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

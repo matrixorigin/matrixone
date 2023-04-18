@@ -19,12 +19,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -44,7 +44,7 @@ type txnStore struct {
 	transferTable *model.HashPageTable
 	dbs           map[uint64]*txnDB
 	driver        wal.Driver
-	nodesMgr      base.INodeManager
+	indexCache    model.LRUCache
 	txn           txnif.AsyncTxn
 	catalog       *catalog.Catalog
 	cmdMgr        *commandManager
@@ -60,10 +60,10 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, txnBufMgr, dataFactory)
+		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
 	}
 }
 
@@ -71,7 +71,7 @@ func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		transferTable: transferTable,
@@ -81,7 +81,7 @@ func newStore(
 		driver:        driver,
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
-		nodesMgr:      txnBufMgr,
+		indexCache:    indexCache,
 		wg:            sync.WaitGroup{},
 	}
 }
@@ -178,8 +178,8 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []dataio.Index,
-	metaLoc []string,
+	zm []objectio.ZoneMap,
+	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
@@ -197,7 +197,7 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
-func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -208,7 +208,7 @@ func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string)
 	return db.UpdateMetaLoc(id, metaLoc)
 }
 
-func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -231,7 +231,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, err error) {
+func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -523,7 +523,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return

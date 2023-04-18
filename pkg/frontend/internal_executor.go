@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -136,7 +137,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Dispose()
+	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, sql)
@@ -146,7 +147,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Dispose()
+	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
@@ -179,6 +180,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
+
+	//make sure init tasks can see the prev task's data
+	now, _ := runtime.ProcessLevelRuntime().Clock().Now()
+	sess.lastCommitTS = now
 	return sess
 }
 
@@ -217,6 +222,10 @@ func (ip *internalProtocol) HandleHandshake(ctx context.Context, payload []byte)
 	return false, nil
 }
 
+func (ip *internalProtocol) Authenticate(ctx context.Context) error {
+	return nil
+}
+
 func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
 	return nil
 }
@@ -227,6 +236,10 @@ func (ip *internalProtocol) GetDebugString() string {
 
 func (ip *internalProtocol) GetSequenceId() uint8 {
 	return 0
+}
+
+func (ip *internalProtocol) GetConnectAttrs() map[string]string {
+	return nil
 }
 
 func (ip *internalProtocol) SetSequenceID(value uint8) {

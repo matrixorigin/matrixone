@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
@@ -45,6 +46,7 @@ const (
 	MO_INDEX_COLUMN_NAME      = "column_name"
 	MO_INDEX_ORDINAL_POSITION = "ordinal_position"
 	MO_INDEX_TABLE_NAME       = "index_table_name"
+	MO_INDEX_PRIKEY           = catalog.CPrimaryKeyColName
 )
 
 // Column type mapping of table 'mo_indexes'
@@ -61,6 +63,7 @@ var MO_INDEX_COLTYPE = map[string]types.T{
 	MO_INDEX_ORDINAL_POSITION: types.T_uint32,
 	MO_INDEX_OPTIONS:          types.T_text,
 	MO_INDEX_TABLE_NAME:       types.T_varchar,
+	MO_INDEX_PRIKEY:           types.T_varchar,
 }
 
 const (
@@ -166,8 +169,8 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 
 func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 12),
-		Vecs:  make([]*vector.Vector, 12),
+		Attrs: make([]string, 13),
+		Vecs:  make([]*vector.Vector, 13),
 		Cnt:   1,
 	}
 	bat.Attrs[0] = MO_INDEX_ID
@@ -182,6 +185,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat.Attrs[9] = MO_INDEX_ORDINAL_POSITION
 	bat.Attrs[10] = MO_INDEX_OPTIONS
 	bat.Attrs[11] = MO_INDEX_TABLE_NAME
+	bat.Attrs[12] = MO_INDEX_PRIKEY
 
 	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
@@ -348,6 +352,14 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 			}
 		}
 	}
+
+	// processing composite primary key
+	vec_prikey, err := multi.SerialWithSomeCols([]*vector.Vector{vec_id, vec_column_name}, proc)
+	if err != nil {
+		return nil, err
+	}
+	bat.Vecs[12] = vec_prikey
+
 	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	return bat, nil
 }

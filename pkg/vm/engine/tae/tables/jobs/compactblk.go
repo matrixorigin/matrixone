@@ -18,18 +18,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -163,7 +165,26 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 
 	if !empty {
-		if _, err = task.createAndFlushNewBlock(seg, preparer, deletes); err != nil {
+		createOnSeg := seg
+		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
+		// double the threshold to make more room for creating new appendable segment during appending, just a piece of defensive code
+		// check GetAppender function in tableHandle
+		if curSeg.GetNextObjectIndex() > options.DefaultObejctPerSegment*2 {
+			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
+			if nextSeg.ID == curSeg.ID {
+				// we can't create appendable seg here because compaction can be rollbacked.
+				// so just wait until the new appendable seg is available.
+				// actually this log can barely be printed.
+				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				return moerr.GetOkExpectedEOB()
+			}
+			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(nextSeg.ID)
+			if err != nil {
+				return err
+			}
+		}
+
+		if _, err = task.createAndFlushNewBlock(createOnSeg, preparer, deletes); err != nil {
 			return
 		}
 	}
@@ -198,11 +219,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		var metaLocABlk string
-		metaLocABlk, err = blockio.EncodeLocation(
+		metaLocABlk := blockio.EncodeLocation(
+			ablockTask.name,
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
-			ablockTask.blocks)
+			ablockTask.blocks[0].GetID())
 		if err != nil {
 			return
 		}
@@ -210,11 +231,11 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			var deltaLoc string
-			deltaLoc, err = blockio.EncodeLocation(
+			deltaLoc := blockio.EncodeLocation(
+				ablockTask.name,
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
-				ablockTask.blocks)
+				ablockTask.blocks[1].GetID())
 			if err != nil {
 				return
 			}
@@ -288,10 +309,11 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
-	metaLoc, err := blockio.EncodeLocation(
+	metaLoc := blockio.EncodeLocation(
+		ioTask.name,
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
-		ioTask.blocks)
+		ioTask.blocks[0].GetID())
 	if err != nil {
 		return
 	}
@@ -300,11 +322,11 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		return
 	}
 	if deletes != nil {
-		var deltaLoc string
-		deltaLoc, err = blockio.EncodeLocation(
+		deltaLoc := blockio.EncodeLocation(
+			ioTask.name,
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
-			ioTask.blocks)
+			ioTask.blocks[1].GetID())
 		if err != nil {
 			return
 		}

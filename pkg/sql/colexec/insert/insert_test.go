@@ -56,7 +56,7 @@ func TestInsertOperator(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -83,7 +83,7 @@ func TestInsertOperator(t *testing.T) {
 	argument1 := Argument{
 		Engine: eng,
 		InsertCtx: &InsertCtx{
-			Source: &mockRelation{},
+			Rels: []engine.Relation{&mockRelation{}},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",
@@ -104,7 +104,7 @@ func TestInsertOperator(t *testing.T) {
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
 
-	result := argument1.InsertCtx.Source.(*mockRelation).result
+	result := argument1.InsertCtx.Rels[0].(*mockRelation).result
 	// check attr names
 	require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
 	// check vector

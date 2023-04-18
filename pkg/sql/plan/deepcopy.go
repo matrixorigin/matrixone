@@ -115,6 +115,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		OnSetRef:       make([]*plan.ObjectRef, len(ctx.OnSetRef)),
 		OnSetDef:       make([]*plan.TableDef, len(ctx.OnSetDef)),
 		OnSetIdx:       make([]*plan.IdList, len(ctx.OnSetIdx)),
+		Idx:            make([]*plan.IdList, len(ctx.Idx)),
 		OnSetUpdateCol: make([]*plan.ColPosMap, len(ctx.OnSetUpdateCol)),
 	}
 
@@ -139,6 +140,14 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	}
 	for i, def := range ctx.OnSetDef {
 		newCtx.OnSetDef[i] = DeepCopyTableDef(def)
+	}
+	for i, list := range ctx.Idx {
+		if list != nil {
+			newCtx.Idx[i] = &plan.IdList{
+				List: make([]int64, len(list.List)),
+			}
+			copy(newCtx.Idx[i].List, list.List)
+		}
 	}
 	for i, list := range ctx.OnSetIdx {
 		if list != nil {
@@ -280,6 +289,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ExtraOptions:    node.ExtraOptions,
 		Children:        make([]int32, len(node.Children)),
 		JoinType:        node.JoinType,
+		BuildOnLeft:     node.BuildOnLeft,
 		BindingTags:     make([]int32, len(node.BindingTags)),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),

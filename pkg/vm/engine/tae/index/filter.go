@@ -60,7 +60,7 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op); err != nil {
+	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
 		return nil, err
 	}
 	var inner *xorfilter.BinaryFuse8
@@ -97,7 +97,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool
 		return nil
 	}
 
-	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op); err != nil {
+	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
 		return false, nil, err
 	}
 	return !positive.IsEmpty(), positive, nil

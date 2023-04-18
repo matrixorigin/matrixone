@@ -15,28 +15,18 @@
 package multi
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 )
-
-var buildTime = parseBuildTime(version.BuildTime)
 
 func BuildVersion(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtyp := types.T_timestamp.ToType()
-	return vector.NewConstFixed(rtyp, buildTime, 1, proc.Mp()), nil
-}
-
-func parseBuildTime(s string) types.Timestamp {
-	if s == "" {
-		return 0
-	}
-	t, err := time.Parse(time.RFC3339, s)
+	t, err := strconv.ParseInt(version.BuildTime, 10, 64)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return types.UnixNanoToTimestamp(t.UnixNano())
+	return vector.NewConstFixed(rtyp, types.UnixToTimestamp(t), 1, proc.Mp()), nil
 }

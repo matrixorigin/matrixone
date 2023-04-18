@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -64,6 +65,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -84,7 +87,7 @@ func init() {
 	constBat.Zs = []int64{1}
 }
 
-func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister) vm.Instruction {
+func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
 	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx, IsFirst: sourceIns.IsFirst, IsLast: sourceIns.IsLast}
 	switch sourceIns.Op {
 	case vm.Anti:
@@ -135,8 +138,28 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Right_typs: t.Right_typs,
-			Left_typs:  t.Left_typs,
+			RightTypes: t.RightTypes,
+			LeftTypes:  t.LeftTypes,
+			Conditions: t.Conditions,
+		}
+	case vm.RightSemi:
+		t := sourceIns.Arg.(*rightsemi.Argument)
+		res.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			RightTypes: t.RightTypes,
+			Conditions: t.Conditions,
+		}
+	case vm.RightAnti:
+		t := sourceIns.Arg.(*rightanti.Argument)
+		res.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -308,25 +331,27 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap:    t.NeedHashMap,
-			NeedExpr:       t.NeedExpr,
-			NeedSelectList: t.NeedSelectList,
-			Ibucket:        t.Ibucket,
-			Nbucket:        t.Nbucket,
-			Typs:           t.Typs,
-			Conditions:     t.Conditions,
+			NeedHashMap: t.NeedHashMap,
+			NeedExpr:    t.NeedExpr,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			Typs:        t.Typs,
+			Conditions:  t.Conditions,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
 		res.Arg = &external.Argument{
 			Es: &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:         t.Es.Attrs,
-					Cols:          t.Es.Cols,
-					Name2ColIndex: t.Es.Name2ColIndex,
-					CreateSql:     t.Es.CreateSql,
-					FileList:      t.Es.FileList,
-					Extern:        t.Es.Extern,
+					Attrs:           t.Es.Attrs,
+					Cols:            t.Es.Cols,
+					Idx:             index,
+					Name2ColIndex:   t.Es.Name2ColIndex,
+					CreateSql:       t.Es.CreateSql,
+					FileList:        t.Es.FileList,
+					FileSize:        t.Es.FileSize,
+					FileOffsetTotal: t.Es.FileOffsetTotal,
+					Extern:          t.Es.Extern,
 				},
 				ExParam: external.ExParam{
 					Filter: t.Es.Filter,
@@ -403,6 +428,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	delCtx := &deletion.DeleteCtx{
 		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
 		DelRef:    oldCtx.Ref,
+		DelIdx:    make([][]int32, len(oldCtx.Idx)),
 
 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
 		IdxIdx:    oldCtx.IdxIdx,
@@ -431,6 +457,12 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			delCtx.DelSource[i] = rel
 		}
 	} else {
+		for i, list := range oldCtx.Idx {
+			delCtx.DelIdx[i] = make([]int32, len(list.List))
+			for j, id := range list.List {
+				delCtx.DelIdx[i][j] = int32(id)
+			}
+		}
 		for i, list := range oldCtx.OnSetIdx {
 			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
 			for j, id := range list.List {
@@ -543,8 +575,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Source = originRel
-	newCtx.UniqueSource = indexRels
+	newCtx.Rels = append(newCtx.Rels, originRel)
+	newCtx.Rels = append(newCtx.Rels, indexRels...)
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
@@ -658,7 +690,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset [][2]int) *external.Argument {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -666,16 +698,16 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 	return &external.Argument{
 		Es: &external.ExternalParam{
 			ExParamConst: external.ExParamConst{
-				Attrs:         attrs,
-				Cols:          n.TableDef.Cols,
-				Extern:        param,
-				Name2ColIndex: n.TableDef.Name2ColIndex,
-				FileOffset:    fileOffset,
-				CreateSql:     n.TableDef.Createsql,
-				Ctx:           ctx,
-				FileList:      fileList,
-				FileSize:      FileSize,
-				ClusterTable:  n.GetClusterTable(),
+				Attrs:           attrs,
+				Cols:            n.TableDef.Cols,
+				Extern:          param,
+				Name2ColIndex:   n.TableDef.Name2ColIndex,
+				FileOffsetTotal: fileOffset,
+				CreateSql:       n.TableDef.Createsql,
+				Ctx:             ctx,
+				FileList:        fileList,
+				FileSize:        FileSize,
+				ClusterTable:    n.GetClusterTable(),
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
@@ -686,7 +718,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		},
 	}
 }
-func constructTableFunction(n *plan.Node, ctx context.Context, name string) *table_function.Argument {
+func constructTableFunction(n *plan.Node) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -695,7 +727,7 @@ func constructTableFunction(n *plan.Node, ctx context.Context, name string) *tab
 		Attrs:  attrs,
 		Rets:   n.TableDef.Cols,
 		Args:   n.TblFuncExprList,
-		Name:   name,
+		Name:   n.TableDef.TblFunc.Name,
 		Params: n.TableDef.TblFunc.Param,
 	}
 }
@@ -760,8 +792,40 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &right.Argument{
-		Left_typs:  left_typs,
-		Right_typs: right_typs,
+		LeftTypes:  left_typs,
+		RightTypes: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
+func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightsemi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		_, result[i] = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &rightsemi.Argument{
+		RightTypes: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
+func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightanti.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		_, result[i] = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &rightanti.Argument{
+		RightTypes: right_typs,
 		Nbucket:    Nbucket,
 		Ibucket:    Ibucket,
 		Result:     result,
@@ -834,7 +898,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 }
 */
 
-func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
+func constructOrder(n *plan.Node) *order.Argument {
 	return &order.Argument{
 		Fs: n.OrderBy,
 	}
@@ -919,21 +983,21 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 // ibucket: bucket number
 // nbucket:
 // construct operator argument
-func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket int) *intersectall.Argument {
+func constructIntersectAll(ibucket, nbucket int) *intersectall.Argument {
 	return &intersectall.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
 	}
 }
 
-func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
+func constructMinus(ibucket, nbucket int) *minus.Argument {
 	return &minus.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
 	}
 }
 
-func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket int) *intersect.Argument {
+func constructIntersect(ibucket, nbucket int) *intersect.Argument {
 	return &intersect.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
@@ -954,7 +1018,7 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
-func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) (bool, *dispatch.Argument) {
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
 
 	scopeLen := len(ss)
@@ -995,8 +1059,8 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
-	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, proc)
+func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
@@ -1006,7 +1070,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 	return arg
 }
 
-func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
+func constructMergeGroup(needEval bool) *mergegroup.Argument {
 	return &mergegroup.Argument{
 		NeedEval: needEval,
 	}
@@ -1041,7 +1105,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	}
 }
 
-func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
+func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
 	return &mergeorder.Argument{
 		Fs: n.OrderBy,
 	}
@@ -1087,7 +1151,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
+func constructLoopSingle(n *plan.Node, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -1145,26 +1209,23 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
@@ -1173,7 +1234,27 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Typs:        arg.RightTypes,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.RightSemi:
+		arg := in.Arg.(*rightsemi.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.RightTypes,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.RightAnti:
+		arg := in.Arg.(*rightanti.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:
@@ -1186,59 +1267,51 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap:    false,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
+			NeedHashMap: false,
+			Typs:        arg.Typs,
 		}
 
 	default:
