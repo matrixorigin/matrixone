@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -45,7 +44,7 @@ type txnStore struct {
 	transferTable *model.HashPageTable
 	dbs           map[uint64]*txnDB
 	driver        wal.Driver
-	nodesMgr      base.INodeManager
+	indexCache    model.LRUCache
 	txn           txnif.AsyncTxn
 	catalog       *catalog.Catalog
 	cmdMgr        *commandManager
@@ -61,10 +60,10 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, txnBufMgr, dataFactory)
+		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
 	}
 }
 
@@ -72,7 +71,7 @@ func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		transferTable: transferTable,
@@ -82,7 +81,7 @@ func newStore(
 		driver:        driver,
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
-		nodesMgr:      txnBufMgr,
+		indexCache:    indexCache,
 		wg:            sync.WaitGroup{},
 	}
 }
