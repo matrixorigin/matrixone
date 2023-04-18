@@ -25,14 +25,14 @@ func ReadExtent(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noCache bool,
+	noLRUCache bool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (v any, err error) {
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  noCache,
+		NoCache:  noLRUCache,
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -51,7 +51,7 @@ func ReadBloomFilter(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noCache bool,
+	noLRUCache bool,
 	fs fileservice.FileService,
 ) (filters []StaticFilter, err error) {
 	var v any
@@ -59,7 +59,7 @@ func ReadBloomFilter(
 		ctx,
 		name,
 		extent,
-		noCache,
+		noLRUCache,
 		fs,
 		BloomFilterConstructorFactory); err != nil {
 		return
@@ -71,23 +71,23 @@ func ReadBloomFilter(
 func ReadObjectMetaWithLocation(
 	ctx context.Context,
 	location *Location,
-	noCache bool,
+	noLRUCache bool,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	name := location.Name().String()
 	extent := location.Extent()
-	return ReadObjectMeta(ctx, name, &extent, noCache, fs)
+	return ReadObjectMeta(ctx, name, &extent, noLRUCache, fs)
 }
 
 func ReadObjectMeta(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noCache bool,
+	noLRUCache bool,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v any
-	if v, err = ReadExtent(ctx, name, extent, noCache, fs, objectMetaConstructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, objectMetaConstructorFactory); err != nil {
 		return
 	}
 	meta = ObjectMeta(v.([]byte))
@@ -126,7 +126,7 @@ func ReadMultiBlocksWithMeta(
 	name string,
 	meta *ObjectMeta,
 	options map[uint16]*ReadBlockOptions,
-	noCache bool,
+	noLRUCache bool,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
@@ -156,7 +156,7 @@ func ReadAllBlocksWithMeta(
 	meta *ObjectMeta,
 	name string,
 	cols []uint16,
-	noCache bool,
+	noLRUCache bool,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
@@ -164,7 +164,7 @@ func ReadAllBlocksWithMeta(
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
-		NoCache:  noCache,
+		NoCache:  noLRUCache,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, colIdx := range cols {

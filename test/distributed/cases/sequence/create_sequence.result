@@ -386,3 +386,43 @@ nextval(seq_17)    currval(seq_17)
 select lastval();
 lastval()
 28
+begin;
+create sequence seq_18 minvalue 1000;
+select nextval('seq_18');
+SQL parser error: table "seq_18" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select nextval('seq_18');
+ExpectedEOB
+create sequence seq_18;
+ExpectedEOB
+select nextval('seq_18');
+SQL parser error: table "seq_18" does not exist
+commit;
+select nextval('seq_18'),currval('seq_18');
+SQL parser error: table "seq_18" does not exist
+drop sequence seq_18;
+no such sequence create_sequence.seq_18
+begin;
+create sequence seq_19 minvalue 1000;
+select nextval('seq_19');
+SQL parser error: table "seq_19" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select nextval('seq_19');
+ExpectedEOB
+create sequence seq_19;
+ExpectedEOB
+rollback;
+select nextval('seq_19');
+SQL parser error: table "seq_19" does not exist
+drop sequence seq_19;
+no such sequence create_sequence.seq_19
+start transaction ;
+create sequence seq_20 increment by -10;
+select nextval('seq_20');
+SQL parser error: table "seq_20" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+rollback;
+select nextval('seq_20');
+SQL parser error: table "seq_20" does not exist
+drop sequence seq_20;
+no such sequence create_sequence.seq_20
