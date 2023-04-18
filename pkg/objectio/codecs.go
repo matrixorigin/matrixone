@@ -22,10 +22,8 @@ func (h IOEntryHeader) String() string {
 }
 
 type IOEntry interface {
-	Marshal() ([]byte, error)
-	Unmarshal([]byte) error
-	Type() uint16
-	Version() uint16
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary([]byte) error
 }
 
 type IOEncodeFunc = func(IOEntry) ([]byte, error)
@@ -37,6 +35,14 @@ type ioEntryCodec struct {
 
 	// if decFn is nil, no need to decode
 	decFn IODecodeFunc
+}
+
+func (codec ioEntryCodec) NoMarshal() bool {
+	return codec.encFn == nil
+}
+
+func (codec ioEntryCodec) NoUnmarshal() bool {
+	return codec.decFn == nil
 }
 
 var ioEntryCodecs = map[IOEntryHeader]ioEntryCodec{}
@@ -59,8 +65,4 @@ func GetIOEntryCodec(h IOEntryHeader) (codec ioEntryCodec) {
 		panic(fmt.Sprintf("no codec found for: %s", h.String()))
 	}
 	return
-}
-
-func init() {
-	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, 1}, nil, nil)
 }

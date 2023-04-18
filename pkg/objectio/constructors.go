@@ -26,6 +26,55 @@ import (
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
+func getVersionType(buf []byte) (uint16, uint16) {
+	if len(buf) < 4 {
+		panic("bad data")
+	}
+	return types.DecodeUint16(buf[:2]), types.DecodeUint16(buf[2:])
+}
+
+// use this to replace all other constructors
+func constructorFactory(size int64, algo uint8) CacheConstructor {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		fn := func() ([]byte, int64, error) {
+			var err error
+			if len(data) == 0 {
+				data, err = io.ReadAll(reader)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+
+			// no compress
+			if algo == 0 {
+				return data, int64(len(data)), nil
+			}
+
+			// lz4 compress
+			decompressed := make([]byte, size)
+			decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+			if err != nil {
+				return nil, 0, err
+			}
+			return decompressed, int64(len(decompressed)), nil
+		}
+		buf, size, err := fn()
+		if err != nil {
+			return nil, 0, err
+		}
+		version, typ := getVersionType(buf)
+		codec := GetIOEntryCodec(IOEntryHeader{version, typ})
+		if codec.NoUnmarshal() {
+			return buf, size, err
+		}
+		vec, err := codec.decFn(buf[4:])
+		if err != nil {
+			return nil, 0, err
+		}
+		return vec, size, nil
+	}
+}
+
 func genericConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		var err error

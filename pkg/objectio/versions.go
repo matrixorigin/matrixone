@@ -14,6 +14,11 @@
 
 package objectio
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
 type ObjectWriter = objectWriterV1
 
 type ObjectReader = objectReaderV1
@@ -30,6 +35,25 @@ var (
 
 const (
 	IOET_ObjectMeta_V1 = 1
+	IOET_ColumnData_V1 = 1
 
 	IOET_ObjectMeta_CurrVer = IOET_ObjectMeta_V1
+	IOET_ColumnData_CurrVer = IOET_ColumnData_V1
 )
+
+func init() {
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V1}, nil, nil)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
+}
+
+func EncodeColumnDataV1(ioe IOEntry) (buf []byte, err error) {
+	return ioe.MarshalBinary()
+}
+
+func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
+	vec := vector.NewVec(types.Type{})
+	if err = vec.UnmarshalBinary(buf); err != nil {
+		return
+	}
+	return vec, err
+}
