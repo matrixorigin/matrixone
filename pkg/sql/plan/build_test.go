@@ -31,8 +31,8 @@ import (
 // only use in developing
 func TestSingleSQL(t *testing.T) {
 	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
-	sql := "insert into dept values (11, 'aa', 'bb')"
-	// sql := "delete from dept where deptno > 10"
+	//sql := "insert into dept values (11, 'aa', 'bb')"
+	sql := "delete from dept where deptno > 10"
 	// sql := "delete from nation where n_nationkey > 10"
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
