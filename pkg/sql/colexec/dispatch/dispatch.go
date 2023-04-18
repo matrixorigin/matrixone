@@ -46,7 +46,10 @@ func Prepare(proc *process.Process, arg any) error {
 			ap.ctr.sendFunc = sendToAllFunc
 		}
 		for _, rr := range ap.RemoteRegs {
-			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+			err := colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+			if err != nil {
+				return err
+			}
 		}
 
 	case SendToAnyFunc:
@@ -61,7 +64,10 @@ func Prepare(proc *process.Process, arg any) error {
 			ap.ctr.sendFunc = sendToAnyFunc
 		}
 		for _, rr := range ap.RemoteRegs {
-			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+			err := colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+			if err != nil {
+				return err
+			}
 		}
 
 	case SendToAllLocalFunc:

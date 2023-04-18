@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,7 +55,8 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	select {
 	case <-reg.Ctx.Done():
 		bat.Clean(proc.Mp())
-		return true, nil
+		return true, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+
 	case reg.Ch <- bat:
 		proc.SetInputBatch(nil)
 		return false, nil

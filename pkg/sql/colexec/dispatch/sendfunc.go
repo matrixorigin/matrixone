@@ -120,8 +120,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			ap.localRegsCnt--
 			ap.aliveRegCnt--
 			if ap.localRegsCnt == 0 {
-				return true, nil
+				return true, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 			}
+
 		case reg.Ch <- bat:
 			proc.SetInputBatch(nil)
 			ap.sendCnt++
