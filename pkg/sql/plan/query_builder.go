@@ -235,15 +235,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		tag := node.BindingTags[0]
 		for i := range node.ProjectList {
 			globalRef := [2]int32{tag, int32(i)}
-			// if colRefCnt[globalRef] == 0 {
-			// 	continue
-			// }
 			internalRemapping.addColRef(globalRef)
 		}
 		for i := range node.ProjectList {
-			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
-				continue
-			}
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 		}
 
