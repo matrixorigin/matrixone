@@ -21,22 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type ObjectMeta = objectMetaV1
-
-var (
-	BuildObjectMeta = buildObjectMetaV1
-)
-
-const (
-	ObjectMetaCurrVer = 1
-)
-
 const FooterSize = 64
 const HeaderSize = 64
 
 type objectMetaV1 []byte
 
-func buildObjectMetaV1(count uint16) ObjectMeta {
+func buildObjectMetaV1(count uint16) objectMetaV1 {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	meta := objectMetaV1(buf)
