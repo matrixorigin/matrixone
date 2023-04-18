@@ -11,8 +11,8 @@ sleep(15)
 0
 select statement, sql_source_type from system.statement_info where user="dump" order by request_at desc limit 4;
 statement    sql_source_type
-select sleep(15) as s    external_sql
-select * from user limit 0    external_sql
-use mysql    external_sql
-use system    external_sql
+show tables    cloud_user_sql
+use system    cloud_nonuser_sql
+select * from __mo_t1    external_sql
+insert into __mo_t1 values (1)    external_sql
 drop account if exists sql_source_type;
