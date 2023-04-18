@@ -128,9 +128,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			IndexCapacity:  DefaultIndexCacheSize,
-			InsertCapacity: DefaultMTCacheSize,
-			TxnCapacity:    DefaultTxnCacheSize,
+			IndexCapacity: DefaultIndexCacheSize,
 		}
 	}
 

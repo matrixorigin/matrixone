@@ -18,29 +18,30 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type dataSegment struct {
 	common.ClosedState
-	meta      *catalog.SegmentEntry
-	bufMgr    base.INodeManager
-	scheduler tasks.TaskScheduler
+	meta       *catalog.SegmentEntry
+	scheduler  tasks.TaskScheduler
+	indexCache model.LRUCache
 }
 
-func newSegment(meta *catalog.SegmentEntry,
-	bufMgr base.INodeManager,
+func newSegment(
+	meta *catalog.SegmentEntry,
+	indexCache model.LRUCache,
 	dir string) *dataSegment {
 	seg := &dataSegment{
-		meta:      meta,
-		bufMgr:    bufMgr,
-		scheduler: meta.GetScheduler(),
+		meta:       meta,
+		indexCache: indexCache,
+		scheduler:  meta.GetScheduler(),
 	}
 	return seg
 }
