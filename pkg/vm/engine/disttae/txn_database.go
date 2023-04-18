@@ -183,8 +183,13 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if v, ok := db.txn.createMap.Load(k); ok {
 		oldId = v.(*txnTable).tableId
 		v.(*txnTable).tableId = newId
+		parts := db.txn.engine.getPartitions(db.databaseId, newId).Snapshot()
+		v.(*txnTable)._parts = parts
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
 		oldId = v.(*txnTable).tableId
+		v.(*txnTable).tableId = newId
+		parts := db.txn.engine.getPartitions(db.databaseId, newId).Snapshot()
+		v.(*txnTable)._parts = parts
 	} else {
 		item := &cache.TableItem{
 			Name:       name,
