@@ -106,7 +106,6 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 		}
 	}
 
-	//hasPK := false
 	writers := make([]*S3Writer, 1+uniqueNums)
 	for i := range writers {
 		writers[i] = &S3Writer{
@@ -121,7 +120,6 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 		writers[i].ResetMetaLocBat()
 		//handle origin/main table's sort index.
 		if i == 0 {
-			//tableDef := insertCtx.TableDef
 			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 				// the serialized cpk col is located in the last of the bat.vecs
 				writers[i].sortIndex = len(tableDef.Cols)
@@ -150,14 +148,12 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			for _, def := range tableDef.Cols {
 				if def.Primary {
 					writers[i].pk[def.Name] = struct{}{}
-					//hasPK = true
 				}
 			}
 
 			// Check whether the composite primary key column is included
 			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 				writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
-				//hasPK = true
 			}
 			continue
 		}
@@ -308,7 +304,6 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 		// sort bats firstly
 		// for main/orgin table and unique index table.
 		if w.sortIndex != -1 {
-			//if w.idx == 0 && w.sortIndex != -1 {
 			sortByKey(proc, bats[i], w.sortIndex, proc.GetMPool())
 			sortIdx = w.sortIndex
 		}

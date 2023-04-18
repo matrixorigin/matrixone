@@ -155,18 +155,12 @@ func getUniqueKeyInfo(tableDef *pb.TableDef) (map[string]int, int) {
 		if !hasCompositePKey && col.Name != catalog.Row_ID && col.Primary {
 			pkPos = j
 		}
-		//if (tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil) && col.Name != catalog.Row_ID && col.Primary {
-		//	pkPos = j
-		//}
 		if col.Name != catalog.Row_ID {
 			nameToPos[col.Name] = pos
 			pos++
 		}
 	}
 	// Check whether the composite primary key column is included
-	//if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-	//	pkPos = pos
-	//}
 	if hasCompositePKey {
 		pkPos = pos
 	}
