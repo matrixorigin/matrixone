@@ -136,7 +136,7 @@ func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
 
 func (sw *BaseSqlWriter) initOrRefreshDBConn() (*sql.DB, error) {
 	if sw.db == nil {
-		dbUser, err := GetSQLWriterDBUser()
+		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return nil, errNotReady
 		}
