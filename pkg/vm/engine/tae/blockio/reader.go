@@ -38,10 +38,14 @@ type fetchParams struct {
 	reader *objectio.ObjectReader
 }
 
-func NewObjectReader(service fileservice.FileService, key objectio.Location) (*BlockReader, error) {
+func NewObjectReader(
+	service fileservice.FileService,
+	key objectio.Location,
+	opts ...objectio.ReaderOptionFunc,
+) (*BlockReader, error) {
 	name := key.Name()
 	metaExt := key.Extent()
-	reader, err := objectio.NewObjectReader(&name, &metaExt, service)
+	reader, err := objectio.NewObjectReader(&name, &metaExt, service, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +67,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 }
 
 func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoCacheReader(true))
+	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoLRUCacheOption(true))
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +178,12 @@ func (r *BlockReader) LoadOneBF(
 	blk uint16,
 ) (objectio.StaticFilter, error) {
 	return r.reader.ReadOneBF(ctx, blk)
+}
+
+func (r *BlockReader) LoadAllBF(
+	ctx context.Context,
+) ([]objectio.StaticFilter, uint32, error) {
+	return r.reader.ReadAllBF(ctx)
 }
 
 func (r *BlockReader) GetObjectName() *objectio.ObjectName {

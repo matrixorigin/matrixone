@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -45,10 +44,10 @@ type ablock struct {
 func newABlock(
 	meta *catalog.BlockEntry,
 	fs *objectio.ObjectFS,
-	bufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	scheduler tasks.TaskScheduler) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
