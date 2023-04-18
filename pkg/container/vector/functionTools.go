@@ -313,6 +313,7 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 		v = NewConstNull(typ, length, mp)
 	} else {
 		v = NewVec(typ)
+		v.PreExtend(length, mp)
 	}
 
 	switch typ.Oid {
