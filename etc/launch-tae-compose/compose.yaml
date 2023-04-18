@@ -1,14 +1,26 @@
 version: '3.9'
 
-services:
-  cn-0:
-    container_name: cn-0
+# docker compose extension fields
+# https://github.com/docker/compose/pull/5140
+# https://stackoverflow.com/questions/45805380/meaning-of-ampersand-in-docker-compose-yml-file
+x-mo-common: &mo-common
     build:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.org,direct"
-    image: matrixorigin/matrixone:nightly-a464424e
+    image: matrixorigin/matrixone:latest
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+      - ../../test:/test
+    restart: on-failure
+    tty: true
+
+
+services:
+  cn-0:
+    container_name: cn-0
+    <<: *mo-common
     entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
     profiles:
       - launch-tae-CN-tae-DN
@@ -18,54 +30,32 @@ services:
     ports:
       - "6001:6001"
       - "6002"
-    restart: on-failure
-    volumes:
-      - ../../etc/launch-tae-compose/config:/config
-      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
-    tty: true
     networks:
       monet:
 
   cn-1:
     container_name: cn-1
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.org,direct"
-    image: matrixorigin/matrixone:nightly-a464424e
+    <<: *mo-common
     entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
     depends_on:
       - dn
     ports:
       - "7001:6001"
       - "6002"
-    restart: on-failure
     profiles:
       - launch-tae-multi-CN-tae-DN
-    volumes:
-      - ../../etc/launch-tae-compose/config:/config
-      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-        # - AWS_REGION=${AWS_REGION}
-    tty: true
     networks:
       monet:
 
   dn:
     container_name: dn
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.org,direct"
-    image: matrixorigin/matrixone:nightly-a464424e
+    <<: *mo-common
     entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
     profiles:
       - launch-tae-CN-tae-DN
@@ -74,26 +64,15 @@ services:
       - logservice
     ports:
       - "41010"
-    restart: on-failure
-    tty: true
-    volumes:
-      - ../../etc/launch-tae-compose/config:/config
-      - ../../test:/test
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
     networks:
       monet:
 
   logservice:
     container_name: logservice
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.org,direct"
-    image: matrixorigin/matrixone:nightly-a464424e
+    <<: *mo-common
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -107,17 +86,11 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
-    restart: on-failure
-    volumes:
-      - ../../etc/launch-tae-compose/config:/config
-      - ../../test:/test
-    tty: true    
     networks:
       monet:
 
   minio:
-    image: minio/minio
+    image: minio/minio:latest
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -138,10 +111,14 @@ services:
     networks:
       monet:
 
+  # Create default buckets via environment variables in docker
+  # https://github.com/minio/minio/issues/4769
+  # mc client: https://github.com/minio/mc/blob/master/docs/minio-client-complete-guide.md
+  # mc anonymous set: https://min.io/docs/minio/linux/reference/minio-mc/mc-anonymous-set.html
   createbuckets:
-    image: minio/mc
+    image: minio/mc:latest
     depends_on:
-       minio:
+      minio:
         condition: service_healthy
     profiles:
       - launch-tae-CN-tae-DN
@@ -150,15 +127,17 @@ services:
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
       /usr/bin/mc mb myminio/mo-test;
-      /usr/bin/mc policy set public myminio/mo-test;
+      /usr/bin/mc anonymous set public myminio/mo-test;
       exit 0;
       "
     networks:
       monet:
 
+
 volumes:
   minio_storage: {}
 
+# If there has subnet conflict, please change the subnet CIDR
 networks:
   monet:
     driver: bridge

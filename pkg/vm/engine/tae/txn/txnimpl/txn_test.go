@@ -26,10 +26,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -314,10 +314,8 @@ func TestLoad(t *testing.T) {
 	err := tbl.Append(bats[0])
 	assert.NoError(t, err)
 
-	t.Log(tbl.store.nodesMgr.String())
 	v, _, err := tbl.GetLocalValue(100, 0)
 	assert.NoError(t, err)
-	t.Log(tbl.store.nodesMgr.String())
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
 	assert.NoError(t, txn.Commit())
 }
@@ -424,13 +422,12 @@ func TestTxnManager1(t *testing.T) {
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog(nil)
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
-	txnBufMgr := buffer.NewNodeManager(common.G, nil)
-	mutBufMgr := buffer.NewNodeManager(common.G, nil)
+	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
-	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, txnBufMgr, factory),
+	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, indexCache, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
 	return c, mgr, driver

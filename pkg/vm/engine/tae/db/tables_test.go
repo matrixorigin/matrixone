@@ -46,7 +46,7 @@ func TestTables1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
-	dataFactory := tables.NewDataFactory(db.Fs, db.MTBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(db.Fs, db.IndexCache, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
