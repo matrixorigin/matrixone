@@ -190,7 +190,12 @@ func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
 		return -1
 	}
 
-	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+	ctx := builder.ctxByNode[nodeID]
+	if ctx == nil {
+		return -1
+	}
+
+	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
 		s := sc.GetStatsInfoMap(binding.tableID)
 		return s.NdvMap[binding.cols[col.ColPos]]
 	} else {
