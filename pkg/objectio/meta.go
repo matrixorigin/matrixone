@@ -193,20 +193,28 @@ func BuildBlockHeader() BlockHeader {
 	return buf[:]
 }
 
-func (bh BlockHeader) Version() uint16 {
+func (bh BlockHeader) Type() uint16 {
 	return types.DecodeUint16(bh[:typeLen])
 }
 
+func (bh BlockHeader) setType(t uint16) {
+	copy(bh[:typeLen], types.EncodeUint16(&t))
+}
+
+func (bh BlockHeader) Version() uint16 {
+	return types.DecodeUint16(bh[versionOff:])
+}
+
 func (bh BlockHeader) setVersion(version uint16) {
-	copy(bh[:typeLen], types.EncodeUint16(&version))
+	copy(bh[versionOff:], types.EncodeUint16(&version))
 }
 
 func (bh BlockHeader) TableID() uint64 {
-	return types.DecodeUint64(bh[:tableIDLen])
+	return types.DecodeUint64(bh[tableIDOff:])
 }
 
 func (bh BlockHeader) SetTableID(id uint64) {
-	copy(bh[:tableIDLen], types.EncodeUint64(&id))
+	copy(bh[tableIDOff:], types.EncodeUint64(&id))
 }
 
 func (bh BlockHeader) BlockID() *Blockid {

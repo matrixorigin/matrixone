@@ -62,5 +62,4 @@ func GetIOEntryCodec(h IOEntryHeader) (codec ioEntryCodec) {
 
 func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, 1}, nil, nil)
-	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, 1}, nil, nil)
 }
