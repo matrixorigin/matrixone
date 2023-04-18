@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -456,6 +457,13 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	preCtx := n.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
 
+	var attrs []string
+	for _, col := range preCtx.TableDef.Cols {
+		if !col.Hidden {
+			attrs = append(attrs, col.Name)
+		}
+	}
+
 	if preCtx.Ref.SchemaName != "" {
 		dbSource, err := eg.Database(proc.Ctx, preCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
@@ -473,6 +481,15 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		HasAutoCol: preCtx.HasAutoCol,
 		SchemaName: schemaName,
 		TableDef:   preCtx.TableDef,
+		Attrs:      attrs,
+	}, nil
+}
+
+func constructPreInsertUk(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsertunique.Argument, error) {
+	preCtx := n.PreInsertUkCtx
+	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: preCtx,
 	}, nil
 }
 

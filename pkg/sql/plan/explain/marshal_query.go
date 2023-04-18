@@ -231,6 +231,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return result, err
 		}
+	//todo
+	case plan.Node_PRE_INSERT:
+		return "preinsert", nil
+	case plan.Node_PRE_INSERT_UK:
+		return "preinsert_uk", nil
+	case plan.Node_PRE_DELETE:
+		return "predelete", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}

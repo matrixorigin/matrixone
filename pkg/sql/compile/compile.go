@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -743,6 +742,49 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: scp,
 		})
 		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_ON_DUPLICATE_KEY:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		rs := c.newMergeScope(ss)
+		// updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Merge
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.OnDuplicateKey,
+			Arg: onDuplicateKeyArg,
+		})
+		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_PRE_INSERT_UK:
+		curr := c.anal.curr
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		preInsertUkArg, err := constructPreInsertUk(n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.PreInsertUnique,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     preInsertUkArg,
+			})
+		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
@@ -1574,23 +1616,23 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	ss2 := make([]*Scope, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
-		ss2 = append(ss2, s)
-	}
-	insert := &vm.Instruction{
-		Op:  vm.Insert,
-		Arg: arg,
-	}
-	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
-	}
-	return c.newMergeScope(ss2)
-}
+// func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+// 	ss2 := make([]*Scope, 0, len(ss))
+// 	for _, s := range ss {
+// 		if s.IsEnd {
+// 			continue
+// 		}
+// 		ss2 = append(ss2, s)
+// 	}
+// 	insert := &vm.Instruction{
+// 		Op:  vm.Insert,
+// 		Arg: arg,
+// 	}
+// 	for i := range ss2 {
+// 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
+// 	}
+// 	return c.newMergeScope(ss2)
+// }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{

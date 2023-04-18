@@ -253,11 +253,11 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	var newCols []*ColDef
 	for _, col := range tableDef.Cols {
 		if col.Hidden {
-			if col.Name == catalog.Row_ID {
-				if tblInfo.typ != "insert" {
-					newCols = append(newCols, col)
-				}
+			// if col.Name == catalog.Row_ID {
+			if tblInfo.typ != "insert" {
+				newCols = append(newCols, col)
 			}
+			// }
 		} else {
 			newCols = append(newCols, col)
 		}

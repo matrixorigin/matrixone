@@ -479,6 +479,7 @@ message OnDuplicateKeyCtx {
 message InsertCtx {
 	ObjectRef ref			= 1;
 	bool add_affected_rows 	= 2;
+	bool is_cluster_table	= 3;
 }
 
 message UpdateCtx {
@@ -704,6 +705,7 @@ message DeleteCtx {
 	ObjectRef ref 			= 2;
 	int32 row_id_idx		= 3;
 	bool add_affected_rows 	= 4;
+	bool is_cluster_table	= 5;
 }
 
 message Query {

@@ -5100,37 +5100,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT { //insert select
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
+					objRef := node.InsertCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   PrivilegeTypeInsert,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.InsertCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+					objRef := node.DeleteCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   PrivilegeTypeDelete,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.DeleteCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}

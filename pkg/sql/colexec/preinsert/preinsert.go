@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,7 +51,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 
 	defer bat.Clean(proc.Mp())
-	newBat := batch.NewWithSize(len(arg.Idx))
+	newBat := batch.New(false, arg.Attrs)
 	for _, idx := range arg.Idx {
 		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
 	}

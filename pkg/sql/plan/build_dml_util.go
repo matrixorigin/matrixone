@@ -51,7 +51,6 @@ func buildInsertPlans(
 	if err != nil {
 		return nil, err
 	}
-
 	query, err := builder.createQuery()
 	return query, err
 }
@@ -186,6 +185,7 @@ func makeOneDeletePlan(
 			Ref:             objRef,
 			CanTruncate:     false,
 			AddAffectedRows: addAffectedRows,
+			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
@@ -201,16 +201,18 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext,
 	preNode := builder.qry.Nodes[lastNodeId]
 	preTag := preNode.BindingTags[0]
 	preInsertTag := builder.genNewTag()
-	sinkProjection := getProjectionByPreProjection(preNode.ProjectList, preTag)
+
+	preInsertProjection := getProjectionByPreProjection(preNode.ProjectList, preTag)
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
 
 	preProjectLength := len(preNode.ProjectList)
+	sinkProjection := getProjectionByPreProjection(preNode.ProjectList, preInsertTag)
 	for i, typ := range hiddenColumnTyp {
 		sinkProjection = append(sinkProjection, &plan.Expr{
 			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: preInsertTag, //xxx need check
+					RelPos: preInsertTag,
 					ColPos: int32(i + preProjectLength),
 					Name:   hiddenColumnName[i],
 				},
@@ -232,6 +234,7 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext,
 		NodeType:    plan.Node_PRE_INSERT,
 		Children:    []int32{lastNodeId},
 		BindingTags: []int32{preInsertTag},
+		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
 			Idx:              idx,
 			HiddenColumnTyp:  hiddenColumnTyp,
@@ -287,7 +290,8 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 			Width: types.MaxVarcharLen,
 		}
 	}
-	sinkProjection := getProjectionByPreProjection(sinkScanNode.ProjectList, sinkScanTag)
+	preinsertUkProjection := getProjectionByPreProjection(sinkScanNode.ProjectList, sinkScanTag)
+	var sinkProjection []*Expr
 	sinkProjection = append(sinkProjection, &plan.Expr{
 		Typ: ukType,
 		Expr: &plan.Expr_Col{
@@ -311,6 +315,7 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 		NodeType:    plan.Node_PRE_INSERT_UK,
 		Children:    []int32{lastNodeId},
 		BindingTags: []int32{preInsertUkTag},
+		ProjectList: preinsertUkProjection,
 		PreInsertUkCtx: &plan.PreInsertUkCtx{
 			Columns:  useColumns,
 			PkColumn: pkColumn,
@@ -431,10 +436,10 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 		}
 		insertNode := &Node{
 			NodeType: plan.Node_INSERT,
-			ObjRef:   objRef,
 			InsertCtx: &plan.InsertCtx{
 				Ref:             objRef,
 				AddAffectedRows: addAffectedRows,
+				IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 			},
 			Children: []int32{lastNodeId},
 		}
@@ -469,6 +474,14 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			for i, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
 					idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+					// remove row_id
+					for i, col := range idxTableDef.Cols {
+						if col.Name != catalog.Row_ID {
+							idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
+							break
+						}
+					}
+
 					//make preinsert_uk plan,  to build the batch to insert
 					newSourceStep, err := makePreInsertUkPlan(builder, bindCtx, tableDef, uniqueSourceStep, i)
 					if err != nil {

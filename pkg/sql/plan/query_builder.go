@@ -659,6 +659,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 	case plan.Node_PRE_INSERT:
+		nodeTag := node.BindingTags[0]
+		for _, expr := range node.ProjectList {
+			increaseRefCnt(expr, colRefCnt)
+		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
 		if err != nil {
 			return nil, err
@@ -668,6 +672,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				continue
 			}
 			remapping.addColRef(globalRef)
+		}
+		for i, expr := range node.ProjectList {
+			remapping.addColRef([2]int32{nodeTag, int32(i)})
+			decreaseRefCnt(expr, colRefCnt)
+		}
+		oldPrejectLen := len(node.ProjectList)
+		node.ProjectList = node.ProjectList[0:0]
+		for i := range node.PreInsertCtx.HiddenColumnTyp {
+			pos := int32(oldPrejectLen + i)
+			remapping.addColRef([2]int32{nodeTag, pos})
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -733,6 +747,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_PRE_INSERT_UK:
 		nodeTag := node.BindingTags[0]
+		for _, expr := range node.ProjectList {
+			increaseRefCnt(expr, colRefCnt)
+		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
 		if err != nil {
 			return nil, err
@@ -752,6 +769,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				},
 			},
 		}, colRefCnt)
+		for _, expr := range node.ProjectList {
+			decreaseRefCnt(expr, colRefCnt)
+		}
+		node.ProjectList = node.ProjectList[0:0]
 		node.ProjectList = append(node.ProjectList, &plan.Expr{
 			Typ: node.PreInsertUkCtx.UkType,
 			Expr: &plan.Expr_Col{
