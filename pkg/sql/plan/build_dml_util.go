@@ -100,10 +100,13 @@ func buildDeletePlans(
 	if tableDef.Partition != nil {
 		isPartitionTable = true
 		lastNodeId = makePreDeletePlan(builder, bindCtx, objRef, tableDef, lastNodeId)
+		lastNode := builder.qry.Nodes[lastNodeId]
+		projectTag = lastNode.BindingTags[0]
+		projectProjection = lastNode.ProjectList
 	}
 
-	haveUniqueKey := haveUniqueKey(tableDef)
-	if haveUniqueKey {
+	hasUniqueKey := haveUniqueKey(tableDef)
+	if hasUniqueKey {
 		// append join node to get unique key table's row_id/pk for delete
 		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, tableDef, lastNodeId)
 		lastNode := builder.qry.Nodes[lastNodeId]
@@ -150,6 +153,7 @@ func buildDeletePlans(
 
 	// append project node in the end
 	endProjectProjection := getProjectionByPreProjection(projectProjection, projectTag)
+
 	endProjectTag := builder.genNewTag()
 	endProjectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
@@ -853,6 +857,7 @@ func makePreDeletePlan(builder *QueryBuilder, bindCtx *BindContext, objRef *Obje
 		NodeType:    plan.Node_PRE_DELETE,
 		Children:    []int32{lastNodeId},
 		BindingTags: []int32{predeleteTag},
+		ProjectList: projection,
 	}
 	return builder.appendNode(preDeleteNode, bindCtx)
 }

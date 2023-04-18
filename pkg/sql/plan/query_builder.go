@@ -859,7 +859,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
-	case plan.Node_PROJECT, plan.Node_MATERIAL, plan.Node_SINK:
+	case plan.Node_PROJECT, plan.Node_MATERIAL, plan.Node_SINK, plan.Node_PRE_DELETE:
 		projectTag := node.BindingTags[0]
 
 		var neededProj []int32
