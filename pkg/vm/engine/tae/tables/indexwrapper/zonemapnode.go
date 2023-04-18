@@ -26,7 +26,7 @@ import (
 )
 
 type ZmReader struct {
-	metaKey objectio.Location
+	metaLoc objectio.Location
 	idx     uint16
 	reader  *blockio.BlockReader
 	cache   atomic.Pointer[index.ZM]
@@ -35,7 +35,7 @@ type ZmReader struct {
 func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *ZmReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 	return &ZmReader{
-		metaKey: metaLoc,
+		metaLoc: metaLoc,
 		idx:     idx,
 		reader:  reader,
 	}
@@ -46,12 +46,12 @@ func (r *ZmReader) getZoneMap() (*index.ZM, error) {
 	if cached != nil {
 		return cached, nil
 	}
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, r.metaKey.ID(), nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, r.metaLoc.ID(), nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	zm := zmList[0]
+	zm := zmList[0].Clone()
 	r.cache.Store(&zm)
 	return &zm, err
 }

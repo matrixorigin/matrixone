@@ -71,8 +71,6 @@ func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSiz
 	if cst == CST_Customize {
 		cacheCfg := new(options.CacheCfg)
 		cacheCfg.IndexCapacity = uint64(blockSize) * uint64(blockCnt) * 80
-		cacheCfg.InsertCapacity = uint64(blockSize) * uint64(blockCnt) * 800
-		cacheCfg.TxnCapacity = uint64(blockSize) * uint64(blockCnt) * 10
 		opts.CacheCfg = cacheCfg
 	}
 	opts.FillDefaults(dir)
@@ -91,8 +89,6 @@ func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows uint32, b
 	if cst == CST_Customize {
 		cacheCfg := new(options.CacheCfg)
 		cacheCfg.IndexCapacity = uint64(blockRows) * uint64(blockCnt) * 2000
-		cacheCfg.InsertCapacity = uint64(blockRows) * uint64(blockCnt) * 1000
-		cacheCfg.TxnCapacity = uint64(blockRows) * uint64(blockCnt) * 100
 		opts.CacheCfg = cacheCfg
 	}
 	opts.FillDefaults(dir)
