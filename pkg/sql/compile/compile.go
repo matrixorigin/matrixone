@@ -405,9 +405,13 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	c.cnList, err = c.e.Nodes()
 	if client != nil {
 		for i := 0; i < len(c.cnList); i++ {
+			addrs := strings.Split(c.cnList[i].Addr, ":")
+			if len(addrs) != 2 {
+				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+			}
 			// InValid Addr, this should be docker addr,
 			// "cn-0","cn-1", just skip it
-			if address := net.ParseIP(c.cnList[i].Addr); address == nil {
+			if address := net.ParseIP(addrs[0]); address == nil {
 				continue
 			}
 			if isSameCN(c.addr, c.cnList[i].Addr) {
