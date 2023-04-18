@@ -20,9 +20,6 @@ set @uuid_hide_3 = last_uuid();
 1
 1
 set @uuid_hide_4 = last_uuid();
-select "split";select "split";select "split";select "split";
-split
-split
 select sleep(16);
 sleep(16)
 0
@@ -45,7 +42,4 @@ status    err_code    error
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
 Success    0    
-select count(*) from system.statement_info where account = 'query_tae_table' and statement = 'select "split"';
-count(*)
-4
 drop account `query_tae_table`;

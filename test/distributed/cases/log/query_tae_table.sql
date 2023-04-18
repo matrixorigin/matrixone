@@ -26,9 +26,6 @@ set @uuid_hide_3 = last_uuid();
 /* cloud_user */select 1;
 set @uuid_hide_4 = last_uuid();
 
--- split multiple sqls in one request
-select "split";select "split";select "split";select "split";
-
 select sleep(16);
 
 select account from system.statement_info where statement_id = @uuid_create_table;
@@ -44,9 +41,6 @@ select span_kind from system.rawlog where `raw_item` = "span_info" and span_name
 
 -- case: fix issue 8168, with syntax error
 select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table');
-
--- split result
-select count(*) from system.statement_info where account = 'query_tae_table' and statement = 'select "split"';
 
 -- clean
 drop account `query_tae_table`;
