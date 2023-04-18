@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	// "time"
 
@@ -422,14 +423,15 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
-		// update constraint
+		// alter table
+		tbl.schema = schema
 		un := &MVCCNode[*TableMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
 			TxnMVCCNode: txnNode,
 			BaseNode: &TableMVCCNode{
-				SchemaConstraints: string(schema.Constraint),
+				Schema: schema,
 			},
 		}
 		tbl.Insert(un)
@@ -449,7 +451,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		},
 		TxnMVCCNode: txnNode,
 		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
+			Schema: schema,
 		},
 	}
 	tbl.Insert(un)

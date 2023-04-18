@@ -17,12 +17,11 @@ package catalog
 import (
 	"fmt"
 	"io"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type TableMVCCNode struct {
-	SchemaConstraints string // store as immutable, bytes actually
+	// history schema
+	Schema *Schema
 }
 
 func NewEmptyTableMVCCNode() *TableMVCCNode {
@@ -30,39 +29,46 @@ func NewEmptyTableMVCCNode() *TableMVCCNode {
 }
 
 func (e *TableMVCCNode) CloneAll() *TableMVCCNode {
-	node := &TableMVCCNode{}
-	node.SchemaConstraints = e.SchemaConstraints
-	return node
-}
-
-func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 	return &TableMVCCNode{
-		SchemaConstraints: e.SchemaConstraints,
+		Schema: e.Schema.Clone(),
 	}
 }
 
-func (e *TableMVCCNode) String() string {
+func (e *TableMVCCNode) CloneData() *TableMVCCNode {
+	return e.CloneAll()
+}
 
-	return fmt.Sprintf("cstr[%d]",
-		len(e.SchemaConstraints))
+func (e *TableMVCCNode) String() string {
+	return fmt.Sprintf("schema.v.%d", e.Schema.Version)
 }
 
 // for create drop in one txn
 func (e *TableMVCCNode) Update(un *TableMVCCNode) {
-	e.SchemaConstraints = un.SchemaConstraints
+	e.Schema = un.Schema
 }
 
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	n, err = objectio.WriteString(e.SchemaConstraints, w)
+	var schemaBuf []byte
+	if schemaBuf, err = e.Schema.Marshal(); err != nil {
+		return
+	}
+	if _, err = w.Write(schemaBuf); err != nil {
+		return
+	}
+	n += int64(len(schemaBuf))
 	return
 }
 
 func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	e.SchemaConstraints, n, err = objectio.ReadString(r)
+	e.Schema = NewEmptySchema("")
+	if n, err = e.Schema.ReadFrom(r); err != nil {
+		return
+	}
 	return
 }
 
 type TableNode struct {
+	// the latest schema
 	schema *Schema
 }
 

@@ -595,7 +595,6 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				DelSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
-				dbNode.GetEnd(),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID(), false)
@@ -606,7 +605,6 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				catalog.SystemDBSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
-				dbNode.GetEnd(),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBInsertTxnIDX])
 		}
@@ -641,6 +639,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(
 					entry,
+					tblNode,
 					syscol.Name,
 					collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
 				)
@@ -665,7 +664,6 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),
-				tblNode.GetEnd(),
 			)
 
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLInsertTxnIDX])
@@ -689,7 +687,6 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				DelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
-				tblNode.GetEnd(),
 				tblNode.GetEnd(),
 			)
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLDeleteTxnIDX])

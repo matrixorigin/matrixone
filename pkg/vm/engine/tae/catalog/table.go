@@ -103,7 +103,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
-	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{})
+	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -439,10 +439,12 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
-	node.BaseNode.Update(
-		&TableMVCCNode{
-			SchemaConstraints: string(req.GetUpdateCstr().GetConstraints()),
-		})
+
+	// TODO(aptend): if apply failed, delete the new mvcc node
+	node.BaseNode.Schema.ApplyAlterTable(req)
+	if isNewNode {
+		node.BaseNode.Schema.Version += 1
+	}
 	return
 }
 
@@ -453,7 +455,7 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
+			Schema: schema,
 		},
 	}
 	entry.Insert(node)
