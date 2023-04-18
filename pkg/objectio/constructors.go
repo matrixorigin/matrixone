@@ -26,27 +26,6 @@ import (
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
-func objectMetaConstructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		objectMeta := ObjectMeta(decompressed)
-		objectMeta.BlockHeader().MetaLocation().SetLength(uint32(len(data)))
-		return decompressed, int64(len(decompressed)), nil
-	}
-}
-
 func noDecompressConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		if len(data) == 0 {
@@ -114,7 +93,7 @@ func BloomFilterConstructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
-func ColumnConstructorFactory(size int64) CacheConstructor {
+func ColumnConstructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
