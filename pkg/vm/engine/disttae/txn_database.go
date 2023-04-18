@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 	"strings"
 
@@ -156,6 +158,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
 		parts:        db.txn.engine.getPartitions(db.databaseId, item.Id).Snapshot(),
+		rowid:        item.Rowid,
+		rowids:       item.Rowids,
 	}
 	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, item.Id,
@@ -171,15 +175,37 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	var id uint64
-
+	var rowid types.Rowid
+	var rowids []types.Rowid
 	k := genTableKey(ctx, name, db.databaseId)
-	if _, ok := db.txn.createMap.Load(k); ok {
+	if v, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
 		db.txn.deletedTableMap.Store(k, nil)
-		return nil
+		table := v.(*txnTable)
+		//this rowid is generated in the txnDatabase.Create function
+		rowid = table.rowid
+		//Even if the created table in the createMap, there is an
+		//INSERT entry in the CN workspace. We need add a DELETE
+		//entry in the CN workspace to tell the DN to delete the
+		//table.
+		//Example
+		//begin;
+		//create table t1;
+		//drop table t1;
+		//commit;
+		//If we do not add DELETE entry in workspace, there is
+		//a table t1 there after commit.
+
+		//save rowids of mo_columns
+		rowids = table.rowids
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		id = v.(*txnTable).tableId
+		table := v.(*txnTable)
+		id = table.tableId
 		db.txn.tableMap.Delete(k)
+		//this rowid is from data DN
+		rowid = table.rowid
+		//save rowids of mo_columns
+		rowids = table.rowids
 	} else {
 		item := &cache.TableItem{
 			Name:       name,
@@ -191,16 +217,38 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
+		//this rowid is from data DN
+		rowid = item.Rowid
+		//save rowids of mo_columns
+		rowids = item.Rowids
 	}
-	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
+	fmt.Println("Delete mo_tables rowid", rowid, name)
+	bat, err := genDropTableTuple(rowid, id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 
 	for _, store := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true); err != nil {
 			return err
+		}
+	}
+
+	//加writeBatch(delete,mo_columns);来过滤掉删除表的columns
+	//发送给dn时，(delete,mo_columns)可以不发送。
+	//mo_columns中的每行都要有rowid
+	for _, rid := range rowids {
+		fmt.Println("Delete mo_columns", rid)
+		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.dnStores {
+			if err = db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -240,7 +288,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 	for _, store := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false); err != nil {
 			return 0, err
 		}
 	}
@@ -266,6 +314,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{tableId}))
 	tbl.comment = getTableComment(defs)
 	{
 		for _, def := range defs { // copy from tae
@@ -302,30 +351,44 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	{
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(tbl, sql, accountId, userId, roleId, name,
-			tableId, db.databaseId, db.databaseName, db.txn.proc.Mp())
+			tableId, db.databaseId, db.databaseName, tbl.rowid, true, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
 		for _, store := range db.txn.dnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
+				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true); err != nil {
 				return err
 			}
 		}
+		//方案1： 多个dnStores怎么处理多个rowid?
+		//get rowid from bat.vec[0]
+		//save rowid into txnTable.rowid
+		//方案2：生成一个txnTable.rowid
+		//WriteBatch里面不在生成rowid。直接用txnTable.rowid
 	}
 	tbl.primaryIdx = -1
 	tbl.clusterByIdx = -1
+	//TODO:record rowids for columns
+	tbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
-		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
+		tbl.rowids[i] = db.txn.genRowId()
+		fmt.Println("create mo_columns", tbl.rowids[i])
+		bat, err := genCreateColumnTuple(col, tbl.rowids[i], true, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
 		for _, store := range db.txn.dnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1); err != nil {
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true); err != nil {
 				return err
 			}
 		}
+		//方案1： 多个dnStores怎么处理多个rowid?
+		//get rowid from bat.vec[0]
+		//save rowid into txnTable.rowid
+		//方案2：生成一个txnTable.rowid
+		//WriteBatch里面不在生成rowid。直接用txnTable.rowid
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
 		}

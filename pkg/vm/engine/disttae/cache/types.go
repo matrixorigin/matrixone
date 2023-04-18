@@ -88,6 +88,7 @@ type TableItem struct {
 	TableDef *plan.TableDef
 	Defs     []engine.TableDef
 	Rowid    types.Rowid
+	Rowids   []types.Rowid
 
 	// table def
 	Kind        string
@@ -129,6 +130,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	isClusterBy     int8
+	rowid           types.Rowid //rowid in mo_columns
 }
 
 type columns []column

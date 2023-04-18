@@ -209,6 +209,7 @@ func genUpdateConstraint(rows [][]any) []UpdateConstraint {
 func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
+		//name := string(row[ROWID_OFF+MO_TABLES_REL_NAME_IDX].([]byte))
 		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		if id, tblName, ok := isTruncate(name); ok {
 			cmds[i].Id = id
@@ -218,8 +219,11 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		} else {
 			cmds[i].IsDrop = true
+			//cmds[i].Id = row[ROWID_OFF+MO_TABLES_REL_ID_IDX].(uint64)
 			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
 			cmds[i].Name = name
+			//cmds[i].DatabaseId = row[ROWID_OFF+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			//cmds[i].DatabaseName = string(row[ROWID_OFF+MO_TABLES_RELDATABASE_IDX].([]byte))
 			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		}

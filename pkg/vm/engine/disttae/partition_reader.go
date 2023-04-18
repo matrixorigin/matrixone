@@ -52,6 +52,9 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
+
+	//deletedTableFromMoTables map
+	//deletedTableFromMoColumns map
 }
 
 type BlockBatch struct {
@@ -104,6 +107,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if p.blockBatch == nil {
 		p.blockBatch = &BlockBatch{}
 	}
+	//p.inserts new insert
+	//p.blockBatch s3 insert
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
@@ -164,6 +169,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					if _, ok := p.deletes[rowIds[j]]; ok {
 						continue
 					}
+					//mo_tables, mo_columns 要删除行
 					if err := uf(vec, srcVec, int64(j)); err != nil {
 						return nil, err
 					}
@@ -173,6 +179,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				if _, ok := p.deletes[rowIds[j]]; ok {
 					continue
 				}
+				//mo_tables, mo_columns 要删除行
 				b.Zs = append(b.Zs, int64(bat.Zs[j]))
 			}
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
@@ -210,6 +217,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				p.sourceBatchNameIndex[name] = i
 			}
 		}
+		//mo_tables,mo_columns 删除主键行
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
 				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {

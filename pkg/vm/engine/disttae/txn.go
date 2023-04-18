@@ -91,10 +91,11 @@ func (txn *Transaction) WriteBatch(
 	bat *batch.Batch,
 	dnStore DNStore,
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
+	batchHasRowId bool,
 ) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT {
+	if typ == INSERT && !batchHasRowId {
 		len := bat.Length()
 		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {

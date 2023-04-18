@@ -110,7 +110,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false); err != nil {
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
@@ -314,7 +314,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false); err != nil {
 		return err
 	}
 	return nil

@@ -185,6 +185,11 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 			tbl.CreateSql = item.CreateSql
 			tbl.PrimaryIdx = item.PrimaryIdx
 			tbl.ClusterByIdx = item.ClusterByIdx
+			copy(tbl.Rowid[:], item.Rowid[:])
+			tbl.Rowids = make([]types.Rowid, len(item.Rowids))
+			for i, rowid := range item.Rowids {
+				copy(tbl.Rowids[i][:], rowid[:])
+			}
 		}
 		return false
 	})
@@ -288,6 +293,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 	mp := make(map[tableItemKey]columns) // TableItem -> columns
 	key := new(TableItem)
+	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	// get table key info
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
@@ -329,6 +335,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes[i],
 				isClusterBy:     clusters[i],
 			}
+			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs[i]...)
 			col.updateExpr = append(col.updateExpr, updateExprs[i]...)
 			col.defaultExpr = append(col.defaultExpr, defaultExprs[i]...)
@@ -348,6 +355,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		item, _ := cc.tables.data.Get(key)
 		defs := make([]engine.TableDef, 0, len(cols))
 		defs = append(defs, genTableDefOfComment(item.Comment))
+		item.Rowids = make([]types.Rowid, len(cols))
 		for i, col := range cols {
 			if col.constraintType == catalog.SystemColPKConstraint {
 				item.PrimaryIdx = i
@@ -356,6 +364,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				item.ClusterByIdx = i
 			}
 			defs = append(defs, genTableDefOfColumn(col))
+			copy(item.Rowids[i][:], col.rowid[:])
 		}
 		item.Defs = defs
 		item.TableDef = getTableDef(item.Name, defs)

@@ -368,7 +368,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false); err != nil {
 		return err
 	}
 	tbl.constraint = ct
@@ -443,7 +443,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false); err != nil {
 		return err
 	}
 	packer, put := tbl.db.txn.engine.packerPool.Get()
@@ -481,7 +481,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx, false); err != nil {
 			return err
 		}
 	}
@@ -646,6 +646,8 @@ func (tbl *txnTable) newReader(
 
 	inserts := make([]*batch.Batch, 0, len(entries))
 	deletes := make(map[types.Rowid]uint8)
+	//deletedTableFromMoTables map
+	//deletedTableFromMoColumns map
 	for _, entry := range entries {
 		if entry.typ == INSERT {
 			inserts = append(inserts, entry.bat)
@@ -655,6 +657,14 @@ func (tbl *txnTable) newReader(
 				for _, v := range vs {
 					deletes[v] = 0
 				}
+			}
+			//table id == catalog.MO_TABLES_ID
+			//mo_tables 里面的delete 要用主键
+			//mo_tables 主键列rel_id
+			//table id == catalog.MO_COLUMNS_ID
+			//mo_columns 主键tableid-attrname
+			for rowid, _ := range deletes {
+				fmt.Println("delete", rowid, tbl.tableName)
 			}
 		}
 	}
@@ -702,6 +712,8 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
+		//deletedTableFromMoTables map
+		//deletedTableFromMoColumns map
 	}
 	readers[0] = partReader
 

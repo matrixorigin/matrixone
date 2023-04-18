@@ -232,6 +232,8 @@ const (
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
+
+	ROWID_OFF = 1 //rowid is the 0th vector in the batch
 )
 
 type BlockInfo struct {
