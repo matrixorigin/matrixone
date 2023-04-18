@@ -121,7 +121,7 @@ func buildDeletePlans(
 				if err != nil {
 					return -1, err
 				}
-				beginIdx = beginIdx + 2 // row_id & pk
+				deleteIdx = deleteIdx + 2 // row_id & pk
 			}
 		}
 	}
