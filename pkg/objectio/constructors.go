@@ -24,7 +24,7 @@ import (
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
-type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
+type CacheConstructorFactory = func(size int64, algo uint8, noUnmarshalHint bool) CacheConstructor
 
 func getVersionType(buf []byte) (uint16, uint16) {
 	if len(buf) < 4 {
@@ -34,7 +34,7 @@ func getVersionType(buf []byte) (uint16, uint16) {
 }
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8) CacheConstructor {
+func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		fn := func() ([]byte, int64, error) {
 			var err error
@@ -59,9 +59,10 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 			return decompressed, int64(len(decompressed)), nil
 		}
 		buf, size, err := fn()
-		if err != nil {
-			return nil, 0, err
+		if noUnmarshalHint || err != nil {
+			return buf, size, err
 		}
+
 		version, typ := getVersionType(buf)
 		codec := GetIOEntryCodec(IOEntryHeader{version, typ})
 		if codec.NoUnmarshal() {
@@ -75,7 +76,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
-func genericConstructorFactory(size int64, algo uint8) CacheConstructor {
+func genericConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		var err error
 		if len(data) == 0 {
@@ -100,7 +101,7 @@ func genericConstructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
-func BloomFilterConstructorFactory(size int64, algo uint8) CacheConstructor {
+func BloomFilterConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
@@ -134,7 +135,7 @@ func BloomFilterConstructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
-func ColumnConstructorFactory(size int64, algo uint8) CacheConstructor {
+func ColumnConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
