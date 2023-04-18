@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -404,9 +405,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	c.cnList, err = c.e.Nodes()
 	if client != nil {
 		for i := 0; i < len(c.cnList); i++ {
-			// FIX DOCKER ADDR "cn-0" and "cn-1",
-			// this will cause the ping bug
-			if string(c.cnList[i].Addr[0:2]) == "cn" {
+			// InValid Addr, this should be docker addr,
+			// "cn-0","cn-1", just skip it
+			if address := net.ParseIP(c.cnList[i].Addr); address == nil {
 				continue
 			}
 			if isSameCN(c.addr, c.cnList[i].Addr) {
