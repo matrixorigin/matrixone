@@ -155,6 +155,7 @@ func NewService(
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+	s.initSqlWriterFactory()
 
 	err := s.runMoServer()
 	if err != nil {
