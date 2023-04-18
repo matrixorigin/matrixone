@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1968,6 +1970,38 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			})
 		}
 		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes, nil
+	}
+
+	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
+		//to maxify locality, put blocks in the same s3 object in the same CN
+		lenCN := len(c.cnList)
+		for i := range c.cnList {
+			if isSameCN(c.cnList[i].Addr, c.addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Addr: c.addr,
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[i].Id,
+					Addr: c.cnList[i].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				})
+			}
+		}
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+		for i := range ranges {
+			marshalledBlock := disttae.BlockUnmarshal(ranges[i])
+			objName := marshalledBlock.Info.MetaLoc.Name()
+			index := plan2.SimpleHashToRange(objName, lenCN)
+			nodes[index].Data = append(nodes[index].Data, ranges[i])
+		}
 		return nodes, nil
 	}
 

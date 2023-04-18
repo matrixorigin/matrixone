@@ -139,7 +139,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 		},
 	}
 	data := blockMarshal(meta)
-	meta0 := blockUnmarshal(data)
+	meta0 := BlockUnmarshal(data)
 	require.Equal(t, meta, meta0)
 }
 

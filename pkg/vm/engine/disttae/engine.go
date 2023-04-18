@@ -458,7 +458,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	rds := make([]engine.Reader, num)
 	blks := make([]BlockMeta, len(ranges))
 	for i := range ranges {
-		blks[i] = blockUnmarshal(ranges[i])
+		blks[i] = BlockUnmarshal(ranges[i])
 		blks[i].Info.EntryState = false
 	}
 	if len(ranges) < num {

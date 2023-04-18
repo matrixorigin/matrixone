@@ -367,7 +367,7 @@ func blockMarshal(meta BlockMeta) []byte {
 	return data
 }
 
-func blockUnmarshal(data []byte) BlockMeta {
+func BlockUnmarshal(data []byte) BlockMeta {
 	var meta BlockMeta
 
 	types.Decode(data, &meta)
