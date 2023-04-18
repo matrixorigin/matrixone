@@ -5048,7 +5048,8 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ := db.GetRelationByName("test")
-	err := tbl.UpdateConstraint([]byte("version 1"))
+	err := tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 1"))
+	assert.NoError(t, err)
 	assert.NoError(t, err)
 	err = txn.Commit()
 	assert.NoError(t, err)
@@ -5056,7 +5057,7 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ = db.GetRelationByName("test")
-	err = tbl.UpdateConstraint([]byte("version 2"))
+	err = tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 2"))
 	assert.NoError(t, err)
 	txn.Commit()
 

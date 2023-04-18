@@ -15,10 +15,12 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -317,6 +319,6 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
 }
 
-func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
-	return h.table.UpdateConstraint(cstr)
+func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
+	return h.table.AlterTable(ctx, req)
 }

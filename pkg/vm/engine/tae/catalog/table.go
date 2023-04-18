@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -422,7 +424,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	return
 }
 
-func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
@@ -439,7 +441,7 @@ func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isN
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(
 		&TableMVCCNode{
-			SchemaConstraints: string(cstr),
+			SchemaConstraints: string(req.GetUpdateCstr().GetConstraints()),
 		})
 	return
 }

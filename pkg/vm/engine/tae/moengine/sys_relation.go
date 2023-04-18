@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -81,11 +82,7 @@ func (s *sysRelation) DeleteByPhyAddrKeys(_ context.Context, _ *vector.Vector) e
 	return ErrReadOnly
 }
 
-func (s *sysRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	return ErrReadOnly
-}
-
-func (s *sysRelation) UpdateConstraintWithBin(context.Context, []byte) error {
+func (s *sysRelation) AlterTable(context.Context, *apipb.AlterTableReq) error {
 	return ErrReadOnly
 }
 

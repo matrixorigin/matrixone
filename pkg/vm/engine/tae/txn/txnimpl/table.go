@@ -19,14 +19,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-
 	"github.com/RoaringBitmap/roaring"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -803,14 +803,19 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	return
 }
 
-func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
+func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
+	switch req.Kind {
+	case apipb.AlterKind_UpdateConstraint:
+	default:
+		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
-	isNewNode, err := tbl.entry.UpdateConstraint(tbl.store.txn, cstr)
+	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
-	return
+	return err
 }
 
 func (tbl *txnTable) UncommittedRows() uint32 {
