@@ -125,7 +125,8 @@ func bulkInsert(db *sql.DB, rows string, tbl *table.Table, maxLen int) (int, err
 		return 0, nil
 	}
 
-	chunks := chunkRecords(records, maxLen)
+	chunkSize := maxLen
+	chunks := chunkRecords(records, chunkSize)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -134,10 +135,40 @@ func bulkInsert(db *sql.DB, rows string, tbl *table.Table, maxLen int) (int, err
 
 	totalInserted := 0
 	for _, chunk := range chunks {
-		if len(chunk) == 0 {
-			continue
+		valueStrings := []string{}
+
+		for _, row := range chunk {
+			if len(row) == 0 {
+				continue
+			}
+
+			valueString := "("
+			for i, field := range row {
+				if i != 0 {
+					valueString += ","
+				}
+				if tbl.Columns[i].ColType == table.TJson {
+					res := strings.ReplaceAll(jsonEscape(field), "'", "\\'")
+					valueString += "'" + res + "'"
+				} else {
+					// escape single quote
+					res := strings.ReplaceAll(field, "'", "\\'")
+					valueString += "'" + res + "'"
+				}
+			}
+			valueString += ")"
+
+			valueStrings = append(valueStrings, valueString)
 		}
-		stmt, _, err := generateInsertStatement(chunk, tbl)
+
+		updateString := ""
+		updateParts := []string{}
+		for _, column := range tbl.Columns {
+			updateParts = append(updateParts, fmt.Sprintf("`%s` = VALUES(`%s`)", column.Name, column.Name))
+		}
+		updateString = " ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", ")
+
+		stmt := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s%s", tbl.Database, tbl.Table, strings.Join(valueStrings, ","), updateString)
 		res, err := tx.Exec(stmt)
 		if err != nil {
 			tx.Rollback()

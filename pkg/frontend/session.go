@@ -1307,7 +1307,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 
-	logInfo(sessionInfo, tenant.String())
+	logInfo(ses, sessionInfo, tenant.String())
 
 	return []byte(pwd), nil
 }
