@@ -739,7 +739,6 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
-	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
@@ -761,6 +760,7 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
+		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
 		`create table mo_user(
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
@@ -6398,11 +6398,6 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 		return err
 	}
 
-	err = bh.Exec(ctx, createAutoTableSql)
-	if err != nil {
-		return err
-	}
-
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -6575,7 +6570,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var err error
 	var exists bool
 	var newTenant *TenantInfo
-	var newTenantCtx context.Context
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -6639,31 +6633,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 	} else {
-		newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
-		if err != nil {
-			goto handleFailed
-		}
-		err = bh.Exec(ctx, "commit;")
-		if err != nil {
-			goto handleFailed
-		}
-
-		err = bh.Exec(newTenantCtx, createMoIndexesSql)
-		if err != nil {
-			return err
-		}
-
-		err = bh.Exec(newTenantCtx, createAutoTableSql)
-		if err != nil {
-			return err
-		}
-
-		err = bh.Exec(ctx, "begin;")
-		if err != nil {
-			goto handleFailed
-		}
-
-		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
+		newTenant, _, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6701,13 +6671,28 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var newTenantID int64
 	var newUserId int64
 	var comment = ""
+	var initDataSqls []string
+	var initMoRole1 string
+	var initMoRole2 string
+	var initMoUser1 string
+	var initMoUserGrant1 string
+	var initMoUserGrant2 string
 	var newTenant *TenantInfo
+	var name, password, status string
 	var newTenantCtx context.Context
 	var sql string
 	//var configuration string
 	//var sql string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
 	defer span.End()
+
+	addSqlIntoSet := func(sql string) {
+		initDataSqls = append(initDataSqls, sql)
+	}
+
+	//step6: add new entries to the mo_mysql_compatibility_mode
+	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 
 	if nameIsInvalid(ca.Name) {
 		err = moerr.NewInternalError(ctx, "the account name is invalid")
@@ -6781,15 +6766,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
 	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
 	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
-handleFailed:
-	return newTenant, newTenantCtx, err
-}
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo) error {
-	var err error
-	var initDataSqls []string
-	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
+
+	err = bh.Exec(newTenantCtx, createMoIndexesSql)
+	if err != nil {
+		goto handleFailed
+	}
+
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
@@ -6798,32 +6782,29 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		}
 		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 	}
 
 	//initialize the default data of tables for the tenant
-	addSqlIntoSet := func(sql string) {
-		initDataSqls = append(initDataSqls, sql)
-	}
 	//step 2:add new role entries to the mo_role
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole1 = fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 = fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, newTenant.GetUserID(), newTenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 		err = moerr.NewInternalError(newTenantCtx, "only support password verification now")
-		return err
+		goto handleFailed
 	}
-	name := ca.AuthOption.AdminName
-	password := ca.AuthOption.IdentifiedType.Str
+	name = ca.AuthOption.AdminName
+	password = ca.AuthOption.IdentifiedType.Str
 	if len(password) == 0 {
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
-		return err
+		goto handleFailed
 	}
-	status := rootStatus
+	status = rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
@@ -6831,7 +6812,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
+	initMoUser1 = fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -6862,14 +6843,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	}
 
 	//step5: add new entries to the mo_user_grant
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant1 = fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant1)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant2 = fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
 	//step6: add new entries to the mo_mysql_compatibility_mode
-	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
@@ -6877,10 +6856,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		bh.ClearExecResultSet()
 		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 	}
-	return nil
+handleFailed:
+	return newTenant, newTenantCtx, err
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.

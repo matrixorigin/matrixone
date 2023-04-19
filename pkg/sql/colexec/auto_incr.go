@@ -127,20 +127,10 @@ loop:
 		return 0, 0, 0, err
 	}
 
-	txn, err := NewTxn(param.eg, param.proc, param.ctx)
-	if err != nil {
-		goto loop
-	}
 	var d, m, s uint64
-	if d, m, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn, cachesize, curNum); err != nil { // Get next 1000.
-		RolllbackTxn(param.eg, txn, param.ctx)
+	if d, m, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, param.proc.TxnOperator, cachesize, curNum); err != nil { // Get next 1000.
 		goto loop
 	}
-
-	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
-		goto loop
-	}
-
 	return d, m, s, nil
 }
 
@@ -625,12 +615,6 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		return err
 	}
 	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
-
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-
 	for _, attr := range cols {
 		if !attr.Typ.AutoIncr {
 			continue
@@ -638,44 +622,25 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		var rel2 engine.Relation
 		// Essentially, temporary table is not an operation of a transaction.
 		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
-		if dbName == defines.TEMPORARY_DBNAME {
-			rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
-		} else {
-			rel2, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
-		}
+		rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
 		if err != nil {
 			return err
 		}
 		bat := makeAutoIncrBatch(name+attr.Name, 0, 1, proc.Mp())
 		if err = rel2.Write(ctx, bat); err != nil {
-			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-				return err2
-			}
 			return err
 		}
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
-		return err
 	}
 	return nil
 }
 
 // for delete table operation, delete col in mo_increment_columns table
 func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, rel engine.Relation, proc *process.Process, dbName string, tableID uint64) error {
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-
+	var err error
 	var rel2 engine.Relation
 	// Essentially, temporary table is not an operation of a transaction.
 	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
-	if dbName == defines.TEMPORARY_DBNAME {
-		rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
-	} else {
-		rel2, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
-	}
-
+	rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
 	if err != nil {
 		return err
 	}
@@ -698,9 +663,6 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			}
 			if err = rel2.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
 				bat.Clean(proc.Mp())
-				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-					return err2
-				}
 				return err
 			}
 			bat.Clean(proc.Mp())
@@ -708,9 +670,6 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			// Delete the cache.
 			deleteAutoIncrCache(name, proc)
 		}
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
-		return err
 	}
 	return nil
 }
@@ -797,19 +756,10 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 		return err
 	}
 
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-
 	var autoRel engine.Relation
 	// Essentially, temporary table is not an operation of a transaction.
 	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
-	if dbName == defines.TEMPORARY_DBNAME {
-		autoRel, err = db.Relation(ctx, catalog.AutoIncrTableName)
-	} else {
-		autoRel, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
-	}
+	autoRel, err = db.Relation(ctx, catalog.AutoIncrTableName)
 
 	if err != nil {
 		return err
@@ -827,9 +777,6 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
 			if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
-				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-					return err2
-				}
 				return err
 			}
 
@@ -838,15 +785,9 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 
 			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
-				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-					return err2
-				}
 				return err
 			}
 		}
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
-		return err
 	}
 	return nil
 }
