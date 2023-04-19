@@ -164,9 +164,6 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 		sw.dsn = dsn
 	}
 	if forceNewConn {
-		if err := sw.db.Close(); err != nil {
-			return nil, err
-		}
 		db, err := sql.Open("mysql", sw.dsn)
 		if err != nil {
 			return nil, err
