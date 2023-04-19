@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"net"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2037,14 +2036,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		}
+		if len(nodes) != len(c.cnList) {
+			panic(fmt.Sprintf("nodes len %v, cnlist len %v", len(nodes), len(c.cnList)))
+		}
+		//sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-
-		for i := range ranges {
+		for i, blk := range ranges {
 			marshalledBlock := disttae.BlockUnmarshal(ranges[i])
 			objName := marshalledBlock.Info.MetaLoc.Name()
 			index := plan2.SimpleHashToRange(objName, lenCN)
-			nodes[index].Data = append(nodes[index].Data, ranges[i])
+			nodes[index].Data = append(nodes[index].Data, blk)
 		}
 		return nodes, nil
 	}
