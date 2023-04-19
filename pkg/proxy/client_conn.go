@@ -96,6 +96,8 @@ type ClientConn interface {
 type clientConn struct {
 	ctx context.Context
 	log *log.MOLogger
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
 	// conn is the raw TCP connection between proxy and client.
 	conn goetty.IOSession
 	// mysqlProto is mainly used to build handshake.
@@ -130,6 +132,7 @@ var _ ClientConn = (*clientConn)(nil)
 func newClientConn(
 	ctx context.Context,
 	logger *log.MOLogger,
+	cs *counterSet,
 	conn goetty.IOSession,
 	mc clusterservice.MOCluster,
 	router Router,
@@ -140,14 +143,15 @@ func newClientConn(
 		return nil, err
 	}
 	c := &clientConn{
-		ctx:       ctx,
-		log:       logger,
-		conn:      conn,
-		connID:    nextClientConnID(),
-		moCluster: mc,
-		router:    router,
-		tun:       tun,
-		originIP:  net.ParseIP(host),
+		ctx:        ctx,
+		log:        logger,
+		counterSet: cs,
+		conn:       conn,
+		connID:     nextClientConnID(),
+		moCluster:  mc,
+		router:     router,
+		tun:        tun,
+		originIP:   net.ParseIP(host),
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
@@ -311,7 +315,8 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		}
 	}
 	if !isOKPacket(r) {
-		return nil, moerr.NewInternalErrorNoCtx("access error")
+		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
+			codeAuthFailed)
 	}
 	return sc, nil
 }
