@@ -170,8 +170,8 @@ func (w *dummyStringWriter) GetContent() string { return "" }
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
 	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
-		sw := sqlWriter.NewSqlWriter(tbl, context.TODO())
-		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w, sw, false)
+		sw := sqlWriter.NewSqlWriter(context.TODO())
+		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w, sw, false, tbl)
 		return w
 	})
 }

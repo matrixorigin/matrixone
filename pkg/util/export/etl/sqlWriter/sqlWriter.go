@@ -30,7 +30,6 @@ var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // SqlWriter is a writer that writes data to a SQL database.
 type BaseSqlWriter struct {
-	table        *table.Table
 	db           *sql.DB
 	dsn          string
 	forceNewConn bool
@@ -39,7 +38,7 @@ type BaseSqlWriter struct {
 
 type SqlWriter interface {
 	table.RowWriter
-	WriteRows(rows string) (int, error)
+	WriteRows(rows string, tbl *table.Table) (int, error)
 }
 
 func (sw *BaseSqlWriter) GetContent() string {
@@ -109,12 +108,12 @@ func (sw *BaseSqlWriter) generateInsertStatement(rows string, tbl *table.Table) 
 	return sb.String(), len(records), nil
 }
 
-func (sw *BaseSqlWriter) WriteRows(rows string) (int, error) {
+func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	db, err := sw.initOrRefreshDBConn()
 	if err != nil {
 		return 0, err
 	}
-	insertStatement, cnt, err := sw.generateInsertStatement(rows, sw.table)
+	insertStatement, cnt, err := sw.generateInsertStatement(rows, tbl)
 	if err != nil {
 		return 0, err
 	}

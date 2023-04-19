@@ -16,10 +16,10 @@ package sqlWriter
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 var (
@@ -30,6 +30,10 @@ var (
 var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
+
+	sqlWriter = &BaseSqlWriter{}
+
+	once sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
@@ -64,11 +68,12 @@ func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context) (string, error))
 }
 
-func NewSqlWriter(tbl *table.Table, ctx context.Context) *BaseSqlWriter {
-	sw := &BaseSqlWriter{
-		ctx:          ctx,
-		forceNewConn: true,
-		table:        tbl,
-	}
-	return sw
+func NewSqlWriter(ctx context.Context) *BaseSqlWriter {
+	once.Do(func() {
+		sqlWriter = &BaseSqlWriter{
+			ctx:          ctx,
+			forceNewConn: true,
+		}
+	})
+	return sqlWriter
 }
