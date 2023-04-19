@@ -232,9 +232,9 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 		if id, tblName, ok := isTruncate(name); ok {
 			cmds[i].Id = id
 			cmds[i].Name = tblName
-			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
-			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+			cmds[i].NewId = row[ROWID_OFF+MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].DatabaseId = row[ROWID_OFF+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[ROWID_OFF+MO_TABLES_RELDATABASE_IDX].([]byte))
 		} else {
 			cmds[i].IsDrop = true
 			cmds[i].Id = row[ROWID_OFF+MO_TABLES_REL_ID_IDX].(uint64)

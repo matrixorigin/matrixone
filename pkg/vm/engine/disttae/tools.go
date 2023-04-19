@@ -432,7 +432,7 @@ func genDropTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseN
 	return bat, nil
 }
 
-func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
+func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -459,6 +459,13 @@ func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 

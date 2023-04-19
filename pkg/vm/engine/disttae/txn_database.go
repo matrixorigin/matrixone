@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 	"strings"
@@ -223,7 +222,6 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		//save rowids of mo_columns
 		rowids = item.Rowids
 	}
-	fmt.Println("Delete mo_tables rowid", rowid, name)
 	bat, err := genDropTableTuple(rowid, id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
@@ -236,11 +234,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		}
 	}
 
-	//加writeBatch(delete,mo_columns);来过滤掉删除表的columns
-	//发送给dn时，(delete,mo_columns)可以不发送。
-	//mo_columns中的每行都要有rowid
+	//Add writeBatch(delete,mo_columns) to filter table in mo_columns.
+	//Dn will filter writeBatch(delete,mo_columns) just after writeBatch(delete,mo_tables).
+	//Every row in writeBatch(delete,mo_columns) needs rowid
 	for _, rid := range rowids {
-		fmt.Println("Delete mo_columns", rid)
 		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
 		if err != nil {
 			return err
@@ -259,6 +256,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 
 func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
+	var rowid types.Rowid
 
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
@@ -266,10 +264,16 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 	k := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
-		v.(*txnTable).tableId = newId
+		table := v.(*txnTable)
+		oldId = table.tableId
+		table.tableId = newId
+		//this rowid is generated in the txnDatabase.Create function
+		rowid = table.rowid
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
+		table := v.(*txnTable)
+		oldId = table.tableId
+		//this rowid is from data DN
+		rowid = table.rowid
 	} else {
 		item := &cache.TableItem{
 			Name:       name,
@@ -281,8 +285,10 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 			return 0, moerr.GetOkExpectedEOB()
 		}
 		oldId = item.Id
+		//this rowid is from data DN
+		rowid = item.Rowid
 	}
-	bat, err := genTruncateTableTuple(newId, db.databaseId,
+	bat, err := genTruncateTableTuple(rowid, newId, db.databaseId,
 		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return 0, err
@@ -362,11 +368,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 				return err
 			}
 		}
-		//方案1： 多个dnStores怎么处理多个rowid?
-		//get rowid from bat.vec[0]
-		//save rowid into txnTable.rowid
-		//方案2：生成一个txnTable.rowid
-		//WriteBatch里面不在生成rowid。直接用txnTable.rowid
 	}
 	tbl.primaryIdx = -1
 	tbl.clusterByIdx = -1
@@ -374,7 +375,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
 		tbl.rowids[i] = db.txn.genRowId()
-		fmt.Println("create mo_columns", tbl.rowids[i])
 		bat, err := genCreateColumnTuple(col, tbl.rowids[i], true, db.txn.proc.Mp())
 		if err != nil {
 			return err
@@ -385,11 +385,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 				return err
 			}
 		}
-		//方案1： 多个dnStores怎么处理多个rowid?
-		//get rowid from bat.vec[0]
-		//save rowid into txnTable.rowid
-		//方案2：生成一个txnTable.rowid
-		//WriteBatch里面不在生成rowid。直接用txnTable.rowid
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
 		}

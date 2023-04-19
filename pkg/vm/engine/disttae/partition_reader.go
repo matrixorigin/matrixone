@@ -52,9 +52,6 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-
-	//deletedTableFromMoTables map
-	//deletedTableFromMoColumns map
 }
 
 type BlockBatch struct {
