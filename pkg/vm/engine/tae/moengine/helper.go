@@ -153,7 +153,16 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	for _, def := range defs {
 		switch defVal := def.(type) {
 		case *engine.AttributeDef:
-			if pkeyColName == defVal.Attr.Name {
+			// In TAE, it doesn't dedup or sort by fake primary key
+			// Fake pk is only used when collecting logtail.
+			// When collecting logtail, it uses schema.GetPrimaryKey.
+			// Can't identify fake pk with column.flag. Column.flag is not ready in 0.8.0.
+			// TODO: Use column.flag instead of column.name to idntify fake pk.
+			if defVal.Attr.Name == "__mo_fake_pk_col" {
+				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
+					return
+				}
+			} else if pkeyColName == defVal.Attr.Name {
 				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
 					return
 				}

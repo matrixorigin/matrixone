@@ -23,6 +23,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -148,6 +149,25 @@ func (s *Schema) HasSortKey() bool { return s.SortKey != nil }
 func (s *Schema) GetSingleSortKey() *ColDef        { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int         { return s.SortKey.Defs[0].Idx }
 func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey().Type }
+
+// Can't identify fake pk with column.flag. Column.flag is not ready in 0.8.0.
+// TODO: Use column.flag instead of column.name to idntify fake pk.
+func (s *Schema) getFakePrimaryKey() *ColDef {
+	idx, ok := s.NameIndex["__mo_fake_pk_col"]
+	if !ok {
+		logutil.Infof("fake primary key not existed: %v", s.String())
+		panic("fake primary key not existed")
+	}
+	return s.ColDefs[idx]
+}
+
+// GetPrimaryKey gets the primary key, including fake primary key.
+func (s *Schema) GetPrimaryKey() *ColDef {
+	if s.HasPK() {
+		return s.ColDefs[s.SortKey.GetSingleIdx()]
+	}
+	return s.getFakePrimaryKey()
+}
 
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn2 int
