@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -241,7 +242,7 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	var sn int64
-	if sn, err = common.WriteBytes(buf, w); err != nil {
+	if sn, err = objectio.WriteBytes(buf, w); err != nil {
 		return
 	}
 	n += int64(sn)
@@ -264,7 +265,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	n += int64(sn)
 	var sn2 int64
 	var buf []byte
-	if buf, sn2, err = common.ReadBytes(r); err != nil {
+	if buf, sn2, err = objectio.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn2
