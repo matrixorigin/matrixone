@@ -59,7 +59,7 @@ func (*baseRelation) DelTableDef(_ context.Context, def engine.TableDef) error {
 }
 
 func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.Schema().(*catalog.Schema)
 	defs, _ := SchemaToDefs(schema)
 	return defs, nil
 }
@@ -99,11 +99,11 @@ func (rel *baseRelation) Rows(c context.Context) (int64, error) {
 }
 
 func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
-	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	return rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 }
 
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 	if !schema.HasPK() {
 		return nil, nil
 	}
@@ -123,7 +123,7 @@ func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute,
 // Might that can be done in the future
 
 func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 	if schema.PhyAddrKey == nil {
 		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
 	}

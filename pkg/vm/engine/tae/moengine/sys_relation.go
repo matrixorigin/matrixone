@@ -87,7 +87,7 @@ func (s *sysRelation) AlterTable(context.Context, *apipb.AlterTableReq) error {
 }
 
 func (s *sysRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
-	colDefs := s.handle.GetMeta().(*catalog.TableEntry).GetSchema().ColDefs
+	colDefs := s.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema().ColDefs
 	cols, _ := ColDefsToAttrs(colDefs)
 	return cols, nil
 }

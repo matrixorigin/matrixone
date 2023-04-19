@@ -128,7 +128,7 @@ func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
 	if latest != nil {
 		return latest.BaseNode.Schema.Clone()
 	}
-	return meta.GetSchema().Clone()
+	return meta.GetLastestSchema().Clone()
 }
 
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {

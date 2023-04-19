@@ -106,16 +106,20 @@ type txnTable struct {
 	idx int
 }
 
-func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
+func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
+	schema := entry.GetVisibleSchema(store.txn)
+	if schema == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No visible schema for ts %s", store.txn.GetStartTS().ToString())
+	}
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
-		schema:      entry.GetSchema(),
+		schema:      schema,
 		deleteNodes: make(map[common.ID]*deleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  newTxnEntries(),
 	}
-	return tbl
+	return tbl, nil
 }
 
 func (tbl *txnTable) PrePreareTransfer() (err error) {
@@ -511,7 +515,9 @@ func (tbl *txnTable) IsDeleted() bool {
 	return tbl.dropEntry != nil
 }
 
-func (tbl *txnTable) GetSchema() *catalog.Schema {
+// GetLocalSchema returns the schema remains in the txn table, rather than the
+// latest schema in TableEntry
+func (tbl *txnTable) GetLocalSchema() *catalog.Schema {
 	return tbl.schema
 }
 

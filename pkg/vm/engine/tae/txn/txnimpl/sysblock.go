@@ -51,7 +51,7 @@ func bool2i8(v bool) int8 {
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return isSysTable(blk.table.entry.GetSchema().Name)
+	return isSysTable(blk.table.entry.GetLastestSchema().Name)
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -126,7 +126,7 @@ func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.Ta
 func (blk *txnSysBlock) columnRows() int {
 	rows := 0
 	fn := func(table *catalog.TableEntry) error {
-		rows += len(table.GetSchema().ColDefs)
+		rows += len(table.GetLastestSchema().ColDefs)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {

@@ -141,7 +141,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		if b.batches[columnDelBatch] == nil {
 			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
 		}
-		for _, usercol := range tbl.GetSchema().ColDefs {
+		for _, usercol := range tbl.GetLastestSchema().ColDefs {
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
 		}
@@ -157,7 +157,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 			txnimpl.FillColumnRow(tbl, node, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
 		}
-		for _, usercol := range tbl.GetSchema().ColDefs {
+		for _, usercol := range tbl.GetLastestSchema().ColDefs {
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
 		}
@@ -174,7 +174,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 			txnimpl.FillColumnRow(tbl, node, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
 		}
-		for _, usercol := range tbl.GetSchema().ColDefs {
+		for _, usercol := range tbl.GetLastestSchema().ColDefs {
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
 		}

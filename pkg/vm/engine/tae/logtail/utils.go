@@ -646,15 +646,15 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			}
 			rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
+			for _, usercol := range entry.GetLastestSchema().ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 			}
 
 			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
-				SnapshotAttr_BlockMaxRow).Append(entry.GetSchema().BlockMaxRows, false)
+				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchema().BlockMaxRows, false)
 			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
-				SnapshotAttr_SegmentMaxBlock).Append(entry.GetSchema().SegmentMaxBlocks, false)
+				SnapshotAttr_SegmentMaxBlock).Append(entry.GetLastestSchema().SegmentMaxBlocks, false)
 
 			catalogEntry2Batch(
 				collector.data.bats[TBLInsertIDX],
@@ -675,7 +675,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 			rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetSchema().ColDefs {
+			for _, usercol := range entry.GetLastestSchema().ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 			}

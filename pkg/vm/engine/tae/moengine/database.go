@@ -40,7 +40,7 @@ func (db *txnDatabase) Relations(_ context.Context) ([]string, error) {
 
 	it := db.handle.MakeRelationIt()
 	for it.Valid() {
-		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
+		names = append(names, it.GetRelation().Schema().(*catalog.Schema).Name)
 		it.Next()
 	}
 	return names, nil
@@ -51,7 +51,7 @@ func (db *txnDatabase) RelationNames(_ context.Context) ([]string, error) {
 
 	it := db.handle.MakeRelationIt()
 	for it.Valid() {
-		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
+		names = append(names, it.GetRelation().Schema().(*catalog.Schema).Name)
 		it.Next()
 	}
 	return names, nil

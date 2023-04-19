@@ -5940,13 +5940,13 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.createRelAndAppend(bats[0], true)
 
 	_, rel := tae.getRelation()
-	partioned := rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned := rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -5959,7 +5959,7 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 }
 
