@@ -225,7 +225,7 @@ func TestTxn4(t *testing.T) {
 		pk.AppendMany([]any{int32(1), int32(2), int32(1)}, []bool{false, false, false})
 		provider := containers.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
-		bat := containers.MockBatch(schema.Types(), 3, schema.GetSingleSortKeyIdx(), provider)
+		bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetSingleSortKeyIdx(), provider)
 		defer bat.Close()
 		err := rel.Append(bat)
 		t.Log(err)
@@ -447,7 +447,7 @@ func TestMergeBlocks1(t *testing.T) {
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
@@ -549,7 +549,7 @@ func TestMergeBlocks2(t *testing.T) {
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")

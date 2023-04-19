@@ -843,10 +843,12 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		}
 	}
 	// fake pk
-	typ := types.T_uint64.ToType()
-	typ.Width = 64
-	schema.AppendFakePKCol(FakePKName, typ)
-	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+	if pkIdx == -1 {
+		typ := types.T_uint64.ToType()
+		typ.Width = 64
+		schema.AppendFakePKCol(FakePKName, typ)
+		schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+	}
 
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
