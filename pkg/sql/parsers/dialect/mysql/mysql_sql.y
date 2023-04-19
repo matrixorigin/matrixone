@@ -412,6 +412,8 @@ import (
 // sp_begin_sym
 %token <str> SPBEGIN
 
+%token <str> BACKEND SERVERS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
@@ -425,6 +427,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
+%type <statement> show_servers_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
@@ -2772,6 +2775,7 @@ show_stmt:
 |   show_accounts_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_servers_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3146,6 +3150,12 @@ show_create_stmt:
 |   SHOW CREATE PUBLICATION db_name
     {
 	$$ = &tree.ShowCreatePublications{Name: $4}
+    }
+
+show_servers_stmt:
+    SHOW BACKEND SERVERS
+    {
+        $$ = &tree.ShowBackendServers{}
     }
 
 table_name_unresolved:

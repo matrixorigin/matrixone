@@ -27,10 +27,6 @@ import (
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
-func compareBlockFn(a, b *BlockEntry) int {
-	return a.ID.Compare(b.ID)
-}
-
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
 	segment *SegmentEntry
@@ -133,6 +129,10 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	}
 	e.BaseEntryImpl.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	return e
+}
+
+func (entry *BlockEntry) Less(b *BlockEntry) int {
+	return entry.ID.Compare(b.ID)
 }
 
 func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
