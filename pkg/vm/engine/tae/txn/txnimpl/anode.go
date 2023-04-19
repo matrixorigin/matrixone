@@ -89,8 +89,8 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 	if n.storage.mnode.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(txnbase.MaxNodeRows) {
-			opts.Capacity = int(txnbase.MaxNodeRows)
+		if opts.Capacity > int(MaxNodeRows) {
+			opts.Capacity = int(MaxNodeRows)
 		}
 		n.storage.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
@@ -127,7 +127,7 @@ func (n *anode) FillColumnView(view *model.ColumnView) (err error) {
 }
 
 func (n *anode) GetSpace() uint32 {
-	return txnbase.MaxNodeRows - n.storage.mnode.rows
+	return MaxNodeRows - n.storage.mnode.rows
 }
 
 func (n *anode) RowsWithoutDeletes() uint32 {

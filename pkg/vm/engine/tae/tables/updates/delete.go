@@ -35,8 +35,8 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(a, b *DeleteNode) int {
-	return a.TxnMVCCNode.Compare2(b.TxnMVCCNode)
+func (node *DeleteNode) Less(b *DeleteNode) int {
+	return node.TxnMVCCNode.Compare2(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {

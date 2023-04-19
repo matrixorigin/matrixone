@@ -97,7 +97,7 @@ user_grant_2    role_account_priv_1    table    select    *.*
 create user user_test_2 identified by '123456';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='user_test_2';
 user_name    authentication_string
-user_test_2    123456
+user_test_2    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 create role if not exists role_test_01;
 select role_name from mo_catalog.mo_role where role_name='role_test_01';
 role_name

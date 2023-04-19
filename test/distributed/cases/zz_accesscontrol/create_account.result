@@ -171,7 +171,7 @@ mo_database
 mo_columns
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
-admin    123456    2
+admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2
 select role_name,obj_type,privilege_name,privilege_level from mo_role_privs;
 role_name    obj_type    privilege_name    privilege_level
 accountadmin    account    create user    *
