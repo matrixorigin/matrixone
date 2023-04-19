@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 // version uint16
@@ -31,6 +32,31 @@ const (
 	InfoSizeOffset    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+unsafe.Sizeof(uint32(0)))
 	DescriptorSize    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+2*unsafe.Sizeof(uint32(0)))
 )
+
+const (
+	IOET_WALEntry_V1 uint16 = 1
+	IOET_WALEntry    uint16 = 2000
+
+	IOET_WALEntry_CurrVer = IOET_WALEntry_V1
+)
+
+func init() {
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry,
+			Version: IOET_WALEntry_V1,
+		},
+		func(a any) ([]byte, error) {
+			info := a.(*Info)
+			return info.Marshal()
+		},
+		func(b []byte) (any, error) {
+			info := NewEmptyInfo()
+			err := info.Unmarshal(b)
+			return info, err
+		},
+	)
+}
 
 // type u16, payloadsize u32, infosize u32
 type descriptor struct {

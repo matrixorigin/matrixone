@@ -409,8 +409,15 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return int64(n1), err
 		}
-		info := NewEmptyInfo()
-		err = info.Unmarshal(infoBuf)
+		version := b.GetVersion()
+		codec := objectio.GetIOEntryCodec(
+			objectio.IOEntryHeader{
+				Type:    IOET_WALEntry,
+				Version: version,
+			},
+		)
+		vinfo, err := codec.Decode(infoBuf)
+		info := vinfo.(*Info)
 		if err != nil {
 			return int64(n1), err
 		}
@@ -443,11 +450,18 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	if err != nil {
 		return n + n1, err
 	}
-
 	offset += n1
 	b.SetInfoBuf(infoBuf)
-	info := NewEmptyInfo()
-	err = info.Unmarshal(infoBuf)
+
+	version := b.GetVersion()
+	codec := objectio.GetIOEntryCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry,
+			Version: version,
+		},
+	)
+	vinfo, err := codec.Decode(infoBuf)
+	info := vinfo.(*Info)
 	if err != nil {
 		return n + n1, err
 	}
@@ -471,6 +485,7 @@ func (b *Base) PrepareWrite() {
 }
 
 func (b *Base) WriteTo(w io.Writer) (int64, error) {
+	b.descriptor.SetVersion(IOET_WALEntry_CurrVer)
 	n1, err := b.descriptor.WriteTo(w)
 	if err != nil {
 		return n1, err
