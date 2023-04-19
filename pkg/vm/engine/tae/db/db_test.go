@@ -6023,6 +6023,7 @@ func TestCommitS3Blocks(t *testing.T) {
 		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, objNames[i])
 		assert.Nil(t, err)
+		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
 			_, err := writer.WriteBatch(containers.ToCNBatch(bat))
 			assert.Nil(t, err)
@@ -6049,7 +6050,8 @@ func TestCommitS3Blocks(t *testing.T) {
 	}
 	for _, meta := range blkMetas {
 		txn, rel := tae.getRelation()
-		rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
-		assert.Error(t, txn.Commit())
+		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		assert.Error(t, err)
+		assert.NoError(t, txn.Commit())
 	}
 }
