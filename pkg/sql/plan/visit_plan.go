@@ -97,7 +97,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
-		oldType := DeepCopyTyp(e.Typ)
+		oldType := DeepCopyType(e.Typ)
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
