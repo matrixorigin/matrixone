@@ -403,7 +403,16 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableId = tableId
 	tbl.parts = db.txn.engine.getPartitions(db.databaseId, tableId).Snapshot()
 	tbl.getTableDef()
-	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	key := genTableKey(ctx, name, db.databaseId)
+	db.txn.createMap.Store(key, tbl)
+	//CORNER CASE
+	//begin;
+	//create table t1(a int);
+	//drop table t1; //t1 is in deleteTableMap now.
+	//select * from t1; //t1 does not exist.
+	//create table t1(a int); //t1 does not exist. t1 can be created again.
+	//	t1 needs be deleted from deleteTableMap
+	db.txn.deletedTableMap.Delete(key)
 	return nil
 }
 
