@@ -108,7 +108,7 @@ func buildDeletePlans(
 	hasUniqueKey := haveUniqueKey(tableDef)
 	if hasUniqueKey {
 		// append join node to get unique key table's row_id/pk for delete
-		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, tableDef, lastNodeId)
+		lastNodeId, bindCtx, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, tableDef, lastNodeId)
 		lastNode := builder.qry.Nodes[lastNodeId]
 		projectTag = lastNode.BindingTags[0]
 		projectProjection = lastNode.ProjectList
@@ -704,7 +704,7 @@ func getHiddenColumnForPreInsert(tableDef *TableDef) ([]*Type, []string) {
 	return typs, names
 }
 
-func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, baseNodeId int32) (int32, error) {
+func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, tableDef *TableDef, baseNodeId int32) (int32, *BindContext, error) {
 	lastNodeId := baseNodeId
 	typMap := make(map[string]*plan.Type)
 	posMap := make(map[string]int)
@@ -715,16 +715,18 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 		posMap[col.Name] = idx
 		typMap[col.Name] = col.Typ
 	}
+	var returnCtx *BindContext
 
 	for _, indexdef := range tableDef.Indexes {
 		if indexdef.Unique {
 			// append table_scan node
-			joinCtx := NewBindContext(builder, bindCtx)
-			rightCtx := NewBindContext(builder, joinCtx)
+			returnCtx = NewBindContext(builder, nil)
+			rightCtx := NewBindContext(builder, returnCtx)
+			leftCtx := builder.ctxByNode[lastNodeId]
 			astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
 			rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 			if err != nil {
-				return -1, err
+				return -1, nil, err
 			}
 			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 			rightTableDef := builder.qry.Nodes[rightId].TableDef
@@ -805,28 +807,27 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 				}
 				leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 				if err != nil {
-					return -1, err
+					return -1, nil, err
 				}
 			}
 
 			condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 			if err != nil {
-				return -1, err
+				return -1, nil, err
 			}
 			joinConds = []*Expr{condExpr}
 
-			leftCtx := builder.ctxByNode[lastNodeId]
-			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
+			err = returnCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 			if err != nil {
-				return -1, err
+				return -1, nil, err
 			}
 			lastNodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeId, rightId},
 				JoinType: plan.Node_LEFT,
 				OnList:   joinConds,
-			}, joinCtx)
-			bindCtx.binder = NewTableBinder(builder, bindCtx)
+			}, returnCtx)
+			returnCtx.binder = NewTableBinder(builder, returnCtx)
 		}
 	}
 
@@ -837,9 +838,9 @@ func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindCo
 		Children:    []int32{lastNodeId},
 		BindingTags: []int32{projectNodeTag},
 		ProjectList: projectList,
-	}, bindCtx)
+	}, returnCtx)
 
-	return lastNodeId, nil
+	return lastNodeId, returnCtx, nil
 }
 
 // makePreDeletePlan  build predelete plan.

@@ -242,8 +242,8 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	newCtx := &plan.PreInsertUkCtx{
 		Columns:  make([]int32, len(ctx.Columns)),
 		PkColumn: ctx.PkColumn,
-		PkType:   DeepCopyTyp(ctx.PkType),
-		UkType:   DeepCopyTyp(ctx.UkType),
+		PkType:   DeepCopyType(ctx.PkType),
+		UkType:   DeepCopyType(ctx.UkType),
 	}
 	copy(newCtx.Columns, ctx.Columns)
 
