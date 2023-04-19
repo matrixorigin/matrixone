@@ -110,7 +110,9 @@ func (s *testCNServer) waitCNServerReady() bool {
 				_ = conn.Close()
 				return true
 			}
-			_ = conn.Close()
+			if conn != nil {
+				_ = conn.Close()
+			}
 		}
 	}
 }
@@ -275,7 +277,7 @@ func TestFakeCNServer(t *testing.T) {
 func TestServerConn_ExecStmt(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
-	addr := "127.0.0.1:38090"
+	addr := "127.0.0.1:38190"
 	cn1 := &CNServer{
 		reqLabel: newLabelInfo("t1", map[string]string{
 			"k1": "v1",
