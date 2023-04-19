@@ -28,21 +28,11 @@ import (
 
 // ### Shallow copy Functions
 
-func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	return vec.GetDownstreamVector()
-}
-
-func ToCNVecs(vecs []Vector) []*movec.Vector {
-	movecs := make([]*movec.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = UnmarshalToMoVec(vecs[i])
-	}
-	return movecs
-}
-
 func ToCNBatch(dnBat *Batch) *batch.Batch {
 	cnBat := batch.New(true, dnBat.Attrs)
-	cnBat.Vecs = ToCNVecs(dnBat.Vecs)
+	for i, vec := range dnBat.Vecs {
+		cnBat.Vecs[i] = vec.GetDownstreamVector()
+	}
 	return cnBat
 }
 

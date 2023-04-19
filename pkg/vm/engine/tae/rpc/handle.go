@@ -845,7 +845,7 @@ func (h *Handle) HandleWrite(
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
 
-			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
+			err = tb.DeleteByPhyAddrKeys(ctx, vec.GetDownstreamVector())
 			if err != nil {
 				vec.Close()
 				return

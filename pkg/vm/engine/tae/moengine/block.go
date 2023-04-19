@@ -48,7 +48,7 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 		if vec.Allocated() > 0 {
 			bat.Vecs[i] = containers.CopyToMoVec(vec)
 		} else {
-			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
+			bat.Vecs[i] = vec.GetDownstreamVector()
 		}
 	}
 	view.Close()
