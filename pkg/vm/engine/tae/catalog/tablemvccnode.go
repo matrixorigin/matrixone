@@ -68,29 +68,19 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type TableNode struct {
-	// the latest schema. shortcut to the schema in the last mvvcnode.
-	// TODO(aptend):
-	// use atomic.Pointer?
-	// do not writeTo or readFrom, inherit from mvvcnode in replay phrase
+	// The latest schema. A shortcut to the schema in the last mvvcnode.
+	// TODO(aptend): use atomic.Pointer?
 	schema *Schema
 }
 
 func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {
-	var schemaBuf []byte
-	if schemaBuf, err = node.schema.Marshal(); err != nil {
-		return
-	}
-	if _, err = w.Write(schemaBuf); err != nil {
-		return
-	}
-	n += int64(len(schemaBuf))
+	// do not writeTo inherit from mvvcnode in replay phrase
+	// reference: function onReplayCreateTable and onReplayUpdateTable
 	return
 }
 
 func (node *TableNode) ReadFrom(r io.Reader) (n int64, err error) {
-	node.schema = NewEmptySchema("")
-	if n, err = node.schema.ReadFrom(r); err != nil {
-		return
-	}
+	// do not readFrom, inherit from mvvcnode in replay phrase
+	// reference: function onReplayCreateTable and onReplayUpdateTable
 	return
 }

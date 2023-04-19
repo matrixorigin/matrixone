@@ -821,6 +821,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
+	//TODO(aptend):
+	// 1.update local schema
+	// 2.handle written data in localseg, keep the batch aligned with the new schema
 	return err
 }
 

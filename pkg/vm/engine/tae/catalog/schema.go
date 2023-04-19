@@ -142,6 +142,8 @@ func (s *Schema) Clone() *Schema {
 	return ns
 }
 
+// ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
+// recommended to close schema first and then apply alter table.
 func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) {
 	switch req.Kind {
 	case apipb.AlterKind_UpdateConstraint:

@@ -33,8 +33,7 @@ const (
 )
 
 type statCaches struct {
-	newest int
-	//TODO(aptend): use array
+	newest  int
 	entries map[cacheKey]cacheEntry
 }
 

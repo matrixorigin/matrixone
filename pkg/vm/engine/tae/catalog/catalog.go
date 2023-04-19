@@ -362,6 +362,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.db = db
 		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
+		tbl.TableNode.schema = un.BaseNode.Schema
 		tbl.Insert(un)
 		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
 		if err != nil {
@@ -372,7 +373,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	}
 	tblun := tbl.SearchNode(un)
 	if tblun == nil {
-		tbl.schema = un.BaseNode.Schema
+		tbl.TableNode.schema = un.BaseNode.Schema
 		tbl.Insert(un) //TODO isvalid
 	}
 
@@ -426,7 +427,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
-		tbl.schema = schema
+		tbl.TableNode.schema = schema
 		un := &MVCCNode[*TableMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
@@ -441,8 +442,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		return
 	}
 	tbl = NewReplayTableEntry()
-	tbl.TableNode = &TableNode{}
-	tbl.schema = schema
+	tbl.TableNode = &TableNode{schema: schema}
 	tbl.db = db
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
