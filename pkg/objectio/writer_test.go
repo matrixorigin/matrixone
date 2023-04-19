@@ -115,7 +115,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, constructorFactory)
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
 	assert.Nil(t, err)
 	vector1 := vec.Entries[0].Object.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
@@ -145,7 +145,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, constructorFactory)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
 	assert.Nil(t, err)
 	vector1 = vec.Entries[0].Object.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])

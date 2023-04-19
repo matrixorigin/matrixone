@@ -125,7 +125,6 @@ func (r *objectReaderV1) ReadOneBlock(
 	idxs []uint16,
 	blk uint16,
 	m *mpool.MPool,
-	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
@@ -138,7 +137,6 @@ func (r *objectReaderV1) ReadAll(
 	ctx context.Context,
 	idxs []uint16,
 	m *mpool.MPool,
-	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
@@ -200,7 +198,6 @@ func (r *objectReaderV1) ReadMultiBlocks(
 	ctx context.Context,
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
-	constructor CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
