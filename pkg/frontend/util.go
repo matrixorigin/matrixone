@@ -325,10 +325,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
-		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
+		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAt[types.Decimal128](vec, 0)
-		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
+		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)
