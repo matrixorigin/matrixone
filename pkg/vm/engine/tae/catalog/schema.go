@@ -23,6 +23,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -164,11 +164,11 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	if s.Name, sn, err = common.ReadString(r); err != nil {
+	if s.Name, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if s.Comment, sn, err = common.ReadString(r); err != nil {
+	if s.Comment, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -176,24 +176,24 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 1
-	if s.Partition, sn, err = common.ReadString(r); err != nil {
+	if s.Partition, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if s.Relkind, sn, err = common.ReadString(r); err != nil {
+	if s.Relkind, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if s.Createsql, sn, err = common.ReadString(r); err != nil {
+	if s.Createsql, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
 
-	if s.View, sn, err = common.ReadString(r); err != nil {
+	if s.View, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if s.Constraint, sn, err = common.ReadBytes(r); err != nil {
+	if s.Constraint, sn, err = objectio.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn
@@ -210,11 +210,11 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		n += int64(types.TSize)
 		def := new(ColDef)
 		def.Type = types.DecodeType(colBuf)
-		if def.Name, sn, err = common.ReadString(r); err != nil {
+		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
 		n += sn
-		if def.Comment, sn, err = common.ReadString(r); err != nil {
+		if def.Comment, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
 		n += sn
@@ -250,11 +250,11 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += int64(sn2)
-		if def.Default, sn, err = common.ReadBytes(r); err != nil {
+		if def.Default, sn, err = objectio.ReadBytes(r); err != nil {
 			return
 		}
 		n += sn
-		if def.OnUpdate, sn, err = common.ReadBytes(r); err != nil {
+		if def.OnUpdate, sn, err = objectio.ReadBytes(r); err != nil {
 			return
 		}
 		n += sn
@@ -277,28 +277,28 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = s.AcInfo.WriteTo(&w); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.Name, &w); err != nil {
+	if _, err = objectio.WriteString(s.Name, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.Comment, &w); err != nil {
+	if _, err = objectio.WriteString(s.Comment, &w); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeInt8(&s.Partitioned)); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.Partition, &w); err != nil {
+	if _, err = objectio.WriteString(s.Partition, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.Relkind, &w); err != nil {
+	if _, err = objectio.WriteString(s.Relkind, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.Createsql, &w); err != nil {
+	if _, err = objectio.WriteString(s.Createsql, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteString(s.View, &w); err != nil {
+	if _, err = objectio.WriteString(s.View, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteBytes(s.Constraint, &w); err != nil {
+	if _, err = objectio.WriteBytes(s.Constraint, &w); err != nil {
 		return
 	}
 	length := uint16(len(s.ColDefs))
@@ -309,10 +309,10 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
 			return
 		}
-		if _, err = common.WriteString(def.Name, &w); err != nil {
+		if _, err = objectio.WriteString(def.Name, &w); err != nil {
 			return
 		}
-		if _, err = common.WriteString(def.Comment, &w); err != nil {
+		if _, err = objectio.WriteString(def.Comment, &w); err != nil {
 			return
 		}
 		if _, err = w.Write(types.EncodeBool(&def.NullAbility)); err != nil {
@@ -339,10 +339,10 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = w.Write(types.EncodeBool(&def.ClusterBy)); err != nil {
 			return
 		}
-		if _, err = common.WriteBytes(def.Default, &w); err != nil {
+		if _, err = objectio.WriteBytes(def.Default, &w); err != nil {
 			return
 		}
-		if _, err = common.WriteBytes(def.OnUpdate, &w); err != nil {
+		if _, err = objectio.WriteBytes(def.OnUpdate, &w); err != nil {
 			return
 		}
 	}

@@ -18,10 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -398,7 +401,30 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
+	client := cnclient.GetRPCClient()
 	c.cnList, err = c.e.Nodes()
+	if client != nil {
+		for i := 0; i < len(c.cnList); i++ {
+			addrs := strings.Split(c.cnList[i].Addr, ":")
+			if len(addrs) != 2 {
+				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+			}
+			// InValid Addr, this should be docker addr,
+			// "cn-0","cn-1", just skip it
+			if address := net.ParseIP(addrs[0]); address == nil {
+				continue
+			}
+			if isSameCN(c.addr, c.cnList[i].Addr) {
+				continue
+			}
+			err := client.Ping(ctx, c.cnList[i].Addr)
+			// ping failed
+			if err != nil {
+				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+				i--
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1594,16 +1620,34 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 }
 
 func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
-	ss := make([]*Scope, 0, len(leftScopes))
-	for i := range leftScopes {
-		tmp := new(Scope)
-		tmp.Magic = Remote
-		tmp.IsJoin = true
-		tmp.Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
-		tmp.NodeInfo = leftScopes[i].NodeInfo
-		ss = append(ss, tmp)
+	/*
+		ss := make([]*Scope, 0, len(leftScopes))
+		for i := range leftScopes {
+			tmp := new(Scope)
+			tmp.Magic = Remote
+			tmp.IsJoin = true
+			tmp.Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+			tmp.NodeInfo = leftScopes[i].NodeInfo
+			ss = append(ss, tmp)
+		}
+	*/
+
+	// Force right join to execute on one CN due to right join issue
+	// Will fix in future
+	maxCpuNum := 1
+	for _, s := range leftScopes {
+		if s.NodeInfo.Mcpu > maxCpuNum {
+			maxCpuNum = s.NodeInfo.Mcpu
+		}
 	}
 
+	ss := make([]*Scope, 1)
+	ss[0] = &Scope{
+		Magic:    Remote,
+		IsJoin:   true,
+		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
+		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(c.NumCPU(), maxCpuNum)},
+	}
 	return ss
 }
 

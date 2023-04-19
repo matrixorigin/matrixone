@@ -17,6 +17,7 @@ package multi
 import (
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ceil"
@@ -59,6 +60,12 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func CeilDecimal64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	scale := vecs[0].GetType().Scale
+	if len(vecs) > 1 {
+		digit := vector.MustFixedCol[int64](vecs[1])
+		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
+			return nil, moerr.NewOutOfRange(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
+		}
+	}
 	cb := func(vs []types.Decimal64, rs []types.Decimal64, digits int64) []types.Decimal64 {
 		return ceil.CeilDecimal64(vs, rs, digits, scale)
 	}
@@ -67,6 +74,12 @@ func CeilDecimal64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	scale := vecs[0].GetType().Scale
+	if len(vecs) > 1 {
+		digit := vector.MustFixedCol[int64](vecs[1])
+		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
+			return nil, moerr.NewOutOfRange(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
+		}
+	}
 	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
 		return ceil.CeilDecimal128(vs, rs, digits, scale)
 	}

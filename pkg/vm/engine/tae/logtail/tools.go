@@ -127,6 +127,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 
 // consume containers.Batch to construct api batch
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.CopyToMoBatch(bat)
+	mobat := containers.CopyToCNBatch(bat)
 	return batch.BatchToProtoBatch(mobat)
 }

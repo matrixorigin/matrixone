@@ -146,7 +146,7 @@ var (
 	defaultOBShowStatsInterval = time.Minute
 
 	// defaultOBMaxBufferCnt
-	defaultOBBufferCnt int32 = 10
+	defaultOBBufferCnt int32 = -1
 
 	//defaultOBBufferSize, 10 << 20 = 10485760
 	defaultOBBufferSize int64 = 10485760

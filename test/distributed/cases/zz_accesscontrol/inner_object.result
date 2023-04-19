@@ -62,7 +62,7 @@ relname
 tables
 select user_name,authentication_string from mo_user;
 user_name    authentication_string
-admin    123456
+admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 select role_name from mo_role;
 role_name
 accountadmin
