@@ -501,9 +501,11 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	return s.AppendColDef(def)
 }
 
-func (s *Schema) AppendFakePKCol(name string, typ types.Type) error {
+func (s *Schema) AppendFakePKCol() error {
+	typ := types.T_uint64.ToType()
+	typ.Width = 64
 	def := &ColDef{
-		Name:          name,
+		Name:          FakePKName,
 		Type:          typ,
 		SortIdx:       -1,
 		NullAbility:   true,
@@ -563,18 +565,6 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 	if err != nil {
 		return err
 	}
-	return s.AppendColDef(def)
-}
-
-func (s *Schema) AppendFakePKWithAttribute(attr engine.Attribute) error {
-	def, err := ColDefFromAttribute(attr)
-	if err != nil {
-		return err
-	}
-
-	def.FakePK = true
-	def.Primary = true
-
 	return s.AppendColDef(def)
 }
 
@@ -842,11 +832,9 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 		}
 	}
-	// fake pk
+	// if pk not existed, mock fake pk
 	if pkIdx == -1 {
-		typ := types.T_uint64.ToType()
-		typ.Width = 64
-		schema.AppendFakePKCol(FakePKName, typ)
+		schema.AppendFakePKCol()
 		schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 	}
 
