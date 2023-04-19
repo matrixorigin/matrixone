@@ -17,6 +17,7 @@ package objectio
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ObjectWriter = objectWriterV1
@@ -48,7 +49,7 @@ const (
 func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V1}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
-	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, nil)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, DecodeBloomFilterV1)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
 }
 
@@ -64,6 +65,35 @@ func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
 	return vec, err
 }
 
-func EncodeObjectDataV1(ioe IOEntry) (buf []byte, err error) {
-	return ioe.MarshalBinary()
+func DecodeBloomFilterV1(buf []byte) (ioe IOEntry, err error) {
+	bf := &BloomFilterEntry{}
+	bf.UnmarshalBinary(buf)
+	return bf, nil
+}
+
+type BloomFilterEntry struct {
+	indexes []StaticFilter
+}
+
+func (b *BloomFilterEntry) UnmarshalBinary(buf []byte) error {
+	b.indexes = make([]StaticFilter, 0)
+	bf := BloomFilter(buf)
+	count := bf.BlockCount()
+	for i := uint32(0); i < count; i++ {
+		buf := bf.GetBloomFilter(i)
+		if len(buf) == 0 {
+			b.indexes = append(b.indexes, nil)
+			continue
+		}
+		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
+		if err != nil {
+			return err
+		}
+		b.indexes = append(b.indexes, index)
+	}
+	return nil
+}
+
+func (b *BloomFilterEntry) MarshalBinary() ([]byte, error) {
+	return nil, nil
 }

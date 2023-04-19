@@ -61,7 +61,7 @@ func ReadBloomFilter(
 		extent,
 		noLRUCache,
 		fs,
-		BloomFilterConstructorFactory); err != nil {
+		constructorFactory); err != nil {
 		return
 	}
 	filters = v.([]StaticFilter)
