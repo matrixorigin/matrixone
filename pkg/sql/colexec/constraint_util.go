@@ -249,6 +249,36 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 	return retBatch
 }
 
+// GroupByPartition: Group data based on partition and return batch array with the same length as the number of partitions.
+// Data from the same partition is placed in the same batch
+func GroupByPartition(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) []*batch.Batch {
+	vecList := make([]*vector.Vector, partitionNum)
+	for i := 0; i < partitionNum; i++ {
+		retVec := vector.NewVec(types.T_Rowid.ToType())
+		vecList[i] = retVec
+	}
+
+	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
+		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
+			partition := vector.MustFixedCol[int32](bat.Vecs[pIdx])[i]
+			if partition == -1 {
+				panic("partiton number is -1")
+			} else {
+				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
+			}
+		}
+	}
+
+	batches := make([]*batch.Batch, partitionNum)
+	for i := range vecList {
+		retBatch := batch.New(true, []string{catalog.Row_ID})
+		retBatch.SetZs(vecList[i].Length(), proc.Mp())
+		retBatch.SetVector(0, vecList[i])
+		batches[i] = retBatch
+	}
+	return batches
+}
+
 func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string, parentIdx map[string]int32) (*batch.Batch, *batch.Batch, error) {
 	rowIdMap := make(map[types.Rowid]struct{})
 	var rowSkip []bool
