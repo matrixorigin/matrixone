@@ -214,7 +214,7 @@ func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
 }
 
 func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
-	if sw.db == nil {
+	if sw.db == nil || forceNewConn {
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return nil, errNotReady
@@ -239,13 +239,6 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 		}
 		sw.db = db
 		sw.dsn = dsn
-	}
-	if forceNewConn {
-		db, err := sql.Open("mysql", sw.dsn)
-		if err != nil {
-			return nil, err
-		}
-		sw.db = db
 	}
 	return sw.db, nil
 }
