@@ -131,7 +131,7 @@ func (r *objectReaderV1) ReadOneBlock(
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, factory)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, constructorFactory)
 }
 
 func (r *objectReaderV1) ReadAll(
@@ -144,7 +144,7 @@ func (r *objectReaderV1) ReadAll(
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, factory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, constructorFactory)
 }
 
 func (r *objectReaderV1) ReadOneBF(
@@ -214,7 +214,7 @@ func (r *objectReaderV1) ReadMultiBlocks(
 		false,
 		m,
 		r.fs,
-		constructor)
+		constructorFactory)
 }
 
 func (r *objectReaderV1) ReadAllMeta(

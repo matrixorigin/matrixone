@@ -123,6 +123,7 @@ func BloomFilterConstructorFactory(size int64, algo uint8, _ bool) CacheConstruc
 			return nil, 0, err
 		}
 		indexes := make([]StaticFilter, 0)
+		decompressed = decompressed[4:]
 		bf := BloomFilter(decompressed)
 		count := bf.BlockCount()
 		for i := uint32(0); i < count; i++ {
