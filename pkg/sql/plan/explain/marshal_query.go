@@ -238,6 +238,10 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "preinsert_uk", nil
 	case plan.Node_PRE_DELETE:
 		return "predelete", nil
+	case plan.Node_SINK:
+		return "sink", nil
+	case plan.Node_SINK_SCAN:
+		return "sink_scan", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -481,6 +485,31 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		labels = append(labels, Label{
 			Name:  "Minus expressions",
 			Value: value,
+		})
+	case plan.Node_PRE_INSERT:
+		labels = append(labels, Label{
+			Name:  "pre insert",
+			Value: []string{},
+		})
+	case plan.Node_PRE_INSERT_UK:
+		labels = append(labels, Label{
+			Name:  "pre insert uk",
+			Value: []string{},
+		})
+	case plan.Node_PRE_DELETE:
+		labels = append(labels, Label{
+			Name:  "pre delete",
+			Value: []string{},
+		})
+	case plan.Node_SINK:
+		labels = append(labels, Label{
+			Name:  "sink",
+			Value: []string{},
+		})
+	case plan.Node_SINK_SCAN:
+		labels = append(labels, Label{
+			Name:  "sink scan",
+			Value: []string{},
 		})
 	default:
 		return nil, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")

@@ -5065,17 +5065,18 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	}
 	if p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
-		lastNode := q.Nodes[len(q.Nodes)-1]
+
+		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
 		var clusterTable bool
 		var clusterTableOperation clusterTableOperationType
 		for _, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
-				switch lastNode.NodeType {
-				case plan.Node_UPDATE:
+				switch q.StmtType {
+				case plan.Query_UPDATE:
 					t = PrivilegeTypeUpdate
 					clusterTableOperation = clusterTableModify
-				case plan.Node_DELETE:
+				case plan.Query_DELETE:
 					t = PrivilegeTypeDelete
 					clusterTableOperation = clusterTableModify
 				default:

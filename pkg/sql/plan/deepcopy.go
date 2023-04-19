@@ -287,7 +287,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:    node.NotCacheable,
-		CurrentStep:     node.CurrentStep,
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),

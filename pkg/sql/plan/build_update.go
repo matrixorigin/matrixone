@@ -24,6 +24,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	if err != nil {
 		return nil, err
 	}
+
 	rewriteInfo := &dmlSelectInfo{
 		typ:     "update",
 		rootId:  -1,
@@ -149,6 +150,49 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 			Query: query,
 		},
 	}, err
+
+	// new logic
+	// builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	// queryBindCtx := NewBindContext(builder, nil)
+	// lastNodeId, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	// lastTag := lastNode.BindingTags[0]
+	// // append sink node
+	// sinkTag := builder.genNewTag()
+	// sinkProjection := getProjectionByPreProjection(lastNode.ProjectList, lastTag)
+	// sinkNode := &Node{
+	// 	NodeType:    plan.Node_SINK,
+	// 	Children:    []int32{lastNodeId},
+	// 	BindingTags: []int32{sinkTag},
+	// 	ProjectList: sinkProjection,
+	// }
+	// lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
+	// sourceStep := builder.appendStep(lastNodeId)
+
+	// beginIdx := 0
+	// for i, tableDef := range tblInfo.tableDefs {
+	// 	updateBindCtx := NewBindContext(builder, nil)
+	// 	err = buildUpdatePlans(ctx, builder, updateBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	beginIdx = beginIdx + len(tableDef.Cols)
+	// }
+	// query, err := builder.createQuery()
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// query.StmtType = plan.Query_UPDATE
+	// return &Plan{
+	// 	Plan: &plan.Plan_Query{
+	// 		Query: query,
+	// 	},
+	// }, err
 }
 
 func isSameColumnType(t1 *Type, t2 *Type) bool {
@@ -159,4 +203,44 @@ func isSameColumnType(t1 *Type, t2 *Type) bool {
 		return true
 	}
 	return true
+}
+
+func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, error) {
+	fromTables := &tree.From{
+		Tables: stmt.Tables,
+	}
+	var selectList []tree.SelectExpr
+
+	// append  table.* to project list
+	columnsSize := 0
+	var aliasList = make([]string, len(tableInfo.alias))
+	for alias, i := range tableInfo.alias {
+		aliasList[i] = alias
+	}
+	for i, alias := range aliasList {
+		for _, col := range tableInfo.tableDefs[i].Cols {
+			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+			columnsSize = columnsSize + 1
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: e,
+			})
+		}
+	}
+
+	selectAst := &tree.Select{
+		Select: &tree.SelectClause{
+			Distinct: false,
+			Exprs:    selectList,
+			From:     fromTables,
+			Where:    stmt.Where,
+		},
+		OrderBy: stmt.OrderBy,
+		Limit:   stmt.Limit,
+		With:    stmt.With,
+	}
+	//ftCtx := tree.NewFmtCtx(dialect.MYSQL)
+	//selectAst.Format(ftCtx)
+	//sql := ftCtx.String()
+	//fmt.Print(sql)
+	return builder.buildSelect(selectAst, bindCtx, false)
 }

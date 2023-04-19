@@ -56,67 +56,17 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	objRef := tblInfo.objRef[0]
 	var query *Query
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		query, err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
-		if err != nil {
-			return nil, err
-		}
+		err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
 	} else {
-		query, err = buildInsertPlans(builder, bindCtx, objRef, tableDef, ctx, rewriteInfo.rootId)
-		if err != nil {
-			return nil, err
-		}
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
 	}
-	// new logic
-
-	// if tblInfo.haveConstraint {
-	// 	for i, tableDef := range tblInfo.tableDefs {
-	// 		err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 	}
-	// }
-
-	// // append ProjectNode
-	// rewriteInfo.rootId = builder.appendNode(&plan.Node{
-	// 	NodeType:    plan.Node_PROJECT,
-	// 	ProjectList: rewriteInfo.projectList,
-	// 	Children:    []int32{rewriteInfo.rootId},
-	// 	BindingTags: []int32{bindCtx.projectTag},
-	// }, bindCtx)
-
-	// bindCtx.results = rewriteInfo.projectList
-	// builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
-	// query, err := builder.createQuery()
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// // append insert node
-	// insertCtx := &plan.InsertCtx{
-	// 	Ref:      rewriteInfo.tblInfo.objRef[0],
-	// 	TableDef: rewriteInfo.tblInfo.tableDefs[0],
-
-	// 	IdxRef: rewriteInfo.onIdxTbl,
-	// 	IdxIdx: rewriteInfo.onIdx,
-
-	// 	OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
-	// 	OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
-	// }
-	// if len(rewriteInfo.parentIdx) == 1 {
-	// 	insertCtx.ParentIdx = rewriteInfo.parentIdx[0]
-	// }
-
-	// node := &Node{
-	// 	NodeType:  plan.Node_INSERT,
-	// 	ObjRef:    insertCtx.Ref,
-	// 	TableDef:  insertCtx.TableDef,
-	// 	Children:  []int32{query.Steps[len(query.Steps)-1]},
-	// 	NodeId:    int32(len(query.Nodes)),
-	// 	InsertCtx: insertCtx,
-	// }
-	// query.Nodes = append(query.Nodes, node)
-	// query.Steps[len(query.Steps)-1] = node.NodeId
+	if err != nil {
+		return nil, err
+	}
+	query, err = builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
 	query.StmtType = plan.Query_INSERT
 
 	return &Plan{

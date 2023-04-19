@@ -579,6 +579,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		// 	})
 		// }
 	case plan.Query_UPDATE:
+		// return ss[0], nil
 		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err

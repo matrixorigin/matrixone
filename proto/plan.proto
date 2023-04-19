@@ -659,14 +659,13 @@ message Node {
 	InsertCtx insert_ctx = 30;
 
 	// used to connect two plans[steps]
-	int32 current_step = 31;
-	int32 source_step = 32;
+	int32 source_step = 31;
 
-	PreDeleteCtx pre_delete_ctx = 33;
-	PreInsertCtx pre_insert_ctx = 34;
+	PreDeleteCtx pre_delete_ctx = 32;
+	PreInsertCtx pre_insert_ctx = 33;
 	// build unique key batch before insert into hidden table which keep the unique key
-	PreInsertUkCtx pre_insert_uk_ctx = 35;
-	OnDuplicateKeyCtx on_duplicate_key = 36;
+	PreInsertUkCtx pre_insert_uk_ctx = 34;
+	OnDuplicateKeyCtx on_duplicate_key = 35;
 }
 
 message PreInsertUkCtx {

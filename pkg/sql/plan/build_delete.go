@@ -49,16 +49,29 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
 	sourceStep := builder.appendStep(lastNodeId)
-	currentStep := sourceStep + 1
 
 	// append delete plans
 	beginIdx := 0
+	var endProjectProjection []*Expr
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
-		currentStep, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep, currentStep)
+		lastNodeId, endProjectProjection, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep)
 		if err != nil {
 			return nil, err
 		}
+
+		// append Project Node at the end
+		endProjectTag := builder.genNewTag()
+		endProjectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			BindingTags: []int32{endProjectTag},
+			SourceStep:  sourceStep,
+			ProjectList: endProjectProjection,
+		}
+		lastNodeId = builder.appendNode(endProjectNode, deleteBindCtx)
+		sourceStep = builder.appendStep(lastNodeId)
+
 		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 	query, err := builder.createQuery()
