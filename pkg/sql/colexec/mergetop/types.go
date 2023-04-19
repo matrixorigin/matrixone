@@ -49,6 +49,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.cleanReceiver(mp)
 	}
 }
 
@@ -56,6 +57,27 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+}
+
+func (ctr *container) cleanReceiver(mp *mpool.MPool) {
+	listeners := ctr.receiverListener
+	alive := len(listeners)
+	for alive != 0 {
+		chosen, value, ok := reflect.Select(listeners)
+		if !ok {
+			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+			alive--
+			continue
+		}
+		pointer := value.UnsafePointer()
+		bat := (*batch.Batch)(pointer)
+		if bat == nil {
+			alive--
+			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+			continue
+		}
+		bat.Clean(mp)
 	}
 }
 
