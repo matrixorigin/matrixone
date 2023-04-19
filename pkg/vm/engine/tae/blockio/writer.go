@@ -90,7 +90,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
-		columnData := containers.NewVectorWithSharedMemory(vec)
+		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData)
 

@@ -259,7 +259,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
-			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12])
+			vec := containers.ToDNVector(bat.Vecs[12])
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -399,7 +399,7 @@ func TestCopy1(t *testing.T) {
 		}
 	}
 
-	v3 := containers.NewVectorWithSharedMemory(mv2)
+	v3 := containers.ToDNVector(mv2)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))

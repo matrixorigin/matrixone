@@ -314,7 +314,7 @@ func (t *GCTable) replayData(ctx context.Context,
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec)
+			vec = containers.ToDNVector(pkgVec)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}

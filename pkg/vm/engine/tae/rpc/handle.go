@@ -843,7 +843,7 @@ func (h *Handle) HandleWrite(
 			if err != nil {
 				return
 			}
-			vec := containers.NewVectorWithSharedMemory(bat.Vecs[0])
+			vec := containers.ToDNVector(bat.Vecs[0])
 
 			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(vec))
 			if err != nil {

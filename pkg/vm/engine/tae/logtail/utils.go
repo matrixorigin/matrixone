@@ -470,7 +470,7 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec)
+			vec = containers.ToDNVector(pkgVec)
 		}
 		bat.AddVector(colNames[idx], vec)
 		bat.Vecs[i] = vec
