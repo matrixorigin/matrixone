@@ -264,14 +264,13 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		return false, err
 	}
 
-	for i, expr := range ap.Exprs {
-		vec, err := colexec.EvalExpr(bat, proc, expr)
+	for i := range ap.Exprs {
+		ctr.groupVecs[i].vec, err = ctr.groupVecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			ctr.cleanGroupVectors()
 			return false, err
 		}
-		ctr.groupVecs[i].vec = vec
-		ctr.vecs[i] = vec
+		ctr.vecs[i] = ctr.groupVecs[i].vec
 	}
 
 	if ctr.bat == nil {

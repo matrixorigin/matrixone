@@ -42,7 +42,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.Limit > 1024 {
@@ -60,6 +60,15 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 	}
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+
+	ctr := ap.ctr
+	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	for i := range ctr.executorsForOrderList {
+		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -123,26 +132,27 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
-		for _, f := range ap.Fs {
-			vec, err := colexec.EvalExpr(bat, proc, f.Expr)
+		for i := range ctr.executorsForOrderList {
+			vec, err := ctr.executorsForOrderList[i].Eval(proc, []*batch.Batch{bat})
 			if err != nil {
 				return false, err
 			}
 			flg := true
-			for i := range bat.Vecs {
-				if bat.Vecs[i] == vec {
+			for j := range bat.Vecs {
+				if bat.Vecs[j] == vec {
 					flg = false
-					ctr.poses = append(ctr.poses, int32(i))
+					ctr.poses = append(ctr.poses, int32(j))
 					break
 				}
 			}
 			if flg {
-				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-				bat.Vecs = append(bat.Vecs, vec)
-			} else {
-				if vec != nil {
-					anal.Alloc(int64(vec.Size()))
+				nv, err := vec.Dup(proc.Mp())
+				if err != nil {
+					return false, err
 				}
+				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
+				bat.Vecs = append(bat.Vecs, nv)
+				anal.Alloc(int64(nv.Size()))
 			}
 		}
 		if ctr.bat == nil {

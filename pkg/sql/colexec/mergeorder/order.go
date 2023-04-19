@@ -39,7 +39,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
@@ -54,6 +54,14 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	ap.ctr.compare0Index = make([]int32, len(ap.Fs))
 	ap.ctr.compare1Index = make([]int32, len(ap.Fs))
+
+	ap.ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	for i := range ap.ctr.executorsForOrderList {
+		ap.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -144,8 +152,8 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 	ctr.poses = ctr.poses[:0]
 
 	// evaluate the order column.
-	for _, f := range ap.Fs {
-		vec, err := colexec.EvalExpr(bat2, proc, f.Expr)
+	for i := range ctr.executorsForOrderList {
+		vec, err := ctr.executorsForOrderList[i].Eval(proc, []*batch.Batch{bat2})
 		if err != nil {
 			return err
 		}
@@ -159,8 +167,12 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 		}
 		if newColumn {
 			ctr.poses = append(ctr.poses, int32(len(bat2.Vecs)))
-			bat2.Vecs = append(bat2.Vecs, vec)
-			anal.Alloc(int64(vec.Size()))
+			nv, err := vec.Dup(proc.Mp())
+			if err != nil {
+				return err
+			}
+			bat2.Vecs = append(bat2.Vecs, nv)
+			anal.Alloc(int64(nv.Size()))
 		}
 	}
 	copy(ctr.compare1Index, ctr.poses)

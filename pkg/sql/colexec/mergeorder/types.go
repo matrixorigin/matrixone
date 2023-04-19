@@ -15,6 +15,7 @@
 package mergeorder
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,6 +41,9 @@ type container struct {
 	unionFlag                    []uint8
 	compare0Index, compare1Index []int32
 	finalSelectList              []int64
+
+	// executors for order column.
+	executorsForOrderList []colexec.ExpressionExecutor
 }
 
 type Argument struct {
@@ -52,6 +56,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.cleanExecutors()
 	}
 }
 
@@ -59,5 +64,11 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+}
+
+func (ctr *container) cleanExecutors() {
+	for i := range ctr.executorsForOrderList {
+		ctr.executorsForOrderList[i].Free()
 	}
 }
