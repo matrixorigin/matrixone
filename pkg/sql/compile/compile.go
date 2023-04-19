@@ -2027,7 +2027,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			})
 		}
 		for i := range c.cnList {
-			if !isSameCN(c.cnList[i].Addr, c.addr) {
+			if c.cnList[i].Addr != c.addr {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[i].Id,
