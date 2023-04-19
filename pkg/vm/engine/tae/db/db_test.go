@@ -6016,12 +6016,10 @@ func TestCommitS3Blocks(t *testing.T) {
 	tae.createRelAndAppend(datas[0], true)
 	datas = datas[1:]
 
-	var objNames []objectio.ObjectName
-	var blkMetas []objectio.Location
-	for i, bat := range datas {
+	blkMetas := make([]objectio.Location, 0)
+	for _, bat := range datas {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		objNames = append(objNames, name)
-		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, objNames[i])
+		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
