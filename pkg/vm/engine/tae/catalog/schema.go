@@ -61,6 +61,7 @@ type ColDef struct {
 	SortKey       bool
 	Comment       string
 	ClusterBy     bool
+	FakePK        bool // TODO: use column.flag instead of column.fakepk
 	Default       []byte
 	OnUpdate      []byte
 }
@@ -72,6 +73,7 @@ func (def *ColDef) Nullable() bool        { return def.NullAbility }
 func (def *ColDef) IsHidden() bool        { return def.Hidden }
 func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
 func (def *ColDef) IsPrimary() bool       { return def.Primary }
+func (def *ColDef) IsRealPrimary() bool   { return def.Primary && !def.FakePK }
 func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
 func (def *ColDef) IsSortKey() bool       { return def.SortKey }
 func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
@@ -546,6 +548,18 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 	if err != nil {
 		return err
 	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendFakePKWithAttribute(attr engine.Attribute) error {
+	def, err := ColDefFromAttribute(attr)
+	if err != nil {
+		return err
+	}
+
+	def.FakePK = true
+	def.Primary = true
+
 	return s.AppendColDef(def)
 }
 
