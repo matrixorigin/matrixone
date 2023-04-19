@@ -352,7 +352,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
@@ -587,6 +587,7 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.PrepareStmt{}},
 		{stmt: &tree.PrepareString{}},
 		{stmt: &tree.Deallocate{}},
+		{stmt: &tree.ShowBackendServers{}},
 	}
 
 	for i := 0; i < len(args); i++ {

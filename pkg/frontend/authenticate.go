@@ -2337,8 +2337,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	var user *tree.User
 	var userName string
 	var hostName string
-	var passwaord string
+	var password string
 	var erArray []ExecResult
+	var encryption string
 	account := ses.GetTenantInfo()
 	currentUser := account.User
 
@@ -2360,14 +2361,18 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	if err != nil {
 		return err
 	}
-	user = au.Users[0]
-	userName = user.Username
-	hostName = user.Hostname
-	passwaord = user.AuthOption.Str
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	user = au.Users[0]
+	userName = user.Username
+	hostName = user.Hostname
+	password = user.AuthOption.Str
+	if len(password) == 0 {
+		err = moerr.NewInternalError(ctx, "password is empty string")
+		goto handleFailed
+	}
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	if err != nil {
@@ -2429,8 +2434,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 		goto handleFailed
 	}
 
+	//encryption the password
+	encryption = HashPassWord(password)
+
 	if execResultArrayHasData(erArray) {
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2443,7 +2451,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			goto handleFailed
 		}
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2604,7 +2612,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			}
 
 			//2, update the password
-			sql, err = getSqlForUpdatePasswordOfUser(ctx, aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			//encryption the password
+			encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
 			if err != nil {
 				goto handleFailed
 			}
@@ -4961,7 +4971,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions:
+		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowBackendServers:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ShowAccounts:
@@ -6471,8 +6482,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 		defaultPassword = d
 	}
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	//encryption the password
+	encryption := HashPassWord(defaultPassword)
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
@@ -6633,7 +6647,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 	} else {
-		newTenant, _, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+		newTenant, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6664,7 +6678,7 @@ handleFailed:
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *tree.CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *tree.CreateAccount) (*TenantInfo, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -6677,8 +6691,9 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var initMoUser1 string
 	var initMoUserGrant1 string
 	var initMoUserGrant2 string
+	var configuration, initMoMysqlCompatbilityMode string
+	var name, password, status, encryption string
 	var newTenant *TenantInfo
-	var name, password, status string
 	var newTenantCtx context.Context
 	var sql string
 	//var configuration string
@@ -6689,10 +6704,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
 	}
-
-	//step6: add new entries to the mo_mysql_compatibility_mode
-	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 
 	if nameIsInvalid(ca.Name) {
 		err = moerr.NewInternalError(ctx, "the account name is invalid")
@@ -6767,8 +6778,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
 	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
 
-	defer span.End()
-
 	err = bh.Exec(newTenantCtx, createMoIndexesSql)
 	if err != nil {
 		goto handleFailed
@@ -6804,6 +6813,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		goto handleFailed
 	}
+	//encryption the password
+	encryption = HashPassWord(password)
 	status = rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
@@ -6812,7 +6823,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 = fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
+	initMoUser1 = fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, encryption, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -6849,6 +6860,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	addSqlIntoSet(initMoUserGrant2)
 
 	//step6: add new entries to the mo_mysql_compatibility_mode
+	configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
@@ -6860,7 +6873,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 handleFailed:
-	return newTenant, newTenantCtx, err
+	return newTenant, err
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
@@ -7081,12 +7094,15 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			goto handleFailed
 		}
 
+		//encryption the password
+		encryption := HashPassWord(password)
+
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		host = user.Hostname
 		if len(user.Hostname) == 0 || user.Hostname == "%" {
 			host = rootHost
 		}
-		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, password, status,
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 

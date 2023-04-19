@@ -242,7 +242,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu1 := newTunnel(context.TODO(), nil)
+	tu1 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -256,7 +256,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn, err = ru.SelectByLabel(li2)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu2 := newTunnel(context.TODO(), nil)
+	tu2 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -270,7 +270,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn, err = ru.SelectByLabel(li3)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu3 := newTunnel(context.TODO(), nil)
+	tu3 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -339,7 +339,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn, err := ru.SelectByLabel(li1)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu1 := newTunnel(context.TODO(), nil)
+	tu1 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -353,7 +353,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn, err = ru.SelectByLabel(li2)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu2 := newTunnel(context.TODO(), nil)
+	tu2 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -367,7 +367,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn, err = ru.SelectByLabel(li3)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	tu3 := newTunnel(context.TODO(), nil)
+	tu3 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, nil, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
