@@ -114,6 +114,9 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
 	jsonVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
