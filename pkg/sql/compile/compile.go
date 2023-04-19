@@ -2037,7 +2037,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 		if len(nodes) != len(c.cnList) {
-			panic(fmt.Sprintf("nodes len %v, cnlist len %v", len(nodes), len(c.cnList)))
+			panic(fmt.Sprintf("nodes len %v, cnlist len %v, nodes: %v, cnlist: %v, %v,", len(nodes), len(c.cnList), nodes[0].Addr, c.cnList[0].Addr, c.cnList[1].Addr))
 		}
 		//sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
