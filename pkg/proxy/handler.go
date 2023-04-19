@@ -39,6 +39,8 @@ type handler struct {
 	moCluster clusterservice.MOCluster
 	// router select the best CN server and connects to it.
 	router Router
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -49,6 +51,7 @@ func newProxyHandler(
 	runtime runtime.Runtime,
 	cfg Config,
 	st *stopper.Stopper,
+	cs *counterSet,
 	testHAKeeperClient logservice.ClusterHAKeeperClient,
 ) (*handler, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -82,24 +85,27 @@ func newProxyHandler(
 	}
 
 	return &handler{
-		ctx:       context.Background(),
-		logger:    runtime.Logger(),
-		config:    cfg,
-		stopper:   st,
-		moCluster: mc,
-		router:    newRouter(mc, re, false),
+		ctx:        context.Background(),
+		logger:     runtime.Logger(),
+		config:     cfg,
+		stopper:    st,
+		moCluster:  mc,
+		counterSet: cs,
+		router:     newRouter(mc, re, false),
 	}, nil
 }
 
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
+	h.counterSet.connAccepted.Add(1)
+
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger)
+	t := newTunnel(h.ctx, h.logger, h.counterSet)
 	defer func() {
 		_ = t.Close()
 	}()
 
-	cc, err := newClientConn(h.ctx, h.logger, c, h.moCluster, h.router, t)
+	cc, err := newClientConn(h.ctx, h.logger, h.counterSet, c, h.moCluster, h.router, t)
 	if err != nil {
 		return err
 	}
@@ -109,6 +115,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 	// the server connection.
 	sc, err := cc.BuildConnWithServer(true)
 	if err != nil {
+		h.counterSet.updateWithErr(err)
 		cc.SendErrToClient(err.Error())
 		return err
 	}
@@ -158,6 +165,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
+		h.counterSet.updateWithErr(err)
 		h.logger.Error("proxy handle error", zap.Error(err))
 		return err
 	}
