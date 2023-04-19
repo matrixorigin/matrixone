@@ -30,17 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-)
-
-const (
-	NTInsert txnbase.NodeType = iota
-	NTUpdate
-	NTDelete
-	NTCreateTable
-	NTDropTable
-	NTCreateDB
-	NTDropDB
 )
 
 const MaxNodeRows = 10000
