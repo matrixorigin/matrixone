@@ -63,6 +63,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.cleanReceiver(mp)
 	}
 }
 
@@ -81,5 +82,26 @@ func (ctr *container) cleanHashMap() {
 	if ctr.strHashMap != nil {
 		ctr.strHashMap.Free()
 		ctr.strHashMap = nil
+	}
+}
+
+func (ctr *container) cleanReceiver(mp *mpool.MPool) {
+	listeners := ctr.receiverListener
+	alive := len(listeners)
+	for alive != 0 {
+		chosen, value, ok := reflect.Select(listeners)
+		if !ok {
+			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+			alive--
+			continue
+		}
+		pointer := value.UnsafePointer()
+		bat := (*batch.Batch)(pointer)
+		if bat == nil {
+			alive--
+			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+			continue
+		}
+		bat.Clean(mp)
 	}
 }
