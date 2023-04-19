@@ -43,7 +43,8 @@ const (
 // }
 
 type localSegment struct {
-	entry      *catalog.SegmentEntry
+	entry *catalog.SegmentEntry
+
 	appendable InsertNode
 	//index for primary key
 	index TableIndex
@@ -58,11 +59,10 @@ type localSegment struct {
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
-	entry := catalog.NewStandaloneSegment(
-		table.entry,
-		table.store.txn.GetStartTS())
 	return &localSegment{
-		entry:   entry,
+		entry: catalog.NewStandaloneSegment(
+			table.entry,
+			table.store.txn.GetStartTS()),
 		nodes:   make([]InsertNode, 0),
 		index:   NewSimpleTableIndex(),
 		appends: make([]*appendCtx, 0),
@@ -83,13 +83,13 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 
 // register a non-appendable insertNode.
 func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
+	sid := metaLoc.Name().SegmentId()
 	meta := catalog.NewStandaloneBlockWithLoc(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		nil,
+		objectio.NewBlockid(&sid, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
-	seg.entry.AddEntryLocked(meta)
 	n := NewNode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -103,11 +103,12 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 
 // register an appendable insertNode.
 func (seg *localSegment) registerANode() {
+	entry := seg.entry
 	meta := catalog.NewStandaloneBlock(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		entry,
+		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
-	seg.entry.AddEntryLocked(meta)
+	entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -239,8 +240,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				break
 			}
 		}
-		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx].Close()
-		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx] = vec
+		an.storage.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
+		an.storage.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
 		return
 	}
 	//handle persisted insertNode.
@@ -294,6 +295,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	appended := uint32(0)
 	offset := uint32(0)
 	length := uint32(data.Length())
+	schema := seg.table.GetLocalSchema()
 	for {
 		h := seg.appendable
 		space := h.GetSpace()
@@ -306,10 +308,10 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 			return
 		}
 		skip := seg.table.store.txn.GetPKDedupSkip()
-		if seg.table.schema.HasPK() && skip == txnif.PKDedupSkipNone {
+		if schema.HasPK() && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
-				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
-				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
+				data.Attrs[schema.GetSingleSortKeyIdx()],
+				data.Vecs[schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
 				seg.rows,
@@ -338,7 +340,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 		//insert primary keys into seg.index
 		if pkVecs != nil && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
-				seg.table.schema.GetSingleSortKey().Name,
+				seg.table.GetLocalSchema().GetSingleSortKey().Name,
 				pkVecs[i],
 				0,
 				pkVecs[i].Length(),
@@ -354,8 +356,9 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 }
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	schema := seg.table.GetLocalSchema()
 	for i := from; i <= to; i++ {
-		v, _, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v, _, err := node.GetValue(schema.GetSingleSortKeyIdx(), i)
 		if err != nil {
 			return err
 		}
@@ -377,7 +380,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		if err != nil {
 			return err
 		}
-		if !seg.table.schema.HasPK() {
+		if !seg.table.GetLocalSchema().HasPK() {
 			// If no pk defined
 			return err
 		}
@@ -451,31 +454,35 @@ func (seg *localSegment) Rows() (n uint32) {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	id = seg.entry.AsCommonID()
-	if !seg.table.schema.HasPK() {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+	if !seg.table.GetLocalSchema().HasPK() {
+		id = seg.table.entry.AsCommonID()
+		id.SegmentID, id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
+	id = seg.entry.AsCommonID()
 	if v, ok := filter.Val.([]byte); ok {
 		offset, err = seg.index.Search(string(v))
 	} else {
 		offset, err = seg.index.Search(filter.Val)
 	}
+	if err != nil {
+		return
+	}
 	return
 }
 
 func (seg *localSegment) GetPKColumn() containers.Vector {
-	schema := seg.table.entry.GetSchema()
+	schema := seg.table.entry.GetLastestSchema()
 	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) GetPKVecs() []containers.Vector {
-	schema := seg.table.entry.GetSchema()
+	schema := seg.table.entry.GetLastestSchema()
 	return seg.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {
-	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
+	return seg.index.BatchDedup(seg.table.GetLocalSchema().GetSingleSortKey().Name, key)
 }
 
 func (seg *localSegment) GetColumnDataByIds(

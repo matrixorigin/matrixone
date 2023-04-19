@@ -87,7 +87,7 @@ func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskF
 		filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
 		filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
 		blks := segment.meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
-		if len(blks) < int(segment.meta.GetTable().GetSchema().SegmentMaxBlocks) {
+		if len(blks) < int(segment.meta.GetTable().GetLastestSchema().SegmentMaxBlocks) {
 			return
 		}
 		for _, blk := range blks {

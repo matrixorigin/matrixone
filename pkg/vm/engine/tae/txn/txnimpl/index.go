@@ -18,8 +18,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -51,14 +49,14 @@ func NewSimpleTableIndex() *simpleTableIndex {
 }
 
 func DedupOp[T comparable](
-	t types.Type,
+	t *types.Type,
 	attr string,
 	vs any,
 	tree map[any]uint32) (err error) {
 	vals := vs.([]T)
 	for _, v := range vals {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v, false)
+			entry := common.TypeStringValue(*t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 	}
@@ -66,7 +64,7 @@ func DedupOp[T comparable](
 }
 
 func InsertOp[T comparable](
-	t types.Type,
+	t *types.Type,
 	attr string,
 	input any,
 	start, count int,
@@ -78,7 +76,7 @@ func InsertOp[T comparable](
 		set := make(map[T]bool)
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				entry := common.TypeStringValue(t, v, false)
+				entry := common.TypeStringValue(*t, v, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			set[v] = true
@@ -87,7 +85,7 @@ func InsertOp[T comparable](
 	}
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v, false)
+			entry := common.TypeStringValue(*t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 		tree[v] = fromRow
@@ -119,7 +117,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
-			if vec.Length() > int(txnbase.MaxNodeRows) {
+			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
@@ -127,7 +125,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		}
 	default:
 		for k := range idx.tree {
-			if vec.Length() > int(txnbase.MaxNodeRows) {
+			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
@@ -250,7 +248,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			for i := start; i < start+count; i++ {
 				v := string(vs.Get(i).([]byte))
 				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(colType, []byte(v), false)
+					entry := common.TypeStringValue(*colType, []byte(v), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, attr)
 				}
 				set[v] = true
@@ -260,7 +258,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		for i := start; i < start+count; i++ {
 			v := string(vs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v), false)
+				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			idx.tree[v] = row
@@ -344,7 +342,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v), false)
+				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 		}

@@ -16,13 +16,16 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +40,7 @@ import (
 const (
 	INSERT = iota
 	DELETE
+	COMPACTION_CN
 	UPDATE
 )
 
@@ -50,7 +54,10 @@ const (
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
+	INIT_ROWID_OFFSET             = math.MaxUint32
 )
+
+var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
 
@@ -101,9 +108,7 @@ type Transaction struct {
 	// local timestamp for workspace operations
 	meta txn.TxnMeta
 	op   client.TxnOperator
-	// fileMaps used to store the mapping relationship between s3 filenames
-	// and blockId
-	fileMap map[string]uint64
+
 	// writes cache stores any writes done by txn
 	writes []Entry
 	// txn workspace size
@@ -123,6 +128,38 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
+
+	cnBlockDeletesMap *CnBlockDeletesMap
+	// blkId -> Pos
+	cnBlkId_Pos                     map[string]Pos
+	blockId_raw_batch               map[string]*batch.Batch
+	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
+}
+
+type Pos struct {
+	idx    int
+	offset int64
+}
+
+type CnBlockDeletesMap struct {
+	// used to store cn block's deleted rows
+	// blockId => deletedOffsets
+	mp map[string][]int64
+}
+
+func (cn_deletes_mp *CnBlockDeletesMap) PutCnBlockDeletes(blockId string, offsets []int64) {
+	cn_deletes_mp.mp[blockId] = append(cn_deletes_mp.mp[blockId], offsets...)
+}
+
+func (cn_deletes_mp *CnBlockDeletesMap) GetCnBlockDeletes(blockId string) []int64 {
+	res := cn_deletes_mp.mp[blockId]
+	offsets := make([]int64, len(res))
+	copy(offsets, res)
+	return offsets
+}
+
+func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
+	txn.cnBlockDeletesMap.PutCnBlockDeletes(blockId, offsets)
 }
 
 // Entry represents a delete/insert
@@ -178,9 +215,9 @@ type txnTable struct {
 	db        *txnDatabase
 	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs     []engine.TableDef
-	tableDef *plan.TableDef
-
+	defs         []engine.TableDef
+	tableDef     *plan.TableDef
+	idxs         []uint16
 	setPartsOnce sync.Once
 	_parts       []*PartitionState
 
@@ -233,7 +270,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []BlockMeta
+	blks       []catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp
@@ -247,6 +284,10 @@ type blockReader struct {
 	colNulls       []bool
 	pkidxInColIdxs int
 	pkName         string
+	// binary search info
+	init       bool
+	canCompute bool
+	searchFunc func(*vector.Vector) int
 }
 
 type blockMergeReader struct {

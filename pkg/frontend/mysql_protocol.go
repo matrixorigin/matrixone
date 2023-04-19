@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
@@ -1038,54 +1039,35 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 	return pos + count
 }
 
-// the server calculates the hash value of the password with the algorithm
-// and judges it with the authentication data from the client.
-// Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
-func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
-	//if len(password) == 0 {
-	//	return false
-	//}
-	//hash1 = SHA1(password)
+// the server get the auth string from HandShakeResponse
+// pwd is SHA1(SHA1(password)), AUTH is from client
+// hash1 = AUTH XOR SHA1( slat + pwd)
+// hash2 = SHA1(hash1)
+// check(hash2, hpwd)
+func (mp *MysqlProtocolImpl) checkPassword(pwd, salt, auth []byte) bool {
 	sha := sha1.New()
-	_, err := sha.Write(password)
+	_, err := sha.Write(salt)
 	if err != nil {
-		logutil.Errorf("SHA1(password) failed.")
+		logutil.Errorf("SHA1(salt) failed.")
+		return false
+	}
+	_, err = sha.Write(pwd)
+	if err != nil {
+		logutil.Errorf("SHA1(hpwd) failed.")
 		return false
 	}
 	hash1 := sha.Sum(nil)
 
-	//hash2 = SHA1(SHA1(password))
-	sha.Reset()
-	_, err = sha.Write(hash1)
-	if err != nil {
-		logutil.Errorf("SHA1(SHA1(password)) failed.")
+	if len(auth) != len(hash1) {
 		return false
 	}
-	hash2 := sha.Sum(nil)
 
-	//hash3 = SHA1(salt + SHA1(SHA1(password)))
-	sha.Reset()
-	_, err = sha.Write(salt)
-	if err != nil {
-		logutil.Errorf("write salt failed.")
-		return false
-	}
-	_, err = sha.Write(hash2)
-	if err != nil {
-		logutil.Errorf("write SHA1(SHA1(password)) failed.")
-		return false
-	}
-	hash3 := sha.Sum(nil)
-
-	//SHA1(password) XOR SHA1(salt + SHA1(SHA1(password)))
 	for i := range hash1 {
-		hash1[i] ^= hash3[i]
+		hash1[i] ^= auth[i]
 	}
 
-	logDebugf(mp.getDebugStringUnsafe(), "server calculated %v", hash1)
-	logDebugf(mp.getDebugStringUnsafe(), "client calculated %v", auth)
-
-	return bytes.Equal(hash1, auth)
+	hash2 := HashSha1(hash1)
+	return bytes.Equal(pwd, hash2)
 }
 
 // the server authenticate that the client can connect and use the database
@@ -2046,7 +2028,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return nil, moerr.NewInternalError(mp.ses.requestCtx, "sendColumn need MysqlColumn")
+			return nil, moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
 		}
 
 		if isNil, err1 := mrs.ColumnIsNull(ctx, r, i); err1 != nil {
@@ -2171,7 +2153,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value)
 			}
 		default:
-			return nil, moerr.NewInternalError(mp.ses.requestCtx, "unsupported column type %d ", mysqlColumn.ColumnType())
+			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	return data, nil
@@ -2604,6 +2586,11 @@ func (mp *MysqlProtocolImpl) MakeErrPayload(errCode uint16, sqlState, errorMessa
 	return mp.makeErrPayload(errCode, sqlState, errorMessage)
 }
 
+// MakeEOFPayload exposes (*MysqlProtocolImpl).makeEOFPayload() function.
+func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
+	return mp.makeEOFPayload(warnings, status)
+}
+
 // tryUpdateSalt tries to update salt with the value read from proxy module.
 func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
 	saltLen := 20
@@ -2730,4 +2717,48 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 	mysql.resetPacket()
 
 	return mysql
+}
+
+// HashSha1 is used to calcute a sha1 hash
+// SHA1()
+func HashSha1(toHash []byte) []byte {
+	sha := sha1.New()
+	_, err := sha.Write(toHash)
+	if err != nil {
+		logutil.Errorf("SHA1 failed.")
+		return nil
+	}
+	return sha.Sum(nil)
+}
+
+// HashPassWord is uesed to hash password
+// *SHA1(SHA1(password))
+func HashPassWord(pwd string) string {
+	if len(pwd) == 0 {
+		return ""
+	}
+	hash1 := HashSha1([]byte(pwd))
+	hash2 := HashSha1(hash1)
+
+	return fmt.Sprintf("*%X", hash2)
+}
+
+func HashPassWordWithByte(pwd []byte) string {
+	if len(pwd) == 0 {
+		return ""
+	}
+	hash1 := HashSha1(pwd)
+	hash2 := HashSha1(hash1)
+
+	return fmt.Sprintf("*%X", hash2)
+}
+
+// GetPassWord is used to get hash byte password
+// SHA1(SHA1(password))
+func GetPassWord(pwd string) ([]byte, error) {
+	pwdByte, err := hex.DecodeString(pwd[1:])
+	if err != nil {
+		logutil.Errorf("GetPassWord failed.")
+	}
+	return pwdByte, nil
 }

@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -397,7 +396,7 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
 }
-func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
@@ -443,9 +442,7 @@ func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	if err != nil {
 		return err
 	}
-	mobat := batch.New(true, bat.Attrs)
-	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.Write(mobat); err != nil {
+	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
 		return
 	}
 

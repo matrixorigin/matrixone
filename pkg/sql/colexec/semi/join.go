@@ -64,10 +64,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
@@ -98,12 +99,12 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.NewVec(*bat.Vecs[pos].GetType())
+		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {

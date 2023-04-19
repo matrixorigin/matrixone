@@ -17,6 +17,7 @@ package index
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	// "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -24,7 +25,6 @@ import (
 var (
 	ErrNotFound  = moerr.NewInternalErrorNoCtx("tae index: key not found")
 	ErrDuplicate = moerr.NewInternalErrorNoCtx("tae index: key duplicate")
-	ErrWrongType = moerr.NewInternalErrorNoCtx("tae index: wrong type")
 )
 
 type KeysCtx struct {

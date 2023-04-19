@@ -30,18 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-const (
-	NTInsert txnbase.NodeType = iota
-	NTUpdate
-	NTDelete
-	NTCreateTable
-	NTDropTable
-	NTCreateDB
-	NTDropDB
-)
+const MaxNodeRows = 10000
 
 type InsertNode interface {
 	Close() error
@@ -139,12 +130,12 @@ func newMemoryNode(node *baseNode) *memoryNode {
 }
 
 func (n *memoryNode) GetSpace() uint32 {
-	return txnbase.MaxNodeRows - n.rows
+	return MaxNodeRows - n.rows
 }
 
 func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 	left := uint32(data.Length()) - offset
-	nodeLeft := txnbase.MaxNodeRows - n.rows
+	nodeLeft := MaxNodeRows - n.rows
 	if left <= nodeLeft {
 		return left
 	}
@@ -152,12 +143,12 @@ func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 }
 
 func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.bnode.table.entry.GetSchema()
+	schema := n.bnode.table.GetLocalSchema()
 	if n.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(txnbase.MaxNodeRows) {
-			opts.Capacity = int(txnbase.MaxNodeRows)
+		if opts.Capacity > int(MaxNodeRows) {
+			opts.Capacity = int(MaxNodeRows)
 		}
 		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
@@ -184,7 +175,7 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.bnode.table.entry.GetSchema().PhyAddrKey.Idx]
+	vec := n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }
@@ -314,11 +305,11 @@ func (n *baseNode) TryUpgrade() (err error) {
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
-	def := n.meta.GetSchema().ColDefs[colIdx]
+	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
 		n.fs,
-		n.meta.AsCommonID(),
+		nil,
 		def,
 		location)
 }

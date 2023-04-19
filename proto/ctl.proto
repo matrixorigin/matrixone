@@ -19,6 +19,7 @@ package ctl;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/ctl";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
@@ -29,21 +30,27 @@ enum CmdMethod {
     Ping        = 0;
     // Flush is to force flush the table data.
     // parameter should be "DbName.TableName"
-    Flush       = 1;
+    Flush           = 1;
     // Task disable or enable task framework
-    Task        = 2;
+    Task            = 2;
     // Checkpoint is to force incremental checkpoint.
-    Checkpoint  = 3;
+    Checkpoint      = 3;
     // UseSnapshot use a spec snapshot timestamp, and all txn will use this ts as snapshot timestamp
-    UseSnapshot = 4;
+    UseSnapshot     = 4;
     // GetSnapshot get current snapshot timestamp
-    GetSnapshot = 5;
+    GetSnapshot     = 5;
     // ForceGC forcing a GC to free memory
-    ForceGC     = 6;
+    ForceGC         = 6;
     // Inspect DN info
-    Inspect   = 7;
+    Inspect         = 7;
     // Label sets the CN label.
-    Label = 8;
+    Label           = 8;
+    // SyncCommit when we turn on Push, some BVT tests use multiple Sessions in multi-CN scenarios. To 
+    // ensure data visibility, we need to synchronize CommitTS between multiple CNs so that the whole 
+    // cluster can see the latest writes from other CNs.
+    SyncCommit      = 9;
+    // GetCommit get latest commit timestamp of cn.
+    GetCommit       = 10;
 }
 
 // DNPingRequest ping request
@@ -63,4 +70,49 @@ message DNPingResponse {
 // DNStringResponse string type response
 message DNStringResponse {
     string returnStr = 1;
+}
+
+// Request is used to send a request for a ctl service related operation to another 
+// ctl service.
+message Request {
+    // RequestID request id
+    uint64                   RequestID           = 1;
+    CmdMethod                CMDMethod           = 2;
+    SyncCommitRequest        SycnCommit          = 3 [(gogoproto.nullable) = false];
+    SyncCommitRequest        GetCommit           = 4 [(gogoproto.nullable) = false];
+}
+
+// Response ctl response
+message Response {
+    // RequestID corresponding request id
+    uint64                    RequestID         = 1;
+    CmdMethod                 CMDMethod         = 2;
+    // Error we use this field to send moerr from service to another service. Set 
+    // with moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
+    bytes                     Error             = 3;
+    SyncCommitResponse        SycnCommit        = 4 [(gogoproto.nullable) = false];
+    GetCommitResponse         GetCommit         = 5 [(gogoproto.nullable) = false];
+}
+
+// SyncCommitRequest sync commit timestamp request
+message SyncCommitRequest {
+    // LatestCommitTS update latest commit ts.
+    timestamp.Timestamp LatestCommitTS = 1 [(gogoproto.nullable) = false];
+}
+
+// SyncCommitResponse sync commit timestamp response
+message SyncCommitResponse {
+    // CurrentCommitTS current commit timestamp after sync
+    timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
+}
+
+// GetCommitRequest get commit timestamp request
+message GetCommitRequest {
+   
+}
+
+// GetCommitResponse get commit timestamp response
+message GetCommitResponse {
+    // CurrentCommitTS current commit timestamp after sync
+    timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
 }

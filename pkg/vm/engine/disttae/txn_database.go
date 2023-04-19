@@ -174,17 +174,26 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 
 func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
-
+	var v any
+	var ok bool
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return 0, err
 	}
 	k := genTableKey(ctx, name, db.databaseId)
-	if v, ok := db.txn.createMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
-		v.(*txnTable).tableId = newId
-	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
+	v, ok = db.txn.createMap.Load(k)
+	if !ok {
+		v, ok = db.txn.tableMap.Load(k)
+	}
+
+	if ok {
+		txn_table := v.(*txnTable)
+		oldId = txn_table.tableId
+		txn_table.tableId = newId
+		parts := db.txn.engine.getPartitions(db.databaseId, newId).Snapshot()
+		txn_table._parts = parts
+		// truncate meta
+		txn_table.TruncateMeta()
 	} else {
 		item := &cache.TableItem{
 			Name:       name,

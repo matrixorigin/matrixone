@@ -251,6 +251,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		PipelineServiceAddress: cn.ServiceAddress,
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
+		CtlAddress:             cn.CtlAddress,
 		Labels:                 cn.Labels,
 	}
 }
@@ -261,6 +262,7 @@ func newDNService(dn logpb.DNStore) metadata.DNService {
 		TxnServiceAddress:     dn.ServiceAddress,
 		LogTailServiceAddress: dn.LogtailServerAddress,
 		LockServiceAddress:    dn.LockServiceAddress,
+		CtlAddress:            dn.CtlAddress,
 	}
 	v.Shards = make([]metadata.DNShard, 0, len(dn.Shards))
 	for _, s := range dn.Shards {

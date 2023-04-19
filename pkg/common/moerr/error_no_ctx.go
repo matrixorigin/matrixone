@@ -299,3 +299,7 @@ func NewNoUDFNoCtx(f string) *Error {
 func NewProcedureAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrProcedureAlreadyExists, f)
 }
+
+func NewTxnNeedRetryNoCtx() *Error {
+	return newError(Context(), ErrTxnNeedRetry)
+}

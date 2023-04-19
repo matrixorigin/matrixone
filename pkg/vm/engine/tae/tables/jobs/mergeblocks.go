@@ -338,7 +338,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		writer.SetPrimaryKey(uint16(pkIdx))
 	}
 	for _, bat := range batchs {
-		_, err = writer.WriteBlock(bat)
+		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 		if err != nil {
 			return err
 		}
