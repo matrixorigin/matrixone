@@ -32,7 +32,7 @@ const (
 )
 
 type evalVector struct {
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -64,7 +64,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 	}
 }
@@ -83,11 +83,10 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
 		}
 	}
 }

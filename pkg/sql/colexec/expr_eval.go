@@ -221,60 +221,6 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 	return vec, nil
 }
 
-func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	var length = len(bat.Zs)
-	if length == 0 {
-		return vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), length, proc.Mp()), nil
-	}
-
-	e := expr.Expr
-	switch t := e.(type) {
-	case *plan.Expr_C:
-		return getConstVec(proc.Ctx, proc, expr, length)
-	case *plan.Expr_T:
-		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
-	case *plan.Expr_Col:
-		vec := bat.Vecs[t.Col.ColPos]
-		if vec.IsConstNull() {
-			vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
-		}
-		return vec, nil
-	case *plan.Expr_List:
-		return getConstVecInList(proc.Ctx, proc, t.List.List)
-	case *plan.Expr_F:
-		var result *vector.Vector
-
-		fid := t.F.GetFunc().GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, fid)
-		if err != nil {
-			return nil, err
-		}
-
-		functionParameters := make([]*vector.Vector, len(t.F.Args))
-		for i := range functionParameters {
-			functionParameters[i], err = EvalExpr(bat, proc, t.F.Args[i])
-			if err != nil {
-				break
-			}
-		}
-		if err != nil {
-			cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
-			return nil, err
-		}
-
-		result, err = evalFunction(proc, f, functionParameters, length)
-		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	default:
-		// *plan.Expr_Corr, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
-	}
-}
-
 func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	length := len(s.Zs)
 	e := expr.Expr
