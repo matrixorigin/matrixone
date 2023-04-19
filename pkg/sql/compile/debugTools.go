@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var debugInstructionNames = map[int]string{
+var debugInstructionNames = map[vm.OpType]string{
 	vm.Top:          "top",
 	vm.Join:         "join",
 	vm.Semi:         "semi",
@@ -68,7 +68,7 @@ var debugInstructionNames = map[int]string{
 	vm.HashBuild:    "hash build",
 }
 
-var debugMagicNames = map[int]string{
+var debugMagicNames = map[magicType]string{
 	Merge:          "Merge",
 	Normal:         "Normal",
 	Remote:         "Remote",
@@ -156,7 +156,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 
 	// convert magic to its string name
 	magicShow := func(magic int) string {
-		name, ok := debugMagicNames[magic]
+		name, ok := debugMagicNames[magicType(magic)]
 		if ok {
 			return name
 		}
@@ -231,7 +231,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		if ss[i].Proc != nil {
 			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
+		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(int(ss[i].Magic)), receiverStr)
 		for j, instruction := range ss[i].Instructions {
 			if j != 0 {
 				str += " -> "
