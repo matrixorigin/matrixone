@@ -105,6 +105,7 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			uniqueNums++
 		}
 	}
+
 	writers := make([]*S3Writer, 1+uniqueNums)
 	for i := range writers {
 		writers[i] = &S3Writer{
@@ -119,7 +120,6 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 		writers[i].ResetMetaLocBat()
 		//handle origin/main table's sort index.
 		if i == 0 {
-			//tableDef := insertCtx.TableDef
 			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 				// the serialized cpk col is located in the last of the bat.vecs
 				writers[i].sortIndex = len(tableDef.Cols)
@@ -157,7 +157,9 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			}
 			continue
 		}
-		//TODO::to handle unique index table's sort index;
+		//handle for unique index table.
+		writers[i].sortIndex = 0
+		writers[i].pk[catalog.IndexTableIndexColName] = struct{}{}
 	}
 	return writers, nil
 }
@@ -300,9 +302,8 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 	sortIdx := -1
 	for i := range bats {
 		// sort bats firstly
-		// for main table
-		//TODO::sort unique index table.
-		if w.idx == 0 && w.sortIndex != -1 {
+		// for main/orgin table and unique index table.
+		if w.sortIndex != -1 {
 			sortByKey(proc, bats[i], w.sortIndex, proc.GetMPool())
 			sortIdx = w.sortIndex
 		}
