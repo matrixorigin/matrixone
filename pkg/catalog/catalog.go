@@ -84,7 +84,25 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
+			rets := genDropOrTruncateTables(GenRows(bat))
+			//SKIP update/delete on mo_columns
+			//there are update/delete entries on mo_columns just after one on mo_tables.
+			//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
+			//                            j                          j                          j
+			//there is none update/delete entries on mo_columns just after one on mo_tables.
+			//case 2: (DELETE,MO_TABLES),...
+			//                            j
+			j := 1
+			for ; j < len(es); j++ {
+				entry := es[j]
+				if entry.TableId == MO_COLUMNS_ID &&
+					(entry.EntryType == api.Entry_Delete || entry.EntryType == api.Entry_Update) {
+				} else {
+					break
+				}
+			}
+			return rets, es[j:], nil
+			//return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		} else if e.EntryType == api.Entry_Update {
 			return genUpdateConstraint(GenRows(bat)), es[1:], nil
 		}
@@ -209,8 +227,8 @@ func genUpdateConstraint(rows [][]any) []UpdateConstraint {
 func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
-		//name := string(row[ROWID_OFF+MO_TABLES_REL_NAME_IDX].([]byte))
-		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		name := string(row[ROWID_OFF+MO_TABLES_REL_NAME_IDX].([]byte))
+		//name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		if id, tblName, ok := isTruncate(name); ok {
 			cmds[i].Id = id
 			cmds[i].Name = tblName
@@ -219,13 +237,13 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		} else {
 			cmds[i].IsDrop = true
-			//cmds[i].Id = row[ROWID_OFF+MO_TABLES_REL_ID_IDX].(uint64)
-			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].Id = row[ROWID_OFF+MO_TABLES_REL_ID_IDX].(uint64)
+			//cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
 			cmds[i].Name = name
-			//cmds[i].DatabaseId = row[ROWID_OFF+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-			//cmds[i].DatabaseName = string(row[ROWID_OFF+MO_TABLES_RELDATABASE_IDX].([]byte))
-			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+			cmds[i].DatabaseId = row[ROWID_OFF+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[ROWID_OFF+MO_TABLES_RELDATABASE_IDX].([]byte))
+			//cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			//cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		}
 	}
 	return cmds

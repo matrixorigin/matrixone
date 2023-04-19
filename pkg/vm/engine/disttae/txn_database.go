@@ -182,6 +182,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		db.txn.createMap.Delete(k)
 		db.txn.deletedTableMap.Store(k, nil)
 		table := v.(*txnTable)
+		id = table.tableId
 		//this rowid is generated in the txnDatabase.Create function
 		rowid = table.rowid
 		//Even if the created table in the createMap, there is an
