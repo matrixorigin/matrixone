@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package proxy
 
 import (
+	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestFile(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	mf := NewMemFile(0)
-	stat := mf.Stat()
-	assert.Equal(t, stat.Size(), int64(0))
-	assert.Equal(t, stat.Name(), "")
-	assert.Equal(t, stat.CompressAlgo(), 0)
-	assert.Equal(t, stat.OriginSize(), int64(0))
-	assert.Equal(t, mf.GetFileType(), MemFile)
-	mf.Ref()
-	mf.Unref()
-	_, err := mf.Read(make([]byte, 0))
-	assert.Nil(t, err)
+func TestCounterSet_Create(t *testing.T) {
+	cs := newCounterSet()
+	require.NotNil(t, cs)
+	le := newCounterLogExporter(cs)
+	require.NotNil(t, le)
+}
+
+func TestCounterSet_Export(t *testing.T) {
+	le := newCounterLogExporter(newCounterSet())
+	fields := le.Export()
+	num := reflect.ValueOf(counterSet{}).Type().NumField()
+	require.Equal(t, num, len(fields))
 }

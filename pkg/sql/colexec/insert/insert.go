@@ -149,9 +149,13 @@ func analyze(proc *process.Process, idx int) func() {
 // 	nameToPos := make(map[string]int)
 // 	pkPos := -1
 // 	pos := 0
+// 	hasCompositePKey := false
+// 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+// 		hasCompositePKey = true
+// 	}
 // 	for j, col := range tableDef.Cols {
 // 		// Check whether the composite primary key column is included
-// 		if (tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil) && col.Name != catalog.Row_ID && col.Primary {
+// 		if !hasCompositePKey && col.Name != catalog.Row_ID && col.Primary {
 // 			pkPos = j
 // 		}
 // 		if col.Name != catalog.Row_ID {
@@ -160,7 +164,7 @@ func analyze(proc *process.Process, idx int) func() {
 // 		}
 // 	}
 // 	// Check whether the composite primary key column is included
-// 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+// 	if hasCompositePKey {
 // 		pkPos = pos
 // 	}
 // 	return nameToPos, pkPos

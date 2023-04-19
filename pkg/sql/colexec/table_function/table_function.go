@@ -46,6 +46,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if e != nil || f {
 		return f, e
 	}
+	if proc.InputBatch() == nil || len(proc.InputBatch().Zs) == 0 {
+		return f, e
+	}
 	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
 		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}

@@ -66,9 +66,9 @@ func TestKillQueryEvent(t *testing.T) {
 		require.NoError(t, stopFn2())
 	}()
 
-	tu1 := newTunnel(tp.ctx, tp.logger)
+	tu1 := newTunnel(tp.ctx, tp.logger, nil)
 	defer func() { _ = tu1.Close() }()
-	tu2 := newTunnel(tp.ctx, tp.logger)
+	tu2 := newTunnel(tp.ctx, tp.logger, nil)
 	defer func() { _ = tu2.Close() }()
 
 	// Client2 will send "kill query 10", which will route to the server which
