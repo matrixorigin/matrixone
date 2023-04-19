@@ -16,8 +16,9 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type TableMVCCNode struct {
@@ -52,12 +53,12 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 }
 
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	n, err = common.WriteString(e.SchemaConstraints, w)
+	n, err = objectio.WriteString(e.SchemaConstraints, w)
 	return
 }
 
 func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
-	e.SchemaConstraints, n, err = common.ReadString(r)
+	e.SchemaConstraints, n, err = objectio.ReadString(r)
 	return
 }
 
