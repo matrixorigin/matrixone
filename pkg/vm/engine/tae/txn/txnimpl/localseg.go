@@ -93,7 +93,7 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 	n := NewNode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
-		seg.table.store.nodesMgr,
+		seg.table.store.indexCache,
 		seg.table.store.dataFactory.Scheduler,
 		meta,
 	)
@@ -111,7 +111,7 @@ func (seg *localSegment) registerANode() {
 	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
-		seg.table.store.nodesMgr,
+		seg.table.store.indexCache,
 		seg.table.store.dataFactory.Scheduler,
 		meta,
 	)
