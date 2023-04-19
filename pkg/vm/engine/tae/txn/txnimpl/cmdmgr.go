@@ -67,7 +67,7 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	// logutil.Info("", common.OperationField("suxi-replay-cmd"),
 	// common.OperandField(mgr.cmd.Desc()))
 	logEntry = entry.GetBase()
-	logEntry.SetType(ETTxnRecord)
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
 		return
 	}

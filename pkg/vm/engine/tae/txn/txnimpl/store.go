@@ -113,7 +113,7 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 		return
 	}
 	logEntry = entry.GetBase()
-	logEntry.SetType(ETTxnState)
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
 		return
 	}

@@ -397,10 +397,6 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		}
 		b.payload = b.node[:b.GetPayloadSize()]
 	}
-	if b.GetType() == ETCheckpoint && b.GetPayloadSize() != 0 {
-		logutil.Infof("payload %d", b.GetPayloadSize())
-		panic("wrong payload size")
-	}
 	n1 := 0
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
@@ -409,13 +405,8 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return int64(n1), err
 		}
-		version := b.GetVersion()
-		codec := objectio.GetIOEntryCodec(
-			objectio.IOEntryHeader{
-				Type:    IOET_WALEntry,
-				Version: version,
-			},
-		)
+		head := objectio.DecodeIOEntryHeader(b.descBuf)
+		codec := objectio.GetIOEntryCodec(*head)
 		vinfo, err := codec.Decode(infoBuf)
 		info := vinfo.(*Info)
 		if err != nil {
@@ -453,13 +444,8 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	offset += n1
 	b.SetInfoBuf(infoBuf)
 
-	version := b.GetVersion()
-	codec := objectio.GetIOEntryCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALEntry,
-			Version: version,
-		},
-	)
+	head := objectio.DecodeIOEntryHeader(b.descBuf)
+	codec := objectio.GetIOEntryCodec(*head)
 	vinfo, err := codec.Decode(infoBuf)
 	info := vinfo.(*Info)
 	if err != nil {

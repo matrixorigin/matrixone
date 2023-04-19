@@ -64,12 +64,6 @@ func init() {
 	)
 }
 
-func getTypeAndVersion(buf []byte) (typ, version uint16) {
-	typ = types.DecodeUint16(buf[0:2])
-	version = types.DecodeUint16(buf[2:4])
-	return
-}
-
 type meta struct {
 	metaType    MetaType
 	appended    uint64
@@ -335,13 +329,8 @@ func (r *recordEntry) unmarshal() {
 	if r.unmarshaled.Load() == 1 {
 		return
 	}
-	typ, version := getTypeAndVersion(r.payload[:4])
-	codec := objectio.GetIOEntryCodec(
-		objectio.IOEntryHeader{
-			Type:    typ,
-			Version: version,
-		},
-	)
+	head := objectio.DecodeIOEntryHeader(r.payload[:4])
+	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(r.payload[4:])
 	if err != nil {
 		panic(err)

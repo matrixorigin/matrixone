@@ -22,20 +22,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-// version uint16
 // type    uint16
+// version uint16
 // payload size uint32
 // info size uint32
 const (
-	TypeOffset        = int(unsafe.Sizeof(uint16(0)))
-	PayloadSizeOffset = TypeOffset + int(unsafe.Sizeof(ETInvalid))
-	InfoSizeOffset    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+unsafe.Sizeof(uint32(0)))
-	DescriptorSize    = TypeOffset + int(unsafe.Sizeof(ETInvalid)+2*unsafe.Sizeof(uint32(0)))
+	VersionOffset     = int(unsafe.Sizeof(uint16(0)))
+	PayloadSizeOffset = VersionOffset + int(unsafe.Sizeof(IOET_WALEntry_Invalid))
+	InfoSizeOffset    = VersionOffset + int(unsafe.Sizeof(IOET_WALEntry_Invalid)+unsafe.Sizeof(uint32(0)))
+	DescriptorSize    = VersionOffset + int(unsafe.Sizeof(IOET_WALEntry_Invalid)+2*unsafe.Sizeof(uint32(0)))
 )
 
 const (
-	IOET_WALEntry_V1 uint16 = 1
-	IOET_WALEntry    uint16 = 2000
+	IOET_WALEntry_V1              uint16 = 1
+	IOET_WALEntry_Invalid         uint16 = 2000
+	IOET_WALEntry_Checkpoint      uint16 = 2001
+	IOET_WALEntry_PostCommit      uint16 = 2002
+	IOET_WALEntry_Uncommitted     uint16 = 2003
+	IOET_WALEntry_Txn             uint16 = 2004
+	IOET_WALEntry_CustomizedStart uint16 = 2005
 
 	IOET_WALEntry_CurrVer = IOET_WALEntry_V1
 )
@@ -43,22 +48,37 @@ const (
 func init() {
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
-			Type:    IOET_WALEntry,
+			Type:    IOET_WALEntry_Checkpoint,
 			Version: IOET_WALEntry_V1,
-		},
-		func(a any) ([]byte, error) {
-			info := a.(*Info)
-			return info.Marshal()
-		},
-		func(b []byte) (any, error) {
-			info := NewEmptyInfo()
-			err := info.Unmarshal(b)
-			return info, err
-		},
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_PostCommit,
+			Version: IOET_WALEntry_V1,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Uncommitted,
+			Version: IOET_WALEntry_V1,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Txn,
+			Version: IOET_WALEntry_V1,
+		}, nil, UnmarshalEntry,
 	)
 }
 
-// type u16, payloadsize u32, infosize u32
+func UnmarshalEntry(b []byte) (any, error) {
+	info := NewEmptyInfo()
+	err := info.Unmarshal(b)
+	return info, err
+}
+
+// type u16, version u16, payloadsize u32, infosize u32
 type descriptor struct {
 	descBuf []byte
 }
@@ -69,20 +89,12 @@ func newDescriptor() *descriptor {
 	}
 }
 
-func (desc *descriptor) IsFlush() bool {
-	return desc.GetType() == ETFlush
-}
-
-func (desc *descriptor) IsCheckpoint() bool {
-	return desc.GetType() == ETCheckpoint
-}
-
 func (desc *descriptor) SetVersion(t uint16) {
-	copy(desc.descBuf[:TypeOffset], types.EncodeUint16(&t))
+	copy(desc.descBuf[VersionOffset:PayloadSizeOffset], types.EncodeUint16(&t))
 }
 
 func (desc *descriptor) SetType(t Type) {
-	copy(desc.descBuf[TypeOffset:PayloadSizeOffset], types.EncodeUint16(&t))
+	copy(desc.descBuf[:VersionOffset], types.EncodeUint16(&t))
 }
 
 func (desc *descriptor) SetPayloadSize(size int) {
@@ -96,7 +108,7 @@ func (desc *descriptor) SetInfoSize(size int) {
 }
 
 func (desc *descriptor) reset() {
-	desc.SetType(ETInvalid)
+	desc.SetType(IOET_WALEntry_Invalid)
 	desc.SetPayloadSize(0)
 	desc.SetInfoSize(0)
 }
@@ -106,11 +118,11 @@ func (desc *descriptor) GetMetaBuf() []byte {
 }
 
 func (desc *descriptor) GetVersion() uint16 {
-	return types.DecodeUint16(desc.descBuf[:TypeOffset])
+	return types.DecodeUint16(desc.descBuf[VersionOffset:PayloadSizeOffset])
 }
 
 func (desc *descriptor) GetType() Type {
-	return types.DecodeUint16(desc.descBuf[TypeOffset:PayloadSizeOffset])
+	return types.DecodeUint16(desc.descBuf[:VersionOffset])
 }
 
 func (desc *descriptor) GetPayloadSize() int {
