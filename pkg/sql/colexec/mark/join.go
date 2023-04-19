@@ -132,7 +132,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if err != nil {
 			return err
 		}
-		if err = ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
+		if err = ctr.evalJoinBuildCondition(bat, proc); err != nil {
 			return err
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
@@ -175,8 +175,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.markVals = vector.MustFixedCol[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
-	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+
+	if err = ctr.evalJoinProbeCondition(bat, proc); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
@@ -260,46 +260,29 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 // store the results of the calculation on the probe side of the equation condition
-func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.evecs {
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
+			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
-		if ctr.evecs[i].needFree && vec != nil {
-			analyze.Alloc(int64(vec.Size()))
-		}
 	}
 	return nil
 }
 
 // store the results of the calculation on the build side of the equation condition
-func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.buildEqEvecs {
+		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
+			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.buildEqVec[i] = vec
 		ctr.buildEqEvecs[i].vec = vec
-		ctr.buildEqEvecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.buildEqEvecs[i].needFree = false
-				break
-			}
-		}
 	}
 	return nil
 }

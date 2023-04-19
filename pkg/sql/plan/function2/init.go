@@ -14,6 +14,11 @@
 
 package function2
 
+var AndFunctionEncodedID = encodeOverloadID(AND, 0)
+var AndFunctionName = "and"
+var EqualFunctionName = "="
+var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
+
 func init() {
 	// init fixed type cast rule for binary operator like
 	// +, -, x, /, div, >=, =, != and so on.

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -73,6 +74,14 @@ func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err err
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
 }
 
+func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
+	fid, _ := DecodeOverloadID(overloadID)
+	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
+	}
+	return allSupportedFunctions[fid].layout, nil
+}
+
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
@@ -82,6 +91,8 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	logutil.Infof("function2 get function by name %s", name)
+
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
@@ -146,10 +157,7 @@ type FuncGetResult struct {
 }
 
 func (fr *FuncGetResult) GetEncodedOverloadID() (overloadID int64) {
-	overloadID = int64(fr.fid)
-	overloadID = overloadID << 32
-	overloadID |= int64(fr.overloadId)
-	return
+	return encodeOverloadID(fr.fid, fr.overloadId)
 }
 
 func (fr *FuncGetResult) ShouldDoImplicitTypeCast() (typs []types.Type, should bool) {
@@ -158,6 +166,13 @@ func (fr *FuncGetResult) ShouldDoImplicitTypeCast() (typs []types.Type, should b
 
 func (fr *FuncGetResult) GetReturnType() types.Type {
 	return fr.retType
+}
+
+func encodeOverloadID(fid, overloadId int32) (overloadID int64) {
+	overloadID = int64(fid)
+	overloadID = overloadID << 32
+	overloadID |= int64(overloadId)
+	return
 }
 
 func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {

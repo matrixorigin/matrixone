@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -577,8 +578,8 @@ func SplitAndExprs(list []*plan.Expr) []*plan.Expr {
 func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 	exprs := make([]*plan.Expr, 0, 1)
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		fid, _ := function.DecodeOverloadID(e.F.Func.GetObj())
-		if fid == function.AND {
+		fid, _ := function2.DecodeOverloadID(e.F.Func.GetObj())
+		if fid == function2.AND {
 			exprs = append(exprs, splitAndExpr(e.F.Args[0])...)
 			exprs = append(exprs, splitAndExpr(e.F.Args[1])...)
 			return exprs
@@ -591,7 +592,7 @@ func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 	return &plan.Expr_F{
 		F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
+			Func: &plan.ObjectRef{Obj: function2.AndFunctionEncodedID, ObjName: function2.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -96,6 +97,9 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
+
+		logutil.Infof("new executor %d", t.F.GetFunc().GetObj())
+
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.NewOp); err != nil {
@@ -187,6 +191,8 @@ func (expr *FunctionExpressionExecutor) Init(
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	logutil.Infof("function executor eval")
+
 	var err error
 	for i := range expr.parameterExecutor {
 		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches)

@@ -580,9 +580,8 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 {
-				if inputs[0].Oid == types.T_char || inputs[0].Oid == types.T_varchar ||
-					inputs[0].Oid == types.T_text {
+			if len(inputs) == 2 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(0)
 				}
 			}

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,7 +45,7 @@ type evalVector struct {
 	// when it comes to be accepted by the operator,will firstly calculate the a+1, so it's up to
 	// the eval implementor whether he store the a+1 result in the old col a vector or create a
 	// new vector to store it.
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -146,8 +147,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
-		ctr.cleanEqVectors(mp)
+		ctr.cleanEvalVectors()
+		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
 	}
 }
@@ -166,20 +167,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
 		}
 	}
 }
 
-func (ctr *container) cleanEqVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEqVectors() {
 	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].needFree && ctr.buildEqEvecs[i].vec != nil {
-			ctr.buildEqEvecs[i].vec.Free(mp)
-			ctr.buildEqEvecs[i].vec = nil
+		if ctr.buildEqEvecs[i].executor != nil {
+			ctr.buildEqEvecs[i].executor.Free()
 		}
 	}
 }
