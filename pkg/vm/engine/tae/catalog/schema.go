@@ -501,6 +501,21 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	return s.AppendColDef(def)
 }
 
+func (s *Schema) AppendFakePKCol(name string, typ types.Type) error {
+	def := &ColDef{
+		Name:        name,
+		Type:        typ,
+		SortIdx:     -1,
+		NullAbility: true,
+		FakePK: true,
+		Primary: true,
+		Hidden: true,
+		AutoIncrement: true,
+		ClusterBy: false,
+	}
+	return s.AppendColDef(def)
+}
+
 // non-cn doesn't set IsPrimary in attr, so isPrimary is used explicitly here
 func (s *Schema) AppendSortColWithAttribute(attr engine.Attribute, sorIdx int, isPrimary bool) error {
 	def, err := ColDefFromAttribute(attr)
@@ -821,6 +836,12 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 		}
 	}
+	// fake pk
+	typ := types.T_uint64.ToType()
+	typ.Width = 64
+	schema.AppendFakePKCol(FakePKName, typ)
+	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
 	schema.Constraint, _ = constraintDef.MarshalBinary()
