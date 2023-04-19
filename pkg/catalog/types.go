@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -158,7 +159,7 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
-	SystemExternalRel     = "e"
+	SystemExternalRel     = plan.SystemExternalRel
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
