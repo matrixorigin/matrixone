@@ -71,8 +71,7 @@ func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 func NewSqlWriter(ctx context.Context) *BaseSqlWriter {
 	once.Do(func() {
 		sqlWriter = &BaseSqlWriter{
-			ctx:          ctx,
-			forceNewConn: true,
+			ctx: ctx,
 		}
 	})
 	return sqlWriter

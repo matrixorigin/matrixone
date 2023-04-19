@@ -30,10 +30,9 @@ var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // SqlWriter is a writer that writes data to a SQL database.
 type BaseSqlWriter struct {
-	db           *sql.DB
-	dsn          string
-	forceNewConn bool
-	ctx          context.Context
+	db  *sql.DB
+	dsn string
+	ctx context.Context
 }
 
 type SqlWriter interface {
@@ -109,7 +108,7 @@ func (sw *BaseSqlWriter) generateInsertStatement(rows string, tbl *table.Table) 
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-	db, err := sw.initOrRefreshDBConn()
+	db, err := sw.initOrRefreshDBConn(false)
 	if err != nil {
 		return 0, err
 	}
@@ -123,17 +122,21 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 	_, err = db.Exec(insertStatement)
 	if err != nil {
-		return cnt, nil
+		// try to reconnect
+		db, err = sw.initOrRefreshDBConn(true)
+		_, err = db.Exec(insertStatement)
+		if err != nil {
+			return 0, err
+		}
 	}
-	return 0, err
-
+	return cnt, nil
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
 	return 0, sw.db.Close()
 }
 
-func (sw *BaseSqlWriter) initOrRefreshDBConn() (*sql.DB, error) {
+func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	if sw.db == nil {
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
@@ -160,16 +163,15 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn() (*sql.DB, error) {
 		sw.db = db
 		sw.dsn = dsn
 	}
-	if err := sw.db.Ping(); err != nil {
-		if sw.forceNewConn {
-			db, err := sql.Open("mysql", sw.dsn)
-			if err != nil {
-				return nil, err
-			}
-			sw.db = db
-		} else {
+	if forceNewConn {
+		if err := sw.db.Close(); err != nil {
 			return nil, err
 		}
+		db, err := sql.Open("mysql", sw.dsn)
+		if err != nil {
+			return nil, err
+		}
+		sw.db = db
 	}
 	return sw.db, nil
 }
