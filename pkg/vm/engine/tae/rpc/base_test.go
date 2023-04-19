@@ -767,7 +767,7 @@ func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
 	bat *batch.Batch) *containers.Batch {
 	taeBatch := containers.NewEmptyBatch()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec)
+		v := containers.ToDNVector(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return taeBatch
