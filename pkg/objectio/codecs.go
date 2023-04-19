@@ -37,8 +37,8 @@ type IOEntry interface {
 	UnmarshalBinary([]byte) error
 }
 
-type IOEncodeFunc = func(IOEntry) ([]byte, error)
-type IODecodeFunc = func([]byte) (IOEntry, error)
+type IOEncodeFunc = func(any) ([]byte, error)
+type IODecodeFunc = func([]byte) (any, error)
 
 type ioEntryCodec struct {
 	// if encFn is nil, no need to encode

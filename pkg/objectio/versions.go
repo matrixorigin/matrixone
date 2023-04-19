@@ -53,11 +53,11 @@ func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
 }
 
-func EncodeColumnDataV1(ioe IOEntry) (buf []byte, err error) {
-	return ioe.MarshalBinary()
+func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
+	return ioe.(*vector.Vector).MarshalBinary()
 }
 
-func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
+func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 	vec := vector.NewVec(types.Type{})
 	if err = vec.UnmarshalBinary(buf); err != nil {
 		return
@@ -65,35 +65,21 @@ func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
 	return vec, err
 }
 
-func DecodeBloomFilterV1(buf []byte) (ioe IOEntry, err error) {
-	bf := &BloomFilterEntry{}
-	bf.UnmarshalBinary(buf)
-	return bf, nil
-}
-
-type BloomFilterEntry struct {
-	indexes []StaticFilter
-}
-
-func (b *BloomFilterEntry) UnmarshalBinary(buf []byte) error {
-	b.indexes = make([]StaticFilter, 0)
+func DecodeBloomFilterV1(buf []byte) (ioe any, err error) {
+	indexes := make([]StaticFilter, 0)
 	bf := BloomFilter(buf)
 	count := bf.BlockCount()
 	for i := uint32(0); i < count; i++ {
 		buf := bf.GetBloomFilter(i)
 		if len(buf) == 0 {
-			b.indexes = append(b.indexes, nil)
+			indexes = append(indexes, nil)
 			continue
 		}
 		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		b.indexes = append(b.indexes, index)
+		indexes = append(indexes, index)
 	}
-	return nil
-}
-
-func (b *BloomFilterEntry) MarshalBinary() ([]byte, error) {
-	return nil, nil
+	return indexes, nil
 }

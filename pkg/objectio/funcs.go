@@ -64,7 +64,7 @@ func ReadBloomFilter(
 		constructorFactory); err != nil {
 		return
 	}
-	filters = v.(*BloomFilterEntry).indexes
+	filters = v.([]StaticFilter)
 	return
 }
 
