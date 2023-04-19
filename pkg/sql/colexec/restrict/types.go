@@ -16,12 +16,27 @@ package restrict
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	E *plan.Expr
+	ctr *container
+	E   *plan.Expr
+}
+
+type container struct {
+	executors colexec.ExpressionExecutor
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.ctr != nil {
+		arg.ctr.cleanExecutor()
+	}
+}
+
+func (ctr *container) cleanExecutor() {
+	if ctr.executors != nil {
+		ctr.executors.Free()
+	}
 }

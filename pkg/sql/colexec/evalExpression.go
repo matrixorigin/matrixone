@@ -115,6 +115,23 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", expr))
 }
 
+// EvaluateExprWithoutExecutor can evaluate an expression without make an executor by developer.
+//
+// XXX I'm not sure if I should support this method.
+// There is a big problem that, user cannot get the executor,
+// and will be very hard to clean the memory.
+// because the result vector maybe just one column from bats.
+func EvaluateExprWithoutExecutor(proc *process.Process, planExpr *plan.Expr, bats []*batch.Batch) (*vector.Vector, error) {
+	executor, err := NewExpressionExecutor(proc, planExpr)
+	if err != nil {
+		if v, errEval := executor.Eval(proc, bats); errEval == nil {
+			return v, nil
+		}
+		executor.Free()
+	}
+	return nil, moerr.NewNotSupported(proc.Ctx, "can not evaluate expression %v", planExpr)
+}
+
 // FixedVectorExpressionExecutor
 // the content of its vector is fixed.
 // e.g.

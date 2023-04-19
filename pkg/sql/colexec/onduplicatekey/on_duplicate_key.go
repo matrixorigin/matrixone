@@ -281,8 +281,14 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 		if expr, exists := updateExpr[attr]; exists && i < columnCount {
 			runExpr := plan2.DeepCopyExpr(expr)
 			resetColPos(runExpr, columnCount)
-			newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
+
+			executor, err := colexec.NewExpressionExecutor(proc, runExpr)
 			if err != nil {
+				return nil, err
+			}
+			newVec, err := executor.Eval(proc, []*batch.Batch{evalBatch})
+			if err != nil {
+				executor.Free()
 				newBatch.Clean(proc.Mp())
 				return nil, err
 			}
@@ -323,8 +329,14 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, insertBatch *ba
 
 	// build the check expr
 	for i, e := range checkExpr {
-		result, err := colexec.EvalExpr(insertBatch, proc, e)
+		executor, err := colexec.NewExpressionExecutor(proc, e)
 		if err != nil {
+			return 0, "", err
+		}
+
+		result, err := executor.Eval(proc, []*batch.Batch{insertBatch})
+		if err != nil {
+			executor.Free()
 			return 0, "", err
 		}
 
@@ -337,9 +349,11 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, insertBatch *ba
 					keys = append(keys, k)
 				}
 				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", strings.Join(keys, ","))
+				executor.Free()
 				return i, conflictMsg, nil
 			}
 		}
+		executor.Free()
 	}
 
 	return -1, "", nil

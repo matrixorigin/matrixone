@@ -17,6 +17,7 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,8 +31,12 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+func Prepare(proc *process.Process, arg any) (err error) {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+
+	ap.ctr.executors, err = colexec.NewExpressionExecutor(proc, ap.E)
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -47,12 +52,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
-	vec, err := colexec.EvalExpr(bat, proc, ap.E)
+
+	vec, err := ap.ctr.executors.Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		bat.Clean(proc.Mp())
 		return false, err
 	}
-	defer vec.Free(proc.Mp())
+
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
 		return false, moerr.NewOOM(proc.Ctx)
 	}

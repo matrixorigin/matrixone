@@ -33,8 +33,12 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+func Prepare(proc *process.Process, arg any) (err error) {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
+
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -53,8 +57,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
-	for i, e := range ap.Es {
-		vec, err := colexec.EvalExpr(bat, proc, e)
+
+	// do projection.
+	for i := range ap.ctr.projExecutors {
+		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			bat.Clean(proc.Mp())
 			rbat.Clean(proc.Mp())
@@ -62,6 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 		rbat.Vecs[i] = vec
 	}
+
 	for i, vec := range bat.Vecs {
 		isSame := false
 		for _, rVec := range rbat.Vecs {
