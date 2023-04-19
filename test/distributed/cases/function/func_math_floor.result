@@ -144,8 +144,7 @@ select floor(123.342124124214, 100);
 floor(123.342124124214, 100)
 123.342124124214
 select floor(-123.342124124214, -100);
-floor(-123.342124124214, -100)
--1.0E100
+Data truncation: data out of range: data type decimal64, floor(decimal64(18,12),-100)
 select floor(123.342, null);
 invalid argument the second argument of the floor, bad value not const
 select floor(null, 1);
