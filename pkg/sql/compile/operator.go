@@ -426,16 +426,30 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
-		Ref:             oldCtx.Ref,
-		RowIdIdx:        int(oldCtx.RowIdIdx),
-		CanTruncate:     oldCtx.CanTruncate,
-		AddAffectedRows: oldCtx.AddAffectedRows,
+		Ref:                   oldCtx.Ref,
+		RowIdIdx:              int(oldCtx.RowIdIdx),
+		CanTruncate:           oldCtx.CanTruncate,
+		AddAffectedRows:       oldCtx.AddAffectedRows,
+		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 	}
+	// get the relation instance of the original table
 	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
 	if err != nil {
 		return nil, err
 	}
 	delCtx.Source = rel
+	if len(oldCtx.PartitionTableIds) > 0 {
+		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+		// get the relation instances for each partition sub table
+		for i, pTableId := range oldCtx.PartitionTableIds {
+			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.PartitionSources[i] = pRel
+		}
+	}
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,

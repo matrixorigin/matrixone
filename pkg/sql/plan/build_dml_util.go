@@ -91,8 +91,10 @@ func buildDeletePlans(
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 	isPartitionTable := false
+	partExprIdx := -1
 	if tableDef.Partition != nil {
 		isPartitionTable = true
+		partExprIdx = len(tableDef.Cols)
 		lastNodeId = makePreDeletePlan(builder, bindCtx, objRef, tableDef, lastNodeId)
 		lastNode := builder.qry.Nodes[lastNodeId]
 		projectTag = lastNode.BindingTags[0]
@@ -111,9 +113,9 @@ func buildDeletePlans(
 		}
 
 		// delete unique table
-		deleteIdx := len(tableDef.Cols)
+		uniqueDeleteIdx := len(tableDef.Cols)
 		if isPartitionTable {
-			deleteIdx = deleteIdx + 1
+			uniqueDeleteIdx = uniqueDeleteIdx + 1
 		}
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
@@ -123,11 +125,14 @@ func buildDeletePlans(
 					ObjName:    indexdef.IndexTableName,
 					Obj:        int64(idxTableDef.TblId),
 				}
-				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, idxObjRef, idxTableDef, deleteIdx, lastNodeId, false)
+
+				// getNode information about delete table
+				delNodeInfo := makeDeleteNodeInfo(ctx, idxObjRef, idxTableDef, uniqueDeleteIdx, -1, false)
+				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 				if err != nil {
 					return -1, nil, err
 				}
-				deleteIdx = deleteIdx + 2 // row_id & pk
+				uniqueDeleteIdx = uniqueDeleteIdx + 2 // row_id & pk
 			}
 		}
 	}
@@ -140,7 +145,10 @@ func buildDeletePlans(
 			break
 		}
 	}
-	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, objRef, tableDef, deleteIdx, lastNodeId, true)
+
+	// getNode information about delete table
+	delNodeInfo := makeDeleteNodeInfo(ctx, objRef, tableDef, deleteIdx, partExprIdx, true)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 	if err != nil {
 		return -1, nil, err
 	}
@@ -234,12 +242,42 @@ func haveUniqueKey(tableDef *TableDef) bool {
 	return false
 }
 
+// makeDeleteNodeInfo Get `DeleteNode` based on TableDef
+func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef, deleteIdx int, partitionIdx int, addAffectedRows bool) *deleteNodeInfo {
+	delNodeInfo := &deleteNodeInfo{
+		objRef:          objRef,
+		tableDef:        tableDef,
+		deleteIndex:     deleteIdx,
+		partitionIdx:    partitionIdx,
+		addAffectedRows: addAffectedRows,
+		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+	}
+
+	if tableDef.Partition != nil {
+		partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
+		for i, partition := range tableDef.Partition.Partitions {
+			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName)
+			partTableIds[i] = partTableDef.TblId
+		}
+		delNodeInfo.partTableIDs = partTableIds
+	}
+	return delNodeInfo
+}
+
+// information of deleteNode, which is about the deleted table
+type deleteNodeInfo struct {
+	objRef          *ObjectRef
+	tableDef        *TableDef
+	IsClusterTable  bool
+	deleteIndex     int      // The array index position of the rowid column
+	partTableIDs    []uint64 // Align array index with the partition number
+	partitionIdx    int      // The array index position of the partition expression column
+	addAffectedRows bool
+}
+
 // makeOneDeletePlan
 // predelete[build partition] -> lock -> filter -> delete
-func makeOneDeletePlan(
-	builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, lastNodeId int32, addAffectedRows bool) (int32, error) {
+func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, delNodeInfo *deleteNodeInfo) (int32, error) {
 	// todo: append predelete node to build partition id
 
 	// todo: append lock & filter
@@ -251,11 +289,13 @@ func makeOneDeletePlan(
 		BindingTags: []int32{deleteTag},
 		Children:    []int32{lastNodeId},
 		DeleteCtx: &plan.DeleteCtx{
-			RowIdIdx:        int32(deleteIdx),
-			Ref:             objRef,
-			CanTruncate:     false,
-			AddAffectedRows: addAffectedRows,
-			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+			RowIdIdx:          int32(delNodeInfo.deleteIndex),
+			Ref:               delNodeInfo.objRef,
+			CanTruncate:       false,
+			AddAffectedRows:   delNodeInfo.addAffectedRows,
+			IsClusterTable:    delNodeInfo.IsClusterTable,
+			PartitionTableIds: delNodeInfo.partTableIDs,
+			PartitionIdx:      int32(delNodeInfo.partitionIdx),
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)

@@ -96,12 +96,15 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate:     ctx.CanTruncate,
-		AddAffectedRows: ctx.AddAffectedRows,
-		RowIdIdx:        ctx.RowIdIdx,
-		Ref:             DeepCopyObjectRef(ctx.Ref),
-		IsClusterTable:  ctx.IsClusterTable,
+		CanTruncate:       ctx.CanTruncate,
+		AddAffectedRows:   ctx.AddAffectedRows,
+		RowIdIdx:          ctx.RowIdIdx,
+		Ref:               DeepCopyObjectRef(ctx.Ref),
+		IsClusterTable:    ctx.IsClusterTable,
+		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
+		PartitionIdx:      ctx.PartitionIdx,
 	}
+	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	return newCtx
 }
 

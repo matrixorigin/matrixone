@@ -53,12 +53,30 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	var err error
 	delCtx := p.DeleteCtx
 
-	delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
-	affectedRows = uint64(delBatch.Length())
-	if affectedRows > 0 {
-		err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
-		if err != nil {
-			return false, err
+	if len(delCtx.PartitionTableIDs) > 0 {
+		delBatches := colexec.GroupByPartition(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		for i, delBatch := range delBatches {
+			tempRows := uint64(delBatch.Length())
+			if tempRows > 0 {
+				affectedRows += tempRows
+				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				if err != nil {
+					// clean delBatch ? yes
+					delBatch.Clean(proc.Mp())
+					return false, err
+				}
+				// clean delBatch ? yes
+				delBatch.Clean(proc.Mp())
+			}
+		}
+	} else {
+		delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		affectedRows = uint64(delBatch.Length())
+		if affectedRows > 0 {
+			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 

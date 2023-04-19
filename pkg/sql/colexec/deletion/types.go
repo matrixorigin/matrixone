@@ -37,11 +37,14 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	CanTruncate     bool
-	RowIdIdx        int
-	Source          engine.Relation
-	Ref             *plan.ObjectRef
-	AddAffectedRows bool
+	CanTruncate           bool
+	RowIdIdx              int               // The array index position of the rowid column
+	PartitionTableIDs     []uint64          // Align array index with the partition number
+	PartitionIndexInBatch int               // The array index position of the partition expression column
+	PartitionSources      []engine.Relation // Align array index with the partition number
+	Source                engine.Relation
+	Ref                   *plan.ObjectRef
+	AddAffectedRows       bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
