@@ -39,6 +39,12 @@ const (
 	CmdCustomized
 )
 
+const (
+	IOET_WALTxnEntry         uint16 = 3000
+	IOET_WALTxnEntry_V1      uint16 = 1
+	IOET_WALTxnEntry_CurrVer        = IOET_WALTxnEntry_V1
+)
+
 func init() {
 	txnif.RegisterCmdFactory(CmdPointer, func(int16) txnif.TxnCmd {
 		return new(PointerCmd)
@@ -58,6 +64,18 @@ func init() {
 	txnif.RegisterCmdFactory(CmdTxnState, func(int16) txnif.TxnCmd {
 		return NewEmptyTxnStateCmd()
 	})
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnEntry,
+			Version: IOET_WALTxnEntry_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnEntry := NewTxnEmptyTxnEntry()
+			err := txnEntry.Unmarshal(b)
+			return txnEntry, err
+		},
+	)
 }
 
 type CustomizedCmd interface {
@@ -84,10 +102,14 @@ type DeleteBitmapCmd struct {
 	Bitmap *roaring.Bitmap
 }
 
-type TxnCmd struct {
-	version uint16
+type TxnEntry struct {
 	*ComposedCmd
 	*TxnCtx
+}
+
+type TxnCmd struct {
+	version uint16
+	*TxnEntry
 	Txn txnif.AsyncTxn
 }
 
@@ -155,18 +177,123 @@ func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd 
 	}
 }
 
-func NewTxnCmd() *TxnCmd {
-	return &TxnCmd{
-		ComposedCmd: NewComposedCmd(),
-		TxnCtx:      &TxnCtx{},
-	}
-}
-
-func NewEmptyTxnCmd() *TxnCmd {
-	return &TxnCmd{
+func NewTxnEmptyTxnEntry() *TxnEntry {
+	return &TxnEntry{
 		ComposedCmd: NewComposedCmd(),
 		TxnCtx:      NewEmptyTxnCtx(),
 	}
+}
+
+func (c *TxnEntry) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int64
+	sn, err = c.ComposedCmd.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+	if sn, err = objectio.WriteString(c.ID, w); err != nil {
+		return
+	}
+	n += sn
+	//start ts
+	if _, err = w.Write(c.StartTS[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	//prepare ts
+	if _, err = w.Write(c.PrepareTS[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	//participants
+	length := uint32(len(c.Participants))
+	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
+		return
+	}
+	n += 4
+	for _, p := range c.Participants {
+		if _, err = w.Write(types.EncodeUint64(&p)); err != nil {
+			return
+		}
+		n += 8
+	}
+	if sn, err = c.Memo.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
+	return
+}
+
+func (c *TxnEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	var cmd txnif.TxnCmd
+	cmd, sn, err = BuildCommandFrom(r)
+	if err != nil {
+		return
+	}
+	c.ComposedCmd = cmd.(*ComposedCmd)
+	n += sn
+	if c.ID, sn, err = objectio.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	// start timestamp
+	if _, err = r.Read(c.StartTS[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	// prepare timestamp
+	if _, err = r.Read(c.PrepareTS[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	// participants
+	num := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&num)); err != nil {
+		return
+	}
+	n += 4
+	c.Participants = make([]uint64, num)
+	for i := 0; i < int(num); i++ {
+		id := uint64(0)
+		if _, err = r.Read(types.EncodeUint64(&id)); err != nil {
+			break
+		} else {
+			c.Participants = append(c.Participants, id)
+			n += 8
+		}
+	}
+	if sn, err = c.Memo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
+	return
+
+}
+func (c *TxnEntry) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (c *TxnEntry) Unmarshal(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = c.ReadFrom(bbuf)
+	return err
+}
+
+func NewTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		TxnEntry: &TxnEntry{
+			ComposedCmd: NewComposedCmd(),
+			TxnCtx:      &TxnCtx{},
+		},
+	}
+}
+func NewEmptyTxnCmd() *TxnCmd {
+	return &TxnCmd{}
 }
 func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := c.GetType()
@@ -267,38 +394,7 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 2
 	var sn int64
-	sn, err = c.ComposedCmd.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
-	if sn, err = objectio.WriteString(c.ID, w); err != nil {
-		return
-	}
-	n += sn
-	//start ts
-	if _, err = w.Write(c.StartTS[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	//prepare ts
-	if _, err = w.Write(c.PrepareTS[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	//participants
-	length := uint32(len(c.Participants))
-	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
-		return
-	}
-	n += 4
-	for _, p := range c.Participants {
-		if _, err = w.Write(types.EncodeUint64(&p)); err != nil {
-			return
-		}
-		n += 8
-	}
-	if sn, err = c.Memo.WriteTo(w); err != nil {
+	if sn, err = c.TxnEntry.WriteTo(w); err != nil {
 		return
 	}
 	n += sn
@@ -310,44 +406,8 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 2
 	var sn int64
-	var cmd txnif.TxnCmd
-	cmd, sn, err = BuildCommandFrom(r)
-	if err != nil {
-		return
-	}
-	c.ComposedCmd = cmd.(*ComposedCmd)
-	n += sn
-	if c.ID, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	// start timestamp
-	if _, err = r.Read(c.StartTS[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	// prepare timestamp
-	if _, err = r.Read(c.PrepareTS[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	// participants
-	num := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&num)); err != nil {
-		return
-	}
-	n += 4
-	c.Participants = make([]uint64, num)
-	for i := 0; i < int(num); i++ {
-		id := uint64(0)
-		if _, err = r.Read(types.EncodeUint64(&id)); err != nil {
-			break
-		} else {
-			c.Participants = append(c.Participants, id)
-			n += 8
-		}
-	}
-	if sn, err = c.Memo.ReadFrom(r); err != nil {
+	c.TxnEntry = NewTxnEmptyTxnEntry()
+	if sn, err = c.TxnEntry.ReadFrom(r); err != nil {
 		return
 	}
 	n += sn
@@ -363,8 +423,15 @@ func (c *TxnCmd) Marshal() (buf []byte, err error) {
 	return
 }
 func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
-	bbuf := bytes.NewBuffer(buf)
-	_, err = c.ReadFrom(bbuf)
+	c.version = types.DecodeUint16(buf[:2])
+	codec := objectio.GetIOEntryCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnEntry,
+			Version: c.version,
+		},
+	)
+	entry, err := codec.Decode(buf[2:])
+	c.TxnEntry = entry.(*TxnEntry)
 	return err
 }
 func (c *TxnCmd) GetType() int16 { return CmdTxn }
