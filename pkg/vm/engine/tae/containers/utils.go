@@ -40,6 +40,12 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
+func ToCNBatch(dnBat *Batch) *batch.Batch {
+	cnBat := batch.New(true, dnBat.Attrs)
+	cnBat.Vecs = UnmarshalToMoVecs(dnBat.Vecs)
+	return cnBat
+}
+
 func ToDNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)

@@ -397,7 +397,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		name := objectio.BuildObjectName(uuid, 0)
 		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name)
 		assert.Nil(t, err)
-		_, err = writer.WriteBlock(bat)
+		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
@@ -4703,7 +4703,7 @@ func TestAlwaysUpdate(t *testing.T) {
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
-			_, err := writer.WriteBlock(bat)
+			_, err := writer.WriteBatch(containers.ToCNBatch(bat))
 			assert.Nil(t, err)
 		}
 		blocks, _, err := writer.Sync(context.Background())

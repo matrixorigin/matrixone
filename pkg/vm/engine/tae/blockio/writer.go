@@ -68,13 +68,6 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.pk = idx
 }
 
-func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	block, err = w.WriteBatch(bat)
-	return
-}
-
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
@@ -121,12 +114,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 	}
 	return block, nil
-}
-
-func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	return w.writer.Write(bat)
 }
 
 func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {

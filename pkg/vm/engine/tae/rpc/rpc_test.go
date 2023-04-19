@@ -105,7 +105,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		writer, err := blockio.NewBlockWriterNew(fs, objNames[i])
 		assert.Nil(t, err)
 		for i := 0; i < 50; i++ {
-			_, err := writer.WriteBlock(taeBats[offset+i])
+			_, err := writer.WriteBatch(containers.ToCNBatch(taeBats[offset+i]))
 			assert.Nil(t, err)
 			//offset++
 		}
@@ -276,7 +276,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		if i == 2 {
 			break
 		}
-		_, err := writer.WriteBlock(bat)
+		_, err := writer.WriteBatch(containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 	}
 	blocks, _, err := writer.Sync(context.Background())
@@ -302,7 +302,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	writer, err = blockio.NewBlockWriterNew(fs, objName2)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
-	_, err = writer.WriteBlock(taeBats[3])
+	_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[3]))
 	assert.Nil(t, err)
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Equal(t, 1, len(blocks))
@@ -468,7 +468,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	for _, bat := range hideBats {
 		taeBat := toTAEBatchWithSharedMemory(schema, bat)
 		//defer taeBat.Close()
-		_, err := writer.WriteBlockWithOutIndex(taeBat)
+		_, err := writer.WriteBatchWithOutIndex(containers.ToCNBatch(taeBat))
 		assert.Nil(t, err)
 	}
 	blocks, _, err = writer.Sync(context.Background())
