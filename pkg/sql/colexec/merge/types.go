@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,6 +33,23 @@ type Argument struct {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
-		arg.ctr.receiverListener = nil
+		listeners := arg.ctr.receiverListener
+		alive := len(listeners)
+		for alive != 0 {
+			chosen, value, ok := reflect.Select(listeners)
+			if !ok {
+				listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+				alive--
+				continue
+			}
+			pointer := value.UnsafePointer()
+			bat := (*batch.Batch)(pointer)
+			if bat == nil {
+				alive--
+				listeners = append(listeners[:chosen], listeners[chosen+1:]...)
+				continue
+			}
+			bat.Clean(proc.Mp())
+		}
 	}
 }

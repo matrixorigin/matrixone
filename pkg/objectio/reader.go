@@ -16,21 +16,23 @@ package objectio
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-type ObjectReader struct {
+type objectReaderV1 struct {
 	Object
 	ReaderOptions
-	oname   *ObjectName
-	metaExt *Extent
+	oname     *ObjectName
+	metaExt   *Extent
+	metaCache atomic.Pointer[objectMetaV1]
 }
 
-func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (*ObjectReader, error) {
-	reader := &ObjectReader{
+func newObjectReaderWithStrV1(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (*objectReaderV1, error) {
+	reader := &objectReaderV1{
 		Object: Object{
 			name: name,
 			fs:   fs,
@@ -42,14 +44,14 @@ func NewObjectReaderWithStr(name string, fs fileservice.FileService, opts ...Rea
 	return reader, nil
 }
 
-func NewObjectReader(
+func newObjectReaderV1(
 	oname *ObjectName,
 	metaExt *Extent,
 	fs fileservice.FileService,
 	opts ...ReaderOptionFunc,
-) (*ObjectReader, error) {
+) (*objectReaderV1, error) {
 	name := oname.String()
-	reader := &ObjectReader{
+	reader := &objectReaderV1{
 		Object: Object{
 			name: name,
 			fs:   fs,
@@ -63,33 +65,33 @@ func NewObjectReader(
 	return reader, nil
 }
 
-func (r *ObjectReader) GetObject() *Object {
+func (r *objectReaderV1) GetObject() *Object {
 	return &r.Object
 }
 
-func (r *ObjectReader) GetMetaExtent() *Extent {
+func (r *objectReaderV1) GetMetaExtent() *Extent {
 	return r.metaExt
 }
 
-func (r *ObjectReader) GetObjectName() *ObjectName {
+func (r *objectReaderV1) GetObjectName() *ObjectName {
 	return r.oname
 }
 
-func (r *ObjectReader) GetName() string {
+func (r *objectReaderV1) GetName() string {
 	return r.name
 }
 
-func (r *ObjectReader) CacheMetaExtent(ext *Extent) {
+func (r *objectReaderV1) CacheMetaExtent(ext *Extent) {
 	r.metaExt = ext
 }
 
-func (r *ObjectReader) ReadZM(
+func (r *objectReaderV1) ReadZM(
 	ctx context.Context,
 	blk uint16,
 	cols []uint16,
 	m *mpool.MPool,
 ) (zms []ZoneMap, err error) {
-	var meta ObjectMeta
+	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -98,50 +100,63 @@ func (r *ObjectReader) ReadZM(
 	return
 }
 
-func (r *ObjectReader) ReadMeta(
+func (r *objectReaderV1) ReadMeta(
 	ctx context.Context,
 	m *mpool.MPool,
-) (meta ObjectMeta, err error) {
-	return ReadObjectMeta(ctx, r.name, r.metaExt, r.noCache, r.fs)
+) (meta objectMetaV1, err error) {
+	if r.withMetaCache {
+		cache := r.metaCache.Load()
+		if cache != nil {
+			meta = *cache
+			return
+		}
+	}
+	if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
+		return
+	}
+	if r.withMetaCache {
+		r.metaCache.Store(&meta)
+	}
+	return
 }
 
-func (r *ObjectReader) ReadOneBlock(
+func (r *objectReaderV1) ReadOneBlock(
 	ctx context.Context,
 	idxs []uint16,
 	blk uint16,
 	m *mpool.MPool,
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
-	var meta ObjectMeta
+	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
 	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, factory)
 }
 
-func (r *ObjectReader) ReadAll(
+func (r *objectReaderV1) ReadAll(
 	ctx context.Context,
 	idxs []uint16,
 	m *mpool.MPool,
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
-	var meta ObjectMeta
+	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noCache, m, r.fs, factory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, factory)
 }
 
-func (r *ObjectReader) ReadOneBF(
+func (r *objectReaderV1) ReadOneBF(
 	ctx context.Context,
 	blk uint16,
 ) (bf StaticFilter, err error) {
-	var meta ObjectMeta
+	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noCache, r.fs)
+	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs)
 	if err != nil {
 		return
 	}
@@ -149,7 +164,22 @@ func (r *ObjectReader) ReadOneBF(
 	return
 }
 
-func (r *ObjectReader) ReadExtent(
+func (r *objectReaderV1) ReadAllBF(
+	ctx context.Context,
+) (bfs []StaticFilter, size uint32, err error) {
+	var meta objectMetaV1
+	if meta, err = r.ReadMeta(ctx, nil); err != nil {
+		return
+	}
+	extent := meta.BlockHeader().BFExtent()
+	if bfs, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
+		return
+	}
+	size = extent.OriginSize()
+	return
+}
+
+func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
 ) ([]byte, error) {
@@ -157,22 +187,22 @@ func (r *ObjectReader) ReadExtent(
 		ctx,
 		r.name,
 		&extent,
-		r.noCache,
+		r.noLRUCache,
 		r.fs,
-		decompressConstructorFactory)
+		genericConstructorFactory)
 	if err != nil {
 		return nil, err
 	}
 	return v.([]byte), nil
 }
 
-func (r *ObjectReader) ReadMultiBlocks(
+func (r *objectReaderV1) ReadMultiBlocks(
 	ctx context.Context,
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
 	constructor CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
-	var meta ObjectMeta
+	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -187,10 +217,10 @@ func (r *ObjectReader) ReadMultiBlocks(
 		constructor)
 }
 
-func (r *ObjectReader) ReadAllMeta(
+func (r *objectReaderV1) ReadAllMeta(
 	ctx context.Context,
 	m *mpool.MPool,
-) (ObjectMeta, error) {
+) (objectMetaV1, error) {
 	if r.metaExt == nil {
 		header, err := r.ReadHeader(ctx, m)
 		if err != nil {
@@ -202,9 +232,9 @@ func (r *ObjectReader) ReadAllMeta(
 	return r.ReadMeta(ctx, m)
 }
 
-func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
+func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noCache, r.fs, noDecompressConstructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, genericConstructorFactory)
 	if err != nil {
 		return
 	}
@@ -213,14 +243,23 @@ func (r *ObjectReader) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header
 }
 
 type ReaderOptions struct {
-	// noCache true means NOT cache IOVector in FileService's cache
-	noCache bool
+	// noLRUCache true means NOT cache IOVector in FileService's cache
+	noLRUCache bool
+	// withMetaCache true means cache objectMetaV1 in the Reader
+	// Note: if withMetaCache is true, cleanup is needed
+	withMetaCache bool
 }
 
 type ReaderOptionFunc func(opt *ReaderOptions)
 
-func WithNoCacheReader(noCache bool) ReaderOptionFunc {
+func WithNoLRUCacheOption(noLRUCache bool) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.noCache = noCache
+		opt.noLRUCache = noLRUCache
+	})
+}
+
+func WithLocalMetaCacheOption(withMetaCache bool) ReaderOptionFunc {
+	return ReaderOptionFunc(func(opt *ReaderOptions) {
+		opt.withMetaCache = withMetaCache
 	})
 }

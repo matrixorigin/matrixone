@@ -298,6 +298,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
+	err := v.MarshalBinaryWithBuffer(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 
 	// write class
 	buf.WriteByte(uint8(v.class))
@@ -332,7 +340,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 	// write nspLen, nsp
 	nspData, err := v.nsp.Show()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	nspLen := uint32(len(nspData))
 	buf.Write(types.EncodeUint32(&nspLen))
@@ -340,7 +348,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 		buf.Write(nspData)
 	}
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {

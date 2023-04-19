@@ -78,6 +78,12 @@ func (zm ZM) String() string {
 	return b.String()
 }
 
+func (zm ZM) Clone() ZM {
+	cloned := make([]byte, ZMSize)
+	copy(cloned[:], zm[:])
+	return cloned
+}
+
 func (zm ZM) GetType() types.T {
 	return types.T(zm[63])
 }
