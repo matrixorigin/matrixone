@@ -3,10 +3,10 @@ create user if not exists u_a identified by 'a111', u_b identified by 'b111' def
 create user u_c identified by 'a111', u_d identified by 'b111';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-root    111
-dump    111
-u_a    a111
-u_b    b111
-u_c    a111
-u_d    b111
+u_a    *8CEE9E1B21098E7CB4691717A980257DC4F93F23
+u_b    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
+u_c    *8CEE9E1B21098E7CB4691717A980257DC4F93F23
+u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
+root    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
+dump    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
 drop user if exists u_a,u_b,u_c,u_d;
