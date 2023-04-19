@@ -5999,3 +5999,57 @@ func TestCompactLargeTable(t *testing.T) {
 
 	tae.checkRowsByScan(10, true)
 }
+
+func TestCommitS3Blocks(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(60, 3)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 200)
+	datas := data.Split(10)
+	tae.createRelAndAppend(datas[0], true)
+	datas = datas[1:]
+
+	var objNames []objectio.ObjectName
+	var blkMetas []objectio.Location
+	for i, bat := range datas {
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		objNames = append(objNames, name)
+		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, objNames[i])
+		assert.Nil(t, err)
+		for i := 0; i < 50; i++ {
+			_, err := writer.WriteBatch(containers.ToCNBatch(bat))
+			assert.Nil(t, err)
+			//offset++
+		}
+		blocks, _, err := writer.Sync(context.Background())
+		assert.Nil(t, err)
+		assert.Equal(t, 50, len(blocks))
+		for _, blk := range blocks {
+			metaLoc := blockio.EncodeLocation(
+				writer.GetName(),
+				blk.GetExtent(),
+				uint32(bat.Vecs[0].Length()),
+				blk.GetID())
+			assert.Nil(t, err)
+			blkMetas = append(blkMetas, metaLoc)
+		}
+	}
+
+	for _, meta := range blkMetas {
+		txn, rel := tae.getRelation()
+		rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		assert.NoError(t, txn.Commit())
+	}
+	for _, meta := range blkMetas {
+		txn, rel := tae.getRelation()
+		rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		assert.Error(t, txn.Commit())
+	}
+}
