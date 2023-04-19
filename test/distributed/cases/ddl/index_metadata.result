@@ -21,6 +21,7 @@ from
 where  `tbl`.`relname` = 't1';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 deptno    UNIQUE    deptno    1    0        t1    deptno    1    null
+PRIMARY    PRIMARY    PRIMARY    1    0        t1    __mo_fake_pk_col    1    null
 drop table if exists t2;
 create table t2(
 empno int unsigned auto_increment,
@@ -78,6 +79,7 @@ where  `tbl`.`relname` = 't3';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 empno    UNIQUE    empno    1    0        t3    empno    1    null
 empno    UNIQUE    empno    1    0        t3    ename    2    null
+PRIMARY    PRIMARY    PRIMARY    1    0        t3    __mo_fake_pk_col    1    null
 drop table if exists t4;
 create table t4(
 empno int unsigned,
@@ -108,6 +110,7 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 empno    MULTIPLE    empno    1    0        t4    empno    1    null
 empno    MULTIPLE    empno    1    0        t4    ename    2    null
 empno    MULTIPLE    empno    1    0        t4    job    3    null
+PRIMARY    PRIMARY    PRIMARY    1    0        t4    __mo_fake_pk_col    1    null
 drop table if exists t5;
 create table t5(
 empno int unsigned,
@@ -163,6 +166,7 @@ from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
+PRIMARY    PRIMARY    PRIMARY    1    0        t6    __mo_fake_pk_col    1    null
 drop table if exists t7;
 create table t7(
 col1 int unsigned,
@@ -195,6 +199,7 @@ col1    UNIQUE    col1    1    0        t7    col1    1    null
 col1    UNIQUE    col1    1    0        t7    col2    2    null
 col3    UNIQUE    col3    1    0        t7    col3    1    null
 col3    UNIQUE    col3    1    0        t7    col6    2    null
+PRIMARY    PRIMARY    PRIMARY    1    0        t7    __mo_fake_pk_col    1    null
 drop table if exists t8;
 create table t8(
 empno int unsigned primary key,
@@ -341,6 +346,7 @@ from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't11';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
+PRIMARY    PRIMARY    PRIMARY    1    0        t11    __mo_fake_pk_col    1    null
 create index x11 ON t11(a) comment 'xxxxxxx';
 create index x12 ON t11(b, c) comment 'yyyyyyyyy';
 select
@@ -358,6 +364,7 @@ from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't11';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
+PRIMARY    PRIMARY    PRIMARY    1    0        t11    __mo_fake_pk_col    1    null
 x11    MULTIPLE    x11    1    0    xxxxxxx    t11    a    1    null
 x12    MULTIPLE    x12    1    0    yyyyyyyyy    t11    b    1    null
 x12    MULTIPLE    x12    1    0    yyyyyyyyy    t11    c    2    null
@@ -378,6 +385,7 @@ from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't11';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
+PRIMARY    PRIMARY    PRIMARY    1    0        t11    __mo_fake_pk_col    1    null
 drop table t11;
 drop table if exists t12;
 create table t12(a int, b int,c varchar(20), primary key(a));

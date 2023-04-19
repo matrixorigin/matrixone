@@ -17,9 +17,11 @@ package plan
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -513,7 +515,8 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		return nil
 	}
 
-	if tableDef.Pkey != nil {
+	if tableDef.Pkey != nil &&
+		tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		pKeys := make(map[string]int)
 		if dup, dupName := stringSliceToMap(tableDef.Pkey.Names, pKeys); dup {
 			return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
@@ -653,7 +656,8 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 	hasUniqueKey := false
 	var primaryKey *plan.PrimaryKeyDef
 
-	if tableDef.Pkey != nil {
+	if tableDef.Pkey != nil &&
+		tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		hasPrimaryKey = true
 		primaryKey = tableDef.Pkey
 	}
