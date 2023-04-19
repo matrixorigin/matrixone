@@ -30,12 +30,14 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1288,6 +1290,79 @@ func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, s
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func doShowBackendServers(ses *Session) error {
+	// Construct the columns.
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetName("UUID")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2.SetName("Address")
+
+	col3 := new(MysqlColumn)
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3.SetName("Labels")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+
+	var filterLabels = func(labels map[string]string) map[string]string {
+		var reservedLabels = map[string]struct{}{
+			"os_user":      {},
+			"os_sudouser":  {},
+			"program_name": {},
+		}
+		for k := range labels {
+			if _, ok := reservedLabels[k]; ok || strings.HasPrefix(k, "_") {
+				delete(labels, k)
+			}
+		}
+		return labels
+	}
+
+	tenant := ses.GetTenantInfo().GetTenant()
+	var se clusterservice.Selector
+	if tenant != sysAccountName {
+		labels := ses.GetMysqlProtocol().GetConnectAttrs()
+		labels["account"] = tenant
+		se = clusterservice.NewSelector().SelectByLabel(
+			filterLabels(labels), clusterservice.EQ)
+	}
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetCNService(se, func(s metadata.CNService) bool {
+		row := make([]interface{}, 3)
+		row[0] = s.ServiceID
+		row[1] = s.SQLAddress
+		var labelStr string
+		for key, value := range s.Labels {
+			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
+		}
+		row[2] = labelStr
+		mrs.AddRow(row)
+		return true
+	})
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	if err := doShowBackendServers(ses); err != nil {
+		return err
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
@@ -2672,6 +2747,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Load:
 			if st.Local {
 				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
+			}
+		case *tree.ShowBackendServers:
+			selfHandle = true
+			if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
+				goto handleFailed
 			}
 		}
 
