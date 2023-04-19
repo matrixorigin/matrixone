@@ -34,9 +34,10 @@ const (
 	CmdAppend
 	CmdDelete
 	CmdComposed
-	CmdTxn
 	CmdTxnState
 	CmdCustomized
+
+	CmdTxn = int16(IOET_WALTxnEntry)
 )
 
 const (
@@ -108,6 +109,7 @@ type TxnEntry struct {
 }
 
 type TxnCmd struct {
+	typ     uint16
 	version uint16
 	*TxnEntry
 	Txn txnif.AsyncTxn
@@ -286,6 +288,8 @@ func (c *TxnEntry) Unmarshal(buf []byte) (err error) {
 
 func NewTxnCmd() *TxnCmd {
 	return &TxnCmd{
+		typ:     IOET_WALTxnEntry,
+		version: IOET_WALTxnEntry_CurrVer,
 		TxnEntry: &TxnEntry{
 			ComposedCmd: NewComposedCmd(),
 			TxnCtx:      &TxnCtx{},
@@ -294,6 +298,12 @@ func NewTxnCmd() *TxnCmd {
 }
 func NewEmptyTxnCmd() *TxnCmd {
 	return &TxnCmd{}
+}
+func NewEmptyTxnCmdWithVersion(ver uint16) *TxnCmd {
+	return &TxnCmd{
+		typ:     IOET_WALTxnEntry,
+		version: ver,
+	}
 }
 func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := c.GetType()
@@ -434,7 +444,7 @@ func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
 	c.TxnEntry = entry.(*TxnEntry)
 	return err
 }
-func (c *TxnCmd) GetType() int16 { return CmdTxn }
+func (c *TxnCmd) GetType() int16 { return int16(IOET_WALTxnEntry) }
 func (c *TxnCmd) Desc() string {
 	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
 }
