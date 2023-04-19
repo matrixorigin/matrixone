@@ -45,11 +45,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewTag()
-	bindCtx.aggregateTag = builder.genNewTag()
-	bindCtx.projectTag = builder.genNewTag()
 
+	bindCtx := NewBindContext(builder, nil)
 	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err

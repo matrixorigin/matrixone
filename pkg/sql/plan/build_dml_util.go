@@ -47,7 +47,9 @@ func buildInsertPlans(
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 	}
-	err = makeInsertPlan(ctx, builder, bindCtx, objRef, tableDef, sourceStep, true)
+
+	insertBindCtx := NewBindContext(builder, nil)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, sourceStep, true)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +401,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 		// if table have fk. then append join node & filter node
 		if len(tableDef.Fkeys) > 0 {
-			lastNodeId, err = appendJoinNodeForParentFkCheck(builder, bindCtx, tableDef, lastNodeId)
+			lastNodeId, bindCtx, err = appendJoinNodeForParentFkCheck(builder, tableDef, lastNodeId)
 			if err != nil {
 				return err
 			}
@@ -542,7 +544,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	return nil
 }
 
-func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, baseNodeId int32) (int32, error) {
+func appendJoinNodeForParentFkCheck(builder *QueryBuilder, tableDef *TableDef, baseNodeId int32) (int32, *BindContext, error) {
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 	name2pos := make(map[string]int)
@@ -556,6 +558,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	baseNodeTag := baseNode.BindingTags[0]
 	lastNodeId := baseNodeId
 	projectList := getProjectionByPreProjection(baseNode.ProjectList, baseNodeTag)
+	var returnCtx *BindContext
 
 	for _, fk := range tableDef.Fkeys {
 		_, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
@@ -569,12 +572,12 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 
 		// append table scan node
-		joinCtx := NewBindContext(builder, bindCtx)
-		rightCtx := NewBindContext(builder, joinCtx)
+		returnCtx = NewBindContext(builder, nil)
+		rightCtx := NewBindContext(builder, returnCtx)
 		astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
 		rightId, err := builder.buildTable(astTblName, rightCtx, -1, nil)
 		if err != nil {
-			return -1, err
+			return -1, nil, err
 		}
 		rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 
@@ -606,7 +609,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 					}
 					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
-						return -1, err
+						return -1, nil, err
 					}
 					joinConds[i] = condExpr
 					break
@@ -628,21 +631,21 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		// append join node
 		leftCtx := builder.ctxByNode[lastNodeId]
-		err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
+		err = returnCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 		if err != nil {
-			return -1, err
+			return -1, nil, err
 		}
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{lastNodeId, rightId},
 			JoinType: plan.Node_LEFT,
 			OnList:   joinConds,
-		}, joinCtx)
-		bindCtx.binder = NewTableBinder(builder, bindCtx)
+		}, returnCtx)
+		returnCtx.binder = NewTableBinder(builder, returnCtx)
 	}
 
 	// append projection node. to make sure we can get the columns
-	projectCtx := NewBindContext(builder, bindCtx)
+	projectCtx := NewBindContext(builder, returnCtx)
 	lastTag := builder.genNewTag()
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -651,7 +654,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		BindingTags: []int32{lastTag},
 	}, projectCtx)
 
-	return lastNodeId, nil
+	return lastNodeId, returnCtx, nil
 }
 
 func getPkPos(tableDef *TableDef) int {
@@ -660,7 +663,7 @@ func getPkPos(tableDef *TableDef) int {
 	}
 	pkName := tableDef.Pkey.PkeyColName
 	if pkName == catalog.CPrimaryKeyColName {
-		return len(tableDef.Cols)
+		return len(tableDef.Cols) - 1
 	}
 	for i, col := range tableDef.Cols {
 		if col.Name == pkName {
