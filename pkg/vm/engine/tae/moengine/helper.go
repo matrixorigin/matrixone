@@ -158,7 +158,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			// When collecting logtail, it uses schema.GetPrimaryKey.
 			// Can't identify fake pk with column.flag. Column.flag is not ready in 0.8.0.
 			// TODO: Use column.flag instead of column.name to idntify fake pk.
-			if defVal.Attr.Name == "__mo_fake_pk_col" {
+			if catalog.IsFakePkName(defVal.Attr.Name) {
 				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
 					return
 				}

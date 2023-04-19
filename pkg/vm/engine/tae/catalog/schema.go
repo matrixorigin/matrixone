@@ -39,6 +39,14 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
+const (
+	FakePKName = "__mo_fake_pk_col"
+)
+
+func IsFakePkName(name string) bool {
+	return name == FakePKName
+}
+
 type ColDef struct {
 	Name          string
 	Idx           int // indicates its position in all coldefs
@@ -167,7 +175,7 @@ func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey()
 // Can't identify fake pk with column.flag. Column.flag is not ready in 0.8.0.
 // TODO: Use column.flag instead of column.name to idntify fake pk.
 func (s *Schema) getFakePrimaryKey() *ColDef {
-	idx, ok := s.NameIndex["__mo_fake_pk_col"]
+	idx, ok := s.NameIndex[FakePKName]
 	if !ok {
 		logutil.Infof("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
