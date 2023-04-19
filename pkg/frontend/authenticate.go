@@ -2337,8 +2337,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	var user *tree.User
 	var userName string
 	var hostName string
-	var passwaord string
+	var password string
 	var erArray []ExecResult
+	var encryption string
 	account := ses.GetTenantInfo()
 	currentUser := account.User
 
@@ -2360,14 +2361,18 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	if err != nil {
 		return err
 	}
-	user = au.Users[0]
-	userName = user.Username
-	hostName = user.Hostname
-	passwaord = user.AuthOption.Str
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	user = au.Users[0]
+	userName = user.Username
+	hostName = user.Hostname
+	password = user.AuthOption.Str
+	if len(password) == 0 {
+		err = moerr.NewInternalError(ctx, "password is empty string")
+		goto handleFailed
+	}
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	if err != nil {
@@ -2429,8 +2434,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 		goto handleFailed
 	}
 
+	//encryption the password
+	encryption = HashPassWord(password)
+
 	if execResultArrayHasData(erArray) {
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2443,7 +2451,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			goto handleFailed
 		}
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, passwaord, userName)
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2604,7 +2612,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			}
 
 			//2, update the password
-			sql, err = getSqlForUpdatePasswordOfUser(ctx, aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			//encryption the password
+			encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
 			if err != nil {
 				goto handleFailed
 			}
@@ -6477,8 +6487,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 		defaultPassword = d
 	}
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	//encryption the password
+	encryption := HashPassWord(defaultPassword)
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
@@ -6824,6 +6837,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		return err
 	}
+	//encryption the password
+	encryption := HashPassWord(password)
 	status := rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
@@ -6832,7 +6847,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, encryption, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -7102,12 +7117,15 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			goto handleFailed
 		}
 
+		//encryption the password
+		encryption := HashPassWord(password)
+
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		host = user.Hostname
 		if len(user.Hostname) == 0 || user.Hostname == "%" {
 			host = rootHost
 		}
-		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, password, status,
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
