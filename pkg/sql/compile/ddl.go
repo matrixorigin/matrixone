@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 var (
@@ -79,14 +80,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
+		case Merge:
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				_, err = cs.Delete(c)
+				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -158,14 +158,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
+		case Merge:
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				_, err = cs.Delete(c)
+				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
 		case Update:
 			go func(cs *Scope) {
@@ -773,14 +772,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
+		case Merge:
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				_, err = cs.Delete(c)
+				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -1115,14 +1113,13 @@ func (s *Scope) DropTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
+		case Merge:
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				_, err = cs.Delete(c)
+				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
 		}
 	}

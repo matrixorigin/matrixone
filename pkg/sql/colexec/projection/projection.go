@@ -16,6 +16,7 @@ package projection
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -76,7 +77,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	}
 	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	// bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

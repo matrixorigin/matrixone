@@ -179,7 +179,9 @@ func (bat *Batch) Size() int {
 	var size int
 
 	for _, vec := range bat.Vecs {
-		size += vec.Size()
+		if vec != nil {
+			size += vec.Size()
+		}
 	}
 	return size
 }
