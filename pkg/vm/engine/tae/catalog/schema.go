@@ -503,15 +503,15 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 
 func (s *Schema) AppendFakePKCol(name string, typ types.Type) error {
 	def := &ColDef{
-		Name:        name,
-		Type:        typ,
-		SortIdx:     -1,
-		NullAbility: true,
-		FakePK: true,
-		Primary: true,
-		Hidden: true,
+		Name:          name,
+		Type:          typ,
+		SortIdx:       -1,
+		NullAbility:   true,
+		FakePK:        true,
+		Primary:       true,
+		Hidden:        true,
 		AutoIncrement: true,
-		ClusterBy: false,
+		ClusterBy:     false,
 	}
 	return s.AppendColDef(def)
 }
@@ -671,6 +671,12 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 			return moerr.NewInvalidInputNoCtx("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
+		// Fake pk
+		if def.Name == FakePKName {
+			def.FakePK = true
+			def.SortKey = false
+			def.SortIdx = -1
+		}
 		if def.IsSortKey() {
 			sortColIdx = append(sortColIdx, idx)
 		}
