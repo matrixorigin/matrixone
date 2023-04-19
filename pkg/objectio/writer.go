@@ -142,6 +142,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 
 	metadata := new(bytes.Buffer)
+	writeIoHeader(IOET_ObjMeta, IOET_ObjectMeta_CurrVer, metadata)
 	metadata.Write(objectMeta)
 	metadata.Write(blockIndex)
 	// writer block metadata
@@ -169,9 +170,8 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 
 func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([]byte, Extent, error) {
 	bloomFilter := new(bytes.Buffer)
-	bloomFilter.Write([]byte(uint16(IOET_BF)))
-	bloomFilter.Write([]byte(uint16(IOET_BloomFilter_CurrVer)))
-	bloomFilterStart := uint32(len(bloomFilter.Bytes()))
+	writeIoHeader(IOET_BF, IOET_BloomFilter_CurrVer, bloomFilter)
+	bloomFilterStart := uint32(0)
 	bloomFilterIndex := BuildBlockIndex(blockCount)
 	bloomFilterIndex.SetBlockCount(blockCount)
 	bloomFilterStart += bloomFilterIndex.Length()
@@ -189,9 +189,8 @@ func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([
 
 func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {
 	zoneMapArea := new(bytes.Buffer)
-	zoneMapArea.Write([]byte(uint16(IOET_ZM)))
-	zoneMapArea.Write([]byte(uint16(IOET_ZoneMap_CurrVer)))
-	zoneMapAreaStart := uint32(len(zoneMapArea.Bytes()))
+	writeIoHeader(IOET_ZM, IOET_ZoneMap_CurrVer, zoneMapArea)
+	zoneMapAreaStart := uint32(0)
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
 	zoneMapAreaIndex.SetBlockCount(blockCount)
 	zoneMapAreaStart += zoneMapAreaIndex.Length()
@@ -356,8 +355,7 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 	var buf bytes.Buffer
 	for i, vec := range bat.Vecs {
 		buf.Reset()
-		buf.Write([]byte(uint16(IOET_ColData)))
-		buf.Write([]byte(uint16(IOET_ColumnData_CurrVer)))
+		writeIoHeader(IOET_ColData, IOET_ColumnData_CurrVer, &buf)
 		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
 			return err

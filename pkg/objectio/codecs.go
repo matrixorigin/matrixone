@@ -21,7 +21,6 @@ const (
 	IOET_ObjMeta = 1
 	IOET_ColData = 2
 	IOET_BF      = 3
-	IOET_BlkObj  = 4
 	IOET_ZM      = 4
 )
 

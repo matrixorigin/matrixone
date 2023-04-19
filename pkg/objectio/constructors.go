@@ -69,16 +69,16 @@ func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConst
 			return buf, size, err
 		}
 
-		version, typ := getVersionType(buf)
-		codec := GetIOEntryCodec(IOEntryHeader{version, typ})
+		typ, version := getVersionType(buf)
+		codec := GetIOEntryCodec(IOEntryHeader{typ, version})
 		if codec.NoUnmarshal() {
-			return buf, size, err
+			return buf[4:], size - 4, err
 		}
 		vec, err := codec.decFn(buf[4:])
 		if err != nil {
 			return nil, 0, err
 		}
-		return vec, size, nil
+		return vec, size - 4, nil
 	}
 }
 

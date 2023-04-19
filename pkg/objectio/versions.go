@@ -48,6 +48,8 @@ const (
 func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V1}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, nil)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
 }
 
 func EncodeColumnDataV1(ioe IOEntry) (buf []byte, err error) {
@@ -60,4 +62,8 @@ func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
 		return
 	}
 	return vec, err
+}
+
+func EncodeObjectDataV1(ioe IOEntry) (buf []byte, err error) {
+	return ioe.MarshalBinary()
 }

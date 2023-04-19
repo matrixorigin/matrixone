@@ -189,7 +189,7 @@ func (r *objectReaderV1) ReadExtent(
 		&extent,
 		r.noLRUCache,
 		r.fs,
-		genericConstructorFactory)
+		constructorFactory)
 	if err != nil {
 		return nil, err
 	}

@@ -153,7 +153,6 @@ func BuildBlockMeta(count uint16) BlockObject {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	meta := BlockObject(buf)
-	meta.BlockHeader().setType(IOET_BlkObj)
 	return meta
 }
 
