@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,13 +29,15 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" anti join ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
+
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	return nil
+	ap.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Conditions[0])
+
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -141,8 +142,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		return nil
 	}
 
-	ap.ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err
 	}
 
@@ -206,22 +206,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.executorForVecs {
+		vec, err := ctr.executorForVecs[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
-		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
 	}
 	return nil
 }

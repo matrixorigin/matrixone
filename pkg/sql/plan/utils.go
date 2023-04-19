@@ -946,12 +946,17 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	vec, err := colexec.EvalExpr(bat, proc, e)
+
+	executor, err := colexec.NewExpressionExecutor(proc, e)
+	if err != nil {
+		return nil, err
+	}
+	vec, err := executor.Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
 	c := rule.GetConstantValue(vec, false)
-	vec.Free(proc.Mp())
+	executor.Free()
 	if c == nil {
 		return e, nil
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,8 +45,8 @@ type container struct {
 
 	bat *batch.Batch
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executorForVecs []colexec.ExpressionExecutor
+	vecs            []*vector.Vector
 
 	mp *hashmap.JoinMap
 }
@@ -65,7 +66,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 	}
 }
@@ -84,11 +85,8 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
-		}
+func (ctr *container) cleanEvalVectors() {
+	for i := range ctr.executorForVecs {
+		ctr.executorForVecs[i].Free()
 	}
 }

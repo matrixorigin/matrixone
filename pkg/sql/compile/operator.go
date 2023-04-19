@@ -917,11 +917,16 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 */
 
 func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &limit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
@@ -937,8 +942,15 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			if len(f.F.Args) > 1 {
+				executor, err := colexec.NewExpressionExecutor(proc, f.F.Args[len(f.F.Args)-1])
+				if err != nil {
+					panic(err)
+				}
 				// vec is separator
-				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
+				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+				if err != nil {
+					panic(err)
+				}
 				sepa := vec.GetStringAt(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
@@ -946,6 +958,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					Separator: sepa,
 					OrderId:   int32(i),
 				}
+				executor.Free()
 				lenMultiAggs++
 				continue
 			}
@@ -1084,22 +1097,32 @@ func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
 }
 
 func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Offset)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &mergeoffset.Argument{
 		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
 func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &mergelimit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}

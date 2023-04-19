@@ -119,12 +119,19 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	ret, err := colexec.EvalExpr(bat, proc, funExpr)
+
+	executor, err := colexec.NewExpressionExecutor(proc, funExpr)
 	if err != nil {
 		return false, 0
 	}
-	list := vector.MustFixedCol[int64](ret)
-	return true, uint64(list[0])
+	ret, err := executor.Eval(proc, []*batch.Batch{bat})
+	if err != nil {
+		return false, 0
+	}
+	value := vector.MustFixedCol[int64](ret)[0]
+	executor.Free()
+
+	return true, uint64(value)
 }
 
 func compPkCol(colName string, pkName string) bool {

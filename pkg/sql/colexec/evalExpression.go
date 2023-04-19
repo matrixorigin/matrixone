@@ -38,6 +38,17 @@ type ExpressionExecutor interface {
 	Free()
 }
 
+func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
+	executors = make([]ExpressionExecutor, len(planExprs))
+	for i := range executors {
+		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return executors, err
+}
+
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
 	expr := planExpr.Expr
 	switch t := expr.(type) {
@@ -176,6 +187,9 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 }
 
 func (expr *FunctionExpressionExecutor) Free() {
+	if expr.resultVector == nil {
+		return
+	}
 	vec := expr.resultVector.GetResultVector()
 	vec.Free(expr.m)
 	for _, p := range expr.parameterExecutor {
@@ -207,6 +221,9 @@ func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*b
 }
 
 func (expr *FixedVectorExpressionExecutor) Free() {
+	if expr.resultVector == nil {
+		return
+	}
 	expr.resultVector.Free(expr.m)
 }
 

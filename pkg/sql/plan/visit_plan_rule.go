@@ -348,7 +348,8 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 	if c, ok := expr.Expr.(*plan.Expr_C); ok {
 		c.C.Src = e
 	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
-		vec, err := colexec.EvalExpr(r.bat, r.proc, expr)
+		executor, err := colexec.NewExpressionExecutor(r.proc, expr)
+		vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
 		if err != nil {
 			return nil, err
 		}
@@ -358,6 +359,7 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 		expr.Expr = &plan.Expr_C{
 			C: constValue,
 		}
+		executor.Free()
 	}
 	return expr, err
 }
@@ -428,7 +430,11 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 	case *plan.Expr_C:
 		if exprImpl.C.Src != nil {
 			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_F); ok {
-				vec, err := colexec.EvalExpr(r.bat, r.proc, exprImpl.C.Src)
+				executor, err := colexec.NewExpressionExecutor(r.proc, exprImpl.C.Src)
+				if err != nil {
+					return nil, err
+				}
+				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
 				if err != nil {
 					return nil, err
 				}

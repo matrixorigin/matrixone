@@ -581,6 +581,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	colsData := node.RowsetData.Cols
 	rowCount := len(colsData[0].Data)
 	bat := batch.NewWithSize(colCount)
+
 	for i := 0; i < colCount; i++ {
 		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
 		if err != nil {
@@ -1302,25 +1303,43 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		vec, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		executor, err := colexec.NewExpressionExecutor(c.proc, n.Limit)
 		if err != nil {
 			panic(err)
 		}
-		defer vec.Free(c.proc.Mp())
+		vec, err := executor.Eval(c.proc, []*batch.Batch{constBat})
+		if err != nil {
+			panic(err)
+		}
+		defer executor.Free()
 		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
+
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
+
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
-		vec1, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		// get limit
+		executor1, err := colexec.NewExpressionExecutor(c.proc, n.Limit)
 		if err != nil {
 			panic(err)
 		}
-		defer vec1.Free(c.proc.Mp())
-		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
+		vec1, err := executor1.Eval(c.proc, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
-		defer vec2.Free(c.proc.Mp())
+		defer executor1.Free()
+
+		// get offset
+		executor2, err := colexec.NewExpressionExecutor(c.proc, n.Offset)
+		if err != nil {
+			panic(err)
+		}
+		vec2, err := executor2.Eval(c.proc, []*batch.Batch{constBat})
+		if err != nil {
+			panic(err)
+		}
+		defer executor2.Free()
+
 		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
@@ -1328,14 +1347,19 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			return c.compileOffset(n, c.compileTop(n, topN, ss))
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
+
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
+
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
 		return c.compileLimit(n, ss)
+
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
 		return c.compileOffset(n, ss)
+
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0: // limit and offset
 		return c.compileLimit(n, c.compileOffset(n, ss))
+
 	default:
 		return ss
 	}
@@ -2104,8 +2128,18 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	bat.Zs = []int64{1}
 	defer bat.Clean(proc.Mp())
 
-	for _, e := range exprs {
-		tmp, err := colexec.EvalExpr(bat, proc, e)
+	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, e := range executors {
+			e.Free()
+		}
+	}()
+
+	for i, executor := range executors {
+		tmp, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return nil, err
 		}
@@ -2153,7 +2187,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		case types.T_uuid:
 			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", exprs[i]))
 		}
 	}
 	return vec, nil

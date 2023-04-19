@@ -99,7 +99,13 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if !IsConstant(e) {
 		return e
 	}
-	vec, err := colexec.EvalExpr(r.bat, proc, e)
+	executor, err := colexec.NewExpressionExecutor(proc, e)
+	if err != nil {
+		return e
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{r.bat})
 	if err != nil {
 		return e
 	}
