@@ -349,13 +349,15 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 
 	block := blockData{meta: blockMeta}
 	var data []byte
+	var buf bytes.Buffer
 	for i, vec := range bat.Vecs {
-		buf, err := vec.MarshalBinary()
+		buf.Reset()
+		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
 			return err
 		}
 		var ext Extent
-		if data, ext, err = w.WriteWithCompress(0, buf); err != nil {
+		if data, ext, err = w.WriteWithCompress(0, buf.Bytes()); err != nil {
 			return err
 		}
 		block.data = append(block.data, data)
