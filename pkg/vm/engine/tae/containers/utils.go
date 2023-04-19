@@ -32,7 +32,7 @@ func UnmarshalToMoVec(vec Vector) *movec.Vector {
 	return vec.GetDownstreamVector()
 }
 
-func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
+func ToCNVecs(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
 		movecs[i] = UnmarshalToMoVec(vecs[i])
@@ -42,7 +42,7 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 
 func ToCNBatch(dnBat *Batch) *batch.Batch {
 	cnBat := batch.New(true, dnBat.Attrs)
-	cnBat.Vecs = UnmarshalToMoVecs(dnBat.Vecs)
+	cnBat.Vecs = ToCNVecs(dnBat.Vecs)
 	return cnBat
 }
 

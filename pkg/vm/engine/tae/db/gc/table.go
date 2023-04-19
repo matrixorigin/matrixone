@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -331,9 +330,7 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 		return nil, err
 	}
 	for i := range bats {
-		bat := batch.New(true, bats[i].Attrs)
-		bat.Vecs = containers.UnmarshalToMoVecs(bats[i].Vecs)
-		if _, err := writer.Write(bat); err != nil {
+		if _, err := writer.Write(containers.ToCNBatch(bats[i])); err != nil {
 			return nil, err
 		}
 	}
@@ -353,9 +350,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		return nil, err
 	}
 	for i := range bats {
-		bat := batch.New(true, bats[i].Attrs)
-		bat.Vecs = containers.UnmarshalToMoVecs(bats[i].Vecs)
-		if _, err := writer.Write(bat); err != nil {
+		if _, err := writer.Write(containers.ToCNBatch(bats[i])); err != nil {
 			return nil, err
 		}
 	}
