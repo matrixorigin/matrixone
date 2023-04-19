@@ -24,12 +24,6 @@ import (
 const FooterSize = 64
 const HeaderSize = 64
 
-const (
-	typeLen    = 2
-	versionOff = typeLen
-	versionLen = 2
-)
-
 type objectMetaV1 []byte
 
 func buildObjectMetaV1(count uint16) objectMetaV1 {

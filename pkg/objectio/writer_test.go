@@ -301,9 +301,3 @@ func newBatch2(mp *mpool.MPool) *batch.Batch {
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
 }
-
-func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.NewVec(tye)
-	vector.UnmarshalBinary(buf)
-	return vector
-}
