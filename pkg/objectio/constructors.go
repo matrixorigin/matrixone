@@ -21,12 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	// Remove me later. Only used for SCA check now
-	_ = getVersionType
-	_ = constructorFactory
-)
-
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
 type CacheConstructorFactory = func(size int64, algo uint8, noUnmarshalHint bool) CacheConstructor
 
