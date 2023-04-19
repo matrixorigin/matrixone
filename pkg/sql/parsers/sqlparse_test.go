@@ -67,37 +67,87 @@ func TestPostgresql(t *testing.T) {
 }
 
 func TestSplitSqlBySemicolon(t *testing.T) {
-	ret1 := SplitSqlBySemicolon("select 1;select 2;select 3;")
-	require.Equal(t, 3, len(ret1))
-	require.Equal(t, "select 1", ret1[0])
-	require.Equal(t, "select 2", ret1[1])
-	require.Equal(t, "select 3", ret1[2])
+	ret := SplitSqlBySemicolon("select 1;select 2;select 3;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select 2", ret[1])
+	require.Equal(t, "select 3", ret[2])
 
-	ret2 := SplitSqlBySemicolon("select 1;select 2/*;;;*/;select 3;")
-	require.Equal(t, 3, len(ret2))
-	require.Equal(t, "select 1", ret2[0])
-	require.Equal(t, "select 2/*;;;*/", ret2[1])
-	require.Equal(t, "select 3", ret2[2])
+	ret = SplitSqlBySemicolon("select 1;select 2/*;;;*/;select 3;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select 2/*;;;*/", ret[1])
+	require.Equal(t, "select 3", ret[2])
 
-	ret3 := SplitSqlBySemicolon("select 1;select \"2;;\";select 3;")
-	require.Equal(t, 3, len(ret3))
-	require.Equal(t, "select 1", ret3[0])
-	require.Equal(t, "select \"2;;\"", ret3[1])
-	require.Equal(t, "select 3", ret3[2])
+	ret = SplitSqlBySemicolon("select 1;select \"2;;\";select 3;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select \"2;;\"", ret[1])
+	require.Equal(t, "select 3", ret[2])
 
-	ret4 := SplitSqlBySemicolon("select 1;select '2;;';select 3;")
-	require.Equal(t, 3, len(ret4))
-	require.Equal(t, "select 1", ret4[0])
-	require.Equal(t, "select '2;;'", ret4[1])
-	require.Equal(t, "select 3", ret4[2])
+	ret = SplitSqlBySemicolon("select 1;select '2;;';select 3;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select '2;;'", ret[1])
+	require.Equal(t, "select 3", ret[2])
 
-	ret5 := SplitSqlBySemicolon("select 1;select '2;;';select 3")
-	require.Equal(t, 3, len(ret5))
-	require.Equal(t, "select 1", ret5[0])
-	require.Equal(t, "select '2;;'", ret5[1])
-	require.Equal(t, "select 3", ret5[2])
+	ret = SplitSqlBySemicolon("select 1;select '2;;';select 3")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select '2;;'", ret[1])
+	require.Equal(t, "select 3", ret[2])
 
-	ret6 := SplitSqlBySemicolon("abc")
-	require.Equal(t, 1, len(ret6))
-	require.Equal(t, "abc", ret6[0])
+	ret = SplitSqlBySemicolon("select 1")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "select 1", ret[0])
+
+	ret = SplitSqlBySemicolon(";;;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "", ret[0])
+	require.Equal(t, "", ret[1])
+	require.Equal(t, "", ret[2])
+
+	ret = SplitSqlBySemicolon(";")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+}
+
+func TestHandleSqlForRecord(t *testing.T) {
+	// Test remove /* cloud_user */ prefix
+
+	ret := HandleSqlForRecord("/* cloud_user */select 1;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "select 1", ret[0])
+
+	ret = HandleSqlForRecord("/* cloud_user */select * from t;/* cloud_user */select * from t;/* cloud_user */select * from t;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select * from t", ret[0])
+	require.Equal(t, "select * from t", ret[1])
+	require.Equal(t, "select * from t", ret[2])
+
+	ret = HandleSqlForRecord("/* cloud_user */")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
+	// Test hide secret key
+
+	ret = HandleSqlForRecord("create user u identified by '123456';")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "create user u identified by '******'", ret[0])
+
+	ret = HandleSqlForRecord("create user u identified with '12345';")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "create user u identified with '******'", ret[0])
+
+	ret = HandleSqlForRecord("create user u identified by random password;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "create user u identified by random password", ret[0])
+
+	ret = HandleSqlForRecord("create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified with '111', abc3 identified by random password;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified with '******', abc3 identified by random password", ret[0])
+
+	ret = HandleSqlForRecord("create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}", ret[0])
 }
