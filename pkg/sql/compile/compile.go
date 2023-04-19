@@ -2020,16 +2020,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
 		//to maxify locality, put blocks in the same s3 object in the same CN
 		lenCN := len(c.cnList)
+		if len(nodes) == 0 {
+			nodes = append(nodes, engine.Node{
+				Addr: c.addr,
+				Rel:  rel,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+			})
+		}
 		for i := range c.cnList {
-			if isSameCN(c.cnList[i].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Rel:  rel,
-						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-					})
-				}
-			} else {
+			if !isSameCN(c.cnList[i].Addr, c.addr) {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[i].Id,
@@ -2038,6 +2037,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		}
+
 		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 		for i := range ranges {

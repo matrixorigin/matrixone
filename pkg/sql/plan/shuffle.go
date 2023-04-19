@@ -17,5 +17,5 @@ package plan
 func SimpleHashToRange(bytes []byte, upperLimit int) int {
 	lenBytes := len(bytes)
 	//sample five bytes
-	return (int(bytes[0]) + int(bytes[lenBytes/4]) + int(bytes[lenBytes/2]) + int(bytes[lenBytes*3/4]) + int(bytes[lenBytes-1])) % upperLimit
+	return (int(bytes[0])*(int(bytes[lenBytes/4])+int(bytes[lenBytes/2])+int(bytes[lenBytes*3/4])) + int(bytes[lenBytes-1])) % upperLimit
 }
