@@ -169,7 +169,9 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 
 func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([]byte, Extent, error) {
 	bloomFilter := new(bytes.Buffer)
-	bloomFilterStart := uint32(0)
+	bloomFilter.Write([]byte(uint16(IOET_BF)))
+	bloomFilter.Write([]byte(uint16(IOET_BloomFilter_CurrVer)))
+	bloomFilterStart := uint32(len(bloomFilter.Bytes()))
 	bloomFilterIndex := BuildBlockIndex(blockCount)
 	bloomFilterIndex.SetBlockCount(blockCount)
 	bloomFilterStart += bloomFilterIndex.Length()
@@ -187,7 +189,9 @@ func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([
 
 func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {
 	zoneMapArea := new(bytes.Buffer)
-	zoneMapAreaStart := uint32(0)
+	zoneMapArea.Write([]byte(uint16(IOET_ZM)))
+	zoneMapArea.Write([]byte(uint16(IOET_ZoneMap_CurrVer)))
+	zoneMapAreaStart := uint32(len(zoneMapArea.Bytes()))
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
 	zoneMapAreaIndex.SetBlockCount(blockCount)
 	zoneMapAreaStart += zoneMapAreaIndex.Length()
@@ -352,6 +356,8 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 	var buf bytes.Buffer
 	for i, vec := range bat.Vecs {
 		buf.Reset()
+		buf.Write([]byte(uint16(IOET_ColData)))
+		buf.Write([]byte(uint16(IOET_ColumnData_CurrVer)))
 		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
 			return err

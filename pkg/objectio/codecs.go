@@ -22,6 +22,7 @@ const (
 	IOET_ColData = 2
 	IOET_BF      = 3
 	IOET_BlkObj  = 4
+	IOET_ZM      = 4
 )
 
 type IOEntryHeader struct {

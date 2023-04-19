@@ -30,7 +30,7 @@ func buildObjectMetaV1(count uint16) objectMetaV1 {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	meta := objectMetaV1(buf)
-	meta.BlockHeader().setVersion(IOET_ObjectMeta_V1)
+	meta.BlockHeader().setVersion(IOET_ObjectMeta_CurrVer)
 	meta.BlockHeader().setType(IOET_ObjMeta)
 	return buf[:]
 }

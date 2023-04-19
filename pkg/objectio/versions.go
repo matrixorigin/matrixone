@@ -34,11 +34,15 @@ var (
 )
 
 const (
-	IOET_ObjectMeta_V1 = 1
-	IOET_ColumnData_V1 = 1
+	IOET_ObjectMeta_V1  = 1
+	IOET_ColumnData_V1  = 1
+	IOET_BloomFilter_V1 = 1
+	IOET_ZoneMap_V1     = 1
 
-	IOET_ObjectMeta_CurrVer = IOET_ObjectMeta_V1
-	IOET_ColumnData_CurrVer = IOET_ColumnData_V1
+	IOET_ObjectMeta_CurrVer  = IOET_ObjectMeta_V1
+	IOET_ColumnData_CurrVer  = IOET_ColumnData_V1
+	IOET_BloomFilter_CurrVer = IOET_BloomFilter_V1
+	IOET_ZoneMap_CurrVer     = IOET_ZoneMap_V1
 )
 
 func init() {
