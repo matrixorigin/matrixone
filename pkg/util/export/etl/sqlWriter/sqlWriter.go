@@ -56,11 +56,17 @@ func jsonEscape(i string) string {
 	return s[1 : len(s)-1]
 }
 
-func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
+func generateInsertStatement(rows string, tbl *table.Table) (string, int, error) {
 
 	sb := strings.Builder{}
 	sb.WriteString("INSERT INTO")
 	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
+
+	r := csv.NewReader(strings.NewReader(rows))
+	records, err := r.ReadAll()
+	if err != nil {
+		return "", 0, err
+	}
 
 	// write columns
 	sb.WriteString("(")
@@ -193,14 +199,18 @@ func bulkInsert(db *sql.DB, rows string, tbl *table.Table, maxLen int) (int, err
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-	db, err := sw.initOrRefreshDBConn(false)
-	if err != nil {
-		return 0, err
+	db, dbErr := sw.initOrRefreshDBConn(false)
+	if dbErr != nil {
+		return 0, dbErr
 	}
-	cnt, err := bulkInsert(db, rows, tbl, 1000)
+
+	stmt, cnt, _ := generateInsertStatement(rows, tbl)
+	_, err := db.Exec(stmt)
+	// cnt, err := bulkInsert(db, rows, tbl, 1000)
 	if err != nil {
-		db, err := sw.initOrRefreshDBConn(true)
-		cnt, err := bulkInsert(db, rows, tbl, 1000)
+		db, _ := sw.initOrRefreshDBConn(true)
+		// cnt, err := bulkInsert(db, rows, tbl, 1000)
+		_, err := db.Exec(stmt)
 		if err != nil {
 			return 0, err
 		}

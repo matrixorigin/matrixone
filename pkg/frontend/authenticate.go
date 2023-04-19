@@ -307,7 +307,7 @@ func SetSpecialUser(userName string, password []byte) {
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
 	users := getSpecialUsers()
 
-	if users != nil && len(users) > 0 && users[userName] != nil {
+	if len(users) > 0 && users[userName] != nil {
 		return true, users[userName].password, users[userName].account
 	}
 	return false, nil, nil
