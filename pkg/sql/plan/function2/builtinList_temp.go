@@ -673,6 +673,32 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	{
+		functionId: SLEEP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: Sleep[uint64],
+			},
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameter []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: Sleep[float64],
+			},
+		},
+	},
+
 	// function `reverse`
 	{
 		functionId: REVERSE,
@@ -713,7 +739,6 @@ var tempListForUnaryFunctions1 = []FuncNew{
 	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
 	// function `month`
 	// function `oct`
-	// function `sleep`
 	// function `space`
 	// function `time`
 	// function `time_of_day`
