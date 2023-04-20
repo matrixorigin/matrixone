@@ -1973,12 +1973,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nodes, nil
 	}
 
+	engineType := rel.GetEngineType()
+
 	if isPartitionTable {
 		rel = nil
 	}
 
-	// ordinary table , hash s3 objects to fixed CN
-	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
+	// disttae engine , hash s3 objects to fixed CN
+	if engineType == engine.Disttae {
 		dop := c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum))
 		//add current CN
 		nodes = append(nodes, engine.Node{

@@ -174,6 +174,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return 0, nil
 }
 
+func (tbl *txnTable) GetEngineType() engine.EngineType {
+	return engine.Disttae
+}
+
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
 	// if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
