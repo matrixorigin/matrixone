@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
+const PACKET_LARGE_ERROR = "packet for query is too large"
+
 var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // SqlWriter is a writer that writes data to a SQL database.
@@ -85,12 +87,22 @@ func generateInsertStatement(records [][]string, tbl *table.Table) (string, int,
 				sb.WriteString(",")
 			}
 			if tbl.Columns[i].ColType == table.TJson {
-				res := strings.ReplaceAll(jsonEscape(field), "'", "\\'")
-				sb.WriteString("'" + res + "'")
+				var js interface{}
+				err := json.Unmarshal([]byte(field), &js)
+				if err != nil {
+					return "", 0, err
+				}
+				escapedJSON, _ := json.Marshal(js)
+				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
 			} else {
-				// escape single quote
-				res := strings.ReplaceAll(field, "'", "\\'")
-				sb.WriteString("'" + res + "'")
+				// escape single quote abd backslash
+				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
+				// truncate string if it's too long caused by escape for varchar
+				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
+				} else {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+				}
 			}
 		}
 		if idx == len(records)-1 {
@@ -122,17 +134,28 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	chunks := chunkRecords(records, chunkSize)
 
 	totalInserted := 0
+	var err error
 	for _, chunk := range chunks {
 
-		stmt, cnt, err := generateInsertStatement(chunk, tbl)
+		stmt, cnt, _ := generateInsertStatement(chunk, tbl)
 		_, err = db.Exec(stmt)
+		if err != nil {
+			if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
+				chunkSize = chunkSize / 2
+				chunks = chunkRecords(records, chunkSize)
+				_, err = bulkInsert(db, records, tbl, chunkSize)
+			} else {
+				// retry
+				_, err = db.Exec(stmt)
+			}
+		}
 		if err != nil {
 			return totalInserted, err
 		}
 		totalInserted += cnt
 	}
 
-	return totalInserted, nil
+	return totalInserted, err
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
@@ -149,16 +172,15 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	_, err = db.Exec(stmt)
 	if err != nil {
 		db, _ := sw.initOrRefreshDBConn(true)
-		// packet for query is too large. Try adjusting the 'max_allowed_packet' variable on the server
-		if strings.Contains(err.Error(), "packet for query is too large") {
-			if tbl.Table == "statement_info" {
-				cnt, err = bulkInsert(db, records, tbl, 1000)
-				if err != nil {
-					return 0, err
-				}
-			}
-			return cnt, nil
+		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
+			cnt, err = bulkInsert(db, records, tbl, 1000)
+		} else {
+			_, err = db.Exec(stmt)
 		}
+		if err != nil {
+			return 0, err
+		}
+		return cnt, nil
 	}
 	return cnt, nil
 }
