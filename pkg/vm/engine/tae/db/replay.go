@@ -97,8 +97,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	head := objectio.DecodeIOEntryHeader(payload)
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
-	txnCmd := txnbase.NewEmptyTxnCmdWithVersion(head.Version)
-	txnCmd.TxnEntry = entry.(*txnbase.TxnEntry)
+	txnCmd := entry.(*txnbase.TxnCmd)
 	if err != nil {
 		panic(err)
 	}

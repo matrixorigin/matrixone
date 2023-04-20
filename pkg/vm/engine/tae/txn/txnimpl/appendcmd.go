@@ -20,42 +20,52 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 const (
-	CmdAppend int16 = txnbase.CmdCustomized + iota
+	IOET_WALTxnCommand_Append uint16 = 3008
+
+	IOET_WALTxnCommand_Append_V1 uint16 = 1
+
+	IOET_WALTxnCommand_Append_CurrVer = IOET_WALTxnCommand_Append_V1
 )
 
 func init() {
-	txnif.RegisterCmdFactory(CmdAppend, func(int16) txnif.TxnCmd {
-		return NewEmptyAppendCmd()
-	})
+	objectio.RegisterIOEnrtyCodec(objectio.IOEntryHeader{
+		Type:    IOET_WALTxnCommand_Append,
+		Version: IOET_WALTxnCommand_Append_V1,
+	}, nil,
+		func(b []byte) (any, error) {
+			cmd := NewEmptyAppendCmd()
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		})
 }
 
 type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
-	*txnbase.ComposedCmd
+	Data  *containers.Batch
 	Infos []*appendInfo
 	Ts    types.TS
 	Node  InsertNode
 }
 
 func NewEmptyAppendCmd() *AppendCmd {
-	cmd := &AppendCmd{
-		ComposedCmd: txnbase.NewComposedCmd(),
-	}
+	cmd := &AppendCmd{}
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
 	return cmd
 }
 
-func NewAppendCmd(id uint32, node InsertNode) *AppendCmd {
+func NewAppendCmd(id uint32, node InsertNode, data *containers.Batch) *AppendCmd {
 	impl := &AppendCmd{
-		ComposedCmd: txnbase.NewComposedCmd(),
-		Node:        node,
-		Infos:       node.GetAppends(),
+		Node:  node,
+		Infos: node.GetAppends(),
+		Data:  data,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -65,7 +75,10 @@ func (c *AppendCmd) Desc() string {
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s %s", s, info.Desc())
 	}
-	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToDesc("\t\t"))
+	s = fmt.Sprintf("%s;R]ows=%d", s, c.Data.Length())
+	if c.Data.HasDelete() {
+		s = fmt.Sprintf("%s;DelCnt=%d", s, c.Data.DeleteCnt())
+	}
 	return s
 }
 func (c *AppendCmd) String() string {
@@ -73,7 +86,10 @@ func (c *AppendCmd) String() string {
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s%s", s, info.String())
 	}
-	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToString("\t\t"))
+	s = fmt.Sprintf("%s];Rows=%d", s, c.Data.Length())
+	if c.Data.HasDelete() {
+		s = fmt.Sprintf("%s;DelCnt=%d", s, c.Data.DeleteCnt())
+	}
 	return s
 }
 func (c *AppendCmd) VerboseString() string {
@@ -81,14 +97,24 @@ func (c *AppendCmd) VerboseString() string {
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s%s", s, info.String())
 	}
-	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToVerboseString("\t\t"))
+	s = fmt.Sprintf("%s];Rows=%d", s, c.Data.Length())
+	if c.Data.HasDelete() {
+		s = fmt.Sprintf("%s;DelCnt=%d", s, c.Data.DeleteCnt())
+	}
 	return s
 }
-func (c *AppendCmd) Close()         { c.ComposedCmd.Close() }
-func (c *AppendCmd) GetType() int16 { return CmdAppend }
+func (c *AppendCmd) Close() {
+	c.Data.Close()
+	c.Data = nil
+}
+func (c *AppendCmd) GetType() uint16 { return IOET_WALTxnCommand_Append }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := c.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
+		return
+	}
+	ver := IOET_WALTxnCommand_Append_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
@@ -106,7 +132,7 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += sn
 	}
-	sn, err = c.ComposedCmd.WriteTo(w)
+	sn, err = c.Data.WriteTo(w)
 	n += sn
 	if err != nil {
 		return n, err
@@ -137,8 +163,8 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 	}
-	cc, sn, err := txnbase.BuildCommandFrom(r)
-	c.ComposedCmd = cc.(*txnbase.ComposedCmd)
+	c.Data = containers.NewBatch()
+	c.Data.ReadFrom(r)
 	n += sn
 	if err != nil {
 		return n, err
@@ -150,7 +176,7 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (c *AppendCmd) Marshal() (buf []byte, err error) {
+func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = c.WriteTo(&bbuf); err != nil {
 		return
@@ -159,8 +185,12 @@ func (c *AppendCmd) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (c *AppendCmd) Unmarshal(buf []byte) error {
+func (c *AppendCmd) UnmarshalBinary(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := c.ReadFrom(bbuf)
 	return err
 }
+
+func (c *AppendCmd) ApplyCommit()                  {}
+func (c *AppendCmd) ApplyRollback()                {}
+func (c *AppendCmd) SetReplayTxn(_ txnif.AsyncTxn) {}

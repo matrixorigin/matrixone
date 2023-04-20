@@ -22,49 +22,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 const (
-	CmdPointer int16 = iota
-	CmdDeleteBitmap
-	CmdBatch
-	CmdAppend
-	CmdDelete
-	CmdComposed
-	CmdTxnState
-	CmdCustomized
+	IOET_WALTxnEntry            uint16 = 3000
+	IOET_WALTxnCommand_Composed uint16 = 3001
+	IOET_WALTxnCommand_TxnState uint16 = 3002
 
-	CmdTxn = int16(IOET_WALTxnEntry)
-)
+	IOET_WALTxnEntry_V1            uint16 = 1
+	IOET_WALTxnCommand_Composed_V1 uint16 = 1
+	IOET_WALTxnCommand_TxnState_V1 uint16 = 1
 
-const (
-	IOET_WALTxnEntry         uint16 = 3000
-	IOET_WALTxnEntry_V1      uint16 = 1
-	IOET_WALTxnEntry_CurrVer        = IOET_WALTxnEntry_V1
+	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V1
+	IOET_WALTxnCommand_Composed_CurrVer = IOET_WALTxnCommand_Composed_V1
+	IOET_WALTxnCommand_TxnState_CurrVer = IOET_WALTxnCommand_TxnState_V1
 )
 
 func init() {
-	txnif.RegisterCmdFactory(CmdPointer, func(int16) txnif.TxnCmd {
-		return new(PointerCmd)
-	})
-	txnif.RegisterCmdFactory(CmdDeleteBitmap, func(int16) txnif.TxnCmd {
-		return new(DeleteBitmapCmd)
-	})
-	txnif.RegisterCmdFactory(CmdBatch, func(int16) txnif.TxnCmd {
-		return new(BatchCmd)
-	})
-	txnif.RegisterCmdFactory(CmdComposed, func(int16) txnif.TxnCmd {
-		return new(ComposedCmd)
-	})
-	txnif.RegisterCmdFactory(CmdTxn, func(int16) txnif.TxnCmd {
-		return NewEmptyTxnCmd()
-	})
-	txnif.RegisterCmdFactory(CmdTxnState, func(int16) txnif.TxnCmd {
-		return NewEmptyTxnStateCmd()
-	})
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnEntry,
@@ -72,46 +47,44 @@ func init() {
 		},
 		nil,
 		func(b []byte) (any, error) {
-			txnEntry := NewTxnEmptyTxnEntry()
-			err := txnEntry.Unmarshal(b)
+			txnEntry := NewEmptyTxnCmd()
+			err := txnEntry.UnmarshalBinary(b)
 			return txnEntry, err
 		},
 	)
-}
-
-type CustomizedCmd interface {
-	GetID() uint32
-}
-
-func IsCustomizedCmd(cmd txnif.TxnCmd) bool {
-	ctype := cmd.GetType()
-	return ctype >= CmdCustomized
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Composed,
+			Version: IOET_WALTxnCommand_Composed_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnEntry := NewComposedCmd()
+			err := txnEntry.UnmarshalBinary(b)
+			return txnEntry, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_TxnState,
+			Version: IOET_WALTxnCommand_TxnState_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnEntry := NewEmptyTxnStateCmd()
+			err := txnEntry.UnmarshalBinary(b)
+			return txnEntry, err
+		},
+	)
 }
 
 type BaseCmd struct{}
 
 func (base *BaseCmd) Close() {}
 
-type PointerCmd struct {
-	BaseCmd
-	Group uint32
-	Lsn   uint64
-}
-
-type DeleteBitmapCmd struct {
-	BaseCmd
-	Bitmap *roaring.Bitmap
-}
-
-type TxnEntry struct {
+type TxnCmd struct {
 	*ComposedCmd
 	*TxnCtx
-}
-
-type TxnCmd struct {
-	typ     uint16
-	version uint16
-	*TxnEntry
 	Txn txnif.AsyncTxn
 }
 
@@ -121,13 +94,7 @@ type TxnStateCmd struct {
 	CommitTs types.TS
 }
 
-type BatchCmd struct {
-	BaseCmd
-	Bat *containers.Batch
-}
-
 type ComposedCmd struct {
-	BaseCmd
 	Cmds    []txnif.TxnCmd
 	CmdSize uint32
 }
@@ -142,18 +109,6 @@ func NewBaseCustomizedCmd(id uint32, impl txnif.TxnCmd) *BaseCustomizedCmd {
 	return &BaseCustomizedCmd{
 		ID:   id,
 		Impl: impl,
-	}
-}
-
-func NewDeleteBitmapCmd(bitmap *roaring.Bitmap) *DeleteBitmapCmd {
-	return &DeleteBitmapCmd{
-		Bitmap: bitmap,
-	}
-}
-
-func NewBatchCmd(bat *containers.Batch) *BatchCmd {
-	return &BatchCmd{
-		Bat: bat,
 	}
 }
 
@@ -179,17 +134,126 @@ func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd 
 	}
 }
 
-func NewTxnEmptyTxnEntry() *TxnEntry {
-	return &TxnEntry{
-		ComposedCmd: NewComposedCmd(),
-		TxnCtx:      NewEmptyTxnCtx(),
+func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
+		return
 	}
+	n += 2
+	ver := IOET_WALTxnCommand_TxnState_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
+		return
+	}
+	n += 2
+	var sn int64
+	if sn, err = objectio.WriteString(c.ID, w); err != nil {
+		return
+	}
+	n += sn
+	state := int32(c.State)
+	if _, err = w.Write(types.EncodeInt32(&state)); err != nil {
+		return
+	}
+	n += 4
+	if _, err = w.Write(c.CommitTs[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
 }
 
-func (c *TxnEntry) WriteTo(w io.Writer) (n int64, err error) {
+func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	sn, err = c.ComposedCmd.WriteTo(w)
+	if c.ID, sn, err = objectio.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	state := int32(0)
+	if _, err = r.Read(types.EncodeInt32(&state)); err != nil {
+		return
+	}
+	c.State = txnif.TxnState(state)
+	n += 4
+	if _, err = r.Read(c.CommitTs[:]); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
+}
+func (c *TxnStateCmd) MarshalBinary() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (c *TxnStateCmd) ApplyCommit()                  {}
+func (c *TxnStateCmd) ApplyRollback()                {}
+func (c *TxnStateCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
+func (c *TxnStateCmd) UnmarshalBinary(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = c.ReadFrom(bbuf)
+	return err
+}
+func (c *TxnStateCmd) GetType() uint16 { return IOET_WALTxnCommand_TxnState }
+func (c *TxnStateCmd) Desc() string {
+	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) String() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) VerboseString() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) Close() {
+}
+
+func NewTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		ComposedCmd: NewComposedCmd(),
+		TxnCtx:      &TxnCtx{},
+	}
+}
+func NewEmptyTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		TxnCtx: NewEmptyTxnCtx(),
+	}
+}
+func (c *TxnCmd) ApplyCommit() {
+	c.ComposedCmd.ApplyCommit()
+}
+func (c *TxnCmd) ApplyRollback() {
+	c.ComposedCmd.ApplyRollback()
+}
+func (c *TxnCmd) SetReplayTxn(txn txnif.AsyncTxn) {
+	c.ComposedCmd.SetReplayTxn(txn)
+}
+func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
+	c.Txn = txn
+	c.ID = txn.GetID()
+	c.StartTS = txn.GetStartTS()
+	c.PrepareTS = txn.GetPrepareTS()
+	c.Participants = txn.GetParticipants()
+	c.Memo = txn.GetMemo()
+}
+func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
+		return
+	}
+	n += 2
+	v := IOET_WALTxnEntry_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&v)); err != nil {
+		return
+	}
+	n += 2
+	var sn int64
+	buf, err := c.ComposedCmd.MarshalBinary()
 	if err != nil {
+		return
+	}
+	if sn, err = objectio.WriteBytes(buf, w); err != nil {
 		return
 	}
 	n += sn
@@ -225,16 +289,19 @@ func (c *TxnEntry) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
-
-func (c *TxnEntry) ReadFrom(r io.Reader) (n int64, err error) {
+func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	var cmd txnif.TxnCmd
-	cmd, sn, err = BuildCommandFrom(r)
+	c.ComposedCmd = NewComposedCmd()
+	var buf []byte
+	if buf, sn, err = objectio.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
+	cmd, err := BuildCommandFrom(buf)
 	if err != nil {
 		return
 	}
 	c.ComposedCmd = cmd.(*ComposedCmd)
-	n += sn
 	if c.ID, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
@@ -270,9 +337,9 @@ func (c *TxnEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += sn
 	return
-
 }
-func (c *TxnEntry) Marshal() (buf []byte, err error) {
+
+func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = c.WriteTo(&bbuf); err != nil {
 		return
@@ -280,171 +347,12 @@ func (c *TxnEntry) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (c *TxnEntry) Unmarshal(buf []byte) (err error) {
+func (c *TxnCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = c.ReadFrom(bbuf)
 	return err
 }
-
-func NewTxnCmd() *TxnCmd {
-	return &TxnCmd{
-		typ:     IOET_WALTxnEntry,
-		version: IOET_WALTxnEntry_CurrVer,
-		TxnEntry: &TxnEntry{
-			ComposedCmd: NewComposedCmd(),
-			TxnCtx:      &TxnCtx{},
-		},
-	}
-}
-func NewEmptyTxnCmd() *TxnCmd {
-	return &TxnCmd{}
-}
-func NewEmptyTxnCmdWithVersion(ver uint16) *TxnCmd {
-	return &TxnCmd{
-		typ:     IOET_WALTxnEntry,
-		version: ver,
-	}
-}
-func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
-	t := c.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
-		return
-	}
-	// if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
-	// 	return
-	// }
-	n += 2
-	var sn int64
-	if sn, err = objectio.WriteString(c.ID, w); err != nil {
-		return
-	}
-	n += sn
-	state := int32(c.State)
-	if _, err = w.Write(types.EncodeInt32(&state)); err != nil {
-		return
-	}
-	n += 4
-	if _, err = w.Write(c.CommitTs[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	return
-}
-func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	var sn int64
-	if c.ID, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	state := int32(0)
-	if _, err = r.Read(types.EncodeInt32(&state)); err != nil {
-		return
-	}
-	c.State = txnif.TxnState(state)
-	n += 4
-	if _, err = r.Read(c.CommitTs[:]); err != nil {
-		return
-	}
-	n += types.TxnTsSize
-	return
-}
-func (c *TxnStateCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-func (c *TxnStateCmd) ApplyCommit()                  {}
-func (c *TxnStateCmd) ApplyRollback()                {}
-func (c *TxnStateCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
-func (c *TxnStateCmd) Unmarshal(buf []byte) (err error) {
-	bbuf := bytes.NewBuffer(buf)
-	_, err = c.ReadFrom(bbuf)
-	return err
-}
-func (c *TxnStateCmd) GetType() int16 { return CmdTxnState }
-func (c *TxnStateCmd) Desc() string {
-	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
-}
-func (c *TxnStateCmd) String() string {
-	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
-}
-func (c *TxnStateCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
-}
-func (c *TxnStateCmd) Close() {
-}
-func (c *TxnCmd) ApplyCommit() {
-	c.ComposedCmd.ApplyCommit()
-}
-func (c *TxnCmd) ApplyRollback() {
-	c.ComposedCmd.ApplyRollback()
-}
-func (c *TxnCmd) SetReplayTxn(txn txnif.AsyncTxn) {
-	c.ComposedCmd.SetReplayTxn(txn)
-}
-func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
-	c.Txn = txn
-	c.ID = txn.GetID()
-	c.StartTS = txn.GetStartTS()
-	c.PrepareTS = txn.GetPrepareTS()
-	c.Participants = txn.GetParticipants()
-	c.Memo = txn.GetMemo()
-}
-func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
-	t := c.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
-		return
-	}
-	n += 2
-	if _, err = w.Write(types.EncodeUint16(&c.version)); err != nil {
-		return
-	}
-	n += 2
-	var sn int64
-	if sn, err = c.TxnEntry.WriteTo(w); err != nil {
-		return
-	}
-	n += sn
-	return
-}
-func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(types.EncodeUint16(&c.version)); err != nil {
-		return
-	}
-	n += 2
-	var sn int64
-	c.TxnEntry = NewTxnEmptyTxnEntry()
-	if sn, err = c.TxnEntry.ReadFrom(r); err != nil {
-		return
-	}
-	n += sn
-	return
-
-}
-func (c *TxnCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
-	c.version = types.DecodeUint16(buf[:2])
-	codec := objectio.GetIOEntryCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnEntry,
-			Version: c.version,
-		},
-	)
-	entry, err := codec.Decode(buf[2:])
-	c.TxnEntry = entry.(*TxnEntry)
-	return err
-}
-func (c *TxnCmd) GetType() int16 { return int16(IOET_WALTxnEntry) }
+func (c *TxnCmd) GetType() uint16 { return IOET_WALTxnEntry }
 func (c *TxnCmd) Desc() string {
 	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
 }
@@ -457,188 +365,7 @@ func (c *TxnCmd) VerboseString() string {
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()
 }
-func (e *PointerCmd) ApplyCommit()                  {}
-func (e *PointerCmd) ApplyRollback()                {}
-func (e *PointerCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
-func (e *PointerCmd) GetType() int16 {
-	return CmdPointer
-}
-func (e *PointerCmd) Desc() string {
-	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d", e.Group, e.Lsn)
-	return s
-}
-func (e *PointerCmd) String() string {
-	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
-	return s
-}
 
-func (e *PointerCmd) VerboseString() string {
-	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
-	return s
-}
-func (e *PointerCmd) WriteTo(w io.Writer) (n int64, err error) {
-	t := e.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
-		return
-	}
-	if _, err = w.Write(types.EncodeUint32(&e.Group)); err != nil {
-		return
-	}
-	if _, err = w.Write(types.EncodeUint64(&e.Lsn)); err != nil {
-		return
-	}
-	n = 14
-	return
-}
-
-func (e *PointerCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = e.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-
-func (e *PointerCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(types.EncodeUint32(&e.Group)); err != nil {
-		return
-	}
-	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
-		return
-	}
-	n = 12
-	return
-}
-
-func (e *PointerCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := e.ReadFrom(bbuf)
-	return err
-}
-func (e *DeleteBitmapCmd) ApplyCommit()                  {}
-func (e *DeleteBitmapCmd) ApplyRollback()                {}
-func (e *DeleteBitmapCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
-func (e *DeleteBitmapCmd) GetType() int16 {
-	return CmdDeleteBitmap
-}
-
-func (e *DeleteBitmapCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	e.Bitmap = roaring.NewBitmap()
-	n, err = e.Bitmap.ReadFrom(r)
-	return
-}
-
-func (e *DeleteBitmapCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if e == nil {
-		return
-	}
-	t := e.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
-		return
-	}
-	// if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
-	// 	return
-	// }
-	n, err = e.Bitmap.WriteTo(w)
-	n += 2
-	return
-}
-
-func (e *DeleteBitmapCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = e.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-
-func (e *DeleteBitmapCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := e.ReadFrom(bbuf)
-	return err
-}
-
-func (e *DeleteBitmapCmd) Desc() string {
-	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
-	return s
-}
-
-func (e *DeleteBitmapCmd) String() string {
-	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
-	return s
-}
-
-func (e *DeleteBitmapCmd) VerboseString() string {
-	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d;Deletes=%v", e.Bitmap.GetCardinality(), e.Bitmap.String())
-	return s
-}
-func (e *BatchCmd) GetType() int16 {
-	return CmdBatch
-}
-func (e *BatchCmd) ApplyCommit()                  {}
-func (e *BatchCmd) ApplyRollback()                {}
-func (e *BatchCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
-func (e *BatchCmd) Close() {
-	if e.Bat != nil {
-		e.Bat.Close()
-		e.Bat = nil
-	}
-}
-
-func (e *BatchCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = e.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-
-func (e *BatchCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := e.ReadFrom(bbuf)
-	return err
-}
-
-func (e *BatchCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	e.Bat = containers.NewBatch()
-	n, err = e.Bat.ReadFrom(r)
-	return
-}
-
-func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
-	t := e.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
-		return
-	}
-	// if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
-	// 	return
-	// }
-	if n, err = e.Bat.WriteTo(w); err != nil {
-		return
-	}
-	n += 2
-	return
-}
-
-func (e *BatchCmd) Desc() string {
-	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
-	if e.Bat.HasDelete() {
-		s = fmt.Sprintf("%s;DelCnt=%d", s, e.Bat.DeleteCnt())
-	}
-	return s
-}
-
-func (e *BatchCmd) String() string {
-	return e.Desc()
-}
-
-func (e *BatchCmd) VerboseString() string {
-	s := fmt.Sprintf("CmdName=BAT;Rows=%d;Data=%v", e.Bat.Length(), e.Bat)
-	return s
-}
 func (cc *ComposedCmd) ApplyCommit() {
 	for _, c := range cc.Cmds {
 		c.ApplyCommit()
@@ -659,11 +386,11 @@ func (cc *ComposedCmd) Close() {
 		cmd.Close()
 	}
 }
-func (cc *ComposedCmd) GetType() int16 {
-	return CmdComposed
+func (cc *ComposedCmd) GetType() uint16 {
+	return IOET_WALTxnCommand_Composed
 }
 
-func (cc *ComposedCmd) Marshal() (buf []byte, err error) {
+func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cc.WriteTo(&bbuf); err != nil {
 		return
@@ -672,7 +399,7 @@ func (cc *ComposedCmd) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (cc *ComposedCmd) Unmarshal(buf []byte) (err error) {
+func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cc.ReadFrom(bbuf)
 	return err
@@ -680,29 +407,34 @@ func (cc *ComposedCmd) Unmarshal(buf []byte) (err error) {
 
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := cc.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
 		return
 	}
-	// if err = binary.Write(w, binary.BigEndian, cc.GetType()); err != nil {
-	// 	return
-	// }
+	n += 2
+	ver := IOET_WALTxnCommand_Composed_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
+		return
+	}
 	n += 2
 	if _, err = w.Write(types.EncodeUint32(&cc.CmdSize)); err != nil {
 		return
 	}
 	n += 4
-	cmds := uint32(len(cc.Cmds))
-	if _, err = w.Write(types.EncodeUint32(&cmds)); err != nil {
+	length := uint32(len(cc.Cmds))
+	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	n += 4
-	var cn int64
 	for _, cmd := range cc.Cmds {
-		if cn, err = cmd.WriteTo(w); err != nil {
-			break
-		} else {
-			n += cn
+		var buf []byte
+		var sn int64
+		if buf, err = cmd.MarshalBinary(); err != nil {
+			return
 		}
+		if sn, err = objectio.WriteBytes(buf, w); err != nil {
+			return
+		}
+		n += sn
 	}
 	return
 }
@@ -712,19 +444,23 @@ func (cc *ComposedCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 4
-	cmds := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&cmds)); err != nil {
+	length := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&length)); err != nil {
 		return
 	}
 	n += 4
-	var cn int64
-	cc.Cmds = make([]txnif.TxnCmd, cmds)
-	for i := 0; i < int(cmds); i++ {
-		if cc.Cmds[i], cn, err = BuildCommandFrom(r); err != nil {
-			break
-		} else {
-			n += cn
+	for i := 0; i < int(length); i++ {
+		var buf []byte
+		var sn int64
+		if buf, sn, err = objectio.ReadBytes(r); err != nil {
+			return
 		}
+		n += sn
+		subCmd, err := BuildCommandFrom(buf)
+		if err != nil {
+			return n, err
+		}
+		cc.AddCmd(subCmd.(txnif.TxnCmd))
 	}
 	return
 }
@@ -769,16 +505,9 @@ func (cc *ComposedCmd) String() string {
 func (cc *ComposedCmd) Desc() string {
 	return cc.ToDesc("")
 }
-func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, n int64, err error) {
-	var cmdType int16
-	if _, err = r.Read(types.EncodeInt16(&cmdType)); err != nil {
-		return
-	}
 
-	factory := txnif.GetCmdFactory(cmdType)
-
-	cmd = factory(cmdType)
-	n, err = cmd.ReadFrom(r)
-	n += 2
-	return
+func BuildCommandFrom(buf []byte) (cmd any, err error) {
+	head := objectio.DecodeIOEntryHeader(buf)
+	codec := objectio.GetIOEntryCodec(*head)
+	return codec.Decode(buf[4:])
 }

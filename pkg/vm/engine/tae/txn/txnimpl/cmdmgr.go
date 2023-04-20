@@ -61,7 +61,7 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	mgr.cmd.SetCmdSize(mgr.csn)
 	mgr.cmd.SetTxn(txn)
 	var buf []byte
-	if buf, err = mgr.cmd.Marshal(); err != nil {
+	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
 		return
 	}
 	// logutil.Info("", common.OperationField("suxi-replay-cmd"),
