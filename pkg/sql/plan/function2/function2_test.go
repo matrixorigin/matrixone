@@ -169,6 +169,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
 			shouldErr: true,
 		},
+
+		{
+			name: "iff", args: []types.Type{types.T_bool.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			shouldErr:  false,
+			requireFid: IFF, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_bool.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess()

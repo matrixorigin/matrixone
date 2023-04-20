@@ -15,10 +15,10 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type joinEdge struct {
@@ -139,8 +139,8 @@ func isEquiJoin0(exprs []*plan.Expr) bool {
 	return true
 }
 func SupportedJoinCondition(id int64) bool {
-	fid, _ := function.DecodeOverloadID(id)
-	return fid == function.EQUAL
+	fid, _ := function2.DecodeOverloadID(id)
+	return fid == function2.EQUAL
 }
 func HasColExpr(expr *plan.Expr, pos int32) int32 {
 	switch e := expr.Expr.(type) {

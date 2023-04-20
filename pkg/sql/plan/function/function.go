@@ -16,9 +16,6 @@ package function
 
 import (
 	"context"
-	"math"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,16 +29,6 @@ const (
 	// if we input a SQL `select built_in_function(columnA, NULL);`, and columnA is int64 column.
 	// it will use [types.T_int64, ScalarNull] to match function when we were building the query plan.
 	ScalarNull = types.T_any
-)
-
-var (
-	// an empty type structure just for return when we couldn't meet any function.
-	emptyType = types.Type{}
-
-	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
-	// used to make an AndExpr
-	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
-	AndFunctionName      = "and"
 )
 
 // Functions records all overloads of the same function name
@@ -62,55 +49,8 @@ type Functions struct {
 	Overloads []Function
 }
 
-// TypeCheck do type check work for a function,
-// if the input params matched one of function's overloads.
-// returns overload-index-number, target-type
-// just set target-type nil if there is no need to do implicit-type-conversion for parameters
-func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
-	if fs.TypeCheckFn == nil {
-		return normalTypeCheck(fs.Overloads, args)
-	}
-	return fs.TypeCheckFn(fs.Overloads, args)
-}
-
 func normalTypeCheck(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
-	matched := make([]int32, 0, 4)   // function overload which can be matched directly
-	byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
-	convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
-	for i, f := range overloads {
-		c, cost := tryToMatch(inputs, f.Args)
-		switch c {
-		case matchedDirectly:
-			matched = append(matched, int32(i))
-		case matchedByConvert:
-			byCast = append(byCast, int32(i))
-			convertCost = append(convertCost, cost)
-		case matchedFailed:
-			continue
-		}
-	}
-	if len(matched) == 1 {
-		return matched[0], nil
-	} else if len(matched) == 0 && len(byCast) > 0 {
-		// choose the overload with the least number of conversions
-		min, index := math.MaxInt32, 0
-		for j := range convertCost {
-			if convertCost[j] < min {
-				index = j
-				min = convertCost[j]
-			}
-		}
-		return byCast[index], overloads[byCast[index]].Args
-	} else if len(matched) > 1 {
-		// if contains any scalar null as param, just return the first matched.
-		for j := range inputs {
-			if inputs[j] == ScalarNull {
-				return matched[0], nil
-			}
-		}
-		return tooManyFunctionsMatched, nil
-	}
-	return wrongFunctionParameters, nil
+	panic("old function framework code")
 }
 
 // Function is an overload of
@@ -154,35 +94,29 @@ type Function struct {
 }
 
 func (f *Function) TestFlag(funcFlag plan.Function_FuncFlag) bool {
-	return f.flag&funcFlag != 0
+	panic("old function framework code")
 }
 
 func (f *Function) GetLayout() FuncExplainLayout {
-	return f.layout
+	panic("old function framework code")
 }
 
 // ReturnType return result-type of function, and the result is nullable
 // if nullable is false, function won't return a vector with null value.
 func (f Function) ReturnType(args []types.Type) (typ types.Type, nullable bool) {
-	if f.FlexibleReturnType != nil {
-		return f.FlexibleReturnType(args), !f.ResultWillNotNull
-	}
-	return f.ReturnTyp.ToType(), !f.ResultWillNotNull
+	panic("old function framework code")
 }
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if f.Fn == nil {
-		return nil, moerr.NewInternalError(proc.Ctx, "no function")
-	}
-	return f.Fn(vs, proc)
+	panic("old function framework code")
 }
 
 func (f Function) IsAggregate() bool {
-	return f.TestFlag(plan.Function_AGG)
+	panic("old function framework code")
 }
 
 func (f Function) isFunction() bool {
-	return f.GetLayout() == STANDARD_FUNCTION || f.GetLayout() >= NOPARAMETER_FUNCTION
+	panic("old function framework code")
 }
 
 // functionRegister records the information about
@@ -193,36 +127,21 @@ var functionRegister []Functions
 
 // get function id from map functionIdRegister, see functionIds.go
 func fromNameToFunctionIdWithoutError(name string) (int32, bool) {
-	if fid, ok := functionIdRegister[name]; ok {
-		return fid, true
-	}
-	return -1, false
+	panic("old function framework code")
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
 // the high 32-bit is function-id, the low 32-bit is overload-index
 func EncodeOverloadID(fid int32, index int32) (overloadID int64) {
-	overloadID = int64(fid)
-	overloadID = overloadID << 32
-	overloadID |= int64(index)
-	return overloadID
+	panic("old function framework code")
 }
 
 // DecodeOverloadID convert overload id to be function-id and overload-index
 func DecodeOverloadID(overloadID int64) (fid int32, index int32) {
-	base := overloadID
-	index = int32(overloadID)
-	fid = int32(base >> 32)
-	return fid, index
+	panic("old function framework code")
 }
 
 // GetFunctionByID get function structure by its index id.
 func GetFunctionByID(ctx context.Context, overloadID int64) (*Function, error) {
-	fid, overloadIndex := DecodeOverloadID(overloadID)
-	if int(fid) < len(functionRegister) {
-		fs := functionRegister[fid].Overloads
-		return &fs[overloadIndex], nil
-	} else {
-		return nil, moerr.NewInvalidInput(ctx, "function overload id not found")
-	}
+	panic("old function framework code")
 }

@@ -69,19 +69,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		rbat.Vecs[i] = vec
 	}
 
-	for i, vec := range bat.Vecs {
-		isSame := false
-		for _, rVec := range rbat.Vecs {
-			if vec == rVec {
-				bat.Vecs[i] = nil
-				isSame = true
-				break
-			}
-		}
-		if !isSame && vec != nil {
-			anal.Alloc(int64(vec.Size()))
-		}
+	newAlloc, err := colexec.SafeReuseAndDupBatch(proc, rbat, bat)
+	if err != nil {
+		bat.Clean(proc.Mp())
+		rbat.Clean(proc.Mp())
+		return false, err
 	}
+	anal.Alloc(int64(newAlloc))
+
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	bat.Clean(proc.Mp())

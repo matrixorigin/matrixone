@@ -2187,7 +2187,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		if err != nil {
 			return nil, err
 		}
-		if tmp.IsConstNull() {
+		if tmp.IsConstNull() || tmp.GetNulls().Contains(0) {
 			vector.AppendFixed(vec, 0, true, proc.Mp())
 			continue
 		}
