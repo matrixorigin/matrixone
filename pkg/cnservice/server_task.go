@@ -17,7 +17,6 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -108,8 +107,8 @@ func (s *service) initSqlWriterFactory() {
 			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
-		n := rand.Intn(len(details.CNStores))
-		return details.CNStores[n].SQLAddress, nil
+		//n := rand.Intn(len(details.CNStores))
+		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 
 	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
