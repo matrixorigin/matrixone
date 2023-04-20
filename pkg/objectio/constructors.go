@@ -22,7 +22,7 @@ import (
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
-type CacheConstructorFactory = func(size int64, algo uint8, noUnmarshalHint bool) CacheConstructor
+type CacheConstructorFactory = func(size int64, algo uint8, noHeaderHint bool) CacheConstructor
 
 func getVersionType(buf []byte) (uint16, uint16) {
 	if len(buf) < 4 {
@@ -32,7 +32,7 @@ func getVersionType(buf []byte) (uint16, uint16) {
 }
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConstructor {
+func constructorFactory(size int64, algo uint8, noHeaderHint bool) CacheConstructor {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		fn := func() ([]byte, int64, error) {
 			var err error
@@ -57,7 +57,7 @@ func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConst
 			return decompressed, int64(len(decompressed)), nil
 		}
 		buf, size, err := fn()
-		if noUnmarshalHint || err != nil {
+		if noHeaderHint || err != nil {
 			return buf, size, err
 		}
 
@@ -66,35 +66,10 @@ func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConst
 		if codec.NoUnmarshal() {
 			return buf[4:], size - 4, err
 		}
-		vec, err := codec.decFn(buf[4:])
+		v, err := codec.Decode(buf[4:])
 		if err != nil {
 			return nil, 0, err
 		}
-		return vec, size - 4, nil
-	}
-}
-
-func genericConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-
-		// no compress
-		if algo == 0 {
-			return data, int64(len(data)), nil
-		}
-
-		// lz4 compress
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		return decompressed, int64(len(decompressed)), nil
+		return v, size - 4, nil
 	}
 }

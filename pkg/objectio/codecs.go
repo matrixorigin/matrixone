@@ -56,6 +56,14 @@ func (codec ioEntryCodec) NoUnmarshal() bool {
 	return codec.decFn == nil
 }
 
+func (codec ioEntryCodec) Decode(buf []byte) (v any, err error) {
+	if codec.decFn == nil {
+		v = buf
+		return
+	}
+	return codec.decFn(buf)
+}
+
 var ioEntryCodecs = map[IOEntryHeader]ioEntryCodec{}
 
 func RegisterIOEnrtyCodec(h IOEntryHeader, encFn IOEncodeFunc, decFn IODecodeFunc) {
