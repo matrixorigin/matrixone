@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -86,6 +87,7 @@ func New(
 	if err := e.init(ctx, mp); err != nil {
 		panic(err)
 	}
+	go e.gc()
 
 	return e
 }
@@ -557,4 +559,13 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	delete(e.partitions, [2]uint64{dbId, tblId})
 	e.Unlock()
 	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) gc() {
+	for {
+		select {
+		case <-time.After(GcCycle):
+			fmt.Printf("++++timestamp: %v\n", e.cli.MinTimestamp())
+		}
+	}
 }
