@@ -64,3 +64,21 @@ message DNPingResponse {
 message DNStringResponse {
     string returnStr = 1;
 }
+
+// Request is used to send a request for a ctl service related operation to another 
+// ctl service.
+message Request {
+    // RequestID request id
+    uint64                   RequestID           = 1;
+    CmdMethod                CMDMethod           = 2;
+}
+
+// Response ctl response
+message Response {
+    // RequestID corresponding request id
+    uint64                    RequestID         = 1;
+    CmdMethod                 CMDMethod         = 2;
+    // Error we use this field to send moerr from service to another service. Set 
+    // with moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
+    bytes                     Error             = 3;
+}
