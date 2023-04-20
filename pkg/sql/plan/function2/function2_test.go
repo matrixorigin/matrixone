@@ -16,10 +16,11 @@ package function2
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func Test_fixedTypeCastRule1(t *testing.T) {
@@ -243,9 +244,7 @@ func Test_ShowFunctionsShouldBeRefactored(t *testing.T) {
 					continue
 				}
 			}
-			if _, ok := alreadyRegistered[int32(f.functionId)]; ok {
-				delete(alreadyRegistered, int32(f.functionId))
-			}
+			delete(alreadyRegistered, int32(f.functionId))
 		}
 	}
 

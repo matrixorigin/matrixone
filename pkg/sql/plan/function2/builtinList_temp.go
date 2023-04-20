@@ -735,6 +735,63 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	{
+		functionId: VERSION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            nil,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Version,
+			},
+		},
+	},
+
+	{
+		functionId: GIT_VERSION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            nil,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: GitVersion,
+			},
+		},
+	},
+
+	{
+		functionId: BUILD_VERSION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            nil,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: BuildVersion,
+			},
+		},
+	},
+
 	// function `oct`
 	{
 		functionId: OCT,

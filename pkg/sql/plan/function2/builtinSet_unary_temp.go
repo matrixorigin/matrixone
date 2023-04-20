@@ -142,15 +142,13 @@ func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 
 var (
 	intStartMap = map[types.T]int{
-		types.T_int8:  3,
-		types.T_int16: 2,
-		types.T_int32: 1,
-		types.T_int64: 0,
-	}
-	uintStartMap = map[types.T]int{
+		types.T_int8:   3,
 		types.T_uint8:  3,
+		types.T_int16:  2,
 		types.T_uint16: 2,
+		types.T_int32:  1,
 		types.T_uint32: 1,
+		types.T_int64:  0,
 		types.T_uint64: 0,
 	}
 	ints  = []int64{1e16, 1e8, 1e4, 1e2, 1e1}
