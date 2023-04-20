@@ -26,6 +26,7 @@ func ReadExtent(
 	name string,
 	extent *Extent,
 	noLRUCache bool,
+	noHeaderHint bool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (v any, err error) {
@@ -38,7 +39,7 @@ func ReadExtent(
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:   int64(extent.Offset()),
 		Size:     int64(extent.Length()),
-		ToObject: factory(int64(extent.OriginSize()), extent.Alg(), false),
+		ToObject: factory(int64(extent.OriginSize()), extent.Alg(), noHeaderHint),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
@@ -60,6 +61,7 @@ func ReadBloomFilter(
 		name,
 		extent,
 		noLRUCache,
+		false,
 		fs,
 		constructorFactory); err != nil {
 		return
@@ -87,7 +89,7 @@ func ReadObjectMeta(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v any
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, false, fs, constructorFactory); err != nil {
 		return
 	}
 	meta = ObjectMeta(v.([]byte))
