@@ -98,7 +98,7 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(v, true); err != nil {
 				return err
 			}
 		} else {

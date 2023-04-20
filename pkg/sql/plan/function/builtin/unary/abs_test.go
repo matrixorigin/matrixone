@@ -62,3 +62,22 @@ func Test_AbsUint64(t *testing.T) {
 
 	})
 }
+
+var vv *vector.Vector
+
+func BenchmarkAbsInt64(b *testing.B) {
+	c := []int64{-23, 9999999, -11, -99999, 9999999, -11, -99999, 9999999, -11, -99999, 9999999, -11, -99999}
+	proc := testutil.NewProcess()
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeInt64Vector(c, nil)
+
+	b.StartTimer()
+	for i := 0; i < 100000; i++ {
+		vec, err := AbsInt64(vecs, proc)
+		if err != nil {
+			log.Fatal(err)
+		}
+		vv = vec
+	}
+	b.StopTimer()
+}
