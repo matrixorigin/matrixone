@@ -436,7 +436,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: builtInHexString,
 			},
 			{
 				overloadId: 1,
@@ -444,7 +444,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: builtInHexString,
 			},
 			{
 				overloadId: 2,
@@ -452,7 +452,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: builtInHexInt64,
 			},
 		},
 	},
