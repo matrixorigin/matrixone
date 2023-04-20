@@ -254,6 +254,9 @@ select col2 % col1 from time01;
 
 drop table time01;
 
+-- modify time_zone to UTC
+SET time_zone = '+0:00';
+
 -- explicit:timestamp to int and decimal
 drop table if exists test03;
 create table test03(col1 timestamp);
@@ -265,9 +268,6 @@ select * from test03;
 select cast(col1 as int) from test03;
 select cast(col1 as decimal(20,18)) from test03;
 drop table test03;
-
--- modify time_zone to UTC
-SET time_zone = '+0:00';
 
 -- explicit:timestamp with scale to int and decimal
 drop table if exists test03;
