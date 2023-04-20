@@ -3595,9 +3595,9 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		}
 		// data transform Global to json
 		if len(marshalPlan.Steps) > 0 {
-			if len(marshalPlan.Steps) > 1 {
-				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
-			}
+			//if len(marshalPlan.Steps) > 1 {
+			//	logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
+			//}
 			buffer := &bytes.Buffer{}
 			encoder := json.NewEncoder(buffer)
 			encoder.SetEscapeHTML(false)
