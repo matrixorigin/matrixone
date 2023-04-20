@@ -14,7 +14,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"sort"
@@ -749,127 +748,6 @@ func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vec
 	default:
 		return nil
 	}
-}
-
-func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.GetType().Oid {
-	case types.T_int8:
-		rows := vector.MustFixedCol[int8](vec)
-		val := v.(int8)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int16:
-		rows := vector.MustFixedCol[int16](vec)
-		val := v.(int16)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int32:
-		rows := vector.MustFixedCol[int32](vec)
-		val := v.(int32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int64:
-		rows := vector.MustFixedCol[int64](vec)
-		val := v.(int64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint8:
-		rows := vector.MustFixedCol[uint8](vec)
-		val := v.(uint8)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint16:
-		rows := vector.MustFixedCol[uint16](vec)
-		val := v.(uint16)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint32:
-		rows := vector.MustFixedCol[uint32](vec)
-		val := v.(uint32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint64:
-		rows := vector.MustFixedCol[uint64](vec)
-		val := v.(uint64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_float32:
-		rows := vector.MustFixedCol[float32](vec)
-		val := v.(float32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_float64:
-		rows := vector.MustFixedCol[float64](vec)
-		val := v.(float64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_date:
-		rows := vector.MustFixedCol[types.Date](vec)
-		val := v.(types.Date)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_time:
-		rows := vector.MustFixedCol[types.Time](vec)
-		val := v.(types.Time)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_datetime:
-		rows := vector.MustFixedCol[types.Datetime](vec)
-		val := v.(types.Datetime)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_timestamp:
-		rows := vector.MustFixedCol[types.Timestamp](vec)
-		val := v.(types.Timestamp)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uuid:
-		rows := vector.MustFixedCol[types.Uuid](vec)
-		val := v.(types.Uuid)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
-		})
-	case types.T_decimal64:
-		rows := vector.MustFixedCol[types.Decimal64](vec)
-		val := v.(types.Decimal64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Compare(val) >= 0
-		})
-	case types.T_decimal128:
-		rows := vector.MustFixedCol[types.Decimal128](vec)
-		val := v.(types.Decimal128)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Compare(val) >= 0
-		})
-	case types.T_char, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:
-		// rows := vector.MustStrCols(vec)
-		// val := string(v.([]byte))
-		// return sort.SearchStrings(rows, val)
-		val := v.([]byte)
-		area := vec.GetArea()
-		varlenas := vector.MustFixedCol[types.Varlena](vec)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			colVal := varlenas[idx].GetByteSlice(area)
-			return bytes.Compare(colVal, val) >= 0
-		})
-	}
-
-	return -1
 }
 
 func mustVectorFromProto(v *api.Vector) *vector.Vector {
