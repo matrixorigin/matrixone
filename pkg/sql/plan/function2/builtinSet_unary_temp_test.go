@@ -86,8 +86,7 @@ func initHexStringTestCase() []tcTemp {
 		{
 			info: "test hex string - multirow",
 			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"Hello"}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"Gopher!"}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"Hello", "Gopher!"}, []bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"48656c6c6f", "476f7068657221"},
@@ -122,8 +121,7 @@ func initHexInt64TestCase() []tcTemp {
 			info: "test hex int64 - multirow",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{123}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{234}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{345}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{234, 345}, []bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"7B", "EA", "159"},
