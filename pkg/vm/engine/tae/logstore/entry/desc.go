@@ -40,7 +40,8 @@ const (
 	IOET_WALEntry_PostCommit      uint16 = 2002
 	IOET_WALEntry_Uncommitted     uint16 = 2003
 	IOET_WALEntry_Txn             uint16 = 2004
-	IOET_WALEntry_CustomizedStart uint16 = 2005
+	IOET_WALEntry_Test            uint16 = 2005
+	IOET_WALEntry_CustomizedStart uint16 = 2006
 
 	IOET_WALEntry_CurrVer = IOET_WALEntry_V1
 )
@@ -61,6 +62,12 @@ func init() {
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_Uncommitted,
+			Version: IOET_WALEntry_V1,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Test,
 			Version: IOET_WALEntry_V1,
 		}, nil, UnmarshalEntry,
 	)
