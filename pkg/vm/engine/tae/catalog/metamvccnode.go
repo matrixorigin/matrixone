@@ -16,11 +16,10 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type MetadataMVCCNode struct {
@@ -66,11 +65,11 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	if sn, err = common.WriteBytes(e.MetaLoc, w); err != nil {
+	if sn, err = objectio.WriteBytes(e.MetaLoc, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteBytes(e.DeltaLoc, w); err != nil {
+	if sn, err = objectio.WriteBytes(e.DeltaLoc, w); err != nil {
 		return
 	}
 	n += sn
@@ -79,11 +78,11 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	if e.MetaLoc, sn, err = common.ReadBytes(r); err != nil {
+	if e.MetaLoc, sn, err = objectio.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn
-	if e.DeltaLoc, sn, err = common.ReadBytes(r); err != nil {
+	if e.DeltaLoc, sn, err = objectio.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn

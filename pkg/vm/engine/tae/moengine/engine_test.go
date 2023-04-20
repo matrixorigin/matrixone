@@ -113,7 +113,7 @@ func TestEngine(t *testing.T) {
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
+	newbat.Vecs = containers.CopyToCNVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -129,9 +129,9 @@ func TestEngine(t *testing.T) {
 	bat = catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat = mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
+	newbat.Vecs = containers.CopyToCNVectors(bat.Vecs)
 	testBat := mobat.New(true, []string{bat.Attrs[0]})
-	testBat.Vecs = containers.CopyToMoVecs([]containers.Vector{bat.Vecs[12]})
+	testBat.Vecs = containers.CopyToCNVectors([]containers.Vector{bat.Vecs[12]})
 	err = rel.Delete(ctx, testBat, key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -220,7 +220,7 @@ func TestEngineAllType(t *testing.T) {
 	defer basebat.Close()
 
 	newbat := mobat.New(true, basebat.Attrs)
-	newbat.Vecs = containers.CopyToMoVecs(basebat.Vecs)
+	newbat.Vecs = containers.CopyToCNVectors(basebat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -236,9 +236,9 @@ func TestEngineAllType(t *testing.T) {
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat1 := mobat.New(true, bat.Attrs)
-	newbat1.Vecs = containers.CopyToMoVecs(bat.Vecs)
+	newbat1.Vecs = containers.CopyToCNVectors(bat.Vecs)
 	testBat := mobat.New(true, []string{bat.Attrs[0]})
-	testBat.Vecs = containers.CopyToMoVecs([]containers.Vector{bat.Vecs[12]})
+	testBat.Vecs = containers.CopyToCNVectors([]containers.Vector{bat.Vecs[12]})
 	err = rel.Delete(ctx, testBat, key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -259,7 +259,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, bat.Vecs[0].Length())
-			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12])
+			vec := containers.ToDNVector(bat.Vecs[12])
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -312,7 +312,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
+	newbat.Vecs = containers.CopyToCNVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -377,7 +377,7 @@ func TestCopy1(t *testing.T) {
 	v1 := containers.MockVector(t1, 10, false, nil)
 	defer v1.Close()
 	v1.Update(5, nil, true)
-	mv1 := containers.CopyToMoVec(v1)
+	mv1 := containers.CopyToCNVector(v1)
 	for i := 0; i < v1.Length(); i++ {
 		if v1.IsNull(i) {
 			assert.True(t, mv1.GetNulls().Contains(uint64(i)))
@@ -390,7 +390,7 @@ func TestCopy1(t *testing.T) {
 	v2 := containers.MockVector(t2, 20, false, nil)
 	defer v2.Close()
 	v2.Update(6, nil, true)
-	mv2 := containers.CopyToMoVec(v2)
+	mv2 := containers.CopyToCNVector(v2)
 	for i := 0; i < v2.Length(); i++ {
 		if v2.IsNull(i) {
 			assert.True(t, mv2.GetNulls().Contains(uint64(i)))
@@ -399,7 +399,7 @@ func TestCopy1(t *testing.T) {
 		}
 	}
 
-	v3 := containers.NewVectorWithSharedMemory(mv2)
+	v3 := containers.ToDNVector(mv2)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))
@@ -458,7 +458,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
+	newbat.Vecs = containers.CopyToCNVectors(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Equal(t, ErrReadOnly, err)
 	attrs, _ := rel.GetPrimaryKeys(ctx)

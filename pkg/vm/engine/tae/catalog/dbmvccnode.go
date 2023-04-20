@@ -17,7 +17,7 @@ package catalog
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type EmptyMVCCNode struct{}
@@ -55,7 +55,7 @@ type DBNode struct {
 
 func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	if node.name, sn, err = common.ReadString(r); err != nil {
+	if node.name, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -63,11 +63,11 @@ func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	if node.createSql, sn, err = common.ReadString(r); err != nil {
+	if node.createSql, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if node.datType, sn, err = common.ReadString(r); err != nil {
+	if node.datType, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -76,7 +76,7 @@ func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 
 func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	if sn, err = common.WriteString(node.name, w); err != nil {
+	if sn, err = objectio.WriteString(node.name, w); err != nil {
 		return
 	}
 	n += sn
@@ -84,11 +84,11 @@ func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(node.createSql, w); err != nil {
+	if sn, err = objectio.WriteString(node.createSql, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(node.datType, w); err != nil {
+	if sn, err = objectio.WriteString(node.datType, w); err != nil {
 		return
 	}
 	n += sn

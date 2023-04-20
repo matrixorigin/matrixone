@@ -46,9 +46,9 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 		colIdx := nameIdx[attr]
 		vec := view.GetColumnData(colIdx)
 		if vec.Allocated() > 0 {
-			bat.Vecs[i] = containers.CopyToMoVec(vec)
+			bat.Vecs[i] = containers.CopyToCNVector(vec)
 		} else {
-			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
+			bat.Vecs[i] = vec.GetDownstreamVector()
 		}
 	}
 	view.Close()

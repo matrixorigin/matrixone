@@ -52,6 +52,8 @@ type tunnel struct {
 	respC chan []byte
 	// closeOnce controls the close function to close tunnel only once.
 	closeOnce sync.Once
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
 
 	mu struct {
 		sync.Mutex
@@ -73,7 +75,7 @@ type tunnel struct {
 }
 
 // newTunnel creates a tunnel.
-func newTunnel(ctx context.Context, logger *log.MOLogger) *tunnel {
+func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet) *tunnel {
 	ctx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
 		ctx:       ctx,
@@ -85,6 +87,8 @@ func newTunnel(ctx context.Context, logger *log.MOLogger) *tunnel {
 		// response channel should have buffer, because it is handled in the same
 		// for-select with reqC.
 		respC: make(chan []byte, 10),
+		// set the counter set.
+		counterSet: cs,
 	}
 	return t
 }
@@ -153,12 +157,12 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx); err != nil {
-			t.setError(err)
+			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx); err != nil {
-			t.setError(err)
+			t.setError(withCode(err, codeServerDisconnect))
 		}
 	}()
 	if err := csp.waitReady(t.ctx); err != nil {
@@ -220,8 +224,10 @@ func (t *tunnel) canStartTransfer() bool {
 
 // transfer transfers the serverConn of tunnel to a new one.
 func (t *tunnel) transfer(ctx context.Context) error {
+	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(); !ok {
+		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.NewInternalError(ctx, "not safe to start transfer")
 	}
 	defer func() {
@@ -247,6 +253,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		return err
 	}
 	t.replaceServerConn(newConn)
+	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
 

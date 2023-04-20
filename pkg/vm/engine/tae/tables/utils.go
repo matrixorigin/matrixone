@@ -54,7 +54,7 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.NewVectorWithSharedMemory(bat.Vecs[0]), nil
+	return containers.ToDNVector(bat.Vecs[0]), nil
 }
 
 func ReadPersistedBlockRow(location objectio.Location) int {
@@ -75,7 +75,7 @@ func LoadPersistedDeletes(
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	for i := 0; i < 3; i++ {
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat.Vecs[i]))
+		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return
 }
