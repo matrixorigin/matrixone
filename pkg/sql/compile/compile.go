@@ -1979,14 +1979,30 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		rel = nil
 	}
 
-	// disttae engine , hash s3 objects to fixed CN
-	if engineType == engine.Disttae {
-		dop := c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum))
+	// for multi cn in luanch mode, put all payloads in current CN
+	// maybe delete this in the future
+	if isLaunchMode(c.cnList) {
 		//add current CN
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
 			Rel:  rel,
-			Mcpu: dop,
+			Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+		})
+		if engineType == engine.Disttae {
+			//add memory table block
+			nodes[0].Data = append(nodes[0].Data, []byte{})
+		}
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes, nil
+	}
+
+	// disttae engine , hash s3 objects to fixed CN
+	if engineType == engine.Disttae {
+		//add current CN
+		nodes = append(nodes, engine.Node{
+			Addr: c.addr,
+			Rel:  rel,
+			Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 		})
 		//add memory table block
 		nodes[0].Data = append(nodes[0].Data, []byte{})
@@ -2127,6 +2143,15 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 		last := len(s.Instructions) - 1
 		s.Instructions[last].IsLast = true
 	}
+}
+
+func isLaunchMode(cnlist engine.Nodes) bool {
+	for i := range cnlist {
+		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
