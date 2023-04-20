@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -136,14 +137,18 @@ func (s *service) Close() error {
 
 func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, error) {
 	if txn.CreatedOn == s.cfg.ServiceID {
-		txn := s.activeTxnHolder.getActiveTxn(txn.TxnID, false, "")
+		activeTxn := s.activeTxnHolder.getActiveTxn(txn.TxnID, false, "")
 		// the active txn closed
-		if txn == nil {
+		if activeTxn == nil {
 			return true, nil
 		}
-		return txn.fetchWhoWaitingMe(
+		txnID := activeTxn.getID()
+		if !bytes.Equal(txnID, txn.TxnID) {
+			return true, nil
+		}
+		return activeTxn.fetchWhoWaitingMe(
 			s.cfg.ServiceID,
-			txn.txnID,
+			txnID,
 			s.activeTxnHolder,
 			waiters.add,
 			s.getLockTable), nil
@@ -162,16 +167,15 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 }
 
 func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
-	// this wait txn must be hold by current service, because
+	// this wait activeTxn must be hold by current service, because
 	// all transactions found to be deadlocked by the deadlock
 	// detector must be held by the current service
-	txn := s.activeTxnHolder.getActiveTxn(wait.TxnID, false, "")
+	activeTxn := s.activeTxnHolder.getActiveTxn(wait.TxnID, false, "")
 	// the active txn closed
-	if txn == nil {
+	if activeTxn == nil {
 		return
 	}
-	logAbortDeadLock(s.cfg.ServiceID, wait, txn)
-	txn.abort(s.cfg.ServiceID, wait.TxnID)
+	activeTxn.abort(s.cfg.ServiceID, wait)
 }
 
 func (s *service) getLockTable(tableID uint64) (lockTable, error) {
