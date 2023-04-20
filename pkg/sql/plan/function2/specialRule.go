@@ -15,6 +15,9 @@
 package function2
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -36,6 +39,7 @@ type FunctionSpecialRule interface {
 func NewSpecialRule(name string, expressions []*plan.Expr) (FunctionSpecialRule, error) {
 	if name == "current_timestamp" && len(expressions) == 1 {
 		// XXX too hard.
+		return nil, moerr.NewNYI(context.TODO(), "special rule not impl.")
 	}
 	return &noSpecialRule{}, nil
 }

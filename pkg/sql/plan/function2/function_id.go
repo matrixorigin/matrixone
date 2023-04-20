@@ -290,6 +290,9 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
+	GIT_VERSION
+	BUILD_VERSION
+
 	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
 	VALUES
 	BINARY
