@@ -43,7 +43,7 @@ const (
 	SegmentAttr_State    = catalog.SegmentAttr_State
 	SegmentAttr_Sorted   = catalog.SegmentAttr_Sorted
 	// TODO(aptend): add SortHint and replay ckp correctly, onReplayCreateSegment. Use bytes as one column.
-	// Low priority, because replay from ckp will keep the create sequence
+	// Low priority, because replay from ckp will keep the create order
 	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
 	SnapshotMetaAttr_Tid                   = "table_id"
@@ -51,6 +51,8 @@ const (
 	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
 	SnapshotMetaAttr_BlockDeleteBatchEnd   = "block_delete_batch_end"
+
+	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
 
 var (
@@ -126,6 +128,7 @@ var (
 		SnapshotAttr_TID,
 		SnapshotAttr_BlockMaxRow,
 		SnapshotAttr_SegmentMaxBlock,
+		SnapshotAttr_SchemaExtra,
 	}
 	TblDNSchemaType = []types.Type{
 		types.New(types.T_uint64, 0, 0),
@@ -138,6 +141,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint16, 0, 0),
+		types.New(types.T_varchar, 0, 0),
 	}
 	SegmentDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,

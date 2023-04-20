@@ -828,6 +828,7 @@ func (h *Handle) HandleWrite(
 			bat, err = reader.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
+				nil,
 				location.ID(),
 				nil,
 			)

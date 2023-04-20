@@ -877,13 +877,13 @@ func updatePartitionOfPush(
 
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
-			key.PrimaryIdx,
+			key.PrimarySeqnum,
 			e,
 			state,
 			tl,
 		)
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimaryIdx, e, state, tl, dbId, key.Id, key.Name)
+		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
 	}
 
 	if err != nil {
@@ -900,13 +900,13 @@ func updatePartitionOfPush(
 
 func consumeLogTailOfPushWithLazyLoad(
 	ctx context.Context,
-	primaryIdx int,
+	primarySeqnum int,
 	engine *Engine,
 	state *PartitionState,
 	lt *logtail.TableLogtail,
 ) (err error) {
 	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
 			return
 		}
@@ -916,7 +916,7 @@ func consumeLogTailOfPushWithLazyLoad(
 
 func consumeLogTailOfPushWithoutLazyLoad(
 	ctx context.Context,
-	primaryIdx int,
+	primarySeqnum int,
 	engine *Engine,
 	state *PartitionState,
 	lt *logtail.TableLogtail,
@@ -933,14 +933,14 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		return
 	}
 	for _, entry := range entries {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, entry); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
 			return
 		}

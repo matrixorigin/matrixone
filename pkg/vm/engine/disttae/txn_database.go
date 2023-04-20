@@ -108,20 +108,22 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
-		db:           db,
-		tableId:      item.Id,
-		tableName:    item.Name,
-		defs:         item.Defs,
-		tableDef:     item.TableDef,
-		primaryIdx:   item.PrimaryIdx,
-		clusterByIdx: item.ClusterByIdx,
-		relKind:      item.Kind,
-		viewdef:      item.ViewDef,
-		comment:      item.Comment,
-		partitioned:  item.Partitioned,
-		partition:    item.Partition,
-		createSql:    item.CreateSql,
-		constraint:   item.Constraint,
+		db:            db,
+		tableId:       item.Id,
+		version:       item.Version,
+		tableName:     item.Name,
+		defs:          item.Defs,
+		tableDef:      item.TableDef,
+		primaryIdx:    item.PrimaryIdx,
+		primarySeqnum: item.PrimarySeqnum,
+		clusterByIdx:  item.ClusterByIdx,
+		relKind:       item.Kind,
+		viewdef:       item.ViewDef,
+		comment:       item.Comment,
+		partitioned:   item.Partitioned,
+		partition:     item.Partition,
+		createSql:     item.CreateSql,
+		constraint:    item.Constraint,
 	}
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
@@ -276,6 +278,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 	}
 	tbl.primaryIdx = -1
+	tbl.primarySeqnum = -1
 	tbl.clusterByIdx = -1
 	for i, col := range cols {
 		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
@@ -290,6 +293,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
+			tbl.primarySeqnum = i
 		}
 		if col.isClusterBy == 1 {
 			tbl.clusterByIdx = i
@@ -307,12 +311,13 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	tbl := &txnTable{
-		db:           db,
-		tableId:      id,
-		tableName:    name,
-		defs:         defs,
-		primaryIdx:   -1,
-		clusterByIdx: -1,
+		db:            db,
+		tableId:       id,
+		tableName:     name,
+		defs:          defs,
+		primaryIdx:    -1,
+		primarySeqnum: -1,
+		clusterByIdx:  -1,
 	}
 	tbl.getTableDef()
 	return tbl

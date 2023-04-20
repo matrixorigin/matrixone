@@ -88,6 +88,7 @@ type TableItem struct {
 	TableDef *plan.TableDef
 	Defs     []engine.TableDef
 	Rowid    types.Rowid
+	Version  uint32
 
 	// table def
 	Kind        string
@@ -99,7 +100,8 @@ type TableItem struct {
 	CreateSql   string
 
 	// primary index
-	PrimaryIdx int
+	PrimaryIdx    int
+	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
 
@@ -129,6 +131,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	isClusterBy     int8
+	seqnum          uint16
 }
 
 type columns []column

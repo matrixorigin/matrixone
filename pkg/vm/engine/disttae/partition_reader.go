@@ -47,7 +47,7 @@ type PartitionReader struct {
 	extendId2s3File map[string]int
 
 	// used to get idx of sepcified col
-	colIdxMp        map[string]int
+	seqnumMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
 	deletedBlocks   *deletedBlocks
@@ -88,16 +88,30 @@ func (p *PartitionReader) Close() error {
 	return nil
 }
 
-func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
+func (p *PartitionReader) getSeqnums(colNames []string) (res []uint16) {
 	for _, str := range colNames {
 		if str == catalog.Row_ID {
 			continue
 		}
-		v, ok := p.colIdxMp[str]
+		v, ok := p.seqnumMp[str]
 		if !ok {
 			panic("not existed col in partitionReader")
 		}
 		res = append(res, uint16(v))
+	}
+	return
+}
+
+func (p *PartitionReader) getTyps(colNames []string) (res []types.Type) {
+	for _, str := range colNames {
+		if str == catalog.Row_ID {
+			continue
+		}
+		v, ok := p.typsMap[str]
+		if !ok {
+			panic("not existed col in partitionReader")
+		}
+		res = append(res, v)
 	}
 	return
 }
@@ -141,7 +155,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, err
 				}
 			}
-			bat, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), location.ID(), p.procMPool)
+			bat, err = p.s3BlockReader.LoadColumns(context.Background(), p.getSeqnums(colNames), p.getTyps(colNames), location.ID(), p.procMPool)
 			if err != nil {
 				return nil, err
 			}
@@ -254,11 +268,19 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, err
 				}
 			} else {
-				appendFuncs[i](
-					b.Vecs[i],
-					entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
-					entry.Offset,
-				)
+				idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
+				if idx >= len(entry.Batch.Vecs) /*add column*/ || entry.Batch.Attrs[idx] == "" /*drop column*/ {
+					if err := vector.AppendAny(b.Vecs[i], nil, true, mp); err != nil {
+						return nil, err
+					}
+				} else {
+					appendFuncs[i](
+						b.Vecs[i],
+						entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
+						entry.Offset,
+					)
+				}
+
 			}
 		}
 		rows++

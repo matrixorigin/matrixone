@@ -24,7 +24,7 @@ import (
 
 func consumeEntry(
 	ctx context.Context,
-	primaryIdx int,
+	primarySeqnum int,
 	engine *Engine,
 	state *PartitionState,
 	e *api.Entry,
@@ -32,7 +32,7 @@ func consumeEntry(
 
 	packer, put := engine.packerPool.Get()
 	defer put()
-	state.HandleLogtailEntry(ctx, e, primaryIdx, packer)
+	state.HandleLogtailEntry(ctx, e, primarySeqnum, packer)
 
 	if isMetaTable(e.TableName) {
 		return nil

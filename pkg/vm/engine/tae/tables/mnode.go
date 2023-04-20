@@ -30,14 +30,15 @@ var _ NodeT = (*memoryNode)(nil)
 
 type memoryNode struct {
 	common.RefHelper
-	block  *baseBlock
-	data   *containers.Batch
-	prefix []byte
+	block       *baseBlock
+	writeSchema *catalog.Schema
+	data        *containers.Batch
+	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex indexwrapper.Index
 	//index for non-primary key : ZoneMap.
-	indexes map[int]indexwrapper.Index
+	indexes map[uint16]indexwrapper.Index
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -45,7 +46,9 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	impl.block = block
 	impl.prefix = block.meta.MakeKey()
 
+	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
+	impl.writeSchema = schema
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
 	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
@@ -55,16 +58,16 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 }
 
 func (node *memoryNode) initIndexes(schema *catalog.Schema) {
-	node.indexes = make(map[int]indexwrapper.Index)
+	node.indexes = make(map[uint16]indexwrapper.Index)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
 		if def.IsRealPrimary() {
-			node.indexes[def.Idx] = indexwrapper.NewPkMutableIndex(def.Type)
-			node.pkIndex = node.indexes[def.Idx]
+			node.pkIndex = indexwrapper.NewPkMutableIndex(def.Type)
+			node.indexes[def.SeqNum] = node.pkIndex
 		} else {
-			node.indexes[def.Idx] = indexwrapper.NewMutableIndex(def.Type)
+			node.indexes[def.SeqNum] = indexwrapper.NewMutableIndex(def.Type)
 		}
 	}
 }
@@ -102,8 +105,13 @@ func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
 	return
 }
 
-func (node *memoryNode) GetValueByRow(row, col int) (v any, isNull bool) {
-	vec := node.data.Vecs[col]
+func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool) {
+	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[col].SeqNum]
+	if !ok {
+		// TODO(aptend): use default value
+		return nil, true
+	}
+	vec := node.data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
 }
 
@@ -116,26 +124,55 @@ func (node *memoryNode) Rows() uint32 {
 }
 
 func (node *memoryNode) GetColumnDataWindow(
+	readSchema *catalog.Schema,
 	from uint32,
 	to uint32,
-	colIdx int,
+	col int,
 ) (vec containers.Vector, err error) {
-	data := node.data.Vecs[colIdx]
+	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[col].SeqNum]
+	if !ok {
+		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil), nil
+	}
+	data := node.data.Vecs[idx]
 	vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
 	return
 }
 
+func (node *memoryNode) GetDataWindowOnWriteSchema(
+	from, to uint32) (bat *containers.BatchWithVersion, err error) {
+	inner := node.data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	bat = &containers.BatchWithVersion{
+		Version:    node.writeSchema.Version,
+		NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
+		Seqnums:    node.writeSchema.AllSeqnums(),
+		Batch:      inner,
+	}
+	return
+}
+
 func (node *memoryNode) GetDataWindow(
+	readSchema *catalog.Schema,
 	from, to uint32) (bat *containers.Batch, err error) {
-	bat = node.data.CloneWindow(
-		int(from),
-		int(to-from),
-		common.DefaultAllocator)
+	// manually clone data
+	bat = containers.NewBatchWithCapacity(len(readSchema.ColDefs))
+	if node.data.Deletes != nil {
+		bat.Deletes = common.BM32Window(bat.Deletes, int(from), int(to))
+	}
+	for _, col := range readSchema.ColDefs {
+		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
+		var vec containers.Vector
+		if !ok {
+			vec = containers.FillConstVector(int(from-to), col.Type, nil)
+		} else {
+			vec = node.data.Vecs[idx].CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+		}
+		bat.AddVector(col.Name, vec)
+	}
 	return
 }
 
 func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	left := node.block.meta.GetSchema().BlockMaxRows - uint32(node.data.Length())
+	left := node.writeSchema.BlockMaxRows - uint32(node.data.Length())
 	if left == 0 {
 		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
@@ -158,7 +195,7 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer col.Close()
-	vec := node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+	vec := node.data.Vecs[node.writeSchema.PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }
@@ -166,7 +203,7 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 func (node *memoryNode) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	schema := node.block.meta.GetSchema()
+	schema := node.writeSchema
 	from = int(node.data.Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
