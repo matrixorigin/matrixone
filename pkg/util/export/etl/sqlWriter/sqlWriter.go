@@ -142,10 +142,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		if err != nil {
 			if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
 				chunkSize = chunkSize / 2
-				chunks = chunkRecords(records, chunkSize)
-				_, err = bulkInsert(db, records, tbl, chunkSize)
+				_, err = bulkInsert(db, chunk, tbl, chunkSize)
 			} else {
-				// retry
+				// simple retry
 				_, err = db.Exec(stmt)
 			}
 		}
