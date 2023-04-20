@@ -95,7 +95,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		return r, err
 	}
 	f := allSupportedFunctions[r.fid]
-	if f.checkFn == nil {
+	if len(f.Overloads) == 0 || f.checkFn == nil {
 		return r, moerr.NewNYI(ctx, "should implement the function %s", name)
 	}
 

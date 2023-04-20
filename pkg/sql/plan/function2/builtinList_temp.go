@@ -19,17 +19,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var _ = tempListForBinaryFunctions1
+var _ = tempListForUnaryFunctions1
 var _ = tempListForBinaryFunctions2
 
-// tempListForBinaryFunctions just set the unary functions still need to be refactored.
+// tempListForUnaryFunctions1 just set the unary functions still need to be refactored.
 // TODO: plz find the entrance to the old execute code from sql/plan/function/builtins.go
 //
 //	NewOp is new execute code. I set it empty now.
 //	if you want to rewrite, and refer to ./builtinSet.go
 //	if you want to modify, you should copy code from function directory.
 //	but no matter which one, you should see how the old code do.
-var tempListForBinaryFunctions1 = []FuncNew{
+var tempListForUnaryFunctions1 = []FuncNew{
 	// function `abs`
 	{
 		functionId: ABS,

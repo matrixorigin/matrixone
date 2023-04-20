@@ -50,6 +50,14 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
 			},
 		},
+
+		// special rule, null + null
+		// we just cast it as int64 + int64
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_any.ToType(), types.T_any.ToType()},
+			want:       [2]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		},
 	}
 
 	for i, in := range inputs {
@@ -100,6 +108,14 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 6},
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
 			},
+		},
+
+		// special rule, null / null
+		// we just cast it as float64 / float64
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
+			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 		},
 	}
 
@@ -199,5 +215,45 @@ func Test_GetFunctionByName(t *testing.T) {
 			}
 			require.Equal(t, c.requireRet, get.retType, msg)
 		}
+	}
+}
+
+func Test_ShowFunctionsShouldBeRefactored(t *testing.T) {
+	alreadyRegistered := make(map[int32]bool)
+	fromIDtoName := make(map[int32][]string)
+	for name, id := range functionIdRegister {
+		if names, ok := fromIDtoName[id]; ok {
+			fromIDtoName[id] = append(names, name)
+		} else {
+			fromIDtoName[id] = []string{name}
+		}
+
+		alreadyRegistered[id] = true
+	}
+
+	sets := [][]FuncNew{
+		supportedBuiltins, supportedOperators, supportedAggregateFunctions,
+		tempListForUnaryFunctions1, tempListForBinaryFunctions2,
+	}
+
+	for _, set := range sets {
+		for _, f := range set {
+			if f.checkFn == nil || len(f.Overloads) == 0 {
+				if !f.isAggregate() {
+					continue
+				}
+			}
+			if _, ok := alreadyRegistered[int32(f.functionId)]; ok {
+				delete(alreadyRegistered, int32(f.functionId))
+			}
+		}
+	}
+
+	// show how many function we should implement.
+	fmt.Printf("there are still %d functions need to implement\n", len(alreadyRegistered))
+	count := 1
+	for id := range alreadyRegistered {
+		fmt.Printf("%d: %v\n", count, fromIDtoName[id])
+		count++
 	}
 }

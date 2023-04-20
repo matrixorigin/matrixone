@@ -172,7 +172,7 @@ func setTargetScaleFromSource(source, target *types.Type) {
 func initFixed1() {
 	// cast [0] + [1] ==> [2] + [3]
 	ru := [][4]types.T{
-		{types.T_any, types.T_any, types.T_any, types.T_any},
+		{types.T_any, types.T_any, types.T_int64, types.T_int64},
 		{types.T_any, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_any, types.T_int8, types.T_int8, types.T_int8},
 		{types.T_any, types.T_int16, types.T_int16, types.T_int16},
