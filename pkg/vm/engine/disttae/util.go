@@ -102,7 +102,10 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	fGet, _ := function2.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	fGet, err := function2.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	if err != nil {
+		panic(err)
+	}
 	funId, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),

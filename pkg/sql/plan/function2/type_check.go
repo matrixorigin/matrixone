@@ -139,6 +139,9 @@ func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int
 // a fixed type implicit cast rule
 // return can cast or not and cast cost.
 func fixedImplicitTypeCast(from types.Type, to types.T) (canCast bool, cost int) {
+	if from.Oid == types.T_any {
+		return true, 1
+	}
 	rule := fixedCanImplicitCastRule[from.Oid].toList[to]
 	return rule.canCast, rule.preferLevel
 }

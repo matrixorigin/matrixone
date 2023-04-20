@@ -26,13 +26,13 @@ import (
 // builtins,	see initBuiltIns
 // operators,	see initOperators
 func init() {
-	initRelatedStructure()
-
-	initOperators()
-	initBuiltIns()
-	initAggregateFunction()
-
-	initTypeCheckRelated()
+	//initRelatedStructure()
+	//
+	//initOperators()
+	//initBuiltIns()
+	//initAggregateFunction()
+	//
+	//initTypeCheckRelated()
 }
 
 var registerMutex sync.RWMutex

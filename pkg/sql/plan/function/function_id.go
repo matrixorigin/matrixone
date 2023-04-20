@@ -14,8 +14,6 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 const (
 	Distinct     = 0x8000000000000000
 	DistinctMask = 0x7FFFFFFFFFFFFFFF
@@ -541,13 +539,4 @@ var functionIdRegister = map[string]int32{
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
 	"lastval":                        LASTVAL,
-}
-
-func GetFunctionIsWinfunByName(name string) bool {
-	fid, exists := fromNameToFunctionIdWithoutError(name)
-	if !exists {
-		return false
-	}
-	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }

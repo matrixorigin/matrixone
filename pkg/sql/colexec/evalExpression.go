@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -97,8 +96,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
-
-		logutil.Infof("new executor %d", t.F.GetFunc().GetObj())
 
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -191,8 +188,6 @@ func (expr *FunctionExpressionExecutor) Init(
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	logutil.Infof("function executor eval")
-
 	var err error
 	for i := range expr.parameterExecutor {
 		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches)
@@ -225,10 +220,15 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 }
 
 func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	logutil.Infof("batch len is %d, relIndex is %d, colIndex is %d", len(batches), expr.relIndex, expr.colIndex)
-	for i := range batches {
-		logutil.Infof("bat[%d]: vec len is %d", i, len(batches[i].Vecs))
+	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
+	if len(batches) == 1 {
+		vec := batches[0].Vecs[expr.colIndex]
+		if vec.IsConstNull() {
+			vec.SetType(expr.typ)
+		}
+		return vec, nil
 	}
+
 	vec := batches[expr.relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		vec.SetType(expr.typ)

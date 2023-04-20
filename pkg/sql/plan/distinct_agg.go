@@ -16,7 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 )
 
 func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
@@ -32,7 +32,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 		}
 
 		aggFunc := node.AggList[0].GetF()
-		if uint64(aggFunc.Func.Obj)&function.Distinct == 0 || (aggFunc.Func.ObjName != "count" && aggFunc.Func.ObjName != "sum") {
+		if uint64(aggFunc.Func.Obj)&function2.Distinct == 0 || (aggFunc.Func.ObjName != "count" && aggFunc.Func.ObjName != "sum") {
 			return
 		}
 
@@ -63,7 +63,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 			}
 		}
 
-		aggFunc.Func.Obj &= function.DistinctMask
+		aggFunc.Func.Obj &= function2.DistinctMask
 		aggFunc.Args[0] = &plan.Expr{
 			Typ: DeepCopyType(toCount.Typ),
 			Expr: &plan.Expr_Col{
