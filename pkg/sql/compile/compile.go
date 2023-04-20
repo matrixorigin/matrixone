@@ -1955,6 +1955,28 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		rel = nil
 	}
 
+	// If ranges == 0, dont know what type of table is this
+	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i, node := range c.cnList {
+			if isPartitionTable {
+				nodes[i] = engine.Node{
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
+			} else {
+				nodes[i] = engine.Node{
+					Rel:  rel,
+					Id:   node.Id,
+					Addr: node.Addr,
+					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				}
+			}
+		}
+		return nodes, nil
+	}
+
 	// ordinary table , hash s3 objects to fixed CN
 	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
 		dop := c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum))
@@ -2005,30 +2027,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 		return newNodes, nil
-	}
-
-	// If ranges == 0, dont know what type of table is this
-	if len(ranges) == 0 {
-		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
-		nodes = make(engine.Nodes, len(c.cnList))
-		for i, node := range c.cnList {
-			if isPartitionTable {
-				nodes[i] = engine.Node{
-					Id:   node.Id,
-					Addr: node.Addr,
-					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-				}
-			} else {
-				nodes[i] = engine.Node{
-					Rel:  rel,
-					Id:   node.Id,
-					Addr: node.Addr,
-					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-				}
-			}
-
-		}
-		return nodes, nil
 	}
 
 	// maybe temp table on memengine
