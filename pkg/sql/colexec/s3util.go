@@ -289,8 +289,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 			rbat.Zs = append(rbat.Zs, bat.Zs[j+start])
 		}
 		start += rows
-		if rbat.Length() >= int(options.DefaultBlockMaxRows) {
-			w.Batsize += uint64(rbat.Size())
+		if w.Batsize = w.Batsize + uint64(rbat.Size()); w.Batsize > WriteS3Threshold {
 			index = len(w.Bats)
 		}
 	}
