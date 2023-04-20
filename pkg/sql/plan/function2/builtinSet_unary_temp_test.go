@@ -805,3 +805,30 @@ func TestLengthUTF8(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initLtrimTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test ltrim",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{" 123", "  123", "123 ", " 8 ", " 8 a ", ""},
+				[]bool{false, false, false, false, false, true},
+			)},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"123", "123", "123 ", "8 ", "8 a ", ""},
+				[]bool{false, false, false, false, false, true},
+			),
+		},
+	}
+}
+
+func TestLtrim(t *testing.T) {
+	testCases := initLtrimTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Ltrim)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+	"strings"
 	"time"
 )
 
@@ -571,7 +572,7 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 				return err
 			}
 		} else {
-			res := StrLengthUTF8(function2Util.QuickBytesToStr(v))
+			res := strLengthUTF8(v)
 			if err := rs.Append(res, false); err != nil {
 				return err
 			}
@@ -580,6 +581,32 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	return nil
 }
 
-func StrLengthUTF8(xs string) uint64 {
-	return lengthutf8.CountUTF8CodePoints([]byte(xs))
+func strLengthUTF8(xs []byte) uint64 {
+	return lengthutf8.CountUTF8CodePoints(xs)
+}
+
+func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	//TODO: Need help in handling T_blob case. Original Code: https://github.com/m-schen/matrixone/blob/8cc47db01615a6b6504822d2e63f7085c41f3a47/pkg/sql/plan/function/builtin/unary/ltrim.go#L28
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := ltrim(function2Util.QuickBytesToStr(v))
+			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ltrim(xs string) string {
+	return strings.TrimLeft(xs, " ")
 }
