@@ -411,6 +411,7 @@ col2 % col1
 122059
 235959
 drop table time01;
+SET time_zone = '+0:00';
 drop table if exists test03;
 create table test03(col1 timestamp);
 insert into test03 values('1997-01-13 12:20:59.898612');
@@ -423,16 +424,15 @@ col1
 null
 select cast(col1 as int) from test03;
 cast(col1 as int)
-853186860
-2620799
+853158060
+2591999
 null
 select cast(col1 as decimal(20,18)) from test03;
 cast(col1 as decimal(20, 18))
-853186860.000000000000000000
-2620799.000000000000000000
+853158060.000000000000000000
+2591999.000000000000000000
 null
 drop table test03;
-SET time_zone = '+0:00';
 drop table if exists test03;
 create table test03(col1 timestamp(5));
 insert into test03 values('1997-01-13 12:20:59.898612');
