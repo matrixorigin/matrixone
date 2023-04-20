@@ -45,8 +45,8 @@ func (s *Service) initSqlWriterFactory() {
 			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
 
-		//n := rand.Intn(len(details.CNStores))
-		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
+		n := rand.Intn(len(details.CNStores))
+		return details.CNStores[n].SQLAddress, nil
 	}
 
 	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
