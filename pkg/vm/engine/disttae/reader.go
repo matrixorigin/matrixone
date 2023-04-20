@@ -99,9 +99,12 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
 	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.GetType().Oid)
-	if canCompute {
-		row := findRowByPkValue(vec, v)
+	if !r.init {
+		r.init = true
+		r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, vec.GetType().Oid)
+	}
+	if r.canCompute && r.searchFunc != nil {
+		row := r.searchFunc(vec)
 		if row >= vec.Length() {
 			// can not find row.
 			bat.Shrink([]int64{})
