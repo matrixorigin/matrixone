@@ -69,3 +69,57 @@ func BenchmarkAbsInt64(b *testing.B) {
 	}
 	b.StopTimer()
 }
+
+func initHexStringTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test hex string",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "", "255", ""},
+					[]bool{false, false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"61", "", "323535", ""},
+				[]bool{false, false, false, true}),
+		},
+	}
+}
+
+func TestHexString(t *testing.T) {
+	testCases := initHexStringTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInHexString)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initHexInt64TestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test hex string",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{255, 231323423423421, 0},
+					[]bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"FF", "D2632E7B3BBD", ""},
+				[]bool{false, false, true}),
+		},
+	}
+}
+
+func TestHexInt64(t *testing.T) {
+	testCases := initHexInt64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInHexInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}

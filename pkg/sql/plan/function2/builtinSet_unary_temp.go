@@ -25,6 +25,8 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// Abs Functions
+
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
@@ -113,8 +115,7 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-
+func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
@@ -133,7 +134,7 @@ func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
