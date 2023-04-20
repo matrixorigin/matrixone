@@ -15,9 +15,12 @@
 package function2
 
 import (
+	"encoding/hex"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -108,4 +111,51 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 	}
 	return nil
+}
+
+func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := HexEncodeString(v)
+			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := HexEncodeInt64(v)
+			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func HexEncodeString(xs []byte) string {
+	return hex.EncodeToString(xs)
+}
+
+func HexEncodeInt64(xs int64) string {
+	return fmt.Sprintf("%X", xs)
 }
