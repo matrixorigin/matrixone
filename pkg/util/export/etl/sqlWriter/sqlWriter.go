@@ -56,17 +56,11 @@ func jsonEscape(i string) string {
 	return s[1 : len(s)-1]
 }
 
-func generateInsertStatement(rows string, tbl *table.Table) (string, int, error) {
+func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
 
 	sb := strings.Builder{}
 	sb.WriteString("INSERT INTO")
 	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
-
-	r := csv.NewReader(strings.NewReader(rows))
-	records, err := r.ReadAll()
-	if err != nil {
-		return "", 0, err
-	}
 
 	// write columns
 	sb.WriteString("(")
@@ -102,7 +96,7 @@ func generateInsertStatement(rows string, tbl *table.Table) (string, int, error)
 		if idx == len(records)-1 {
 			sb.WriteString(");")
 		} else {
-			sb.WriteString("),\n")
+			sb.WriteString("),")
 		}
 	}
 	return sb.String(), len(records), nil
@@ -120,101 +114,51 @@ func chunkRecords(records [][]string, chunkSize int) [][][]string {
 	return chunks
 }
 
-func bulkInsert(db *sql.DB, rows string, tbl *table.Table, maxLen int) (int, error) {
-	r := csv.NewReader(strings.NewReader(rows))
-	records, err := r.ReadAll()
-	if err != nil {
-		return 0, err
-	}
-
+func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
-
 	chunkSize := maxLen
 	chunks := chunkRecords(records, chunkSize)
 
-	tx, err := db.Begin()
-	if err != nil {
-		return 0, err
-	}
-
 	totalInserted := 0
 	for _, chunk := range chunks {
-		valueStrings := []string{}
 
-		for _, row := range chunk {
-			if len(row) == 0 {
-				continue
-			}
-
-			valueString := "("
-			for i, field := range row {
-				if i != 0 {
-					valueString += ","
-				}
-				if tbl.Columns[i].ColType == table.TJson {
-					res := strings.ReplaceAll(jsonEscape(field), "'", "\\'")
-					valueString += "'" + res + "'"
-				} else {
-					// escape single quote
-					res := strings.ReplaceAll(field, "'", "\\'")
-					valueString += "'" + res + "'"
-				}
-			}
-			valueString += ")"
-
-			valueStrings = append(valueStrings, valueString)
-		}
-
-		updateString := ""
-		updateParts := []string{}
-		for _, column := range tbl.Columns {
-			updateParts = append(updateParts, fmt.Sprintf("`%s` = VALUES(`%s`)", column.Name, column.Name))
-		}
-		updateString = " ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", ")
-
-		stmt := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s%s", tbl.Database, tbl.Table, strings.Join(valueStrings, ","), updateString)
-		res, err := tx.Exec(stmt)
+		stmt, cnt, err := generateInsertStatement(chunk, tbl)
+		_, err = db.Exec(stmt)
 		if err != nil {
-			tx.Rollback()
 			return totalInserted, err
 		}
-
-		affected, err := res.RowsAffected()
-		if err != nil {
-			tx.Rollback()
-			return totalInserted, err
-		}
-
-		totalInserted += int(affected)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return totalInserted, err
+		totalInserted += cnt
 	}
 
 	return totalInserted, nil
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
+	r := csv.NewReader(strings.NewReader(rows))
+	records, err := r.ReadAll()
+	if err != nil {
+		return 0, err
+	}
 	db, dbErr := sw.initOrRefreshDBConn(false)
 	if dbErr != nil {
 		return 0, dbErr
 	}
-
-	stmt, cnt, _ := generateInsertStatement(rows, tbl)
-	_, err := db.Exec(stmt)
-	// cnt, err := bulkInsert(db, rows, tbl, 1000)
+	stmt, cnt, _ := generateInsertStatement(records, tbl)
+	_, err = db.Exec(stmt)
 	if err != nil {
 		db, _ := sw.initOrRefreshDBConn(true)
-		// cnt, err := bulkInsert(db, rows, tbl, 1000)
-		_, err := db.Exec(stmt)
-		if err != nil {
-			return 0, err
+		// packet for query is too large. Try adjusting the 'max_allowed_packet' variable on the server
+		if strings.Contains(err.Error(), "packet for query is too large") {
+			if tbl.Table == "statement_info" {
+				cnt, err = bulkInsert(db, records, tbl, 1000)
+				if err != nil {
+					return 0, err
+				}
+			}
+			return cnt, nil
 		}
-		return cnt, nil
 	}
 	return cnt, nil
 }

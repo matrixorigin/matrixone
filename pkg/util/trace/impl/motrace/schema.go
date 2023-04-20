@@ -101,11 +101,11 @@ var (
 			sqlTypeCol,
 			resultCntCol,
 		},
-		PrimaryKeyColumn: []table.Column{stmtIDCol},
-		Engine:           table.NormalTableEngine,
-		Comment:          "record each statement and stats info",
-		PathBuilder:      table.NewAccountDatePathBuilder(),
-		AccountColumn:    &accountCol,
+		//PrimaryKeyColumn: []table.Column{stmtIDCol},
+		Engine:        table.NormalTableEngine,
+		Comment:       "record each statement and stats info",
+		PathBuilder:   table.NewAccountDatePathBuilder(),
+		AccountColumn: &accountCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
 	}
