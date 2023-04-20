@@ -610,3 +610,29 @@ func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 func ltrim(xs string) string {
 	return strings.TrimLeft(xs, " ")
 }
+
+func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	//TODO: Need help in handling T_blob case. Original Code: https://github.com/m-schen/matrixone/blob/3751d33a42435b21bc0416fe47df9d6f4b1060bc/pkg/sql/plan/function/builtin/unary/rtrim.go#L28
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := rtrim(function2Util.QuickBytesToStr(v))
+			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rtrim(xs string) string {
+	return strings.TrimRight(xs, " ")
+}

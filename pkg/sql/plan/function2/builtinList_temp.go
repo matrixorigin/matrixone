@@ -646,6 +646,33 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	// function `rtrim`
+	{
+		functionId: RTRIM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Rtrim,
+			},
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_blob},
+				retType: func(parameter []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: Rtrim,
+			},
+		},
+	},
+
 	// function `MO_MEMORY_USAGE`
 	// function `MO_ENABLE_MEMORY_USAGE_DETAIL`
 	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
