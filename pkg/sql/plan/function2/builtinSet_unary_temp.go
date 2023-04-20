@@ -17,6 +17,7 @@ package function2
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -667,4 +668,81 @@ func reverse(str string) string {
 		runes[i], runes[j] = runes[j], runes[i]
 	}
 	return string(runes)
+}
+
+func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			var nilVal types.Decimal128
+			if err := rs.Append(nilVal, true); err != nil {
+				return err
+			}
+		} else {
+			res, err := oct(v)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func oct[T constraints.Unsigned | constraints.Signed](val T) (types.Decimal128, error) {
+	_val := uint64(val)
+	return types.ParseDecimal128(fmt.Sprintf("%o", _val), 38, 0)
+}
+
+func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			var nilVal types.Decimal128
+			if err := rs.Append(nilVal, true); err != nil {
+				return err
+			}
+		} else {
+			res, err := octFloat(v)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
+	var res types.Decimal128
+
+	if xs < 0 {
+		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs), 10, 64)
+		if err != nil {
+			return res, err
+		}
+		res, err = oct(uint64(val))
+		if err != nil {
+			return res, err
+		}
+	} else {
+		val, err := strconv.ParseUint(fmt.Sprintf("%1.0f", xs), 10, 64)
+		if err != nil {
+			return res, err
+		}
+		res, err = oct(val)
+		if err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+
 }
