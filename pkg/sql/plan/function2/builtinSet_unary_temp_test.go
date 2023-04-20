@@ -573,7 +573,7 @@ func initHexStringTestCase() []tcTemp {
 				[]bool{false, false, false, true}),
 		},
 		{
-			//TODO: Verify the multi-row case.
+			//TODO: Verify the multi-row case: original code:https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/hex_test.go#L58
 			info: "test hex string - multirow",
 			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"Hello", "Gopher!"},
@@ -609,7 +609,7 @@ func initHexInt64TestCase() []tcTemp {
 				[]bool{false, false, true}),
 		},
 		{
-			//TODO: Verify the multi-row case.
+			//TODO: Verify the multi-row case. Original code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/hex_test.go#L116
 			info: "test hex int64 - multirow",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{123, 234, 345}, []bool{false, false, false}),
@@ -627,6 +627,68 @@ func TestHexInt64(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initBlobLengthTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test length blob",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_blob.ToType(),
+					//TODO: verify: Passing String instead of []byte. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L117
+					[]string{"12345678", ""},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{8, 0},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestBlobLength(t *testing.T) {
+	testCases := initBlobLengthTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initLengthTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			//TODO: verify if makevector can be represented like this. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L51
+			info:   "test length varchar",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+		},
+		{
+			//TODO: verify if makevector can be represented like this. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L58
+			info:   "test length char",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_char.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+		},
+		{
+			//TODO: Previously T_Text was not added
+			info:   "test length text",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_text.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+		},
+	}
+}
+
+func TestLength(t *testing.T) {
+	testCases := initLengthTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
