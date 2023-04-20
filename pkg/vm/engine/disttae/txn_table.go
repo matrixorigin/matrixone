@@ -199,8 +199,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	}
 	parts := tbl.getParts()
 
-	ranges := make([][]byte, 0, 1)
-	ranges = append(ranges, []byte{})
+	ranges := make([][]byte, 0)
 	tbl.skipBlocks = make(map[types.Blockid]uint8)
 	if tbl.meta == nil {
 		return ranges, nil

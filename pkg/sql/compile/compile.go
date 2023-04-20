@@ -1951,8 +1951,63 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expectedLen := len(ranges)
 	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	// If ranges == 0, it's temporary table ?
-	// XXX the code is too confused. should be removed once we remove the memory-engine.
+	if isPartitionTable {
+		rel = nil
+	}
+
+	// ordinary table , hash s3 objects to fixed CN
+	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
+		dop := c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum))
+		//add current CN
+		nodes = append(nodes, engine.Node{
+			Addr: c.addr,
+			Rel:  rel,
+			Mcpu: dop,
+		})
+		//add memory table block
+		nodes[0].Data = append(nodes[0].Data, []byte{})
+		// only memory table block
+		if len(ranges) == 0 {
+			return nodes, nil
+		}
+		//only one cn
+		if len(c.cnList) == 1 {
+			nodes[0].Data = append(nodes[0].Data, ranges...)
+			return nodes, nil
+		}
+		//add the rest of CNs in list
+		for i := range c.cnList {
+			if c.cnList[i].Addr != c.addr {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[i].Id,
+					Addr: c.cnList[i].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				})
+			}
+		}
+		// sort by addr to get fixed order of CN list
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+		//to maxify locality, put blocks in the same s3 object in the same CN
+		lenCN := len(c.cnList)
+		for i, blk := range ranges {
+			marshalledBlock := disttae.BlockUnmarshal(ranges[i])
+			objName := marshalledBlock.Info.MetaLoc.Name()
+			index := plan2.SimpleHashToRange(objName, lenCN)
+			nodes[index].Data = append(nodes[index].Data, blk)
+		}
+		//remove empty node from nodes
+		var newNodes engine.Nodes
+		for i := range nodes {
+			if len(nodes[i].Data) > 0 {
+				newNodes = append(newNodes, nodes[i])
+			}
+		}
+		return newNodes, nil
+	}
+
+	// If ranges == 0, dont know what type of table is this
 	if len(ranges) == 0 {
 		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
 		nodes = make(engine.Nodes, len(c.cnList))
@@ -1976,79 +2031,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nodes, nil
 	}
 
-	if isPartitionTable {
-		rel = nil
-	}
-
-	// In fact, the first element of Ranges is always a memory table.
-	if engine.IsMemtable(ranges[0]) {
-		if c.info.Typ == plan2.ExecTypeTP {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: 1,
-			})
-		} else {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-		ranges = ranges[1:]
-	}
-
-	// 1. If the length of cn list is 1, query is small or just one cn now.
-	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
-	// Both these queries only needs to be executed on the current cn.
-	if len(ranges) == 0 {
-		return nodes, nil
-	}
-	if len(c.cnList) == 1 {
-		if len(nodes) == 0 {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges...)
-		return nodes, nil
-	}
-
-	if n.TableDef.TableType == catalog.SystemOrdinaryRel {
-		//to maxify locality, put blocks in the same s3 object in the same CN
-		lenCN := len(c.cnList)
-		if len(nodes) == 0 {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		for i := range c.cnList {
-			if c.cnList[i].Addr != c.addr {
-				nodes = append(nodes, engine.Node{
-					Rel:  rel,
-					Id:   c.cnList[i].Id,
-					Addr: c.cnList[i].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
-				})
-			}
-		}
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-
-		for i, blk := range ranges {
-			marshalledBlock := disttae.BlockUnmarshal(ranges[i])
-			objName := marshalledBlock.Info.MetaLoc.Name()
-			index := plan2.SimpleHashToRange(objName, lenCN)
-			nodes[index].Data = append(nodes[index].Data, blk)
-		}
-		return nodes, nil
-	}
-
+	// maybe temp table on memengine
 	// determines which blocks should be read by each cn node.
+	// just put payloads in average
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
