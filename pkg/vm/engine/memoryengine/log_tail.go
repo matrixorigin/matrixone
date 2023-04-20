@@ -37,7 +37,7 @@ func (t *Table) GetLogTail(
 		true,
 		thisShard(targetShard),
 		OpGetLogTail,
-		apipb.SyncLogTailReq{
+		&apipb.SyncLogTailReq{
 			CnHave: from,
 			CnWant: to,
 			Table: &apipb.TableID{

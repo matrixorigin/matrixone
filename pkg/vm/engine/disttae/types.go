@@ -223,27 +223,20 @@ type databaseKey struct {
 	name      string
 }
 
-// block list information of table
-type tableMeta struct {
-	tableName     string
-	blocks        [][]BlockMeta
-	modifedBlocks [][]ModifyBlockMeta
-	defs          []engine.TableDef
-}
-
 // txnTable represents an opened table in a transaction
 type txnTable struct {
 	tableId   uint64
 	tableName string
 	dnList    []int
 	db        *txnDatabase
-	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs         []engine.TableDef
-	tableDef     *plan.TableDef
-	idxs         []uint16
-	setPartsOnce sync.Once
-	_parts       []*PartitionState
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	idxs           []uint16
+	setPartsOnce   sync.Once
+	_parts         []*PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
+	blockMetas     [][]BlockMeta
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -338,7 +331,51 @@ type emptyReader struct {
 type BlockMeta struct {
 	Rows    int64
 	Info    catalog.BlockInfo
-	Zonemap [][64]byte
+	Zonemap []Zonemap
+}
+
+func (a *BlockMeta) MarshalBinary() ([]byte, error) {
+	return a.Marshal()
+}
+
+func (a *BlockMeta) UnmarshalBinary(data []byte) error {
+	return a.Unmarshal(data)
+}
+
+type Zonemap [64]byte
+
+func (z *Zonemap) ProtoSize() int {
+	return 64
+}
+
+func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, z[:])
+	return n, nil
+}
+
+func (z *Zonemap) MarshalTo(data []byte) (int, error) {
+	size := z.ProtoSize()
+	return z.MarshalToSizedBuffer(data[:size])
+}
+
+func (z *Zonemap) Marshal() ([]byte, error) {
+	data := make([]byte, z.ProtoSize())
+	n, err := z.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (z *Zonemap) Unmarshal(data []byte) error {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(z[:], data)
+	return nil
 }
 
 type ModifyBlockMeta struct {
