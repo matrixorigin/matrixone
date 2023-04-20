@@ -71,6 +71,7 @@ func BenchmarkAbsInt64(b *testing.B) {
 }
 
 func initHexStringTestCase() []tcTemp {
+	//TODO: Pending multi-row, scalar=true
 	return []tcTemp{
 		{
 			info: "test hex string",
@@ -98,6 +99,7 @@ func TestHexString(t *testing.T) {
 }
 
 func initHexInt64TestCase() []tcTemp {
+	//TODO: Pending multi-row, scalar=true
 	return []tcTemp{
 		{
 			info: "test hex int64",
