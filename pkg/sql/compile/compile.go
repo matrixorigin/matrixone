@@ -1951,10 +1951,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expectedLen := len(ranges)
 	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	if isPartitionTable {
-		rel = nil
-	}
-
 	// If ranges == 0, dont know what type of table is this
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
@@ -1975,6 +1971,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 		return nodes, nil
+	}
+
+	if isPartitionTable {
+		rel = nil
 	}
 
 	// ordinary table , hash s3 objects to fixed CN
