@@ -25,7 +25,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-// Abs Functions
+// Abs Functions (abs.go)
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
@@ -114,6 +114,8 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}
 	return nil
 }
+
+// Hex Functions (hex.go)
 
 func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
