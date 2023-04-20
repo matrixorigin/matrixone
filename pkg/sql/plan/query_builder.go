@@ -661,40 +661,47 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		if err != nil {
 			return nil, err
 		}
-		for _, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
-		}
+		//for _, globalRef := range childRemapping.localToGlobal {
+		//	if colRefCnt[globalRef] == 0 {
+		//		continue
+		//	}
+		//	remapping.addColRef(globalRef)
+		//}
+		//for i, expr := range node.ProjectList {
+		//	remapping.addColRef([2]int32{nodeTag, int32(i)})
+		//	decreaseRefCnt(expr, colRefCnt)
+		//}
 		for i, expr := range node.ProjectList {
 			remapping.addColRef([2]int32{nodeTag, int32(i)})
 			decreaseRefCnt(expr, colRefCnt)
+
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
 		}
+
 		oldPrejectLen := len(node.ProjectList)
-		node.ProjectList = node.ProjectList[0:0]
+		//node.ProjectList = node.ProjectList[0:0]
 		for i := range node.PreInsertCtx.HiddenColumnTyp {
 			pos := int32(oldPrejectLen + i)
 			remapping.addColRef([2]int32{nodeTag, pos})
 		}
 
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		for i, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			// remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
+		//childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		//for i, globalRef := range childRemapping.localToGlobal {
+		//	// remapping.addColRef(globalRef)
+		//	node.ProjectList = append(node.ProjectList, &plan.Expr{
+		//		Typ: childProjList[i].Typ,
+		//		Expr: &plan.Expr_Col{
+		//			Col: &plan.ColRef{
+		//				RelPos: 0,
+		//				ColPos: int32(i),
+		//				Name:   builder.nameByColRef[globalRef],
+		//			},
+		//		},
+		//	})
+		//}
 
 		for i, typ := range node.PreInsertCtx.HiddenColumnTyp {
 			node.ProjectList = append(node.ProjectList, &plan.Expr{

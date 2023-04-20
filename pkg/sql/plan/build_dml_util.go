@@ -316,7 +316,7 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext,
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
 
 	preProjectLength := len(preNode.ProjectList)
-	sinkProjection := getProjectionByPreProjection(preNode.ProjectList, preInsertTag)
+	sinkProjection := getProjectionByPreProjection(preInsertProjection, preInsertTag)
 	for i, typ := range hiddenColumnTyp {
 		sinkProjection = append(sinkProjection, &plan.Expr{
 			Typ: typ,
