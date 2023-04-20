@@ -675,7 +675,7 @@ func initLengthTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
 		},
 		{
-			//TODO: Previously T_Text was not added
+			//TODO: Previously T_Text was not added. Original code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L71
 			info:   "test length text",
 			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_text.ToType(), []string{"abcdefghijklm"}, []bool{false})},
 			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
