@@ -125,26 +125,24 @@ func (r *objectReaderV1) ReadOneBlock(
 	idxs []uint16,
 	blk uint16,
 	m *mpool.MPool,
-	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, factory)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, constructorFactory)
 }
 
 func (r *objectReaderV1) ReadAll(
 	ctx context.Context,
 	idxs []uint16,
 	m *mpool.MPool,
-	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, factory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, constructorFactory)
 }
 
 func (r *objectReaderV1) ReadOneBF(
@@ -189,7 +187,7 @@ func (r *objectReaderV1) ReadExtent(
 		&extent,
 		r.noLRUCache,
 		r.fs,
-		genericConstructorFactory)
+		constructorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +198,6 @@ func (r *objectReaderV1) ReadMultiBlocks(
 	ctx context.Context,
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
-	constructor CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
@@ -214,7 +211,7 @@ func (r *objectReaderV1) ReadMultiBlocks(
 		false,
 		m,
 		r.fs,
-		constructor)
+		constructorFactory)
 }
 
 func (r *objectReaderV1) ReadAllMeta(

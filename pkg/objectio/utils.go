@@ -14,6 +14,7 @@
 package objectio
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,6 +87,11 @@ func (o *CreateBlockOpt) WithBlkIdx(s uint16) *CreateBlockOpt {
 		}{Blkn: s}
 	}
 	return o
+}
+
+func writeIoHeader(typ uint16, version uint16, buf *bytes.Buffer) {
+	buf.Write(types.EncodeUint16(&typ))
+	buf.Write(types.EncodeUint16(&version))
 }
 
 func WriteString(str string, w io.Writer) (n int64, err error) {

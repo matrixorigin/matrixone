@@ -19,14 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-)
-
-var (
-	// Remove me later. Only used for SCA check now
-	_ = getVersionType
-	_ = constructorFactory
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
@@ -69,16 +61,16 @@ func constructorFactory(size int64, algo uint8, noUnmarshalHint bool) CacheConst
 			return buf, size, err
 		}
 
-		version, typ := getVersionType(buf)
-		codec := GetIOEntryCodec(IOEntryHeader{version, typ})
+		typ, version := getVersionType(buf)
+		codec := GetIOEntryCodec(IOEntryHeader{typ, version})
 		if codec.NoUnmarshal() {
-			return buf, size, err
+			return buf[4:], size - 4, err
 		}
 		vec, err := codec.decFn(buf[4:])
 		if err != nil {
 			return nil, 0, err
 		}
-		return vec, size, nil
+		return vec, size - 4, nil
 	}
 }
 
@@ -104,62 +96,5 @@ func genericConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor 
 			return nil, 0, err
 		}
 		return decompressed, int64(len(decompressed)), nil
-	}
-}
-
-func BloomFilterConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		indexes := make([]StaticFilter, 0)
-		bf := BloomFilter(decompressed)
-		count := bf.BlockCount()
-		for i := uint32(0); i < count; i++ {
-			buf := bf.GetBloomFilter(i)
-			if len(buf) == 0 {
-				indexes = append(indexes, nil)
-				continue
-			}
-			index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-			if err != nil {
-				return nil, 0, err
-			}
-			indexes = append(indexes, index)
-		}
-		return indexes, int64(len(decompressed)), nil
-	}
-}
-
-func ColumnConstructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
-		// decompress
-		var err error
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-		}
-		decompressed := make([]byte, size)
-		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		vec := vector.NewVec(types.Type{})
-		if err = vec.UnmarshalBinary(decompressed); err != nil {
-			return nil, 0, err
-		}
-		return vec, int64(len(decompressed)), nil
 	}
 }

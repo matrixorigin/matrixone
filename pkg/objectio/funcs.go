@@ -61,7 +61,7 @@ func ReadBloomFilter(
 		extent,
 		noLRUCache,
 		fs,
-		BloomFilterConstructorFactory); err != nil {
+		constructorFactory); err != nil {
 		return
 	}
 	filters = v.([]StaticFilter)
@@ -87,7 +87,7 @@ func ReadObjectMeta(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v any
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, genericConstructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
 	meta = ObjectMeta(v.([]byte))
