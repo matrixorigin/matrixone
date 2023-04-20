@@ -536,3 +536,26 @@ func hexEncodeString(xs []byte) string {
 func hexEncodeInt64(xs int64) string {
 	return fmt.Sprintf("%X", xs)
 }
+
+func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[int64](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			res := strLength(function2Util.QuickBytesToStr(v))
+			if err := rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func strLength(xs string) int64 {
+	return int64(len(xs))
+}
