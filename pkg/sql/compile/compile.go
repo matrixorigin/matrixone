@@ -1974,82 +1974,24 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 
 	engineType := rel.GetEngineType()
-
 	if isPartitionTable {
 		rel = nil
 	}
-
 	// for multi cn in luanch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		//add current CN
-		nodes = append(nodes, engine.Node{
-			Addr: c.addr,
-			Rel:  rel,
-			Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-		})
-		if engineType == engine.Disttae {
-			//add memory table block
-			nodes[0].Data = append(nodes[0].Data, []byte{})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges...)
-		return nodes, nil
+		return putBlocksInCurrentCN(c, ranges, rel, n, engineType), nil
 	}
-
 	// disttae engine , hash s3 objects to fixed CN
 	if engineType == engine.Disttae {
-		//add current CN
-		nodes = append(nodes, engine.Node{
-			Addr: c.addr,
-			Rel:  rel,
-			Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-		})
-		//add memory table block
-		nodes[0].Data = append(nodes[0].Data, []byte{})
-		// only memory table block
-		if len(ranges) == 0 {
-			return nodes, nil
-		}
-		//only one cn
-		if len(c.cnList) == 1 {
-			nodes[0].Data = append(nodes[0].Data, ranges...)
-			return nodes, nil
-		}
-		//add the rest of CNs in list
-		for i := range c.cnList {
-			if c.cnList[i].Addr != c.addr {
-				nodes = append(nodes, engine.Node{
-					Rel:  rel,
-					Id:   c.cnList[i].Id,
-					Addr: c.cnList[i].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
-				})
-			}
-		}
-		// sort by addr to get fixed order of CN list
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-
-		//to maxify locality, put blocks in the same s3 object in the same CN
-		lenCN := len(c.cnList)
-		for i, blk := range ranges {
-			marshalledBlock := disttae.BlockUnmarshal(ranges[i])
-			objName := marshalledBlock.Info.MetaLoc.Name()
-			index := plan2.SimpleHashToRange(objName, lenCN)
-			nodes[index].Data = append(nodes[index].Data, blk)
-		}
-		//remove empty node from nodes
-		var newNodes engine.Nodes
-		for i := range nodes {
-			if len(nodes[i].Data) > 0 {
-				newNodes = append(newNodes, nodes[i])
-			}
-		}
-		return newNodes, nil
+		return hashBlocksToFixedCN(c, ranges, rel, n), nil
 	}
+	// maybe temp table on memengine , just put payloads in average
+	return putBlocksInAverage(c, ranges, rel, n), nil
+}
 
-	// maybe temp table on memengine
-	// determines which blocks should be read by each cn node.
-	// just put payloads in average
+func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
@@ -2093,7 +2035,74 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 	}
-	return nodes, nil
+	return nodes
+}
+
+func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	//add memory table block
+	nodes[0].Data = append(nodes[0].Data, []byte{})
+	// only memory table block
+	if len(ranges) == 0 {
+		return nodes
+	}
+	//only one cn
+	if len(c.cnList) == 1 {
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes
+	}
+	//add the rest of CNs in list
+	for i := range c.cnList {
+		if c.cnList[i].Addr != c.addr {
+			nodes = append(nodes, engine.Node{
+				Rel:  rel,
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+			})
+		}
+	}
+	// sort by addr to get fixed order of CN list
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+	//to maxify locality, put blocks in the same s3 object in the same CN
+	lenCN := len(c.cnList)
+	for i, blk := range ranges {
+		marshalledBlock := disttae.BlockUnmarshal(ranges[i])
+		objName := marshalledBlock.Info.MetaLoc.Name()
+		index := plan2.SimpleHashToRange(objName, lenCN)
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+	//remove empty node from nodes
+	var newNodes engine.Nodes
+	for i := range nodes {
+		if len(nodes[i].Data) > 0 {
+			newNodes = append(newNodes, nodes[i])
+		}
+	}
+	return newNodes
+}
+
+func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node, engineType engine.EngineType) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	if engineType == engine.Disttae {
+		//add memory table block
+		nodes[0].Data = append(nodes[0].Data, []byte{})
+	}
+	nodes[0].Data = append(nodes[0].Data, ranges...)
+	return nodes
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
