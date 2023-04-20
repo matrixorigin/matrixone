@@ -154,6 +154,14 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 		name = "Minus"
 	case plan.Node_MINUS_ALL:
 		name = "Minus All"
+	case plan.Node_ON_DUPLICATE_KEY:
+		name = "On Duplicate Key"
+	case plan.Node_PRE_DELETE:
+		name = "Pre Delete"
+	case plan.Node_PRE_INSERT:
+		name = "Pre Insert"
+	case plan.Node_PRE_INSERT_UK:
+		name = "Pre Insert Unique"
 	default:
 		return name, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -164,7 +172,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	var result string
 	var err error
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
 			result += m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName()
@@ -191,6 +199,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
 			ctx := m.node.DeleteCtx.Ref
+			result += ctx.SchemaName + "." + ctx.ObjName
+		} else {
+			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
+		}
+	case plan.Node_INSERT:
+		if m.node.InsertCtx != nil {
+			ctx := m.node.InsertCtx.Ref
 			result += ctx.SchemaName + "." + ctx.ObjName
 		} else {
 			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
@@ -289,13 +304,10 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 	case plan.Node_INSERT:
-		tableDef := m.node.TableDef
-		objRef := m.node.ObjRef
+		objRef := m.node.InsertCtx.Ref
 		var fullTableName string
 		if objRef != nil {
 			fullTableName += objRef.GetSchemaName() + "." + objRef.GetObjName()
-		} else if tableDef != nil {
-			fullTableName += tableDef.GetName()
 		} else {
 			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -306,22 +318,22 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 		// "name" : "Columns (2 / 28)",
-		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
+		// columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
-		labels = append(labels, Label{
-			Name:  "Columns",
-			Value: columns,
-		})
+		// labels = append(labels, Label{
+		// 	Name:  "Columns",
+		// 	Value: columns,
+		// })
 
-		labels = append(labels, Label{
-			Name:  "Total columns",
-			Value: len(tableDef.Cols),
-		})
+		// labels = append(labels, Label{
+		// 	Name:  "Total columns",
+		// 	Value: len(tableDef.Cols),
+		// })
 
-		labels = append(labels, Label{
-			Name:  "Scan columns",
-			Value: len(tableDef.Cols),
-		})
+		// labels = append(labels, Label{
+		// 	Name:  "Scan columns",
+		// 	Value: len(tableDef.Cols),
+		// })
 	case plan.Node_UPDATE:
 		if m.node.UpdateCtx != nil {
 			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtx, options)
