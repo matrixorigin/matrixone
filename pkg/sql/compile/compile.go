@@ -579,19 +579,19 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		// 	})
 		// }
 	case plan.Query_UPDATE:
-		// return ss[0], nil
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Update
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Update,
-			Arg: scp,
-		})
+		return ss[0], nil
+		// scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// rs = c.newMergeScope(ss)
+		// updateScopesLastFlag([]*Scope{rs})
+		// rs.Magic = Update
+		// c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		// rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 	Op:  vm.Update,
+		// 	Arg: scp,
+		// })
 	default:
 		rs = c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})

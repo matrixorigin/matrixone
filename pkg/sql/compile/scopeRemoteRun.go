@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -915,6 +916,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			InsertCtx: &insert.InsertCtx{
 				Ref:             t.Ref,
 				AddAffectedRows: t.AddAffectedRows,
+				Attrs:           t.Attrs,
 			},
 		}
 	case vm.PreInsert:
@@ -923,6 +925,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
 			Idx:        t.GetIdx(),
+			Attrs:      t.GetAttrs(),
 		}
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()

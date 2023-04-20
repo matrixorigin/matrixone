@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -511,6 +512,12 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
 
+	var attrs []string
+	for _, col := range oldCtx.TableDef.Cols {
+		if col.Name != catalog.Row_ID {
+			attrs = append(attrs, col.Name)
+		}
+	}
 	originRel, _, err := getRel(ctx, proc, eg, oldCtx.Ref, nil)
 	if err != nil {
 		return nil, err
@@ -519,6 +526,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Ref:             oldCtx.Ref,
 		AddAffectedRows: oldCtx.AddAffectedRows,
 		Rel:             originRel,
+		Attrs:           attrs,
 	}
 
 	return &insert.Argument{

@@ -33,6 +33,7 @@ type InsertCtx struct {
 	Rel             engine.Relation
 	Ref             *plan.ObjectRef
 	AddAffectedRows bool
+	Attrs           []string
 	//origin table's def.
 	// TableDef *plan.TableDef
 }

@@ -86,6 +86,7 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		Ref:             DeepCopyObjectRef(ctx.Ref),
 		AddAffectedRows: ctx.AddAffectedRows,
 		IsClusterTable:  ctx.IsClusterTable,
+		TableDef:        DeepCopyTableDef(ctx.TableDef),
 	}
 
 	return newCtx
