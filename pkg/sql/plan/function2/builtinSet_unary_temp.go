@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/json_quote"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"time"
@@ -558,4 +559,27 @@ func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 
 func strLength(xs string) int64 {
 	return int64(len(xs))
+}
+
+func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			res := StrLengthUTF8(function2Util.QuickBytesToStr(v))
+			if err := rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func StrLengthUTF8(xs string) uint64 {
+	return lengthutf8.CountUTF8CodePoints([]byte(xs))
 }

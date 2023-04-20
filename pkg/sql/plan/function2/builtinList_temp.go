@@ -576,7 +576,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				NewOp: nil,
+				NewOp: LengthUTF8,
 			},
 			{
 				overloadId: 1,
@@ -584,7 +584,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				NewOp: nil,
+				NewOp: LengthUTF8,
 			},
 		},
 	},
