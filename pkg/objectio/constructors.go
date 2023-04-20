@@ -18,18 +18,10 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
 type CacheConstructorFactory = func(size int64, algo uint8, noHeaderHint bool) CacheConstructor
-
-func getVersionType(buf []byte) (uint16, uint16) {
-	if len(buf) < 4 {
-		panic("bad data")
-	}
-	return types.DecodeUint16(buf[:2]), types.DecodeUint16(buf[2:])
-}
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8, noHeaderHint bool) CacheConstructor {
@@ -61,15 +53,15 @@ func constructorFactory(size int64, algo uint8, noHeaderHint bool) CacheConstruc
 			return buf, size, err
 		}
 
-		typ, version := getVersionType(buf)
-		codec := GetIOEntryCodec(IOEntryHeader{typ, version})
+		header := DecodeIOEntryHeader(buf)
+		codec := GetIOEntryCodec(*header)
 		if codec.NoUnmarshal() {
-			return buf[4:], size - 4, err
+			return buf[IOEntryHeaderSize:], size, err
 		}
-		v, err := codec.Decode(buf[4:])
+		v, err := codec.Decode(buf[IOEntryHeaderSize:])
 		if err != nil {
 			return nil, 0, err
 		}
-		return v, size - 4, nil
+		return v, size, nil
 	}
 }
