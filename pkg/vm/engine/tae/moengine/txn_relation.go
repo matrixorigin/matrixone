@@ -47,7 +47,7 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec)
+		v := containers.ToDNVector(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return rel.handle.Append(taeBatch)
@@ -66,7 +66,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
-	tvec := containers.NewVectorWithSharedMemory(keys)
+	tvec := containers.ToDNVector(keys)
 	defer tvec.Close()
 	return rel.handle.DeleteByPhyAddrKeys(tvec)
 }
@@ -79,7 +79,7 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	if data.GetType().Oid == types.T_any {
 		data.SetType(schema.ColDefs[idx].Type)
 	}
-	vec := containers.NewVectorWithSharedMemory(data)
+	vec := containers.ToDNVector(data)
 	defer vec.Close()
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)

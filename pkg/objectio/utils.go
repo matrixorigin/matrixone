@@ -14,6 +14,9 @@
 package objectio
 
 import (
+	"bytes"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -84,4 +87,55 @@ func (o *CreateBlockOpt) WithBlkIdx(s uint16) *CreateBlockOpt {
 		}{Blkn: s}
 	}
 	return o
+}
+
+func writeIoHeader(typ uint16, version uint16, buf *bytes.Buffer) {
+	buf.Write(types.EncodeUint16(&typ))
+	buf.Write(types.EncodeUint16(&version))
+}
+
+func WriteString(str string, w io.Writer) (n int64, err error) {
+	buf := []byte(str)
+	size := uint32(len(buf))
+	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	wn, err := w.Write(buf)
+	return int64(wn + 4), err
+}
+
+func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
+	size := uint32(len(b))
+	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	wn, err := w.Write(b)
+	return int64(wn + 4), err
+}
+
+func ReadString(r io.Reader) (str string, n int64, err error) {
+	strLen := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+		return
+	}
+	buf := make([]byte, strLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	str = string(buf)
+	n = 4 + int64(strLen)
+	return
+}
+
+func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
+	strLen := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+		return
+	}
+	buf = make([]byte, strLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n = 4 + int64(strLen)
+	return
 }

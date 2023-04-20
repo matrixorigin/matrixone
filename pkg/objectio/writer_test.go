@@ -115,13 +115,13 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, genericConstructorFactory)
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
 	assert.Nil(t, err)
-	vector1 := newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
+	vector1 := vec.Entries[0].Object.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 := newVector(types.T_int32.ToType(), vec.Entries[1].Object.([]byte))
+	vector2 := vec.Entries[1].Object.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 := newVector(types.T_int64.ToType(), vec.Entries[2].Object.([]byte))
+	vector3 := vec.Entries[2].Object.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
@@ -145,13 +145,13 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool, genericConstructorFactory)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
 	assert.Nil(t, err)
-	vector1 = newVector(types.T_int8.ToType(), vec.Entries[0].Object.([]byte))
+	vector1 = vec.Entries[0].Object.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 = newVector(types.T_int32.ToType(), vec.Entries[1].Object.([]byte))
+	vector2 = vec.Entries[1].Object.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 = newVector(types.T_int64.ToType(), vec.Entries[2].Object.([]byte))
+	vector3 = vec.Entries[2].Object.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
@@ -300,10 +300,4 @@ func newBatch2(mp *mpool.MPool) *batch.Batch {
 		types.T_uint32.ToType(),
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
-}
-
-func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.NewVec(tye)
-	vector.UnmarshalBinary(buf)
-	return vector
 }
