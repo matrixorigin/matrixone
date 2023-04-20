@@ -558,3 +558,76 @@ func TestJsonQuoteOfYear(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initHexStringTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test hex string",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "", "255", ""},
+					[]bool{false, false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"61", "", "323535", ""},
+				[]bool{false, false, false, true}),
+		},
+		{
+			//TODO: Verify the multi-row case.
+			info: "test hex string - multirow",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"Hello", "Gopher!"},
+				[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"48656c6c6f", "476f7068657221"},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestHexString(t *testing.T) {
+	testCases := initHexStringTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initHexInt64TestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test hex int64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{255, 231323423423421, 0}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"FF", "D2632E7B3BBD", ""},
+				[]bool{false, false, true}),
+		},
+		{
+			//TODO: Verify the multi-row case.
+			info: "test hex int64 - multirow",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{123, 234, 345}, []bool{false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"7B", "EA", "159"},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestHexInt64(t *testing.T) {
+	testCases := initHexInt64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
