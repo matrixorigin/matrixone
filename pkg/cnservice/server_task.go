@@ -17,7 +17,6 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -93,26 +92,27 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 }
 
 func (s *service) initSqlWriterFactory() {
-	addressFunc := func(ctx context.Context) (string, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		haKeeperClient, err := s.getHAKeeperClient()
-		if err != nil {
-			return "", err
-		}
-		details, err := haKeeperClient.GetClusterDetails(ctx)
-		if err != nil {
-			return "", err
-		}
-		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
-		}
+	s.adjustSQLAddress()
+	//addressFunc := func(ctx context.Context) (string, error) {
+	//	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	//	defer cancel()
+	//	haKeeperClient, err := s.getHAKeeperClient()
+	//	if err != nil {
+	//		return "", err
+	//	}
+	//	details, err := haKeeperClient.GetClusterDetails(ctx)
+	//	if err != nil {
+	//		return "", err
+	//	}
+	//	if len(details.CNStores) == 0 {
+	//		return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
+	//	}
+	//
+	//	n := rand.Intn(len(details.CNStores))
+	//	return details.CNStores[n].SQLAddress, nil
+	//}
 
-		n := rand.Intn(len(details.CNStores))
-		return details.CNStores[n].SQLAddress, nil
-	}
-
-	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
+	sqlWriter.SetSQLWriterDBAddressFunc(func(context.Context) (string, error) { return s.cfg.SQLAddress, nil })
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
