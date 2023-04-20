@@ -699,14 +699,46 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	// function `reverse`
+	{
+		functionId: REVERSE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Reverse,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Reverse,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_blob},
+				retType: func(parameter []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: Reverse,
+			},
+		},
+	},
+
 	// function `MO_MEMORY_USAGE`
 	// function `MO_ENABLE_MEMORY_USAGE_DETAIL`
 	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
 	// function `month`
 	// function `oct`
-	// function `reverse`
-	// function `rtrim`
-	// function `sleep`
 	// function `space`
 	// function `time`
 	// function `time_of_day`

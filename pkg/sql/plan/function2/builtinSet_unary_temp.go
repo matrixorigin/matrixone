@@ -637,3 +637,34 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 func rtrim(xs string) string {
 	return strings.TrimRight(xs, " ")
 }
+
+func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	//TODO: Need help in handling T_blob case. Original Code: https://github.com/m-schen/matrixone/blob/a8360197d569920c66b295d957fb1213b0dd1828/pkg/sql/plan/function/builtin/unary/reverse.go#L28
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := reverse(function2Util.QuickBytesToStr(v))
+			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func reverse(str string) string {
+	runes := []rune(str)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
+}
