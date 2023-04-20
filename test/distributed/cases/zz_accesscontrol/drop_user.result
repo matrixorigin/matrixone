@@ -11,7 +11,7 @@ drop user if exists drop_user_2;
 create user drop_user_2 identified by '111' comment '';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='drop_user_2';
 user_name    authentication_string
-drop_user_2    111
+drop_user_2    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
 drop user if exists drop_user_2;
 select user_name,authentication_string from mo_catalog.mo_user where user_name='drop_user_2';
 user_name    authentication_string
@@ -28,37 +28,37 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 create user drop_user_3 identified by '12345678',drop_user_4 identified by '12345678',drop_user_5 identified by '12345678',drop_user_6 identified by '12345678',drop_user_7 identified by '12345678',drop_user_8 identified by '12345678',drop_user_9 identified by '12345678',drop_user_10 identified by '12345678';
 select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
 user_name    authentication_string
-drop_user_3    12345678
-drop_user_4    12345678
-drop_user_5    12345678
-drop_user_6    12345678
-drop_user_7    12345678
-drop_user_8    12345678
-drop_user_9    12345678
-drop_user_10    12345678
+drop_user_3    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_4    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_5    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_6    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_7    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_8    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_9    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_10    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 drop user drop_user_3,drop_user_4,drop_user_5;
 select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
 user_name    authentication_string
-drop_user_6    12345678
-drop_user_7    12345678
-drop_user_8    12345678
-drop_user_9    12345678
-drop_user_10    12345678
+drop_user_6    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_7    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_8    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_9    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_10    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 drop user drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7;
 internal error: there is no user drop_user_3
 select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
 user_name    authentication_string
-drop_user_6    12345678
-drop_user_7    12345678
-drop_user_8    12345678
-drop_user_9    12345678
-drop_user_10    12345678
+drop_user_6    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_7    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_8    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_9    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_10    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 drop user if exists drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7;
 select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
 user_name    authentication_string
-drop_user_8    12345678
-drop_user_9    12345678
-drop_user_10    12345678
+drop_user_8    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_9    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
+drop_user_10    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 drop user if exists drop_user_8;
 select user_name,authentication_string from mo_catalog.mo_user where user_name in ('drop_user_8');
 user_name    authentication_string
