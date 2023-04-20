@@ -100,7 +100,7 @@ func TestHexString(t *testing.T) {
 func initHexInt64TestCase() []tcTemp {
 	return []tcTemp{
 		{
-			info: "test hex string",
+			info: "test hex int64",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{255, 231323423423421, 0},
