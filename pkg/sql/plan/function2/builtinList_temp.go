@@ -633,7 +633,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: Ltrim,
 			},
 			{
 				overloadId: 0,
@@ -641,7 +641,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameter []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
-				NewOp: nil,
+				NewOp: Ltrim,
 			},
 		},
 	},
