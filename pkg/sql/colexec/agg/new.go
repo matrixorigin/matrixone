@@ -170,17 +170,17 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericAnyValue[float64](typ, dist)
 	case types.T_char:
-		return newGenericAnyValue[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_varchar:
-		return newGenericAnyValue[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_binary:
-		return newGenericAnyValue[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_varbinary:
-		return newGenericAnyValue[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_blob:
-		return newGenericAnyValue[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_text:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newStrAnyValue(typ, dist)
 	case types.T_date:
 		return newGenericAnyValue[types.Date](typ, dist)
 	case types.T_datetime:
@@ -732,6 +732,14 @@ func newMedian(typ types.Type, dist bool) Agg[any] {
 
 func newGenericAnyValue[T any](typ types.Type, dist bool) Agg[any] {
 	aggPriv := NewAnyValue[T]()
+	if dist {
+		return NewUnaryDistAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+	}
+	return NewUnaryAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+}
+
+func newStrAnyValue(typ types.Type, dist bool) Agg[any] {
+	aggPriv := NewStrAnyValue()
 	if dist {
 		return NewUnaryDistAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}

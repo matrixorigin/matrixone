@@ -90,6 +90,7 @@ func TestOutput(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

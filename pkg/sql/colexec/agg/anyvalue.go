@@ -16,6 +16,10 @@ package agg
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+type StrAnyvalue struct {
+	NotSet []bool
+}
+
 type Anyvalue[T any] struct {
 	NotSet []bool
 }
@@ -66,6 +70,57 @@ func (a *Anyvalue[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Anyvalue[T]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.NotSet = types.DecodeSlice[bool](copyData)
+	return nil
+}
+
+func NewStrAnyValue() *StrAnyvalue {
+	return &StrAnyvalue{}
+}
+
+func (a *StrAnyvalue) Grows(size int) {
+	if len(a.NotSet) == 0 {
+		a.NotSet = make([]bool, 0)
+	}
+
+	for i := 0; i < size; i++ {
+		a.NotSet = append(a.NotSet, false)
+	}
+}
+
+func (a *StrAnyvalue) Eval(vs [][]byte) [][]byte {
+	return vs
+}
+
+func (a *StrAnyvalue) Fill(i int64, value []byte, ov []byte, z int64, isEmpty bool, isNull bool) ([]byte, bool) {
+	if !isNull && !a.NotSet[i] {
+		a.NotSet[i] = true
+		v := make([]byte, 0, len(value))
+		v = append(v, value...)
+		return v, false
+	}
+	return ov, isEmpty
+}
+
+func (a *StrAnyvalue) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xEmpty bool, yEmpty bool, yAnyValue any) ([]byte, bool) {
+	if !yEmpty {
+		ya := yAnyValue.(*StrAnyvalue)
+		if ya.NotSet[yIndex] && !a.NotSet[xIndex] {
+			a.NotSet[xIndex] = true
+			return y, false
+		}
+	}
+	return x, xEmpty
+}
+
+func (a *StrAnyvalue) MarshalBinary() ([]byte, error) {
+	return types.EncodeSlice(a.NotSet), nil
+}
+
+func (a *StrAnyvalue) UnmarshalBinary(data []byte) error {
 	// avoid resulting errors caused by morpc overusing memory
 	copyData := make([]byte, len(data))
 	copy(copyData, data)
