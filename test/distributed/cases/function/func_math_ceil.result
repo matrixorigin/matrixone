@@ -99,8 +99,7 @@ select ceil(123.342124124214, 100);
 ceil(123.342124124214, 100)
 123.342124124214
 select ceil(-123.342124124214, -100);
-ceil(-123.342124124214, -100)
--0.0
+Data truncation: data out of range: data type decimal64, ceil(decimal64(18,12),-100)
 select ceil(123.342, null);
 invalid argument the second argument of the ceil, bad value not const
 select ceil(null, 1);

@@ -28,19 +28,15 @@ import (
 
 // ### Shallow copy Functions
 
-func UnmarshalToMoVec(vec Vector) *movec.Vector {
-	return vec.GetDownstreamVector()
-}
-
-func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
-	movecs := make([]*movec.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = UnmarshalToMoVec(vecs[i])
+func ToCNBatch(dnBat *Batch) *batch.Batch {
+	cnBat := batch.New(true, dnBat.Attrs)
+	for i, vec := range dnBat.Vecs {
+		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
-	return movecs
+	return cnBat
 }
 
-func NewVectorWithSharedMemory(v *movec.Vector) Vector {
+func ToDNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
@@ -48,7 +44,7 @@ func NewVectorWithSharedMemory(v *movec.Vector) Vector {
 
 // ### Deep copy Functions
 
-func CopyToMoVec(vec Vector) (mov *movec.Vector) {
+func CopyToCNVector(vec Vector) (mov *movec.Vector) {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
 	vecLen := vec.GetDownstreamVector().Length()
 	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
@@ -58,18 +54,18 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	return res
 }
 
-func CopyToMoVecs(vecs []Vector) []*movec.Vector {
+func CopyToCNVectors(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
-		movecs[i] = CopyToMoVec(vecs[i])
+		movecs[i] = CopyToCNVector(vecs[i])
 	}
 	return movecs
 }
 
-func CopyToMoBatch(bat *Batch) *batch.Batch {
+func CopyToCNBatch(bat *Batch) *batch.Batch {
 	ret := batch.New(true, bat.Attrs)
 	for i := range bat.Vecs {
-		ret.Vecs[i] = CopyToMoVec(bat.Vecs[i])
+		ret.Vecs[i] = CopyToCNVector(bat.Vecs[i])
 	}
 	return ret
 }
@@ -267,7 +263,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
-		v := NewVectorWithSharedMemory(b.Vecs[i])
+		v := ToDNVector(b.Vecs[i])
 		bat.AddVector(attr, v)
 	}
 	return bat

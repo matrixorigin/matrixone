@@ -20,7 +20,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -177,7 +177,7 @@ func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	// }
 	n += 2
 	var sn int64
-	if sn, err = common.WriteString(c.ID, w); err != nil {
+	if sn, err = objectio.WriteString(c.ID, w); err != nil {
 		return
 	}
 	n += sn
@@ -194,7 +194,7 @@ func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	if c.ID, sn, err = common.ReadString(r); err != nil {
+	if c.ID, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -270,7 +270,7 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(c.ID, w); err != nil {
+	if sn, err = objectio.WriteString(c.ID, w); err != nil {
 		return
 	}
 	n += sn
@@ -311,7 +311,7 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	c.ComposedCmd = cmd.(*ComposedCmd)
 	n += sn
-	if c.ID, sn, err = common.ReadString(r); err != nil {
+	if c.ID, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn

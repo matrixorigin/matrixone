@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -443,9 +441,7 @@ func (data *CheckpointData) PrintData() {
 func (data *CheckpointData) WriteTo(
 	writer *blockio.BlockWriter) (blks []objectio.BlockObject, err error) {
 	for _, bat := range data.bats {
-		mobat := batch.New(true, bat.Attrs)
-		mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-		if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+		if _, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat)); err != nil {
 			return
 		}
 	}
@@ -470,7 +466,7 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec)
+			vec = containers.ToDNVector(pkgVec)
 		}
 		bat.AddVector(colNames[idx], vec)
 		bat.Vecs[i] = vec
