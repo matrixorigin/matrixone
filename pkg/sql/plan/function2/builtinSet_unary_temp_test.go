@@ -91,7 +91,7 @@ func TestHexString(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInHexString)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -118,7 +118,7 @@ func TestHexInt64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInHexInt64)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

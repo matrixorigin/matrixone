@@ -117,7 +117,7 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 // Hex Functions (hex.go)
 
-func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
@@ -127,7 +127,7 @@ func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 		} else {
-			res := HexEncodeString(v)
+			res := hexEncodeString(v)
 			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
@@ -136,7 +136,7 @@ func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
@@ -146,7 +146,7 @@ func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 				return err
 			}
 		} else {
-			res := HexEncodeInt64(v)
+			res := hexEncodeInt64(v)
 			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
@@ -155,10 +155,10 @@ func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func HexEncodeString(xs []byte) string {
+func hexEncodeString(xs []byte) string {
 	return hex.EncodeToString(xs)
 }
 
-func HexEncodeInt64(xs int64) string {
+func hexEncodeInt64(xs int64) string {
 	return fmt.Sprintf("%X", xs)
 }
