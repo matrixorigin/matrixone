@@ -1332,3 +1332,263 @@ func TestReverse(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initOctUint8TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+
+	return []tcTemp{
+		{
+			info: "test oct uint8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{12, 99, 100, 255},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1, e2, e3, e4},
+				[]bool{false, false, false, false}),
+		},
+	}
+}
+
+func TestOctUint8(t *testing.T) {
+	testCases := initOctUint8TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint8])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctUint16TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
+
+	return []tcTemp{
+		{
+			info: "test oct uint16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint16.ToType(),
+					[]uint16{12, 99, 100, 255, 1024, 10000, 65535},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7},
+				[]bool{false, false, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestOctUint16(t *testing.T) {
+	testCases := initOctUint16TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint16])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctUint32TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
+	e8, _, _ := types.Parse128("37777777777")
+
+	return []tcTemp{
+		{
+			info: "test oct uint32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint32.ToType(),
+					[]uint32{12, 99, 100, 255, 1024, 10000, 65535, 4294967295},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestOctUint32(t *testing.T) {
+	testCases := initOctUint32TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint32])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctUint64TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("14")
+	e2, _, _ := types.Parse128("143")
+	e3, _, _ := types.Parse128("144")
+	e4, _, _ := types.Parse128("377")
+	e5, _, _ := types.Parse128("2000")
+	e6, _, _ := types.Parse128("23420")
+	e7, _, _ := types.Parse128("177777")
+	e8, _, _ := types.Parse128("37777777777")
+	e9, _, _ := types.Parse128("1777777777777777777777")
+
+	return []tcTemp{
+		{
+			info: "test oct uint64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{12, 99, 100, 255, 1024, 10000, 65535, 4294967295, 18446744073709551615},
+					[]bool{false, false, false, false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8, e9},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestOctUint64(t *testing.T) {
+	testCases := initOctUint64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctInt8TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("1777777777777777777600")
+	e2, _, _ := types.Parse128("1777777777777777777777")
+	e3, _, _ := types.Parse128("177")
+
+	return []tcTemp{
+		{
+			info: "test oct int8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{-128, -1, 127},
+					[]bool{false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1, e2, e3},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestOctInt8(t *testing.T) {
+	testCases := initOctInt8TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int8])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctInt16TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("1777777777777777700000")
+
+	return []tcTemp{
+		{
+			info: "test oct int16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{-32768},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestOctInt16(t *testing.T) {
+	testCases := initOctInt16TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int16])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctInt32TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("1777777777760000000000")
+
+	return []tcTemp{
+		{
+			info: "test oct int32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{-2147483648},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestOctInt32(t *testing.T) {
+	testCases := initOctInt32TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int32])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initOctInt64TestCase() []tcTemp {
+	e1, _, _ := types.Parse128("1000000000000000000000")
+
+	return []tcTemp{
+		{
+			info: "test oct int64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-9223372036854775808},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{e1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestOctInt64(t *testing.T) {
+	testCases := initOctInt64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+	//TODO: I am excluding scalar testcase, as per our last discussion on WeCom: https://github.com/m-schen/matrixone/blob/0a48ec5488caff6fd918ad558ebe054eba745be8/pkg/sql/plan/function/builtin/unary/oct_test.go#L176
+	//TODO: Previous OctFloat didn't have testcase. Should we add new testcases?
+}

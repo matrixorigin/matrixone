@@ -673,6 +673,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	// function `sleep`
 	{
 		functionId: SLEEP,
 		class:      plan.Function_STRICT,
@@ -791,11 +792,101 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	// function `oct`
+	{
+		functionId: OCT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[uint8],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[uint16],
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[uint32],
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[uint64],
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[int8],
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[int16],
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[int32],
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: Oct[int64],
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: OctFloat[float32],
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				NewOp: OctFloat[float64],
+			},
+		},
+	},
+
 	// function `MO_MEMORY_USAGE`
 	// function `MO_ENABLE_MEMORY_USAGE_DETAIL`
 	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
 	// function `month`
-	// function `oct`
 	// function `space`
 	// function `time`
 	// function `time_of_day`
