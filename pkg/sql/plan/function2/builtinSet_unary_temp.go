@@ -571,7 +571,7 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 				return err
 			}
 		} else {
-			res := strLengthUTF8(function2Util.QuickBytesToStr(v))
+			res := strLengthUTF8(v)
 			if err := rs.Append(res, false); err != nil {
 				return err
 			}
@@ -580,6 +580,6 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	return nil
 }
 
-func strLengthUTF8(xs string) uint64 {
-	return lengthutf8.CountUTF8CodePoints([]byte(xs))
+func strLengthUTF8(xs []byte) uint64 {
+	return lengthutf8.CountUTF8CodePoints(xs)
 }
