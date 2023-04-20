@@ -73,6 +73,7 @@ func TestComposedCmd(t *testing.T) {
 	buf, err := composed.MarshalBinary()
 	assert.Nil(t, err)
 	vcomposed2, err := txnbase.BuildCommandFrom(buf)
+	assert.Nil(t, err)
 	composed2 := vcomposed2.(*txnbase.ComposedCmd)
 	assert.Equal(t, composed.CmdSize, composed2.CmdSize)
 }
