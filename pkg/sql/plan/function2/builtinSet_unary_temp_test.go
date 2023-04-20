@@ -104,9 +104,7 @@ func initHexInt64TestCase() []tcTemp {
 		{
 			info: "test hex int64",
 			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{255, 231323423423421, 0},
-					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{255, 231323423423421, 0}, []bool{false, false, true}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"FF", "D2632E7B3BBD", ""},
