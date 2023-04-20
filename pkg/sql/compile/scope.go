@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"hash/crc32"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -83,7 +84,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	errChan := make(chan error, len(s.PreScopes))
+	errChanLen := len(s.PreScopes) + 1
+	errChan := make(chan error, errChanLen)
 
 	for _, scope := range s.PreScopes {
 		switch scope.Magic {
@@ -99,17 +101,22 @@ func (s *Scope) MergeRun(c *Compile) error {
 			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
 		}
 	}
+
 	var errReceiveChan chan error
-	if len(s.RemoteReceivRegInfos) > 0 {
-		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+	errReceiveChanLen := len(s.RemoteReceivRegInfos)
+	if errReceiveChanLen > 0 {
+		errReceiveChan = make(chan error, errReceiveChanLen)
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
-	p := pipeline.NewMerge(s.Instructions, s.Reg)
-	if _, err := p.MergeRun(s.Proc); err != nil {
-		return err
-	}
+
+	go func(cs *Scope) {
+		p := pipeline.NewMerge(s.Instructions, s.Reg)
+		_, err := p.MergeRun(s.Proc)
+		errChan <- err
+	}(s)
+
 	// check sub-goroutine's error
-	if errReceiveChan == nil {
+	if errReceiveChanLen == 0 {
 		// check sub-goroutine's error
 		for i := 0; i < len(s.PreScopes); i++ {
 			if err := <-errChan; err != nil {
@@ -119,23 +126,21 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return nil
 	}
 
-	slen := len(s.PreScopes)
-	rlen := len(s.RemoteReceivRegInfos)
 	for {
 		select {
 		case err := <-errChan:
 			if err != nil {
 				return err
 			}
-			slen--
+			errChanLen--
 		case err := <-errReceiveChan:
 			if err != nil {
 				return err
 			}
-			rlen--
+			errReceiveChanLen--
 		}
 
-		if slen == 0 && rlen == 0 {
+		if errChanLen == 0 && errReceiveChanLen == 0 {
 			return nil
 		}
 	}
