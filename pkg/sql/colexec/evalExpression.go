@@ -225,6 +225,10 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 }
 
 func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	logutil.Infof("batch len is %d, relIndex is %d, colIndex is %d", len(batches), expr.relIndex, expr.colIndex)
+	for i := range batches {
+		logutil.Infof("bat[%d]: vec len is %d", i, len(batches[i].Vecs))
+	}
 	vec := batches[expr.relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		vec.SetType(expr.typ)
@@ -410,4 +414,35 @@ func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		}
 	}
 	return vec, nil
+}
+
+// SafeReuseAndDupBatch check vectors of bat.
+// if v dose not exists in source, dup it.
+// if exists and needn't dup, do nothing but remove it from source.
+func SafeReuseAndDupBatch(proc *process.Process, bat *batch.Batch, source *batch.Batch) (dupSize int, err error) {
+	alloc := 0
+	for i, rv := range bat.Vecs {
+		isSame := false
+		index := -1
+		for j, sv := range source.Vecs {
+			if rv == sv {
+				isSame = true
+				index = j
+				break
+			}
+		}
+
+		if !isSame {
+			newV, err := bat.Vecs[i].Dup(proc.Mp())
+			if err != nil {
+				return 0, err
+			}
+			alloc += newV.Size()
+			bat.ReplaceVector(rv, newV)
+		} else {
+			bat.ReplaceVector(rv, source.Vecs[index])
+			source.ReplaceVector(source.Vecs[index], nil)
+		}
+	}
+	return alloc, nil
 }

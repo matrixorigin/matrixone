@@ -32,7 +32,9 @@ type container struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
 		for i := range arg.ctr.projExecutors {
-			arg.ctr.projExecutors[i].Free()
+			if arg.ctr.projExecutors[i] != nil {
+				arg.ctr.projExecutors[i].Free()
+			}
 		}
 	}
 }
