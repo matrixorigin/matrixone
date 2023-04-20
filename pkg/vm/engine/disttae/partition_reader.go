@@ -102,7 +102,7 @@ func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 	return
 }
 
-func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -188,7 +188,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
-				b.Vecs[i] = vector.NewVec(p.typsMap[name])
+				if vp == nil {
+					b.Vecs[i] = vector.NewVec(p.typsMap[name])
+				} else {
+					b.Vecs[i] = vp.GetVector(p.typsMap[name])
+				}
 			}
 			for i, vec := range b.Vecs {
 				srcVec := bat.Vecs[i]
@@ -211,7 +215,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.NewVec(p.typsMap[name])
+		if vp == nil {
+			b.Vecs[i] = vector.NewVec(p.typsMap[name])
+		} else {
+			b.Vecs[i] = vp.GetVector(p.typsMap[name])
+		}
 	}
 	rows := 0
 	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))

@@ -351,7 +351,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 		}
 
 		if fromVec.IsConst() {
-			toVec = vector.NewVec(*bat.Vecs[idx].GetType())
+			toVec = proc.GetVector(*bat.Vecs[idx].GetType())
 			if fromVec.IsConstNull() {
 				for j := 0; j < batLen; j++ {
 					err := vector.AppendFixed(toVec, 0, true, proc.Mp())
@@ -368,14 +368,13 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 				}
 			}
 		} else {
+			toVec = proc.GetVector(*fromVec.GetType())
 			if rowSkip == nil {
 				// XXX should we free the fromVec here ?
-				toVec, err = fromVec.Dup(proc.Mp())
-				if err != nil {
+				if err = vector.GetUnionFunction(*fromVec.GetType(), proc.Mp())(toVec, fromVec); err != nil {
 					return nil, err
 				}
 			} else {
-				toVec = vector.NewVec(*fromVec.GetType())
 				for j := 0; j < fromVec.Length(); j++ {
 					if !rowSkip[j] {
 						err = toVec.UnionOne(fromVec, int64(j), proc.Mp())

@@ -32,15 +32,6 @@ import (
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
-func compareSegmentFn(a, b *SegmentEntry) int {
-	if a.SortHint < b.SortHint {
-		return -1
-	} else if a.SortHint > b.SortHint {
-		return 1
-	}
-	return 0
-}
-
 type SegmentEntry struct {
 	ID types.Uuid
 	*BaseEntryImpl[*MetadataMVCCNode]
@@ -58,7 +49,7 @@ func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:    state,
@@ -76,7 +67,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
@@ -88,7 +79,7 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:   ES_Appendable,
@@ -104,7 +95,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state: ES_Appendable,
@@ -124,6 +115,15 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
+}
+
+func (entry *SegmentEntry) Less(b *SegmentEntry) int {
+	if entry.SortHint < b.SortHint {
+		return -1
+	} else if entry.SortHint > b.SortHint {
+		return 1
+	}
+	return 0
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {

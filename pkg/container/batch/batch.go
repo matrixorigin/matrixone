@@ -141,12 +141,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 
 // I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
-	mp := make(map[*vector.Vector]uint8)
 	for _, vec := range bat.Vecs {
-		if _, ok := mp[vec]; ok {
-			continue
-		}
-		mp[vec]++
 		vec.Shrink(sels, false)
 	}
 	vs := bat.Zs

@@ -16,7 +16,9 @@ package projection
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -48,6 +50,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	anal.Input(bat, isFirst)
@@ -56,28 +59,26 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil {
-			bat.Clean(proc.Mp())
-			rbat.Clean(proc.Mp())
 			return false, err
 		}
-		rbat.Vecs[i] = vec
-	}
-	for i, vec := range bat.Vecs {
-		isSame := false
-		for _, rVec := range rbat.Vecs {
-			if vec == rVec {
-				bat.Vecs[i] = nil
-				isSame = true
-				break
+		needCopy := false
+		for i := range bat.Vecs {
+			if vec == bat.Vecs[i] {
+				needCopy = true
 			}
 		}
-		if !isSame && vec != nil {
-			anal.Alloc(int64(vec.Size()))
+		if needCopy {
+			rbat.Vecs[i] = proc.GetVector(*vec.GetType())
+			if err := vector.GetUnionFunction(*vec.GetType(), proc.Mp())(rbat.Vecs[i], vec); err != nil {
+				return false, err
+			}
+		} else {
+			rbat.Vecs[i] = vec
 		}
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	bat.Clean(proc.Mp())
+	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil

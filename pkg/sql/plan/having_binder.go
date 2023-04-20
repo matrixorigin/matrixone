@@ -120,7 +120,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, err
 	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
-		expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+		if funcName != "max" && funcName != "min" && funcName != "any_value" {
+			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+		}
 	}
 	b.insideAgg = false
 

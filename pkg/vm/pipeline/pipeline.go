@@ -75,7 +75,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		default:
 		}
 		// read data from storage engine
-		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp()); err != nil {
+		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp(), proc); err != nil {
 			p.cleanup(proc, true)
 			return false, err
 		}
@@ -115,7 +115,6 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		p.cleanup(proc, true)
 		return false, err
 	}
-	bat.Cnt = 1
 	pipelineInputBatches := []*batch.Batch{bat, nil}
 	for {
 		for i := range pipelineInputBatches {

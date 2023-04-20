@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -472,10 +471,10 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
-		i := rand.Int() % len(tbl.db.txn.dnStores)
-		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
+		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
 	}
-	ibat := batch.New(true, bat.Attrs)
+	ibat := batch.NewWithSize(len(bat.Attrs))
+	ibat.SetAttributes(bat.Attrs)
 	for j := range bat.Vecs {
 		ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 	}
