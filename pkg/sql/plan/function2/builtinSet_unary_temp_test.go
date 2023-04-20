@@ -573,6 +573,7 @@ func initHexStringTestCase() []tcTemp {
 				[]bool{false, false, false, true}),
 		},
 		{
+			//TODO: Verify the multi-row case.
 			info: "test hex string - multirow",
 			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"Hello", "Gopher!"},
@@ -608,6 +609,7 @@ func initHexInt64TestCase() []tcTemp {
 				[]bool{false, false, true}),
 		},
 		{
+			//TODO: Verify the multi-row case.
 			info: "test hex int64 - multirow",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{123, 234, 345}, []bool{false, false, false}),
