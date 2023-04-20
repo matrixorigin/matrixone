@@ -30,13 +30,14 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
+	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
 	// sql := "insert into dept values (11, 'aa', 'bb')"
 	// sql := "delete from dept where deptno > 10"
 	// sql := "delete from nation where n_nationkey > 10"
 	// sql := "delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name"
 	// sql := "update nation set n_name ='a' where n_nationkey > 10"
-	// sql := "update dept set deptno = 11 where deptno = 10"
+	sql := "update dept set deptno = 11 where deptno = 10"
+	// sql := "prepare stmt1 from update nation set n_name = ? where n_nationkey = ?"
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {

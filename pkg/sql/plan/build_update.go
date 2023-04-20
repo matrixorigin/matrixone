@@ -24,133 +24,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	if err != nil {
 		return nil, err
 	}
-
-	// rewriteInfo := &dmlSelectInfo{
-	// 	typ:     "update",
-	// 	rootId:  -1,
-	// 	tblInfo: tblInfo,
-	// }
-	// builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	// bindCtx := NewBindContext(builder, nil)
-	// bindCtx.groupTag = builder.genNewTag()
-	// bindCtx.aggregateTag = builder.genNewTag()
-	// bindCtx.projectTag = builder.genNewTag()
-
-	// err = initUpdateStmt(builder, bindCtx, rewriteInfo, stmt)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// if tblInfo.haveConstraint {
-	// 	for i, tableDef := range tblInfo.tableDefs {
-	// 		err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 	}
-	// }
-
-	// // append ProjectNode
-	// rewriteInfo.rootId = builder.appendNode(&plan.Node{
-	// 	NodeType:    plan.Node_PROJECT,
-	// 	ProjectList: rewriteInfo.projectList,
-	// 	Children:    []int32{rewriteInfo.rootId},
-	// 	BindingTags: []int32{bindCtx.projectTag},
-	// }, bindCtx)
-	// bindCtx.results = rewriteInfo.projectList
-
-	// builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
-	// query, err := builder.createQuery()
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// // append delete node
-	// updateCtx := &plan.UpdateCtx{
-	// 	Ref:       rewriteInfo.tblInfo.objRef,
-	// 	TableDefs: rewriteInfo.tblInfo.tableDefs,
-	// 	Idx:       make([]*plan.IdList, len(rewriteInfo.tblInfo.objRef)),
-	// 	UpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.tblInfo.updateCol)),
-
-	// 	IdxRef: rewriteInfo.onIdxTbl,
-	// 	IdxIdx: rewriteInfo.onIdx,
-
-	// 	OnRestrictRef: rewriteInfo.onRestrictTbl,
-	// 	OnRestrictIdx: rewriteInfo.onRestrict,
-
-	// 	OnCascadeRef:       rewriteInfo.onCascadeRef,
-	// 	OnCascadeDef:       rewriteInfo.onCascadeTableDef,
-	// 	OnCascadeIdx:       make([]*plan.IdList, len(rewriteInfo.onCascade)),
-	// 	OnCascadeUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onCascadeUpdateCol)),
-
-	// 	OnSetRef:       rewriteInfo.onSetRef,
-	// 	OnSetDef:       rewriteInfo.onSetTableDef,
-	// 	OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
-	// 	OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
-
-	// 	ParentIdx: make([]*plan.ColPosMap, len(rewriteInfo.parentIdx)),
-	// }
-	// idx := int64(0)
-	// for i, tableDef := range rewriteInfo.tblInfo.tableDefs {
-	// 	updateCtx.TableDefs[i] = tableDef
-	// 	idxList := make([]int64, len(tableDef.Cols))
-	// 	for j := range tableDef.Cols {
-	// 		idxList[j] = idx
-	// 		idx++
-	// 	}
-	// 	updateCtx.Idx[i] = &plan.IdList{
-	// 		List: idxList,
-	// 	}
-	// }
-	// for i, idxMap := range rewriteInfo.tblInfo.updateCol {
-	// 	updateCtx.UpdateCol[i] = &plan.ColPosMap{
-	// 		Map: idxMap,
-	// 	}
-	// }
-	// for i, idxList := range rewriteInfo.onCascade {
-	// 	updateCtx.OnCascadeIdx[i] = &plan.IdList{
-	// 		List: idxList,
-	// 	}
-	// }
-	// for i, idxMap := range rewriteInfo.onCascadeUpdateCol {
-	// 	updateCtx.OnCascadeUpdateCol[i] = &plan.ColPosMap{
-	// 		Map: idxMap,
-	// 	}
-	// }
-	// for i, idxList := range rewriteInfo.onSet {
-	// 	updateCtx.OnSetIdx[i] = &plan.IdList{
-	// 		List: idxList,
-	// 	}
-	// }
-	// for i, idxMap := range rewriteInfo.onSetUpdateCol {
-	// 	updateCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
-	// 		Map: idxMap,
-	// 	}
-	// }
-	// for i, idxMap := range rewriteInfo.parentIdx {
-	// 	updateCtx.ParentIdx[i] = &plan.ColPosMap{
-	// 		Map: idxMap,
-	// 	}
-	// }
-
-	// node := &Node{
-	// 	NodeType:  plan.Node_UPDATE,
-	// 	ObjRef:    nil,
-	// 	TableDef:  nil,
-	// 	Children:  []int32{query.Steps[len(query.Steps)-1]},
-	// 	NodeId:    int32(len(query.Nodes)),
-	// 	UpdateCtx: updateCtx,
-	// }
-	// query.Nodes = append(query.Nodes, node)
-	// query.Steps[len(query.Steps)-1] = node.NodeId
-	// query.StmtType = plan.Query_UPDATE
-
-	// return &Plan{
-	// 	Plan: &plan.Plan_Query{
-	// 		Query: query,
-	// 	},
-	// }, err
-
 	// new logic
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	queryBindCtx := NewBindContext(builder, nil)
@@ -165,30 +38,31 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		return nil, err
 	}
 
-	lastNode := builder.qry.Nodes[lastNodeId]
-	lastTag := lastNode.BindingTags[0]
+	sourceStep := builder.appendStep(lastNodeId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+
 	// append sink node
-	sinkTag := builder.genNewTag()
-	sinkProjection := getProjectionByPreProjection(lastNode.ProjectList, lastTag)
 	sinkNode := &Node{
-		NodeType:    plan.Node_SINK,
-		Children:    []int32{lastNodeId},
-		BindingTags: []int32{sinkTag},
-		ProjectList: sinkProjection,
+		NodeType: plan.Node_SINK,
+		Children: []int32{lastNodeId},
 	}
 	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
-	sourceStep := builder.appendStep(lastNodeId)
+	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
 	for i, tableDef := range tblInfo.tableDefs {
 		updateBindCtx := NewBindContext(builder, nil)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, tblInfo.objRef[i], tableDef, updateExprs[i], beginIdx, sourceStep)
+		thisIdx := beginIdx
+		beginIdx = beginIdx + len(tableDef.Cols)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, tblInfo.objRef[i], tableDef, updateExprs[i], thisIdx, sourceStep)
 		if err != nil {
 			return nil, err
 		}
-		beginIdx = beginIdx + len(tableDef.Cols)
 	}
-	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}

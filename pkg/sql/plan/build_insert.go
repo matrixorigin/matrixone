@@ -51,10 +51,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	if err != nil {
 		return nil, err
 	}
+	lastNodeId := rewriteInfo.rootId
+	sourceStep := builder.appendStep(lastNodeId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// new logic
 	objRef := tblInfo.objRef[0]
-	var query *Query
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
 	} else {
@@ -63,12 +69,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	if err != nil {
 		return nil, err
 	}
-	query, err = builder.createQuery()
-	if err != nil {
-		return nil, err
-	}
 	query.StmtType = plan.Query_INSERT
-
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

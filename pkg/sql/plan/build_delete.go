@@ -35,54 +35,34 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	lastNode := builder.qry.Nodes[lastNodeId]
-	lastTag := lastNode.BindingTags[0]
-	// append sink node
-	sinkTag := builder.genNewTag()
-	sinkProjection := getProjectionByPreProjection(lastNode.ProjectList, lastTag)
-	sinkNode := &Node{
-		NodeType:    plan.Node_SINK,
-		Children:    []int32{lastNodeId},
-		BindingTags: []int32{sinkTag},
-		ProjectList: sinkProjection,
-	}
-	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
 	sourceStep := builder.appendStep(lastNodeId)
-
-	// append delete plans
-	beginIdx := 0
-	var endProjectProjection []*Expr
-	for i, tableDef := range tblInfo.tableDefs {
-		deleteBindCtx := NewBindContext(builder, nil)
-		lastNodeId, endProjectProjection, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep)
-		if err != nil {
-			return nil, err
-		}
-
-		// append Project Node at the end
-		endProjectTag := builder.genNewTag()
-		endProjectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
-			BindingTags: []int32{endProjectTag},
-			SourceStep:  sourceStep,
-			ProjectList: endProjectProjection,
-		}
-		lastNodeId = builder.appendNode(endProjectNode, deleteBindCtx)
-		_ = builder.appendStep(lastNodeId)
-
-		beginIdx = beginIdx + len(tableDef.Cols)
-	}
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
-	query.StmtType = plan.Query_DELETE
-	if err != nil {
-		return nil, err
+	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+
+	// append sink node
+	sinkNode := &Node{
+		NodeType: plan.Node_SINK,
+		Children: []int32{lastNodeId},
+	}
+	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
+	sourceStep = builder.appendStep(lastNodeId)
+
+	// append delete plans
+	beginIdx := 0
+	for i, tableDef := range tblInfo.tableDefs {
+		deleteBindCtx := NewBindContext(builder, nil)
+		lastNodeId, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep)
+		if err != nil {
+			return nil, err
+		}
+		_ = builder.appendStep(lastNodeId)
+		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 
+	query.StmtType = plan.Query_DELETE
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
