@@ -693,3 +693,86 @@ func TestLength(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initLengthUTF8TestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test lengthutf8",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{
+					"abc",
+					"",
+					"   ",
+					"中国123",
+					"abc😄",
+					"中国中国中国中国中国中国中国中国中国中国1234",
+					"中国中国中国中国中国中国中国中国中国中国1234😄ggg!",
+					"你好",
+					"français",
+					"にほんご",
+					"Español",
+					"123456",
+					"андрей",
+					"\\",
+					string(rune(0x0c)),
+					string('"'),
+					string('\a'),
+					string('\b'),
+					string('\t'),
+					string('\n'),
+					string('\r'),
+					string(rune(0x10)),
+					"你好",
+					"再见",
+					"今天",
+					"日期时间",
+					"明天",
+					"\n\t\r\b" + string(rune(0)) + "\\_\\%\\",
+				},
+				[]bool{false})},
+			expect: testutil.NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{
+					3,
+					0,
+					3,
+					5,
+					4,
+					24,
+					29,
+					2,
+					8,
+					4,
+					7,
+					6,
+					6,
+					1,
+					1,
+					1,
+					1,
+					1,
+					1,
+					1,
+					1,
+					1,
+					2,
+					2,
+					2,
+					4,
+					2,
+					10,
+				},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestLengthUTF8(t *testing.T) {
+	testCases := initLengthUTF8TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, LengthUTF8)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
