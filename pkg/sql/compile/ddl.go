@@ -1074,7 +1074,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
 	} else {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
 	}
 	if err != nil {
 		return err
