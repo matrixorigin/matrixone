@@ -883,18 +883,134 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
+	{
+		functionId: MONTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DateToMonth,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DatetimeToMonth,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DateStringToMonth,
+			},
+		},
+	},
+
+	{
+		functionId: YEAR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: DateToYear,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: DatetimeToYear,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: DateStringToYear,
+			},
+		},
+	},
+
+	{
+		functionId: WEEK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DateToWeek,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DatetimeToWeek,
+			},
+		},
+	},
+
+	{
+		functionId: WEEKDAY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: DateToWeekday,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: DatetimeToWeekday,
+			},
+		},
+	},
+
 	// function `MO_MEMORY_USAGE`
 	// function `MO_ENABLE_MEMORY_USAGE_DETAIL`
 	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
-	// function `month`
 	// function `space`
 	// function `time`
 	// function `time_of_day`
 	// function `timestamp`
 	// function `values`
-	// function `week`
-	// function `weekday`
-	// function `year`
 }
 
 // tempListForBinaryFunctions just set the binary functions still need to be refactored.
