@@ -166,14 +166,14 @@ func (s *Scope) AlterTable(c *Compile) error {
 				}()
 				err = cs.MergeRun(c)
 			}(s.PreScopes[i])
-		case Update:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Update(c)
-			}(s.PreScopes[i])
+			// case Update:
+			// 	go func(cs *Scope) {
+			// 		var err error
+			// 		defer func() {
+			// 			errChan <- err
+			// 		}()
+			// 		_, err = cs.Update(c)
+			// 	}(s.PreScopes[i])
 		}
 	}
 

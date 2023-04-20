@@ -79,6 +79,7 @@ message Insert{
   bool IsRemote     = 2;
   bool add_affected_rows = 3;
   plan.ObjectRef ref     = 4;
+  repeated string attrs          = 5;
 }
 
 message PreInsert {

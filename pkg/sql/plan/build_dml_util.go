@@ -47,7 +47,7 @@ func buildInsertPlans(
 	}
 
 	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, sourceStep, true)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, nil, sourceStep, true)
 	return err
 }
 
@@ -172,7 +172,7 @@ func buildDeletePlans(
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef,
+	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
 	beginIdx int, sourceStep int32) error {
 	// build delete plans
 	lastNodeId, projectExprs, err := buildDeletePlans(ctx, builder, bindCtx, objRef, tableDef, beginIdx, sourceStep)
@@ -226,9 +226,20 @@ func buildUpdatePlans(
 		ProjectList: projectProjection,
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
+	sinkTag = builder.genNewTag()
+	sinkProjection := getProjectionByPreProjection(projectProjection, projectTag)
+	sinkNode = &Node{
+		NodeType:    plan.Node_SINK,
+		Children:    []int32{lastNodeId},
+		BindingTags: []int32{sinkTag},
+		ProjectList: sinkProjection,
+	}
+	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	sourceStep = builder.appendStep(lastNodeId)
 
 	// build insert plan with update expr.
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, lastNodeId)
+	insertBindCtx := NewBindContext(builder, nil)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, updateExprs, sourceStep, false)
 
 	return err
 }
@@ -478,7 +489,8 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 [o]sink_scan -> join -> filter -> project	// check if pk is unique in rows & snapshot
 */
 func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, sourceStep int32, addAffectedRows bool) error {
+	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
+	sourceStep int32, addAffectedRows bool) error {
 
 	var lastNodeId int32
 	var err error
@@ -486,12 +498,41 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 	haveUniqueKey := haveUniqueKey(tableDef)
 
-	// make plan : sink_scan -> lock -> filter -> [project(if update)] -> join(check fk) -> filter -> insert -> sink/project
+	// make plan : sink_scan -> [project(if update)] -> lock -> join(check fk) -> filter -> insert -> sink/project
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 		insertUserTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
+		lastNode := builder.qry.Nodes[lastNodeId]
 
-		// todo: append lock & filter nodes
+		if len(updateExprs) > 0 {
+			projectProjection := make([]*Expr, len(lastNode.ProjectList))
+			for i, col := range lastNode.ProjectList {
+				if updateExpr, ok := updateExprs[i]; ok {
+					modifyColumnRelPos(updateExpr, insertUserTag)
+					projectProjection[i] = updateExpr
+				} else {
+					projectProjection[i] = &plan.Expr{
+						Typ: col.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: insertUserTag,
+								ColPos: int32(i),
+								Name:   col.GetCol().Name,
+							},
+						},
+					}
+				}
+			}
+			insertUserTag = builder.genNewTag()
+			lastNodeId = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeId},
+				BindingTags: []int32{insertUserTag},
+				ProjectList: projectProjection,
+			}, bindCtx)
+		}
+
+		// todo: append lock
 
 		// if table have fk. then append join node & filter node
 		if len(tableDef.Fkeys) > 0 {
@@ -499,8 +540,6 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			if err != nil {
 				return err
 			}
-			lastNode := builder.qry.Nodes[lastNodeId]
-			insertUserTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
 
 			//get filter exprs
@@ -549,6 +588,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				Ref:             objRef,
 				AddAffectedRows: addAffectedRows,
 				IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+				TableDef:        tableDef,
 			},
 			Children: []int32{lastNodeId},
 		}
@@ -585,7 +625,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
 					// remove row_id
 					for i, col := range idxTableDef.Cols {
-						if col.Name != catalog.Row_ID {
+						if col.Name == catalog.Row_ID {
 							idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
 							break
 						}
@@ -598,7 +638,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					}
 
 					//make insert plans(for unique key table)
-					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, newSourceStep, false)
+					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, nil, newSourceStep, false)
 					if err != nil {
 						return err
 					}

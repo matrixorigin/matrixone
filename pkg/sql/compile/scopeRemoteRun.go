@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -514,7 +515,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s := &Scope{
-		Magic:    int(p.GetPipelineType()),
+		Magic:    magicType(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
 		IsLoad:   p.IsLoad,
@@ -906,8 +907,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
-	switch opr.Op {
+	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	switch v.Op {
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
@@ -916,6 +917,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			InsertCtx: &insert.InsertCtx{
 				Ref:             t.Ref,
 				AddAffectedRows: t.AddAffectedRows,
+				Attrs:           t.Attrs,
 			},
 		}
 	case vm.PreInsert:
@@ -1492,14 +1494,14 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeI
 	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
 	p := &pipeline.Pipeline{}
 	p.PipelineId = ctxId
-	p.PipelineType = Pushdown
+	p.PipelineType = pipeline.Pipeline_PipelineType(Pushdown)
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
 		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
-		Op: vm.Connector,
+		Op: int32(vm.Connector),
 		Connect: &pipeline.Connector{
 			ConnectorIndex: idx,
 			PipelineId:     ctx.id,

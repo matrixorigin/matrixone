@@ -480,6 +480,7 @@ message InsertCtx {
 	ObjectRef ref			= 1;
 	bool add_affected_rows 	= 2;
 	bool is_cluster_table	= 3;
+	TableDef table_def		= 4;
 }
 
 message UpdateCtx {

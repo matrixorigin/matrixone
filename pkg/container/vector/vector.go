@@ -110,6 +110,9 @@ func (v *Vector) SetIsBin(isBin bool) {
 }
 
 func (v *Vector) NeedDup() bool {
+	if v == nil {
+		return false
+	}
 	return v.cantFreeArea || v.cantFreeData
 }
 

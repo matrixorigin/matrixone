@@ -51,26 +51,14 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	// }
 
 	tableDef.Name2ColIndex = map[string]int32{}
-	node1 := &plan.Node{}
-	node1.NodeType = plan.Node_EXTERNAL_SCAN
-	node1.Stats = &plan.Stats{}
-
-	node2 := &plan.Node{}
-	node2.NodeType = plan.Node_PROJECT
-	node2.Stats = &plan.Stats{}
-	node2.NodeId = 1
-	node2.Children = []int32{0}
-
-	node3 := &plan.Node{}
-	node3.NodeType = plan.Node_INSERT
-	node3.Stats = &plan.Stats{}
-	node3.NodeId = 2
-	node3.Children = []int32{1}
-
+	var externalProject []*Expr
+	var insertIdx []int32
+	var preInsertProjection []*Expr
+	hashAutoCol := false
 	for i := 0; i < len(tableDef.Cols); i++ {
 		idx := int32(i)
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
-		tmp := &plan.Expr{
+		colExpr := &plan.Expr{
 			Typ: tableDef.Cols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -79,45 +67,76 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		}
-		node1.ProjectList = append(node1.ProjectList, tmp)
-		// node3.ProjectList = append(node3.ProjectList, tmp)
+		if tableDef.Cols[i].Typ.AutoIncr {
+			hashAutoCol = true
+		}
+		insertIdx = append(insertIdx, int32(i))
+		externalProject = append(externalProject, colExpr)
+		preInsertProjection = append(preInsertProjection, colExpr)
 	}
-	if err := getProjectNode(stmt, ctx, node2, tableDef); err != nil {
-		return nil, err
-	}
+
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
 	}
 
-	// node3.TableDef = tableDef
-	// node3.ObjRef = objRef
-	node3.InsertCtx = &plan.InsertCtx{
-		Ref:             objRef,
-		AddAffectedRows: true,
-		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-	}
-
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
-
 	json_byte, err := json.Marshal(stmt.Param)
 	if err != nil {
 		return nil, err
 	}
-
 	tableDef.Createsql = string(json_byte)
-	node1.TableDef = tableDef
-	node1.ObjRef = objRef
-	// node3.TableDef = tableDef
-	// node3.ObjRef = objRef
 
-	nodes := make([]*plan.Node, 3)
-	nodes[0] = node1
-	nodes[1] = node2
-	nodes[2] = node3
+	externalScanNode := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_EXTERNAL_SCAN,
+		Stats:       &plan.Stats{},
+		ProjectList: externalProject,
+		ObjRef:      objRef,
+		TableDef:    tableDef,
+	}
+
+	projectNode := &plan.Node{
+		NodeId:   1,
+		Children: []int32{0},
+		NodeType: plan.Node_PROJECT,
+		Stats:    &plan.Stats{},
+	}
+	if err := getProjectNode(stmt, ctx, projectNode, tableDef); err != nil {
+		return nil, err
+	}
+
+	//append pre insert node
+	preInsertNode := &Node{
+		NodeId:      2,
+		Children:    []int32{1},
+		NodeType:    plan.Node_PRE_INSERT,
+		ProjectList: preInsertProjection,
+		PreInsertCtx: &plan.PreInsertCtx{
+			Idx:        insertIdx,
+			Ref:        objRef,
+			TableDef:   tableDef,
+			HasAutoCol: hashAutoCol,
+		},
+	}
+
+	insertNode := &plan.Node{
+		NodeId:   3,
+		Children: []int32{2},
+		NodeType: plan.Node_INSERT,
+		Stats:    &plan.Stats{},
+		InsertCtx: &plan.InsertCtx{
+			Ref:             objRef,
+			AddAffectedRows: true,
+			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+		},
+	}
+
+	nodes := []*plan.Node{externalScanNode, projectNode, preInsertNode, insertNode}
+
 	query := &plan.Query{
 		StmtType: plan.Query_INSERT,
-		Steps:    []int32{2},
+		Steps:    []int32{3},
 		Nodes:    nodes,
 	}
 	pn := &Plan{

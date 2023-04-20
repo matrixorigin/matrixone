@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -78,8 +79,20 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		defer func() {
 			bat.Clean(proc.Mp())
 		}()
+		//
+		insertBat := batch.New(true, insertArg.InsertCtx.Attrs)
+		if len(insertArg.InsertCtx.Attrs) != len(bat.Vecs) {
+			fmt.Print("dddddd")
+		}
+		for j := range bat.Vecs {
+			insertBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := insertBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+			return false, err
+		}
+
 		// write origin table, bat will be deeply copied into txn's workspace.
-		err := insertCtx.Rel.Write(proc.Ctx, bat)
+		err := insertCtx.Rel.Write(proc.Ctx, insertBat)
 		if err != nil {
 			return false, err
 		}
@@ -99,14 +112,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	// }
 
 	affectedRows := uint64(bat.Length())
-	newBat := batch.New(true, bat.Attrs)
-	for j := range bat.Vecs {
-		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-	}
-	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		return false, err
-	}
-	proc.SetInputBatch(newBat)
+	proc.SetInputBatch(bat)
 
 	// if insertArg.IsRemote {
 	// if err := collectAndOutput(proc, s3Writers); err != nil {

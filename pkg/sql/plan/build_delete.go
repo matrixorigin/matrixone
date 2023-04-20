@@ -70,7 +70,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			ProjectList: endProjectProjection,
 		}
 		lastNodeId = builder.appendNode(endProjectNode, deleteBindCtx)
-		sourceStep = builder.appendStep(lastNodeId)
+		_ = builder.appendStep(lastNodeId)
 
 		beginIdx = beginIdx + len(tableDef.Cols)
 	}
