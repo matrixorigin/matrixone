@@ -1942,7 +1942,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			ranges = append(ranges, subranges[1:]...)
+			ranges = append(ranges, subranges...)
 		}
 	}
 
