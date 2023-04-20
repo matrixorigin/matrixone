@@ -24,9 +24,9 @@ jobs:
 
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
-
+  
       - name: docker compose launch-tae-multi-CN-tae-DN
-        run: |
+        run: |    
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
@@ -79,7 +79,7 @@ jobs:
         with:
           name: e2e_docker-compose
           path: |
-            ${{ github.workspace }}/docker-compose-log
+             ${{ github.workspace }}/docker-compose-log
           retention-days: 7
 
 
@@ -99,9 +99,9 @@ jobs:
 
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
-
+  
       - name: docker compose launch-tae-multi-CN-tae-DN
-        run: |
+        run: |    
           sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-compose/config/cn-0.toml
           sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-compose/config/cn-1.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-compose/config/cn-0.toml
@@ -160,5 +160,5 @@ jobs:
         with:
           name: e2e_docker-compose
           path: |
-            ${{ github.workspace }}/multi-cn-docker-compose-log
+             ${{ github.workspace }}/multi-cn-docker-compose-log
           retention-days: 7
