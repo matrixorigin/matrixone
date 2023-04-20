@@ -1,0 +1,580 @@
+drop database if exists test;
+create database test;
+use test;
+drop table if exists test01;
+create table test01(col1 datetime);
+insert into test01 values('2020-01-13 12:20:59.1234586153121');
+insert into test01 values('2023-04-17 01:01:45');
+insert into test01 values('9999-01-01 26:25:26');
+invalid input: invalid datatime value 9999-01-01 26:25:26
+insert into test01 values(NULL);
+select * from test01;
+col1
+2020-01-13 12:20:59
+2023-04-17 01:01:45
+null
+select cast(col1 as int) from test01;
+cast(col1 as int)
+1578918059
+1681693305
+null
+select cast(col1 as decimal(20,10)) from test01;
+cast(col1 as decimal(20, 10))
+1578918059.0000000000
+1681693305.0000000000
+null
+drop table test01;
+drop table if exists test01;
+create table test01(col1 datetime(3));
+insert into test01 values('2020-01-13 12:20:59.12343243');
+insert into test01 values('2023-04-17 01:01:45');
+insert into test01 values(NULL);
+select * from test01;
+col1
+2020-01-13 12:20:59.123000000
+2023-04-17 01:01:45
+null
+select cast(col1 as int) from test01;
+cast(col1 as int)
+1578918059
+1681693305
+null
+select cast(col1 as decimal(20,10)) from test01;
+cast(col1 as decimal(20, 10))
+1578918059.1230000000
+1681693305.0000000000
+null
+drop table test01;
+drop table if exists test02;
+create table test02(col1 date);
+insert into test02 values('2020-12-13');
+insert into test02 values('2023-01-01');
+insert into test02 values(NULL);
+select * from test02;
+col1
+2020-12-13
+2023-01-01
+null
+select cast(col1 as int) from test02;
+cast(col1 as int)
+18609
+19358
+null
+drop table test02;
+drop table if exists test04;
+create table test04(col1 time);
+insert into test04 values('00:01:59');
+insert into test04 values('23:59:59');
+insert into test04 values(NULL);
+select cast(col1 as int) from test04;
+cast(col1 as int)
+159
+235959
+null
+select cast(col1 as decimal(20,10)) from test04;
+cast(col1 as decimal(20, 10))
+159.0000000000
+235959.0000000000
+null
+drop table test04;
+drop table if exists test05;
+drop table if exists test06;
+drop table if exists test07;
+create table test05(col1 int);
+create table test06(col1 datetime);
+create table test07(col1 decimal(38,18));
+insert into test06 values('2020-01-13 12:20:59.123');
+insert into test06 values('2023-04-17 01:01:45.65');
+insert into test06 values(NULL);
+insert into test05 select * from test06;
+select cast(col1 as decimal(20,18)) from test06;
+cast(col1 as decimal(20, 18))
+1578918059.000000000000000000
+1681693306.000000000000000000
+null
+insert into test07 select * from test06;
+select * from test05;
+col1
+1578918059
+1681693306
+null
+select * from test07;
+col1
+1578918059.000000000000000000
+1681693306.000000000000000000
+null
+drop table test05;
+drop table test06;
+drop table test07;
+drop table if exists test05;
+drop table if exists test06;
+drop table if exists test07;
+create table test05(col1 int);
+create table test06(col1 datetime(6));
+create table test07(col1 decimal(38,18));
+insert into test06 values('2020-01-13 12:20:59.123');
+insert into test06 values('2023-04-17 01:01:45.65');
+insert into test06 values(NULL);
+insert into test05 select * from test06;
+select cast(col1 as decimal(20,18)) from test06;
+cast(col1 as decimal(20, 18))
+1578918059.123000000000000000
+1681693305.650000000000000000
+null
+insert into test07 select * from test06;
+select * from test05;
+col1
+1578918059
+1681693305
+null
+select * from test07;
+col1
+1578918059.123000000000000000
+1681693305.650000000000000000
+null
+drop table test05;
+drop table test06;
+drop table test07;
+drop table if exists test07;
+drop table if exists test08;
+create table test07(col1 int);
+create table test08(col1 date);
+insert into test08 values('1995-12-12');
+insert into test08 values('2023-01-01');
+insert into test08 values(NULL);
+insert into test07 select * from test08;
+select * from test07;
+col1
+9476
+19358
+null
+drop table test07;
+drop table test08;
+drop table if exists test11;
+drop table if exists test12;
+drop table if exists test13;
+create table test11(col1 int);
+create table test12(col1 time);
+create table test13(col1 decimal(10,0));
+insert into test12 values('12:20:59');
+insert into test12 values('01:01:45');
+insert into test12 values(NULL);
+insert into test11 select * from test12;
+select cast(col1 as decimal(20,15)) from test11;
+cast(col1 as decimal(20, 15))
+122059.000000000000000
+10145.000000000000000
+null
+insert into test13 select * from test12;
+select * from test11;
+col1
+122059
+10145
+null
+select * from test13;
+col1
+122059
+10145
+null
+drop table test11;
+drop table test12;
+drop table test13;
+drop table if exists test14;
+create table test14(col1 int,col2 datetime,col3 decimal(20,5));
+insert into test14 values(1,'2020-01-13 12:20:59',NULL);
+insert into test14 values(2,'2023-04-17 01:01:45',-8.89789552);
+insert into test14 values(3,NULL,456456.7887994512);
+select * from test14;
+col1    col2    col3
+1    2020-01-13 12:20:59    null
+2    2023-04-17 01:01:45    -8.89790
+3    null    456456.78880
+select cast(date(col2) as int) from test14;
+cast(date(col2) as int)
+18274
+19464
+null
+select cast(date_add(col2,interval 45 day) as int) from test14;
+cast(date_add(col2, interval(45, day)) as int)
+1582806059
+1685581305
+null
+select cast(date_sub(col2,interval 45 day) as int) from test14;
+cast(date_sub(col2, interval(45, day)) as int)
+1575030059
+1677805305
+null
+select cast(to_date('2022-01-06 10:20:30','%Y-%m-%d %H:%i:%s') as int) as result;
+result
+1641464430
+drop table if exists test17;
+create table test17(col1 date,col2 int);
+insert into test17 values('1990-01-01',10);
+insert into test17 values('2023-04-18',20);
+insert into test17 values(NULL,30);
+select col1 + col2 from test17;
+col1 + col2
+7315
+19485
+null
+select col1 - col2 from test17;
+col1 - col2
+7295
+19445
+null
+select col1 * 100 from test17;
+col1 * 100
+730500
+1946500
+null
+select col1 % 2 from test17;
+col1 % 2
+1
+1
+null
+drop table test17;
+drop table if exists test18;
+create table test18(col1 date,col2 date);
+insert into test18 values('1997-01-13','2005-01-26');
+select col1 - col2 from test18;
+col1 - col2
+-2935
+select col2 - col1 from test18;
+col2 - col1
+2935
+drop table test18;
+drop table if exists test19;
+create table test19(col1 date,col2 datetime);
+insert into test19 values('1997-01-13','2005-01-26 01:05:06.156');
+insert into test19 values('2023-04-18','1997-01-01 00:00:00');
+select col1 - col2 from test19;
+col1 - col2
+-253587906
+829699200
+select col2 - col1 from test19;
+col2 - col1
+253587906
+-829699200
+drop table test19;
+drop table if exists test14;
+create table test14(col1 int,col2 datetime);
+insert into test14 values(1,'2020-01-13 12:20:59');
+insert into test14 values(2,'2023-04-17 01:01:45');
+insert into test14 values(3,NULL);
+select * from test14;
+col1    col2
+1    2020-01-13 12:20:59
+2    2023-04-17 01:01:45
+3    null
+select col2 / col1 from test14;
+col2 / col1
+1578918059.000000
+840846652.500000
+null
+select col1 * col2 from test14;
+col1 * col2
+1578918059
+3363386610
+null
+select col1 + col2 from test14;
+col1 + col2
+1578918060
+1681693307
+null
+select col1 - col2 from test14;
+col1 - col2
+-1578918058
+-1681693303
+null
+select col2 % col1 from test14;
+col2 % col1
+0
+1
+null
+drop table test14;
+drop table if exists datetime01;
+create table datetime01(col1 datetime(3), col2 decimal);
+insert into datetime01 values('2000-12-12 12:58:58.123',123.454648);
+insert into datetime01 values('1996-04-06 01:01:01.4',-78645312.7894);
+select * from datetime01;
+col1    col2
+2000-12-12 12:58:58.123000000    123
+1996-04-06 01:01:01.400000000    -78645313
+select col1 + col2 from datetime01;
+col1 + col2
+976626061.123
+750107148.400
+select col1 - col2 from datetime01;
+col1 - col2
+976625815.123
+907397774.400
+select col1 * col2 from datetime01;
+col1 * col2
+120124990389.129
+-65177496726323418.200
+select col1 / col2 from datetime01;
+col1 / col2
+7940048.277422764
+-10.537849362
+select col1 % col2 from datetime01;
+col1 % col2
+34.123
+42299331.400
+select col1 + 100.291024 from datetime01;
+col1 + 100.291024
+976626038.414024
+828752561.691024
+select col1 + (-839402143.9320) from datetime01;
+col1 + (-839402143.9320)
+137223794.1910
+-10649682.5320
+select col1 * 798461455511 from datetime01;
+col1 * 798461455511
+779798168043486403345.853
+661726896587767844775.400
+drop table datetime01;
+drop table if exists datetime01;
+create table datetime01(col1 datetime(3), col2 datetime);
+insert into datetime01 values('2000-12-12 12:58:58','1969-03-03 01:05:59');
+insert into datetime01 values('1996-04-06 01:01:01','2019-05-04 23:12:29');
+select * from datetime01;
+col1    col2
+2000-12-12 12:58:58    1969-03-03 01:05:59
+1996-04-06 01:01:01    2019-05-04 23:12:29
+select col1 - col2 from datetime01;
+col1 - col2
+1002887579
+-728259088
+drop table datetime01;
+drop table if exists time01;
+create table time01(col1 int,col2 time);
+insert into time01 values(1,'12:20:59');
+insert into time01 values(2,'23:59:59');
+insert into time01 values(3,NULL);
+select * from time01;
+col1    col2
+1    12:20:59
+2    23:59:59
+3    null
+select col2 / col1 from time01;
+col2 / col1
+122059.000000
+117979.500000
+null
+select col1 * col2 from time01;
+col1 * col2
+122059
+471918
+null
+select col1 + col2 from time01;
+col1 + col2
+122060
+235961
+null
+select col1 - col2 from time01;
+col1 - col2
+-122058
+-235957
+null
+select col2 % col1 from time01;
+col2 % col1
+0
+1
+null
+drop table time01;
+drop table if exists time01;
+create table time01(col1 decimal,col2 time);
+insert into time01 values(1787945645414794854456412,'12:20:59');
+insert into time01 values(-789466511231027845,'23:59:59');
+select * from time01;
+col1    col2
+1787945645414794854456412    12:20:59
+-789466511231027845    23:59:59
+select col2 / col1 from time01;
+col2 / col1
+0.000000
+0.000000
+select col1 * col2 from time01;
+col1 * col2
+218234857533684445140095192308
+-186281728523562099278355
+select col1 + col2 from time01;
+col1 + col2
+1787945645414794854578471
+-789466511230791886
+select col1 - col2 from time01;
+col1 - col2
+1787945645414794854334353
+-789466511231263804
+select col2 % col1 from time01;
+col2 % col1
+122059
+235959
+drop table time01;
+SET time_zone = '+0:00';
+drop table if exists test03;
+create table test03(col1 timestamp);
+insert into test03 values('1997-01-13 12:20:59.898612');
+insert into test03 values('1970-01-30 23:59:59');
+insert into test03 values(NULL);
+select * from test03;
+col1
+1997-01-13 12:21:00
+1970-01-30 23:59:59
+null
+select cast(col1 as int) from test03;
+cast(col1 as int)
+853158060
+2591999
+null
+select cast(col1 as decimal(20,18)) from test03;
+cast(col1 as decimal(20, 18))
+853158060.000000000000000000
+2591999.000000000000000000
+null
+drop table test03;
+drop table if exists test03;
+create table test03(col1 timestamp(5));
+insert into test03 values('1997-01-13 12:20:59.898612');
+insert into test03 values('1970-01-30 23:59:59');
+insert into test03 values(NULL);
+select * from test03;
+col1
+1997-01-13 12:20:59.898610000
+1970-01-30 23:59:59
+null
+select cast(col1 as int) from test03;
+cast(col1 as int)
+853158059
+2591999
+null
+select cast(col1 as decimal(20,18)) from test03;
+cast(col1 as decimal(20, 18))
+853158059.898610000000000000
+2591999.000000000000000000
+null
+drop table test03;
+drop table if exists test09;
+drop table if exists test10;
+drop table if exists test11;
+create table test09(col1 int);
+create table test10(col1 timestamp);
+create table test11(col1 decimal(38,18));
+insert into test10 values('2022-12-13 12:20:59.2132131');
+insert into test10 values('1998-10-10 01:01:45');
+insert into test10 values(NULL);
+insert into test09 select * from test10;
+select cast(col1 as decimal(10,5)) from test10;
+cast(col1 as decimal(10, 5))
+1670934059.00000
+907981305.00000
+null
+insert into test11 select * from test10;
+select * from test09;
+col1
+1670934059
+907981305
+null
+select * from test11;
+col1
+1670934059.000000000000000000
+907981305.000000000000000000
+null
+drop table test09;
+drop table test10;
+drop table test11;
+drop table if exists test09;
+drop table if exists test10;
+create table test09(col1 int);
+create table test10(col1 timestamp(6));
+create table test11(col1 decimal(38,18));
+insert into test10 values('2022-12-13 12:20:59.2132131');
+insert into test10 values('1998-10-10 01:01:45');
+insert into test10 values(NULL);
+insert into test09 select * from test10;
+select cast(col1 as decimal(10,5)) from test10;
+cast(col1 as decimal(10, 5))
+1670934059.21321
+907981305.00000
+null
+insert into test11 select * from test10;
+select * from test09;
+col1
+1670934059
+907981305
+null
+select * from test11;
+col1
+1670934059.213213000000000000
+907981305.000000000000000000
+null
+drop table test09;
+drop table test10;
+drop table test11;
+drop table if exists timestamp01;
+create table timestamp01(col1 int,col2 timestamp);
+insert into timestamp01 values(10000,'2020-01-13 12:20:59');
+insert into timestamp01 values(-22220,'2023-04-17 01:01:45');
+insert into timestamp01 values(123654,NULL);
+select * from timestamp01;
+col1    col2
+10000    2020-01-13 12:20:59
+-22220    2023-04-17 01:01:45
+123654    null
+select col1 + col2 from timestamp01;
+col1 + col2
+1578928059
+1681671085
+null
+select col1 - col2 from timestamp01;
+col1 - col2
+-1578908059
+-1681715525
+null
+select col1 * col2 from timestamp01;
+col1 * col2
+15789180590000
+-37367225237100
+null
+select col2 / col1 from timestamp01;
+col2 / col1
+157891.805900
+-75683.767102
+null
+select col2 % col1 from timestamp01;
+col2 % col1
+8059
+17045
+null
+drop table timestamp01;
+drop table if exists timestamp01;
+create table timestamp01(col1 decimal(38,18),col2 timestamp);
+insert into timestamp01 values(NULL,'2020-01-13 12:20:59');
+insert into timestamp01 values(-4514531.548451,'2023-04-17 01:01:45');
+insert into timestamp01 values(123654.7897948,NULL);
+select * from timestamp01;
+col1    col2
+null    2020-01-13 12:20:59
+-4514531.548451000000000000    2023-04-17 01:01:45
+123654.789794800000000000    null
+select col1 + col2 from timestamp01;
+col1 + col2
+null
+1677178773.451549000000000000
+null
+select col1 - col2 from timestamp01;
+col1 - col2
+null
+-1686207836.548451000000000000
+null
+select col1 * col2 from timestamp01;
+col1 * col2
+null
+-7592057480241329.820555000000000000
+null
+select col2 / col1 from timestamp01;
+invalid input: Decimal128 Div overflow: 1578918059000000000000000000(Scale:18)/0(Scale:18)
+select col2 % col1 from timestamp01;
+invalid input: Decimal128 Mod by Zero: 1578918059000000000000000000%0
+drop table timestamp01;
+drop database test;

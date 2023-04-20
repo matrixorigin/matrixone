@@ -24,48 +24,46 @@ import (
 const FooterSize = 64
 const HeaderSize = 64
 
-type ObjectMeta []byte
+type objectMetaV1 []byte
 
-func BuildObjectMeta(count uint16) ObjectMeta {
+func buildObjectMetaV1(count uint16) objectMetaV1 {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
-	meta := ObjectMeta(buf)
-	meta.BlockHeader().setVersion(Version)
 	return buf[:]
 }
 
-func (o ObjectMeta) BlockHeader() BlockHeader {
+func (o objectMetaV1) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
-func (o ObjectMeta) ObjectColumnMeta(idx uint16) ColumnMeta {
+func (o objectMetaV1) ObjectColumnMeta(idx uint16) ColumnMeta {
 	return GetObjectColumnMeta(idx, o[headerLen:])
 }
 
-func (o ObjectMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
+func (o objectMetaV1) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + uint32(idx)*colMetaLen
 	copy(o[offset:offset+colMetaLen], col)
 }
 
-func (o ObjectMeta) Length() uint32 {
+func (o objectMetaV1) Length() uint32 {
 	return headerLen + uint32(o.BlockHeader().ColumnCount())*colMetaLen
 }
 
-func (o ObjectMeta) BlockCount() uint32 {
+func (o objectMetaV1) BlockCount() uint32 {
 	return uint32(o.BlockHeader().Sequence())
 }
 
-func (o ObjectMeta) BlockIndex() BlockIndex {
+func (o objectMetaV1) BlockIndex() BlockIndex {
 	offset := o.Length()
 	return BlockIndex(o[offset:])
 }
 
-func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
+func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o ObjectMeta) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
+func (o objectMetaV1) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
 	return o.GetBlockMeta(blk).ColumnMeta(col)
 }
 
@@ -121,9 +119,8 @@ func BuildObjectColumnMeta() ColumnMeta {
 
 const (
 	sequenceLen        = 2
-	dbIDOff            = versionOff + versionLen
 	dbIDLen            = 8
-	tableIDOff         = dbIDOff + dbIDLen
+	tableIDOff         = dbIDLen
 	tableIDLen         = 8
 	blockIDOff         = tableIDOff + tableIDLen
 	blockIDLen         = types.BlockidSize
@@ -152,7 +149,6 @@ func BuildBlockMeta(count uint16) BlockObject {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	meta := BlockObject(buf)
-	meta.BlockHeader().setVersion(Version)
 	return meta
 }
 
@@ -193,20 +189,12 @@ func BuildBlockHeader() BlockHeader {
 	return buf[:]
 }
 
-func (bh BlockHeader) Version() uint16 {
-	return types.DecodeUint16(bh[:typeLen])
-}
-
-func (bh BlockHeader) setVersion(version uint16) {
-	copy(bh[:typeLen], types.EncodeUint16(&version))
-}
-
 func (bh BlockHeader) TableID() uint64 {
-	return types.DecodeUint64(bh[:tableIDLen])
+	return types.DecodeUint64(bh[tableIDOff:])
 }
 
 func (bh BlockHeader) SetTableID(id uint64) {
-	copy(bh[:tableIDLen], types.EncodeUint64(&id))
+	copy(bh[tableIDOff:], types.EncodeUint64(&id))
 }
 
 func (bh BlockHeader) BlockID() *Blockid {

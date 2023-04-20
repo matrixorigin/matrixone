@@ -8,43 +8,43 @@ create role if not exists u_role;
 create user yellowcar identified by 'oldmaster';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='yellowcar';
 user_name    authentication_string
-yellowcar    oldmaster
+yellowcar    *5EAD1F0C6CDC33205E6E7EF98890C68BBE040449
 create user  user123456 identified by 'TYUJI_123@126.cn' comment '这是创建用户测试aaaa11111';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='user123456';
 user_name    authentication_string
-user123456    TYUJI_123@126.cn
+user123456    *7DE0CC801EB5CAA3C5C213AA2F0D688D2B29CCB9
 create user  123user  identified by 'eeeeee' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name='123user';
 user_name    authentication_string
-123user    eeeeee
+123user    *FAA84ADA2593C6C09FA43803CD0215DDC4000E9E
 create user Test_user identified by '12345678';
 create user Test_User identified by '12345678';
 internal error: the user test_user exists
 create user `1234@fff` identified by '#¥%……&' comment 'this is test@fefffff' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name='1234@fff';
 user_name    authentication_string
-1234@fff    #¥%……&
+1234@fff    *C4A670ECC55C6B64C62C9501D487AFC344FF0230
 create user  `1234`  identified by '#¥%……&' comment 'this is test@fefffff' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name='1234';
 user_name    authentication_string
-1234    #¥%……&
+1234    *C4A670ECC55C6B64C62C9501D487AFC344FF0230
 create user `user1234.aaaa`  identified by '#¥%……&' comment 'this is test@fefffff' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name='user1234.aaaa';
 user_name    authentication_string
-user1234.aaaa    #¥%……&
+user1234.aaaa    *C4A670ECC55C6B64C62C9501D487AFC344FF0230
 create user  `123user中文`  identified by 'eee中文' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name='123user中文';
 user_name    authentication_string
-123user中文    eee中文
+123user中文    *A9EA4F016275286808108C305EEF19CF8650F907
 create user  "test_user0" identified by '12345678';
 create user  ` c_user_01 `  identified by ' 1111 ' ;
 create user  " c_user_02 "  identified by '1111' ;
 create user  ' c_user_03 '  identified by '1111' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name in('c_user_01','c_user_02','c_user_03');
 user_name    authentication_string
-c_user_01     1111 
-c_user_02    1111
-c_user_03    1111
+c_user_01    *6D0E8D7A755D00085E37F042230C690FF16BDDFC
+c_user_02    *89C6B530AA78695E257E55D63C00A6EC9AD3E977
+c_user_03    *89C6B530AA78695E257E55D63C00A6EC9AD3E977
 create user if not exists test_user1 identified by '12345678';
 create user  test_user1 identified by '12345678';
 internal error: the user test_user1 exists
@@ -119,14 +119,14 @@ internal error: password is empty string
 create user if not exists test_user2 identified by '12345678';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
 user_name    authentication_string
-test_user2    12345678
+test_user2    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 drop user test_user2;
 select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
 user_name    authentication_string
 create user if not exists test_user2 identified by '12345678';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
 user_name    authentication_string
-test_user2    12345678
+test_user2    *84AAC12F54AB666ECFC2A83C676908C8BBC381B1
 create user if not exists user1 identified by '12345678' default role moadmin;
 internal error: the role moadmin can not be granted to non administration user user1
 drop user if exists yellowcar,test_user,user123456,123user,`1234@fff`,`1234`,`user1234.aaaa`,`123user中文`,user_role,user123456,c_user_01,c_user_02,c_user_03,customername,customer,custom,finley,jason,`neil@192.168.1.10`;

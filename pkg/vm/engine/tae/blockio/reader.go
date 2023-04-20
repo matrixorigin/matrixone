@@ -126,7 +126,7 @@ func (r *BlockReader) LoadAllColumns(
 
 	bats := make([]*batch.Batch, 0)
 
-	ioVectors, err := r.reader.ReadAll(ctx, idxs, nil, objectio.ColumnConstructorFactory)
+	ioVectors, err := r.reader.ReadAll(ctx, idxs, nil)
 	if err != nil {
 		return nil, err
 	}

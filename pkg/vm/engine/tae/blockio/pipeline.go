@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -119,7 +118,7 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 			// TODO
 			res = &tasks.JobResult{}
 			ioVectors, err := params.reader.ReadMultiBlocks(ctx,
-				params.ids, nil, objectio.ColumnConstructorFactory)
+				params.ids, nil)
 			if err != nil {
 				res.Err = err
 				return
@@ -154,7 +153,7 @@ type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
-	return params.reader.ReadOneBlock(ctx, params.idxes, params.blk, nil, objectio.ColumnConstructorFactory)
+	return params.reader.ReadOneBlock(ctx, params.idxes, params.blk, nil)
 }
 
 func noopPrefetch(params prefetchParams) error {
