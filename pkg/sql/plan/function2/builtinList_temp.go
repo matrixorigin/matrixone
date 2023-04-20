@@ -44,7 +44,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
-				NewOp: nil,
+				NewOp: AbsInt64,
 			},
 			{
 				overloadId: 1,
@@ -52,7 +52,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				NewOp: nil, // which need us to refactor.
+				NewOp: AbsUInt64, // which need us to refactor.
 			},
 			{
 				overloadId: 2,
@@ -60,7 +60,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
-				NewOp: nil,
+				NewOp: AbsFloat64,
 			},
 			{
 				overloadId: 3,
@@ -68,7 +68,7 @@ var tempListForBinaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_decimal128.ToType()
 				},
-				NewOp: nil,
+				NewOp: AbsDecimal128,
 			},
 		},
 	},

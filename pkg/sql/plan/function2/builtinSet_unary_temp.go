@@ -15,46 +15,48 @@
 package function2
 
 import (
-	"encoding/hex"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
-func builtInHexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			res := HexEncodeString(v)
-			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-				return err
-			}
+		if err := rs.Append(ivec.GetValue(i)); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
+func absSigned[T constraints.Signed | constraints.Float](v T) T {
+	var r T
+	if v < 0 {
+		r = -v
+	} else {
+		r = v
+	}
+	if r < 0 {
+		panic(moerr.NewOutOfRangeNoCtx("int", "'%v'", v))
+	}
+	return r
+}
+
+func AbsInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[int64](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
-			res := HexEncodeInt64(v)
-			if err := rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+			if err := rs.Append(absSigned(v), false); err != nil {
 				return err
 			}
 		}
@@ -62,10 +64,48 @@ func builtInHexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func HexEncodeString(xs []byte) string {
-	return hex.EncodeToString(xs)
+func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[float64](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(absSigned(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
-func HexEncodeInt64(xs int64) string {
-	return fmt.Sprintf("%X", xs)
+func absDecimal128(v types.Decimal128) types.Decimal128 {
+	var r types.Decimal128
+	if v.Sign() {
+		r = v.Minus()
+	} else {
+		r = v
+	}
+	return r
+}
+
+func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(absDecimal128(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
