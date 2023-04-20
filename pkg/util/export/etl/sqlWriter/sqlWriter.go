@@ -30,7 +30,7 @@ const PACKET_LARGE_ERROR = "packet for query is too large"
 
 var _ SqlWriter = (*BaseSqlWriter)(nil)
 
-// SqlWriter is a writer that writes data to a SQL database.
+// BaseSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type BaseSqlWriter struct {
 	db  *sql.DB
 	dsn string
