@@ -159,7 +159,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
-	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea())
+	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea(), false)
 	assert.Nil(t, err)
 	zma := ZoneMapArea(buf1)
 	buf = zma.GetZoneMap(0, 0)

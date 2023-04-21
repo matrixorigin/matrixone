@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -43,18 +44,18 @@ func BlockRead(
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
-	pool *mpool.MPool) (*batch.Batch, error) {
+	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 
 	// read
 	columnBatch, err := BlockReadInner(
 		ctx, info, colIdxes, colTypes,
-		types.TimestampToTS(ts), fs, pool,
+		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	columnBatch.SetZs(columnBatch.Vecs[0].Length(), pool)
+	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
 
 	return columnBatch, nil
 }
@@ -97,15 +98,15 @@ func BlockReadInner(
 	colTypes []types.Type,
 	ts types.TS,
 	fs fileservice.FileService,
-	pool *mpool.MPool) (*batch.Batch, error) {
+	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	var deleteRows []int64
 	columnBatch, deleteRows, err := readBlockData(ctx, colIdxes, colTypes, info, ts,
-		fs, pool)
+		fs, mp)
 	if err != nil {
 		return nil, err
 	}
-	if !info.DeltaLoc.IsEmpty() {
-		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
+	if !info.DeltaLocation().IsEmpty() {
+		deleteBatch, err := readBlockDelete(ctx, info.DeltaLocation(), fs)
 		if err != nil {
 			return nil, err
 		}
@@ -114,23 +115,26 @@ func BlockReadInner(
 			"blockread %s read delete %d: base %s filter out %v\n",
 			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
-	// remove rows from columns
+	rbat := batch.NewWithSize(len(columnBatch.Vecs))
 	for i, col := range columnBatch.Vecs {
-		// Fixme: Due to # 8684, we are not able to use mpool yet
-		// Fixme: replace with cnVec.Dup(nil) when it implemented.
-		columnBatch.Vecs[i], err = col.CloneWindow(0, col.Length(), nil)
-		if err != nil {
+		typ := *col.GetType()
+		if vp == nil {
+			rbat.Vecs[i] = vector.NewVec(typ)
+		} else {
+			rbat.Vecs[i] = vp.GetVector(typ)
+		}
+		if err := vector.GetUnionFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
 			return nil, err
 		}
 		if col.GetType().Oid == types.T_Rowid {
 			// rowid need free
-			col.Free(pool)
+			col.Free(mp)
 		}
 		if len(deleteRows) > 0 {
-			columnBatch.Vecs[i].Shrink(deleteRows, true)
+			rbat.Vecs[i].Shrink(deleteRows, true)
 		}
 	}
-	return columnBatch, nil
+	return rbat, nil
 }
 
 func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, []uint16) {
@@ -170,8 +174,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
 	deleteRows := make([]int64, 0)
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	id := info.MetaLoc.ID()
-	reader, err := NewObjectReader(fs, info.MetaLoc)
+	id := info.MetaLocation().ID()
+	reader, err := NewObjectReader(fs, info.MetaLocation())
 	if err != nil {
 		return nil, deleteRows, err
 	}
@@ -184,7 +188,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
-			info.MetaLoc.Rows(),
+			info.MetaLocation().Rows(),
 			m,
 		)
 		if err != nil {
@@ -330,15 +334,15 @@ func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*p
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
-		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLoc)
+		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLocation())
 		if err != nil {
 			return err
 		}
 		for _, info := range infos[i] {
-			pref.AddBlock(idxes, []uint16{info.MetaLoc.ID()})
-			if !info.DeltaLoc.IsEmpty() {
+			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
+			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLoc.ID()}, service, info.DeltaLoc)
+				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}

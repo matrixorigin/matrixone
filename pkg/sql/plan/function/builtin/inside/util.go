@@ -108,7 +108,7 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 		rds, _ = rel.NewReader(proc.Ctx, 1, expr, ret)
 	}
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(proc.Ctx, catalog.AutoIncrColumnNames, expr, proc.Mp())
+		bat, err := rds[0].Read(proc.Ctx, catalog.AutoIncrColumnNames, expr, proc.Mp(), nil)
 		if err != nil {
 			return 0, moerr.NewInvalidInput(proc.Ctx, "can not find the auto col")
 		}

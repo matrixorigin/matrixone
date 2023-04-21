@@ -83,9 +83,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
-		ctr.cleanAggVectors(mp)
-		ctr.cleanGroupVectors(mp)
-		ctr.cleanMultiAggVecs(mp)
 	}
 }
 
