@@ -135,8 +135,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		_, err = db.Exec(stmt)
 		if err != nil {
 			if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-				chunkSize = len(chunk) / 2
-				_, err = bulkInsert(db, chunk, tbl, chunkSize)
+				_, err = bulkInsert(db, chunk, tbl, len(chunk)/2)
 			} else {
 				// simple retry
 				// _, err = db.Exec(stmt)
@@ -228,14 +227,14 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=30s&writeTimeout=60s&timeout=30s",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=300s&writeTimeout=30m&timeout=3000s",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
 		db, err := sql.Open("mysql", dsn)
 		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
 		if err != nil {
-			logutil.Info("sqlWriter db initialized err", zap.String("address", dbAddress), zap.Error(err))
+			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
 			return err
 		}
 		if sw.db != nil {
@@ -253,7 +252,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 				return sw.db, nil
 			}
 		}
-		logutil.Info("sqlWriter db will init", zap.Bool("forceNewConn", forceNewConn))
+		logutil.Info("sqlWriter db init", zap.Bool("forceNewConn", forceNewConn))
 		err := initFunc()
 		if err != nil {
 			return nil, err
