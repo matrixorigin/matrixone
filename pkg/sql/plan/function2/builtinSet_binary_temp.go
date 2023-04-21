@@ -13,3 +13,66 @@
 // limitations under the License.
 
 package function2
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// ENDSWITH
+
+func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// EXTRACT
+
+func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// FINDINSET
+
+func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// INSTR
+
+func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// LEFT
+
+func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// STARTSWITH
+
+func Startswith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+//POW
+
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+// TIMEDIFF
+
+func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}
