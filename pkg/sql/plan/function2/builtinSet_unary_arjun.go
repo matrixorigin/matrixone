@@ -27,6 +27,8 @@ import (
 	"strings"
 )
 
+// Hex
+
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -73,6 +75,8 @@ func hexEncodeInt64(xs int64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
+// Length
+
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -96,6 +100,8 @@ func strLength(xs string) int64 {
 	return int64(len(xs))
 }
 
+// LengthUTF8
+
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -118,6 +124,8 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
 }
+
+// Ltrim
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
@@ -145,6 +153,8 @@ func ltrim(xs string) string {
 	return strings.TrimLeft(xs, " ")
 }
 
+// Rtrim
+
 func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -170,6 +180,8 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 func rtrim(xs string) string {
 	return strings.TrimRight(xs, " ")
 }
+
+// Reverse
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
@@ -201,6 +213,8 @@ func reverse(str string) string {
 	}
 	return string(runes)
 }
+
+// Oct
 
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
