@@ -739,7 +739,7 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
-	createDbInformationSchemaSql = "create database if not exists information_schema;"
+	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
