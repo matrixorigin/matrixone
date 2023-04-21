@@ -81,8 +81,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if end {
 			break
 		}
+		if bat == nil {
+			continue
+		}
 
-		if bat == nil || bat.Length() == 0 {
+		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)
@@ -258,7 +262,7 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 	}
 	ctr.finalSelectList = sels
 	ctr.bat = bat1
-	bat2.Clean(proc.Mp())
+	proc.PutBatch(bat2)
 	return nil
 }
 

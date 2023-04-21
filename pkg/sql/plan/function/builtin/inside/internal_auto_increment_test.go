@@ -62,7 +62,7 @@ func TestInternalAutoIncrement(t *testing.T) {
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c, d interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(4)
 		bat.Zs = []int64{1}
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
