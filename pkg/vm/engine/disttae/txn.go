@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -363,15 +364,12 @@ func blockRows(meta BlockMeta) int64 {
 }
 
 func blockMarshal(meta BlockMeta) []byte {
-	data, _ := types.Encode(meta)
-	return data
+	sz := unsafe.Sizeof(meta)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
 }
 
 func BlockUnmarshal(data []byte) BlockMeta {
-	var meta BlockMeta
-
-	types.Decode(data, &meta)
-	return meta
+	return *(*BlockMeta)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn
