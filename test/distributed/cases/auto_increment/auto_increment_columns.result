@@ -185,7 +185,7 @@ delete from t3;
 insert into t3(b) values ('bbb');
 select * from t3 order by a;
 a    b
-2999    bbb
+11    bbb
 drop table t3;
 drop table if exists t4;
 create table t4(
