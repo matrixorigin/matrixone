@@ -99,6 +99,9 @@ var supportedAggregateFunctions = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedAggParametersWrong)
@@ -120,6 +123,9 @@ var supportedAggregateFunctions = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedAggParametersWrong)
@@ -231,6 +237,9 @@ var supportedAggregateFunctions = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedAggParametersWrong)

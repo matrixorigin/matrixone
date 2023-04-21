@@ -16,6 +16,7 @@ package function2
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -250,9 +251,14 @@ func Test_ShowFunctionsShouldBeRefactored(t *testing.T) {
 
 	// show how many function we should implement.
 	fmt.Printf("there are still %d functions need to implement\n", len(alreadyRegistered))
-	count := 1
+
+	result := make([]string, 0, len(alreadyRegistered))
 	for id := range alreadyRegistered {
-		fmt.Printf("%d: %v\n", count, fromIDtoName[id])
-		count++
+		result = append(result, fmt.Sprintf("%v", fromIDtoName[id]))
+	}
+	sort.Sort(sort.StringSlice(result))
+
+	for i, name := range result {
+		fmt.Printf("%d: %s\n", i+1, name)
 	}
 }

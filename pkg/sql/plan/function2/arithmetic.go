@@ -588,3 +588,7 @@ func floatIntegerDiv[T float32 | float64](parameters []*vector.Vector, result ve
 	}
 	return nil
 }
+
+func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}

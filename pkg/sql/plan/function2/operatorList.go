@@ -445,6 +445,40 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
+					if integerDivOperatorSupports(t1, t2) {
+						return newCheckResultWithCast(0, []types.Type{t1, t2})
+					}
+				} else {
+					if integerDivOperatorSupports(inputs[0], inputs[1]) {
+						return newCheckResultWithSuccess(0)
+					}
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return integerDivFn(parameters, result, proc, length)
+				},
+			},
+		},
+	},
+
+	// operator `mod`
+	{
+		functionId: MOD,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+				if has {
 					if modOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
@@ -461,10 +495,10 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+					return parameters[0]
 				},
 				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return integerDivFn(parameters, result, proc, length)
+					return modFn(parameters, result, proc, length)
 				},
 			},
 		},
