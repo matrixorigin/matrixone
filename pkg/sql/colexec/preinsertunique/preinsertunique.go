@@ -16,6 +16,7 @@ package preinsertunique
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,13 +60,18 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	if pkPos == -1 {
 		// have no primary key
-		insertUniqueBat = batch.New(true, []string{catalog.IndexTableIndexColName})
+		insertUniqueBat = batch.NewWithSize(1)
+		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName}
 	} else {
-		insertUniqueBat = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
+		insertUniqueBat = batch.NewWithSize(2)
+		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	colCount := len(uniqueColumnPos)
 
+	if inputBat.Vecs == nil {
+		fmt.Print("ddd")
+	}
 	if colCount == 1 {
 		pos := uniqueColumnPos[0]
 		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)

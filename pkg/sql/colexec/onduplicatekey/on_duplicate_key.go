@@ -96,7 +96,9 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	for i := len(attrs); i < len(originBatch.Vecs); i++ {
 		attrs = append(attrs, "")
 	}
-	insertBatch := batch.New(true, attrs)
+	insertBatch := batch.NewWithSize(len(attrs))
+	insertBatch.Attrs = attrs
+
 	for i, v := range originBatch.Vecs {
 		newVec := vector.NewVec(*v.GetType())
 		insertBatch.SetVector(int32(i), newVec)
@@ -254,7 +256,8 @@ func resetColPos(e *plan.Expr, columnCount int) {
 }
 
 func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process, attrs []string) (*batch.Batch, error) {
-	newBatch := batch.New(true, attrs)
+	newBatch := batch.NewWithSize(len(attrs))
+	newBatch.Attrs = attrs
 	var uErr error
 	for i, v := range originBatch.Vecs {
 		newVec := vector.NewVec(*v.GetType())
@@ -275,7 +278,8 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 	// 	return nil, err
 	// }
 	var originVec *vector.Vector
-	newBatch := batch.New(true, attrs)
+	newBatch := batch.NewWithSize(len(attrs))
+	newBatch.Attrs = attrs
 	for i, attr := range newBatch.Attrs {
 		if expr, exists := updateExpr[attr]; exists && i < columnCount {
 			runExpr := plan2.DeepCopyExpr(expr)
