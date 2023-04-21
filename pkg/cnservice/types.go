@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,6 +181,7 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
+	foundMachineHost := ""
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
@@ -188,6 +190,8 @@ func (c *Config) Validate() error {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
 	}
 	if c.Role == "" {
 		c.Role = metadata.CNRole_TP.String()
@@ -246,7 +250,7 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
-	c.Ctl.Adjust(defaultCtlListenAddress)
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 	return nil

@@ -37,8 +37,7 @@ var (
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
 	defaultLockListenAddress     = "0.0.0.0:22002"
 	defaultLockServiceAddress    = "127.0.0.1:22002"
-	defaultCtlListenAddress      = "0.0.0.0:29958"
-	defaultCtlServiceAddress     = "127.0.0.1:29958"
+	defaultCtlListenAddress      = "127.0.0.1:29958"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -145,7 +144,7 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
-	foundServiceHost := ""
+	foundMachineHost := ""
 	if c.UUID == "" {
 		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
 	}
@@ -159,7 +158,7 @@ func (c *Config) Validate() error {
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = defaultServiceAddress
 	} else {
-		foundServiceHost = strings.Split(c.ServiceAddress, ":")[0]
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
 	}
 	if c.LockService.ListenAddress == "" {
 		c.LockService.ListenAddress = defaultLockListenAddress
@@ -230,7 +229,7 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
-	// c.Ctl.Adjust(defaultCtlListenAddress, foundServiceHost)
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 	return nil

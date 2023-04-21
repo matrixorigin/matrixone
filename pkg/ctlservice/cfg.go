@@ -1,20 +1,19 @@
 package ctlservice
 
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/util/address"
+)
+
 // Config ctl service address
 type Config struct {
-	// ListenAddress ctl service listen address for receiving ctl requests
-	ListenAddress string `toml:"listen-address"`
-	// ServiceAddress service address for communication, if this address is not set, use
-	// ListenAddress as the communication address.
-	ServiceAddress string `toml:"service-address"`
+	// Address ctl service address
+	Address address.Address `toml:"address"`
 }
 
 // Adjust adjust config, setup default configs
-func (c *Config) Adjust(defaultListenAddress string) {
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
-	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	}
+func (c *Config) Adjust(machineHost, defaultListenAddress string) {
+	c.Address.Adjust(machineHost, defaultListenAddress)
+	fmt.Printf("%+v\n", c.Address)
 }

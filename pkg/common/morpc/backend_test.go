@@ -837,7 +837,8 @@ func (tm *testMessage) GetPayloadField() []byte {
 }
 
 func (tm *testMessage) SetPayloadField(data []byte) {
-	tm.payload = data
+	tm.payload = make([]byte, len(data))
+	copy(tm.payload, data)
 }
 
 func newTestCodec(options ...CodecOption) Codec {
