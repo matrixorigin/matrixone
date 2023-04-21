@@ -30,14 +30,15 @@ import (
 
 type objectWriterV1 struct {
 	sync.RWMutex
-	object   *Object
-	blocks   []blockData
-	totalRow uint32
-	colmeta  []ColumnMeta
-	buffer   *ObjectBuffer
-	fileName string
-	lastId   uint32
-	name     ObjectName
+	object      *Object
+	blocks      []blockData
+	totalRow    uint32
+	colmeta     []ColumnMeta
+	buffer      *ObjectBuffer
+	fileName    string
+	lastId      uint32
+	name        ObjectName
+	compressBuf []byte
 }
 
 type blockData struct {
@@ -337,12 +338,19 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
+	var tmpData []byte
 	dataLen := len(buf)
-	data = make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
+	compressBlockBound := lz4.CompressBlockBound(dataLen)
+	if len(w.compressBuf) < compressBlockBound {
+		w.compressBuf = make([]byte, compressBlockBound)
+	}
+	if tmpData, err = compress.Compress(buf, w.compressBuf[:compressBlockBound], compress.Lz4); err != nil {
 		return
 	}
-	extent = NewExtent(compress.Lz4, offset, uint32(len(data)), uint32(dataLen))
+	length := uint32(len(tmpData))
+	data = make([]byte, length)
+	copy(data, tmpData[:length])
+	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return
 }
 

@@ -46,11 +46,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	newBat := batch.New(false, arg.Attrs)
 	for _, idx := range arg.Idx {
 		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))

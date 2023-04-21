@@ -16,9 +16,14 @@ package insert
 
 import (
 	"bytes"
-	"fmt"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,60 +35,60 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg any) error {
-	// ap := arg.(*Argument)
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.state = Process
 	// if ap.IsRemote {
-	// s3Writers, err := colexec.AllocS3Writers(ap.InsertCtx.TableDef)
-	// if err != nil {
-	// 	return err
-	// }
-	// ap.s3Writers = s3Writers
+	// 	s3Writers, err := colexec.AllocS3Writers(ap.InsertCtx.TableDef)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	ap.ctr.s3Writers = s3Writers
 	// }
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	defer analyze(proc, idx)()
-
-	insertArg := arg.(*Argument)
-	// s3Writers := insertArg.s3Writers
+	ap := arg.(*Argument)
+	if ap.ctr.state == End {
+		proc.SetInputBatch(nil)
+		return true, nil
+	}
+	// s3Writers := ap.ctr.s3Writers
 	bat := proc.InputBatch()
 	if bat == nil {
-		// if insertArg.IsRemote {
-		// handle the last Batch that batchSize less than DefaultBlockMaxRows
-		// for more info, refer to the comments about reSizeBatch
-		// for _, s3Writer := range s3Writers {
-		// 	if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
+		// if ap.IsRemote {
+		// 	// handle the last Batch that batchSize less than DefaultBlockMaxRows
+		// 	// for more info, refer to the comments about reSizeBatch
+		// 	for _, s3Writer := range s3Writers {
+		// 		if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
+		// 			ap.ctr.state = End
+		// 			return false, err
+		// 		}
+		// 	}
+		// 	if err := collectAndOutput(proc, s3Writers); err != nil {
+		// 		ap.ctr.state = End
 		// 		return false, err
 		// 	}
-		// }
-		// if err := collectAndOutput(proc, s3Writers); err != nil {
-		// 	return false, err
-		// }
 		// }
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
-
-	insertCtx := insertArg.InsertCtx
-
+	defer proc.PutBatch(bat)
+	insertCtx := ap.InsertCtx
 	//write origin table
-	if insertArg.IsRemote {
+	if ap.IsRemote {
 		// write to s3.
-		// err := s3Writers[0].WriteS3Batch(bat, proc)
-		// if err != nil {
+		// if err := s3Writers[0].WriteS3Batch(bat, proc); err != nil {
+		// 	ap.ctr.state = End
 		// 	return false, err
 		// }
 	} else {
-		defer func() {
-			bat.Clean(proc.Mp())
-		}()
-		//
-		insertBat := batch.New(true, insertArg.InsertCtx.Attrs)
-		if len(insertArg.InsertCtx.Attrs) != len(bat.Vecs) {
-			fmt.Print("dddddd")
-		}
+		insertBat := batch.New(true, ap.InsertCtx.Attrs)
 		for j := range bat.Vecs {
 			insertBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
@@ -96,50 +101,31 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		if err != nil {
 			return false, err
 		}
+
+		proc.SetInputBatch(insertBat)
 	}
 
-	// write unique key table
-	// nameToPos, pkPos := getUniqueKeyInfo(insertCtx.TableDef)
-	// var uniqIndexs []engine.Relation
-	// if len(insertCtx.Rels) > 1 {
-	// 	uniqIndexs = insertCtx.Rels[1:]
-	// }
-	// err := colexec.WriteUniqueTable(
-	// 	s3Writers, proc, bat, insertCtx.TableDef,
-	// 	nameToPos, pkPos, uniqIndexs)
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	affectedRows := uint64(bat.Length())
-	proc.SetInputBatch(bat)
-
-	// if insertArg.IsRemote {
-	// if err := collectAndOutput(proc, s3Writers); err != nil {
-	// 	return false, err
-	// }
-	// }
-	atomic.AddUint64(&insertArg.Affected, affectedRows)
+	affectedRows := uint64(bat.Vecs[0].Length())
+	atomic.AddUint64(&ap.Affected, affectedRows)
 	return false, nil
 }
 
-// func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-// 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-// 	res := batch.New(true, attrs)
-// 	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-// 	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
-// 	for _, w := range s3Writers {
-// 		//deep copy.
-// 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
-// 		if err != nil {
-// 			return
-// 		}
-// 		w.ResetMetaLocBat()
-// 	}
-// 	res.AddCnt(1)
-// 	proc.SetInputBatch(res)
-// 	return
-// }
+func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	res := batch.NewWithSize(len(attrs))
+	res.SetAttributes(attrs)
+	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for _, w := range s3Writers {
+		//deep copy.
+		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
+		if err != nil {
+			return
+		}
+	}
+	proc.SetInputBatch(res)
+	return
+}
 
 func analyze(proc *process.Process, idx int) func() {
 	t := time.Now()
