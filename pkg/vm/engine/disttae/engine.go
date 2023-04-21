@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -565,7 +564,6 @@ func (e *Engine) gc() {
 	for {
 		select {
 		case <-time.After(GcCycle):
-			fmt.Printf("++++timestamp: %v\n", e.cli.MinTimestamp())
 		}
 	}
 }

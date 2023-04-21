@@ -118,6 +118,7 @@ func NewTxnClient(
 		opt(c)
 	}
 	c.adjust()
+	c.mu.mp = make(map[string]string)
 	return c
 }
 

@@ -86,7 +86,7 @@ func WithTxnCNCoordinator() TxnOption {
 
 func WithTxnClose(client *txnClient) TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.closeFunc = client.pushTransaction
+		tc.option.closeFunc = client.popTransaction
 	}
 }
 
@@ -327,6 +327,9 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
+		if tc.option.closeFunc != nil {
+			tc.option.closeFunc(tc.mu.txn)
+		}
 		return nil
 	}
 
