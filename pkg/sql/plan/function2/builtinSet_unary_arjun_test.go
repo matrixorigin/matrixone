@@ -107,4 +107,5 @@ func TestDateStringToMonth(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+	//TODO: Ingoring Scalar Nulls: Original code: https://github.com/m-schen/matrixone/blob/823b5524f1c6eb189ee9652013bdf86b99e5571e/pkg/sql/plan/function/builtin/unary/month_test.go#L150
 }
