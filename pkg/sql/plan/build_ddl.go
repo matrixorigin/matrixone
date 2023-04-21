@@ -2040,20 +2040,6 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	return &fkData, nil
 }
 
-var (
-	// TODO(fagongzi): remove this map after the issue fixed:
-	// 1. begin
-	// 2. create database fake;
-	// 3. use fake;
-	// 4. create table t1(id auto_increment primay key)
-	// failed.
-	skipAddPKDatabases = map[string]bool{
-		"system_metrics": true,
-		//"information_schema": true,
-		"system": true,
-	}
-)
-
 // maybeAddPrimaryKey for tables that do not have a primary key, we need to create a hidden
 // auto-increment column primary key. In pessimistic transactionm mode, locks arithmetic requires
 // a primary key. To avoid conflicts with Cluster-By, this primary key needs to be disabled from
