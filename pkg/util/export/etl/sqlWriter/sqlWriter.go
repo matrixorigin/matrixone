@@ -170,14 +170,19 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 		if strings.Contains(err.Error(), "no such table") {
 			return 0, err
 		}
-		db, _ := sw.initOrRefreshDBConn(true)
+
+		// refresh connection if invalid connection
+		if strings.Contains(err.Error(), "invalid connection") {
+			db, _ = sw.initOrRefreshDBConn(true)
+		}
+
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
 			cnt, err = bulkInsert(db, records, tbl, 1000)
 		} else {
 			_, err = db.Exec(stmt)
 		}
 		if err != nil {
-			logutil.Error("sqlWriter db exec failed again", zap.String("dsn", sw.dsn), zap.Error(err))
+			logutil.Error("sqlWriter db exec failed after retry", zap.String("dsn", sw.dsn), zap.Error(err))
 			return 0, err
 		}
 		return cnt, nil
