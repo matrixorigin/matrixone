@@ -17,8 +17,19 @@ package ctlservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+// GetCtlService get ctl cluster from process level runtime
+func GetCtlService() CtlService {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.CtlService)
+	if !ok {
+		panic("no ctl service")
+	}
+	return v.(CtlService)
+}
 
 // CtlService is used to send ctl request to another service or handle request
 // from another service.
@@ -26,7 +37,9 @@ type CtlService interface {
 	// AddHandleFunc add ctl message handler
 	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
 	// SendCtlMessage send ctl message to a service
-	SendCtlMessage(ctx context.Context, serviceID string, req *pb.Request) (*pb.Response, error)
+	SendCtlMessage(ctx context.Context, serviceType metadata.ServiceType, serviceID string, req *pb.Request) (*pb.Response, error)
+	// NewRequest new a request by cmd method
+	NewRequest(pb.CmdMethod) *pb.Request
 	// Release release response
 	Release(*pb.Response)
 	// Start start ctl service

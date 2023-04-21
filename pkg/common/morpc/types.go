@@ -248,6 +248,8 @@ type MessageHandler[REQ, RESP MethodBasedMessage] interface {
 	Close() error
 	// RegisterHandleFunc register request handler func
 	RegisterHandleFunc(method uint32, handleFunc HandleFunc[REQ, RESP], async bool) MessageHandler[REQ, RESP]
+	// Handle handle at local
+	Handle(ctx context.Context, req REQ) RESP
 }
 
 // MessagePool message pool is used to reuse request and response to avoid allocate.

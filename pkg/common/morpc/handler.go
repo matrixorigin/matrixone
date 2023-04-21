@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -56,6 +57,19 @@ func (p *pool[REQ, RESP]) ReleaseResponse(resp RESP) {
 type handleFuncCtx[REQ, RESP MethodBasedMessage] struct {
 	handleFunc HandleFunc[REQ, RESP]
 	async      bool
+}
+
+func (c *handleFuncCtx[REQ, RESP]) call(
+	ctx context.Context,
+	req REQ,
+	resp RESP) {
+	if err := c.handleFunc(ctx, req, resp); err != nil {
+		resp.WrapError(err)
+	}
+	if getLogger().Enabled(zap.DebugLevel) {
+		getLogger().Debug("handle request completed",
+			zap.String("response", resp.DebugString()))
+	}
 }
 
 type handler[REQ, RESP MethodBasedMessage] struct {
@@ -124,6 +138,16 @@ func (s *handler[REQ, RESP]) RegisterHandleFunc(
 	return s
 }
 
+func (s *handler[REQ, RESP]) Handle(
+	ctx context.Context,
+	req REQ) RESP {
+	resp := s.pool.AcquireResponse()
+	if handlerCtx, ok := s.getHandler(ctx, req, resp); ok {
+		handlerCtx.call(ctx, req, resp)
+	}
+	return resp
+}
+
 func (s *handler[REQ, RESP]) onMessage(
 	ctx context.Context,
 	request Message,
@@ -137,55 +161,16 @@ func (s *handler[REQ, RESP]) onMessage(
 			zap.Any("message", request))
 	}
 
-	if getLogger().Enabled(zap.DebugLevel) {
-		getLogger().Debug("received a request",
-			zap.String("request", req.DebugString()))
-	}
-
-	if s.options.filter != nil &&
-		!s.options.filter(req) {
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by filter",
-				zap.String("request", req.DebugString()))
-		}
-		s.pool.ReleaseRequest(req)
-		return nil
-	}
-
-	handlerCtx, ok := s.handlers[req.Method()]
+	resp := s.pool.AcquireResponse()
+	handlerCtx, ok := s.getHandler(ctx, req, resp)
 	if !ok {
-		resp := s.pool.AcquireResponse()
-		resp.SetID(req.GetID())
-		resp.SetMethod(req.Method())
-		resp.WrapError(moerr.NewNotSupportedNoCtx("%d not support in current service",
-			req.Method()))
 		s.pool.ReleaseRequest(req)
 		return cs.Write(ctx, resp)
 	}
 
-	select {
-	case <-ctx.Done():
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by timeout",
-				zap.String("request", req.DebugString()))
-		}
-		s.pool.ReleaseRequest(req)
-		return nil
-	default:
-	}
-
 	fn := func(req REQ) error {
 		defer s.pool.ReleaseRequest(req)
-		resp := s.pool.AcquireResponse()
-		resp.SetID(req.GetID())
-		resp.SetMethod(req.Method())
-		if err := handlerCtx.handleFunc(ctx, req, resp); err != nil {
-			resp.WrapError(err)
-		}
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("handle request completed",
-				zap.String("response", resp.DebugString()))
-		}
+		handlerCtx.call(ctx, req, resp)
 		return cs.Write(ctx, resp)
 	}
 
@@ -195,4 +180,44 @@ func (s *handler[REQ, RESP]) onMessage(
 		return nil
 	}
 	return fn(req)
+}
+
+func (s *handler[REQ, RESP]) getHandler(
+	ctx context.Context,
+	req REQ,
+	resp RESP) (handleFuncCtx[REQ, RESP], bool) {
+	if getLogger().Enabled(zap.DebugLevel) {
+		getLogger().Debug("received a request",
+			zap.String("request", req.DebugString()))
+	}
+
+	select {
+	case <-ctx.Done():
+		if getLogger().Enabled(zap.DebugLevel) {
+			getLogger().Debug("skip request by timeout",
+				zap.String("request", req.DebugString()))
+		}
+		resp.WrapError(ctx.Err())
+		return handleFuncCtx[REQ, RESP]{}, false
+	default:
+	}
+
+	if s.options.filter != nil &&
+		!s.options.filter(req) {
+		if getLogger().Enabled(zap.DebugLevel) {
+			getLogger().Debug("skip request by filter",
+				zap.String("request", req.DebugString()))
+		}
+		resp.WrapError(errors.New("skip request by filter"))
+		return handleFuncCtx[REQ, RESP]{}, false
+	}
+
+	resp.SetID(req.GetID())
+	resp.SetMethod(req.Method())
+	handlerCtx, ok := s.handlers[req.Method()]
+	if !ok {
+		resp.WrapError(moerr.NewNotSupportedNoCtx("%d not support in current service",
+			req.Method()))
+	}
+	return handlerCtx, ok
 }

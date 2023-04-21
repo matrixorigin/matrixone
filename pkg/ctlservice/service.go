@@ -18,20 +18,24 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 type service struct {
-	cluster clusterservice.MOCluster
-	client  morpc.RPCClient
-	h       morpc.MessageHandler[*pb.Request, *pb.Response]
-	pool    morpc.MessagePool[*pb.Request, *pb.Response]
+	serviceID string
+	cluster   clusterservice.MOCluster
+	client    morpc.RPCClient
+	h         morpc.MessageHandler[*pb.Request, *pb.Response]
+	pool      morpc.MessagePool[*pb.Request, *pb.Response]
 }
 
 // NewCtlService new ctl service to send ctl message to another service or handle ctl request from
 // other ctl service.
 func NewCtlService(
+	serviceID string,
 	address string,
 	cfg morpc.Config) (CtlService, error) {
 	pool := morpc.NewMessagePool(
@@ -54,10 +58,11 @@ func NewCtlService(
 		return nil, err
 	}
 	return &service{
-		client:  client,
-		h:       h,
-		cluster: clusterservice.GetMOCluster(),
-		pool:    pool,
+		serviceID: serviceID,
+		client:    client,
+		h:         h,
+		cluster:   clusterservice.GetMOCluster(),
+		pool:      pool,
 	}, nil
 }
 
@@ -70,12 +75,18 @@ func (s *service) AddHandleFunc(
 
 func (s *service) SendCtlMessage(
 	ctx context.Context,
+	serviceType metadata.ServiceType,
 	serviceID string,
 	req *pb.Request) (*pb.Response, error) {
-	addr, err := s.resolveService(serviceID)
+	if s.isSelf(serviceID) {
+		return s.unwrapResponseError(s.h.Handle(ctx, req))
+	}
+
+	addr, err := s.resolveService(serviceType, serviceID)
 	if err != nil {
 		return nil, err
 	}
+
 	f, err := s.client.Send(ctx, addr, req)
 	if err != nil {
 		return nil, err
@@ -86,15 +97,17 @@ func (s *service) SendCtlMessage(
 		return nil, err
 	}
 	resp := v.(*pb.Response)
-	if err := resp.UnwrapError(); err != nil {
-		s.pool.ReleaseResponse(resp)
-		return nil, err
-	}
-	return resp, nil
+	return s.unwrapResponseError(resp)
+}
+
+func (s *service) NewRequest(method pb.CmdMethod) *pb.Request {
+	req := s.pool.AcquireRequest()
+	req.CMDMethod = method
+	return req
 }
 
 func (s *service) Release(resp *pb.Response) {
-	s.Release(resp)
+	s.pool.ReleaseResponse(resp)
 }
 
 func (s *service) Start() error {
@@ -102,12 +115,51 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
-	if err := s.Close(); err != nil {
+	if err := s.client.Close(); err != nil {
 		return err
 	}
 	return s.h.Close()
 }
 
-func (s *service) resolveService(serviceID string) (string, error) {
-	return "", nil
+func (s *service) isSelf(serviceID string) bool {
+	return s.serviceID == serviceID
+}
+
+func (s *service) resolveService(
+	serviceType metadata.ServiceType,
+	serviceID string) (string, error) {
+	address := ""
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		s.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(serviceID),
+			func(s metadata.CNService) bool {
+				address = s.CtlAddress
+				return false
+			})
+	case metadata.ServiceType_DN:
+		s.cluster.GetDNService(
+			clusterservice.NewServiceIDSelector(serviceID),
+			func(s metadata.DNService) bool {
+				address = s.CtlAddress
+				return false
+			})
+	default:
+		return "", moerr.NewNotSupportedNoCtx("not support ctl request to %s",
+			serviceType.String())
+	}
+	if address == "" {
+		return "", moerr.NewInvalidInputNoCtx("service %s:%s not found",
+			serviceType.String(),
+			serviceID)
+	}
+	return address, nil
+}
+
+func (s *service) unwrapResponseError(resp *pb.Response) (*pb.Response, error) {
+	if err := resp.UnwrapError(); err != nil {
+		s.pool.ReleaseResponse(resp)
+		return nil, err
+	}
+	return resp, nil
 }

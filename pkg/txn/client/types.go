@@ -43,6 +43,16 @@ type TxnClient interface {
 	Close() error
 }
 
+// TxnClientWithCtl TxnClient to support ctl command.
+type TxnClientWithCtl interface {
+	TxnClient
+
+	// GetLatestCommitTS get latest commit timestamp
+	GetLatestCommitTS() timestamp.Timestamp
+	// SetLatestCommitTS set latest commit timestamp
+	SetLatestCommitTS(timestamp.Timestamp)
+}
+
 // TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
