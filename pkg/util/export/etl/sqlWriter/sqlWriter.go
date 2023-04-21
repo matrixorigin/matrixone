@@ -165,9 +165,14 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	_, err = db.Exec(stmt)
 	if err != nil {
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-			cnt, err = bulkInsert(db, records, tbl, 1000)
-			if err != nil {
-				logutil.Error("sqlWriter db insert bulk retry failed", zap.String("address", sw.address), zap.Error(err))
+			if tbl.Table == "statement_info" {
+				cnt, err = bulkInsert(db, records, tbl, 1000)
+				if err != nil {
+					logutil.Error("sqlWriter db insert bulk retry failed", zap.String("address", sw.address), zap.Error(err))
+					return 0, err
+				}
+			} else {
+				logutil.Error("sqlWriter db insert packet too large", zap.String("table", tbl.Table), zap.String("address", sw.address), zap.Error(err))
 				return 0, err
 			}
 		} else {
