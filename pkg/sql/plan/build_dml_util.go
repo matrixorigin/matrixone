@@ -65,12 +65,7 @@ func buildUpdatePlans(
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	sinkNode := &Node{
-		NodeType:    plan.Node_SINK,
-		Children:    []int32{lastNodeId},
-		ProjectList: getProjectionByLastNode(builder, lastNodeId),
-	}
-	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep = builder.appendStep(lastNodeId)
 
 	// build insert plan with update expr.
@@ -411,6 +406,17 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 	return lastNodeId
 }
 
+func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) int32 {
+	sinkProject := getProjectionByLastNode(builder, lastNodeId)
+	sinkNode := &Node{
+		NodeType:    plan.Node_SINK,
+		Children:    []int32{lastNodeId},
+		ProjectList: sinkProject,
+	}
+	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	return lastNodeId
+}
+
 func getPkPos(tableDef *TableDef) int {
 	if tableDef.Pkey == nil {
 		return -1
@@ -616,11 +622,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 		if haveUniqueKey {
 			// append sink
-			sinkNode := &Node{
-				NodeType: plan.Node_SINK,
-				Children: []int32{lastNodeId},
-			}
-			lastNodeId = builder.appendNode(sinkNode, bindCtx)
+			lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 			uniqueSourceStep := builder.appendStep(lastNodeId)
 
 			// append plan for the hidden tables of unique keys
@@ -801,11 +803,7 @@ func makePreInsertPlan(builder *QueryBuilder, bindCtx *BindContext,
 	}
 	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
 
-	sinkNode := &Node{
-		NodeType: plan.Node_SINK,
-		Children: []int32{lastNodeId},
-	}
-	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
 	return sourceStep, nil
@@ -876,11 +874,7 @@ func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
-	sinkNode := &Node{
-		NodeType: plan.Node_SINK,
-		Children: []int32{lastNodeId},
-	}
-	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep = builder.appendStep(lastNodeId)
 
 	return sourceStep, nil

@@ -48,7 +48,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	if len(inputBat.Zs) == 0 {
 		return false, nil
 	}
-	// defer inputBat.Clean(proc.Mp())
+	defer proc.PutBatch(inputBat)
 
 	var insertUniqueBat *batch.Batch
 	var vec *vector.Vector
@@ -86,12 +86,4 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	}
 	proc.SetInputBatch(insertUniqueBat)
 	return false, nil
-}
-
-func analyze(idx int, proc *process.Process) func() {
-	analy := proc.GetAnalyze(idx)
-	analy.Start()
-	return func() {
-		analy.Stop()
-	}
 }

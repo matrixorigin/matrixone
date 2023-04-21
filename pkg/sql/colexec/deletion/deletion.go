@@ -48,7 +48,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	var affectedRows uint64
 	var err error
 	delCtx := p.DeleteCtx
@@ -61,11 +61,9 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				affectedRows += tempRows
 				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
-					// clean delBatch ? yes
 					delBatch.Clean(proc.Mp())
 					return false, err
 				}
-				// clean delBatch ? yes
 				delBatch.Clean(proc.Mp())
 			}
 		}
@@ -75,6 +73,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
+				delBatch.Clean(proc.GetMPool())
 				return false, err
 			}
 		}
@@ -85,6 +84,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 	}
 	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 	proc.SetInputBatch(newBat)

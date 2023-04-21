@@ -57,12 +57,14 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
 	}
 	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
+			newBat.Clean(proc.GetMPool())
 			return false, err
 		}
 	}
@@ -70,16 +72,19 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
 	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
 	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 

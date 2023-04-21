@@ -46,11 +46,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
-	sinkNode := &Node{
-		NodeType: plan.Node_SINK,
-		Children: []int32{lastNodeId},
-	}
-	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
+	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
 	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
