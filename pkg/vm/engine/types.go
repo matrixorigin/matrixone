@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -365,7 +366,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
 }
 
 type Database interface {
@@ -417,6 +418,11 @@ type Engine interface {
 
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
+}
+
+type VectorPool interface {
+	PutBatch(bat *batch.Batch)
+	GetVector(typ types.Type) *vector.Vector
 }
 
 type Hints struct {

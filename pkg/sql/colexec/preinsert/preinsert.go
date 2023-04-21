@@ -42,10 +42,11 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
-
+	defer proc.PutBatch(bat)
 	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
 
 	//get insert batch

@@ -426,15 +426,16 @@ func makeType(Cols []*plan.ColDef, index int) types.Type {
 }
 
 func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batch.Batch {
-	batchData := batch.New(true, param.Attrs)
+	bat := batch.NewWithSize(len(param.Attrs))
+	bat.SetAttributes(param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i)
-		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
-		//vec.SetOriginal(false)
-		batchData.Vecs[i] = vec
+		bat.Vecs[i] = proc.GetVector(typ)
+		bat.Vecs[i].PreExtend(batchSize, proc.Mp())
+		bat.Vecs[i].SetLength(batchSize)
 	}
-	return batchData
+	return bat
 }
 
 func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
@@ -507,23 +508,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	n := bat.Vecs[0].Length()
 	if unexpectEOF && n > 0 {
 		n--
-		for i := 0; i < len(bat.Vecs); i++ {
-			newVec, err := proc.AllocVectorOfRows(*bat.Vecs[i].GetType(), n, nil)
-			if err != nil {
-				return nil, err
-			}
-			nulls.Set(newVec.GetNulls(), bat.Vecs[i].GetNulls())
-			for j := int64(0); j < int64(n); j++ {
-				if newVec.GetNulls().Contains(uint64(j)) {
-					continue
-				}
-				err := newVec.Copy(bat.Vecs[i], j, j, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-			}
-			bat.Vecs[i].Free(proc.Mp())
-			bat.Vecs[i] = newVec
+		for i := 0; i < bat.VectorCount(); i++ {
+			vec := bat.GetVector(int32(i))
+			vec.SetLength(n)
 		}
 	}
 	sels := proc.Mp().GetSels()
