@@ -54,7 +54,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	defer proc.PutBatch(bat)
 	newBat := batch.NewWithSize(len(arg.Attrs))
 	newBat.Attrs = arg.Attrs
-	for _, idx := range arg.Idx {
+	for idx := range arg.Attrs {
 		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
 	}
 	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
@@ -62,11 +62,13 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
-	if arg.HasAutoCol {
-		err := genAutoIncrCol(newBat, proc, arg)
-		if err != nil {
-			newBat.Clean(proc.GetMPool())
-			return false, err
+	if !arg.IsUpdate {
+		if arg.HasAutoCol {
+			err := genAutoIncrCol(newBat, proc, arg)
+			if err != nil {
+				newBat.Clean(proc.GetMPool())
+				return false, err
+			}
 		}
 	}
 

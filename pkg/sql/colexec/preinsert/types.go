@@ -28,12 +28,12 @@ type eng = engine.Engine
 type Argument struct {
 	Ctx context.Context
 
-	Idx        []int32
 	HasAutoCol bool
 	Eg         eng
 	SchemaName string
 	TableDef   *pb.TableDef
 	Attrs      []string
+	IsUpdate   bool
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

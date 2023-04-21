@@ -617,7 +617,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
-			Idx:        t.Idx,
+			HasAutoCol: t.HasAutoCol,
+			IsUpdate:   t.IsUpdate,
 			Attrs:      t.Attrs,
 		}
 	case *preinsertunique.Argument:
@@ -925,8 +926,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
-			Idx:        t.GetIdx(),
 			Attrs:      t.GetAttrs(),
+			HasAutoCol: t.GetHasAutoCol(),
+			IsUpdate:   t.GetIsUpdate(),
 		}
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()

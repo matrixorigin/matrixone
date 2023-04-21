@@ -83,10 +83,12 @@ message Insert{
 }
 
 message PreInsert {
-  string             schema_name = 1;
-  plan.TableDef      table_def   = 2;
-  repeated   int32        idx    = 3;
-  repeated   string     attrs    = 4;
+  string schema_name      = 1;
+  plan.TableDef table_def = 2;
+  repeated int32 idx      = 3;
+  repeated string attrs   = 4;
+  bool has_auto_col       = 5;
+  bool is_update          = 6;
 }
 
 message PreInsertUnique {
