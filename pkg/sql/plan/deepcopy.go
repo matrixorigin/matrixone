@@ -229,12 +229,11 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Idx:        make([]int32, len(ctx.Idx)),
 		Ref:        DeepCopyObjectRef(ctx.Ref),
 		TableDef:   DeepCopyTableDef(ctx.TableDef),
 		HasAutoCol: ctx.HasAutoCol,
+		IsUpdate:   ctx.IsUpdate,
 	}
-	copy(newCtx.Idx, ctx.Idx)
 
 	return newCtx
 }

@@ -683,12 +683,10 @@ message PreDeleteCtx {
 }
 
 message PreInsertCtx {
-	//the indexes of insert columns in the batch
-	repeated int32 idx 		= 1;
-	ObjectRef ref 			= 2;
-	TableDef table_def 		= 3;
-	bool has_auto_col		= 4;
-	bool is_update			= 5;
+	ObjectRef ref 			= 1;
+	TableDef table_def 		= 2;
+	bool has_auto_col		= 3;
+	bool is_update			= 4;
 }
 
 message IdList {

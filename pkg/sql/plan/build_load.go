@@ -52,7 +52,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 
 	tableDef.Name2ColIndex = map[string]int32{}
 	var externalProject []*Expr
-	var insertIdx []int32
 	var preInsertProjection []*Expr
 	hashAutoCol := false
 	for i := 0; i < len(tableDef.Cols); i++ {
@@ -70,7 +69,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		if tableDef.Cols[i].Typ.AutoIncr {
 			hashAutoCol = true
 		}
-		insertIdx = append(insertIdx, int32(i))
 		externalProject = append(externalProject, colExpr)
 		preInsertProjection = append(preInsertProjection, colExpr)
 	}
@@ -113,10 +111,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		NodeType:    plan.Node_PRE_INSERT,
 		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
-			Idx:        insertIdx,
 			Ref:        objRef,
 			TableDef:   tableDef,
 			HasAutoCol: hashAutoCol,
+			IsUpdate:   false,
 		},
 	}
 
@@ -127,6 +125,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		Stats:    &plan.Stats{},
 		InsertCtx: &plan.InsertCtx{
 			Ref:             objRef,
+			TableDef:        tableDef,
 			AddAffectedRows: true,
 			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 		},
