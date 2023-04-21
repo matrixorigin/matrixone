@@ -70,8 +70,6 @@ type JoinMap struct {
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
-
-	nullSels []int32
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
@@ -83,9 +81,10 @@ type StrHashMap struct {
 	keys    [][]byte
 	values  []uint64
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
-	zValues          []int64
-	strHashStates    [][3]uint64
-	ibucket, nbucket uint64
+	zValues       []int64
+	strHashStates [][3]uint64
+	ibucket       uint64
+	nbucket       uint64
 
 	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
@@ -97,13 +96,14 @@ type StrHashMap struct {
 type IntHashMap struct {
 	hasNull bool
 
-	rows             uint64
-	keys             []uint64
-	keyOffs          []uint32
-	values           []uint64
-	zValues          []int64
-	hashes           []uint64
-	ibucket, nbucket uint64
+	rows    uint64
+	keys    []uint64
+	keyOffs []uint32
+	values  []uint64
+	zValues []int64
+	hashes  []uint64
+	ibucket uint64
+	nbucket uint64
 
 	m       *mpool.MPool
 	hashMap *hashtable.Int64HashMap
