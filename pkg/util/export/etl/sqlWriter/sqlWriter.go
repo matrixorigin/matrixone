@@ -206,6 +206,10 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 	defer sw.dbMux.Unlock()
 
 	initFunc := func() error {
+		if sw.db != nil {
+			sw.db.Close()
+			sw.db = nil
+		}
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			sw.db = nil
