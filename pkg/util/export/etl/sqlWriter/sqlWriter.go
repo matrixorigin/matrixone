@@ -139,7 +139,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 				_, err = bulkInsert(db, chunk, tbl, chunkSize)
 			} else {
 				// simple retry
-				_, err = db.Exec(stmt)
+				// _, err = db.Exec(stmt)
 			}
 		}
 		if err != nil {
