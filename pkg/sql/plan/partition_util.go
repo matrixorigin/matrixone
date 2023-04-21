@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -657,4 +658,13 @@ var AllowedPartition4BinaryOpMap = map[tree.BinaryOp]string{
 var AllowedPartition4UnaryOpMap = map[tree.UnaryOp]string{
 	tree.UNARY_PLUS:  "+",
 	tree.UNARY_MINUS: "-",
+}
+
+// onlyHasHiddenPrimaryKey checks the primary key is hidden or not
+func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	pk := tableDef.GetPkey()
+	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
 }

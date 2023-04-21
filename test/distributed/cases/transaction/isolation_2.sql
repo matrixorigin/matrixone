@@ -75,6 +75,7 @@ select * from dis_table_02;
 start transaction ;
 create database dis_db_01;
 use dis_db_01;
+begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 -- @session:id=1{
@@ -207,7 +208,9 @@ select * from dis_table_01;
 -- @session:id=1{
 truncate table dis_table_01;
 -- @session}
+-- @bvt:issue#9095
 insert into dis_table_01 select 9999,'abcdefg';
+-- @bvt:issue
 -- @session:id=1{
 select * from dis_table_01;
 -- @session}

@@ -308,41 +308,23 @@ count(*)
 131072
 insert into t select * from t;
 select count(*) from t;
-count(*)
-262144
 insert into t select * from t;
 select count(*) from t;
-count(*)
-524288
 insert into t select * from t;
 select count(*) from t;
-count(*)
-1048576
 insert into t select * from t;
 select count(*) from t;
-count(*)
-2097152
 insert into t select * from t;
 select count(*) from t;
-count(*)
-4194304
 insert into t select * from t;
 select count(*) from t;
-count(*)
-8388608
 insert into t select * from t;
 select count(*) from t;
-count(*)
-16777216
 begin;
 insert into t select * from t;
 select count(*) from t;
-count(*)
-33554432
 commit;
 select count(*) from t;
-count(*)
-33554432
 drop table t;
 create table t(a int primary key);
 insert into t select * from generate_series(1,200000) g;
