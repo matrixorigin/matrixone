@@ -34,9 +34,9 @@ var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // BaseSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type BaseSqlWriter struct {
-	db  *sql.DB
-	dsn string
-	ctx context.Context
+	db      *sql.DB
+	address string
+	ctx     context.Context
 }
 
 type SqlWriter interface {
@@ -158,13 +158,13 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	}
 	db, dbErr := sw.initOrRefreshDBConn(false)
 	if dbErr != nil {
-		logutil.Error("sqlWriter", zap.String("dsn", sw.dsn), zap.Error(dbErr))
+		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
 		return 0, dbErr
 	}
 	stmt, cnt, _ := generateInsertStatement(records, tbl)
 	_, err = db.Exec(stmt)
 	if err != nil {
-		logutil.Error("sqlWriter db insert failed", zap.String("dsn", sw.dsn), zap.Error(err))
+		logutil.Error("sqlWriter insert failed", zap.String("address", sw.address), zap.Error(err))
 		// if table not exist return, no need to retry
 		// todo: create table if not exist
 		if strings.Contains(err.Error(), "no such table") {
@@ -182,7 +182,7 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 			_, err = db.Exec(stmt)
 		}
 		if err != nil {
-			logutil.Error("sqlWriter db exec failed after retry", zap.String("dsn", sw.dsn), zap.Error(err))
+			logutil.Error("sqlWriter db insert retry failed", zap.String("address", sw.address), zap.Error(err))
 			return 0, err
 		}
 		return cnt, nil
@@ -221,7 +221,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			return nil, err
 		}
 		sw.db = db
-		sw.dsn = dsn
+		sw.address = dbAddress
 	}
 	return sw.db, nil
 }
