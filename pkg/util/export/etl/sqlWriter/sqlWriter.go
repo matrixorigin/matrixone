@@ -198,6 +198,10 @@ func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
 
 func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	if sw.db == nil || forceNewConn {
+		if sw.db != nil {
+			sw.db.Close()
+			sw.db = nil
+		}
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			sw.db = nil
