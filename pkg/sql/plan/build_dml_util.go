@@ -255,6 +255,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			if err != nil {
 				return err
 			}
+			lastNode = builder.qry.Nodes[lastNodeId]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
 
 			//get filter exprs
@@ -271,7 +272,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 						},
 					},
 				}
-				nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{colExpr})
+				nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{colExpr})
 				if err != nil {
 					return err
 				}
@@ -290,6 +291,19 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				ProjectList: getProjectionByLastNode(builder, lastNodeId),
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
+
+		}
+
+		// append project node
+		projectProjection := getProjectionByLastNode(builder, lastNodeId)
+		if len(projectProjection) > len(tableDef.Cols) {
+			projectProjection = projectProjection[:len(tableDef.Cols)]
+			projectNode := &Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeId},
+				ProjectList: projectProjection,
+			}
+			lastNodeId = builder.appendNode(projectNode, bindCtx)
 		}
 
 		// in this case. insert columns in front of batch
