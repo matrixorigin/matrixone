@@ -363,13 +363,13 @@ func blockRows(meta BlockMeta) int64 {
 	return meta.Rows
 }
 
-func blockMarshal(meta BlockMeta) []byte {
-	sz := unsafe.Sizeof(meta)
-	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
+func blockInfoMarshal(meta BlockMeta) []byte {
+	sz := unsafe.Sizeof(meta.Info)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&meta.Info)), sz)
 }
 
-func BlockUnmarshal(data []byte) BlockMeta {
-	return *(*BlockMeta)(unsafe.Pointer(&data[0]))
+func BlockInfoUnmarshal(data []byte) catalog.BlockInfo {
+	return *(*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn

@@ -259,7 +259,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				ranges = append(ranges, blockMarshal(blk))
+				ranges = append(ranges, blockInfoMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
@@ -578,9 +578,9 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]BlockMeta, len(ranges))
+	blks := make([]catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = BlockUnmarshal(ranges[i])
+		blks[i] = BlockInfoUnmarshal(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -594,7 +594,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []BlockMeta{blks[i]},
+				blks:       []catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
