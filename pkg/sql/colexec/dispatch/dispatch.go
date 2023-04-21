@@ -101,20 +101,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat.Length() == 0 {
 		return false, nil
 	}
-
-	for i := range bat.Vecs {
-		if bat.Vecs[i].NeedDup() {
-			oldVec := bat.Vecs[i]
-			cloneVec, err := bat.Vecs[i].Dup(proc.Mp())
-			if err != nil {
-				bat.Clean(proc.Mp())
-				return false, err
-			}
-			bat.ReplaceVector(oldVec, cloneVec)
-			oldVec.Free(proc.Mp())
-		}
-	}
-
 	return ap.ctr.sendFunc(bat, ap, proc)
 }
 

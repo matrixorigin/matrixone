@@ -471,7 +471,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(param.ctx, catalog.AutoIncrColumnNames, expr, param.proc.Mp())
+		bat, err := rds[0].Read(param.ctx, catalog.AutoIncrColumnNames, expr, param.proc.Mp(), nil)
 		if err != nil {
 			return 0, 0, nil, moerr.NewInvalidInput(param.ctx, "can not find the auto col")
 		}
@@ -568,7 +568,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 
 	retbat := batch.NewWithSize(1)
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(ctx, catalog.AutoIncrColumnNames, nil, mp)
+		bat, err := rds[0].Read(ctx, catalog.AutoIncrColumnNames, nil, mp, nil)
 		if err != nil {
 			bat.Clean(mp)
 			return nil, 0
