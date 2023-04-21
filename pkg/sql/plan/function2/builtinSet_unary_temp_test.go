@@ -890,3 +890,190 @@ func TestToTimeStamp(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestValues(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "values(col_int8)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{-23}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{-23}, []bool{false}),
+		},
+		{
+			info: "values(col_uint8)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{23, 24, 25}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{23, 24, 25}, []bool{false}),
+		},
+	}
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, Values)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initHourTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
+	d2, _ := types.ParseTimestamp(time.Local, "2004-08-03 01:01:37", 6)
+
+	return []tcTemp{
+		{
+			info: "test hour",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{10},
+				[]bool{false}),
+		},
+		{
+			info: "test hour",
+			typ:  types.T_timestamp,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestHour(t *testing.T) {
+	testCases := initHourTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_datetime:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, DatetimeToHour)
+		case types.T_timestamp:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampToHour)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initMinuteTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
+	d2, _ := types.ParseTimestamp(time.Local, "2004-08-03 01:01:37", 6)
+
+	return []tcTemp{
+		{
+			info: "test hour",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{20},
+				[]bool{false}),
+		},
+		{
+			info: "test hour",
+			typ:  types.T_timestamp,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestMinute(t *testing.T) {
+	testCases := initMinuteTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_datetime:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, DatetimeToMinute)
+		case types.T_timestamp:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampToMinute)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initSecondTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
+	d2, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08", 6)
+
+	return []tcTemp{
+		{
+			info: "test hour",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0},
+				[]bool{false}),
+		},
+		{
+			info: "test hour",
+			typ:  types.T_timestamp,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{8},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestSecond(t *testing.T) {
+	testCases := initSecondTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_datetime:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, DatetimeToSecond)
+		case types.T_timestamp:
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampToSecond)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}

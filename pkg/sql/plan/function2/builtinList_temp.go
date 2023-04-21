@@ -1312,8 +1312,101 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
-	// function `timestamp`
-	// function `values`
+	{
+		functionId: VALUES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: Values,
+			},
+		},
+	},
+
+	{
+		functionId: HOUR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: TimestampToHour,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DatetimeToHour,
+			},
+		},
+	},
+
+	{
+		functionId: MINUTE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: TimestampToMinute,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DatetimeToMinute,
+			},
+		},
+	},
+
+	{
+		functionId: SECOND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: TimestampToSecond,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: DatetimeToSecond,
+			},
+		},
+	},
 }
 
 // tempListForBinaryFunctions just set the binary functions still need to be refactored.
