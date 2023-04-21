@@ -33,6 +33,9 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedBuiltins {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	for _, fn := range supportedAggregateFunctions {
+		allSupportedFunctions[fn.functionId] = fn
+	}
 }
 
 func GetFunctionIsAggregateByName(name string) bool {

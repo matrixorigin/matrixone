@@ -146,6 +146,24 @@ func fixedImplicitTypeCast(from types.Type, to types.T) (canCast bool, cost int)
 	return rule.canCast, rule.preferLevel
 }
 
+// a fixed type check method for Agg(only one column).
+// do not do any implicit type conversion.
+func fixedUnaryAggTypeCheck(inputs []types.Type, supported []types.T) checkResult {
+	if len(inputs) == 1 && len(supported) > 0 {
+		t := inputs[0]
+		// if select agg(null), just match the first one.
+		if t.Oid == types.T_any {
+			return newCheckResultWithCast(0, []types.Type{supported[0].ToType()})
+		}
+		for _, supportT := range supported {
+			if t.Oid == supportT {
+				return newCheckResultWithSuccess(0)
+			}
+		}
+	}
+	return newCheckResultWithFailure(failedAggParametersWrong)
+}
+
 var fixedBinaryCastRule1 [300][300]tarTypes
 var fixedBinaryCastRule2 [300][300]tarTypes
 var fixedCanImplicitCastRule [300]implicitTypeCastRule
