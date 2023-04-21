@@ -240,9 +240,9 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 		}
 		if sw.db != nil {
 			sw.db.Close()
-			sw.db = db
-			sw.address = dbAddress
 		}
+		sw.db = db
+		sw.address = dbAddress
 		return nil
 	}
 
