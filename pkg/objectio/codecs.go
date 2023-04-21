@@ -14,7 +14,10 @@
 
 package objectio
 
-import "fmt"
+import (
+	"fmt"
+	"unsafe"
+)
 
 const (
 	IOET_Empty   = 0
@@ -24,12 +27,25 @@ const (
 	IOET_ZM      = 4
 )
 
+const IOEntryHeaderSize = 4
+
 type IOEntryHeader struct {
 	Type, Version uint16
 }
 
 func (h IOEntryHeader) String() string {
 	return fmt.Sprintf("IOEntry[%d,%d]", h.Type, h.Version)
+}
+
+func EncodeIOEntryHeader(h *IOEntryHeader) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(h)), IOEntryHeaderSize)
+}
+
+func DecodeIOEntryHeader(buf []byte) *IOEntryHeader {
+	if len(buf) < IOEntryHeaderSize {
+		panic("bad data")
+	}
+	return (*IOEntryHeader)(unsafe.Pointer(&buf[0]))
 }
 
 type IOEntry interface {
@@ -54,6 +70,14 @@ func (codec ioEntryCodec) NoMarshal() bool {
 
 func (codec ioEntryCodec) NoUnmarshal() bool {
 	return codec.decFn == nil
+}
+
+func (codec ioEntryCodec) Decode(buf []byte) (v any, err error) {
+	if codec.decFn == nil {
+		v = buf
+		return
+	}
+	return codec.decFn(buf)
 }
 
 var ioEntryCodecs = map[IOEntryHeader]ioEntryCodec{}

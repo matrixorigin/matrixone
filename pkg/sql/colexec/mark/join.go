@@ -96,6 +96,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
@@ -146,7 +147,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
@@ -166,7 +167,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	markVec, err := proc.AllocVectorOfRows(types.T_bool.ToType(), bat.Length(), nil)
@@ -175,11 +176,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.markVals = vector.MustFixedCol[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
-	ctr.cleanEvalVectors(proc.Mp())
 	if err = ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
+	defer ctr.cleanEvalVectors(proc.Mp())
 
 	count := bat.Length()
 	mSels := ctr.mp.Sels()

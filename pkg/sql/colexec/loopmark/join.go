@@ -65,6 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat.Length() == 0 {
@@ -72,7 +73,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			return false, err
 
 		default:

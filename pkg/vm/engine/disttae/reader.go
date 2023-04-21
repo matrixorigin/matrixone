@@ -16,8 +16,9 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -35,7 +36,8 @@ func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *emptyReader) Read(_ context.Context, _ []string,
+	_ *plan.Expr, _ *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	return nil, nil
 }
 
@@ -43,7 +45,8 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
-func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockReader) Read(ctx context.Context, cols []string,
+	_ *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
@@ -84,7 +87,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +99,12 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
 	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.GetType().Oid)
-	if canCompute {
-		row := findRowByPkValue(vec, v)
+	if !r.init {
+		r.init = true
+		r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, vec.GetType().Oid)
+	}
+	if r.canCompute && r.searchFunc != nil {
+		row := r.searchFunc(vec)
 		if row >= vec.Length() {
 			// can not find row.
 			bat.Shrink([]int64{})
@@ -116,7 +122,8 @@ func (r *blockMergeReader) Close() error {
 	return nil
 }
 
-func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockMergeReader) Read(ctx context.Context, cols []string,
+	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		r.sels = nil
 		return nil, nil
@@ -152,7 +159,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -183,12 +190,13 @@ func (r *mergeReader) Close() error {
 	return nil
 }
 
-func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *mergeReader) Read(ctx context.Context, cols []string,
+	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.rds) == 0 {
 		return nil, nil
 	}
 	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(ctx, cols, expr, m)
+		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()

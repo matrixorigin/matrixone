@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -250,6 +251,10 @@ type blockReader struct {
 	colNulls       []bool
 	pkidxInColIdxs int
 	pkName         string
+	// binary search info
+	init       bool
+	canCompute bool
+	searchFunc func(*vector.Vector) int
 }
 
 type blockMergeReader struct {
