@@ -173,7 +173,13 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 		// refresh connection if invalid connection
 		if strings.Contains(err.Error(), "invalid connection") {
-			db, _ = sw.initOrRefreshDBConn(true)
+			newDb, newDbErr := sw.initOrRefreshDBConn(true)
+			if newDbErr != nil {
+				logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(newDbErr))
+				return 0, newDbErr
+			} else {
+				db = newDb
+			}
 		}
 
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
@@ -233,7 +239,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 		db, err := sql.Open("mysql", dsn)
 		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
 		if err != nil {
-			db.Close()
+			logutil.Info("sqlWriter db initialized err", zap.String("address", dbAddress), zap.Error(err))
 			return err
 		}
 		sw.db = db
@@ -242,6 +248,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 	}
 
 	if forceNewConn || sw.db == nil {
+		logutil.Info("sqlWriter db will init", zap.Bool("forceNewConn", forceNewConn))
 		err := initFunc()
 		if err != nil {
 			return nil, err
