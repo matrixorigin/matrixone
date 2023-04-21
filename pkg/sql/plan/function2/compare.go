@@ -16,15 +16,12 @@ package function2
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
-
-// TODO:
-//  there is still some optimize work need to do. e.g
-//		1. vectorized	2. str compare for length <= 24
 
 func compareOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
@@ -1141,4 +1138,121 @@ func valueStrLessEqual(
 		}
 	}
 	return nil
+}
+
+func operatorOpInt64Fn(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(int64, int64) int64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if err := rs.Append(fn(v1, v2), null1 || null2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorOpStrFn(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func([]byte, []byte) ([]byte, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			rv, err := fn(v1, v2)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(rv, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func operatorOpBitAndInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+		return i & i2
+	})
+}
+
+func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
+		if len(i) != len(i2) {
+			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		}
+		rv := make([]byte, len(i))
+		for j := range rv {
+			rv[j] = i[j] & i2[j]
+		}
+		return rv, nil
+	})
+}
+
+func operatorOpBitXorInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+		return i ^ i2
+	})
+}
+
+func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
+		if len(i) != len(i2) {
+			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		}
+		rv := make([]byte, len(i))
+		for j := range rv {
+			rv[j] = i[j] ^ i2[j]
+		}
+		return rv, nil
+	})
+}
+
+func operatorOpBitOrInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+		return i | i2
+	})
+}
+
+func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
+		if len(i) != len(i2) {
+			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		}
+		rv := make([]byte, len(i))
+		for j := range rv {
+			rv[j] = i[j] | i2[j]
+		}
+		return rv, nil
+	})
+}
+
+func operatorOpBitShiftLeftInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+		if i2 < 0 {
+			return 0
+		}
+		return i << i2
+	})
+}
+
+func operatorOpBitShiftRightInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+		if i2 < 0 {
+			return 0
+		}
+		return i >> i2
+	})
 }

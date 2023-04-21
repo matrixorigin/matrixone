@@ -695,4 +695,147 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
+
+	// operator `&`
+	{
+		functionId: OP_BIT_AND,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: operatorOpBitAndInt64Fn,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary, types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_binary.ToType()
+				},
+				NewOp: operatorOpBitAndStrFn,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				NewOp: operatorOpBitAndStrFn,
+			},
+		},
+	},
+
+	// operator `^`
+	{
+		functionId: OP_BIT_XOR,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: operatorOpBitXorInt64Fn,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary, types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_binary.ToType()
+				},
+				NewOp: operatorOpBitXorStrFn,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				NewOp: operatorOpBitXorStrFn,
+			},
+		},
+	},
+
+	// operator `|`
+	{
+		functionId: OP_BIT_OR,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: operatorOpBitOrInt64Fn,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary, types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_binary.ToType()
+				},
+				NewOp: operatorOpBitOrStrFn,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				NewOp: operatorOpBitOrStrFn,
+			},
+		},
+	},
+
+	// operator `<<`
+	{
+		functionId: OP_BIT_SHIFT_LEFT,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: operatorOpBitShiftLeftInt64Fn,
+			},
+		},
+	},
+
+	// operator `>>`
+	{
+		functionId: OP_BIT_SHIFT_RIGHT,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: operatorOpBitShiftRightInt64Fn,
+			},
+		},
+	},
 }
