@@ -901,10 +901,13 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonMap) < len(attrs) {
+	if len(jsonMap) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
 	for idx, attr := range attrs {
+		if cols[idx].Hidden {
+			continue
+		}
 		if val, ok := jsonMap[attr]; ok {
 			if val == nil {
 				res = append(res, NULL_FLAG)
@@ -949,7 +952,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonArray) < len(attrs) {
+	if len(jsonArray) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
 	for idx, val := range jsonArray {
