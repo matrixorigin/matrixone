@@ -451,8 +451,36 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 // Weekday
 
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(int64(v.DayOfWeek2()), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(int64(v.ToDate().DayOfWeek2()), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }

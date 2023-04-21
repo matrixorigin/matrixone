@@ -1367,5 +1367,67 @@ func TestDateTimeToWeek(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+}
 
+// Week day
+
+func initDateToWeekdayTestCase() []tcTemp {
+	d11, _ := types.ParseDateCast("2004-04-03")
+	d12, _ := types.ParseDateCast("2021-10-03")
+	d13, _ := types.ParseDateCast("2020-08-23")
+	return []tcTemp{
+		{
+			info: "test date to weekday - first and last weekday",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d11, d12, d13},
+					[]bool{false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{5, 6, 6},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestDateToWeekday(t *testing.T) {
+	testCases := initDateToWeekdayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekday)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDateTimeToWeekdayTestCase() []tcTemp {
+	d11, _ := types.ParseDatetime("2004-04-03 13:11:10", 6)
+	d12, _ := types.ParseDatetime("2021-10-03 15:24:18", 6)
+	d13, _ := types.ParseDatetime("2020-08-23 21:53:09", 6)
+
+	return []tcTemp{
+		{
+			info: "test datetime to weekday - first and last weekday",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d11, d12, d13},
+					[]bool{false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{5, 6, 6},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestDateTimeToWeekday(t *testing.T) {
+	testCases := initDateTimeToWeekdayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
 }
