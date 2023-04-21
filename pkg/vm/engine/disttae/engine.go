@@ -456,10 +456,10 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]BlockMeta, len(ranges))
+	blks := make([]catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = blockUnmarshal(ranges[i])
-		blks[i].Info.EntryState = false
+		blks[i] = BlockInfoUnmarshal(ranges[i])
+		blks[i].EntryState = false
 	}
 	if len(ranges) < num {
 		for i := range ranges {
@@ -470,7 +470,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []BlockMeta{blks[i]},
+				blks:       []catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {

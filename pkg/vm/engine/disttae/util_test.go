@@ -138,9 +138,9 @@ func TestBlockMetaMarshal(t *testing.T) {
 		},
 	}
 	meta.Info.SetMetaLocation(location)
-	data := blockMarshal(meta)
-	meta0 := blockUnmarshal(data)
-	require.Equal(t, meta, meta0)
+	data := blockInfoMarshal(meta)
+	meta0 := BlockInfoUnmarshal(data)
+	require.Equal(t, meta.Info, meta0)
 }
 
 func TestCheckExprIsMonotonic(t *testing.T) {
