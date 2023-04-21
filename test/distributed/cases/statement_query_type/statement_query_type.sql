@@ -95,8 +95,8 @@ drop database test_db;
 
 -- test sql executes in a transaction
 use statement_query_type;
-begin;
 create database test_db;
+begin;
 use test_db;
 create table test_table(
 col1 int,

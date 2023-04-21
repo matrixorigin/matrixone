@@ -3181,6 +3181,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetDebugString(), err.Error())
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			fmt.Println(err)
+		}
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
