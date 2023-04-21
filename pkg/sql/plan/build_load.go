@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
@@ -52,8 +53,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 
 	tableDef.Name2ColIndex = map[string]int32{}
 	var externalProject []*Expr
-	var preInsertProjection []*Expr
-	hashAutoCol := false
 	for i := 0; i < len(tableDef.Cols); i++ {
 		idx := int32(i)
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
@@ -66,11 +65,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		}
-		if tableDef.Cols[i].Typ.AutoIncr {
-			hashAutoCol = true
-		}
 		externalProject = append(externalProject, colExpr)
-		preInsertProjection = append(preInsertProjection, colExpr)
 	}
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -85,59 +80,53 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	tableDef.Createsql = string(json_byte)
 
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
 	externalScanNode := &plan.Node{
-		NodeId:      0,
 		NodeType:    plan.Node_EXTERNAL_SCAN,
 		Stats:       &plan.Stats{},
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 	}
+	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	projectNode := &plan.Node{
-		NodeId:   1,
-		Children: []int32{0},
+		Children: []int32{lastNodeId},
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
 	if err := getProjectNode(stmt, ctx, projectNode, tableDef); err != nil {
 		return nil, err
 	}
+	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	//append pre insert node
-	preInsertNode := &Node{
-		NodeId:      2,
-		Children:    []int32{1},
-		NodeType:    plan.Node_PRE_INSERT,
-		ProjectList: preInsertProjection,
-		PreInsertCtx: &plan.PreInsertCtx{
-			Ref:        objRef,
-			TableDef:   tableDef,
-			HasAutoCol: hashAutoCol,
-			IsUpdate:   false,
-		},
+	// append hidden column to tableDef
+	newTableDef := DeepCopyTableDef(tableDef)
+	if newTableDef.Pkey != nil && newTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		newTableDef.Cols = append(newTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 	}
+	if newTableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(newTableDef.ClusterBy.Name) {
+		newTableDef.Cols = append(newTableDef.Cols, MakeHiddenColDefByName(newTableDef.ClusterBy.Name))
+	}
+	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, newTableDef, lastNodeId, false)
 
 	insertNode := &plan.Node{
-		NodeId:   3,
-		Children: []int32{2},
+		Children: []int32{lastNodeId},
 		NodeType: plan.Node_INSERT,
 		Stats:    &plan.Stats{},
 		InsertCtx: &plan.InsertCtx{
 			Ref:             objRef,
-			TableDef:        tableDef,
+			TableDef:        newTableDef,
 			AddAffectedRows: true,
 			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 		},
 	}
+	lastNodeId = builder.appendNode(insertNode, bindCtx)
+	query := builder.qry
+	query.StmtType = plan.Query_INSERT
+	query.Steps = []int32{lastNodeId}
 
-	nodes := []*plan.Node{externalScanNode, projectNode, preInsertNode, insertNode}
-
-	query := &plan.Query{
-		StmtType: plan.Query_INSERT,
-		Steps:    []int32{3},
-		Nodes:    nodes,
-	}
 	pn := &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
