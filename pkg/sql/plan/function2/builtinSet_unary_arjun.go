@@ -83,12 +83,58 @@ func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 // Year
 
 func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(int64(v.Year()), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(int64(v.Year()), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			d, e := types.ParseDateCast(function2Util.QuickBytesToStr(v))
+			if e != nil {
+				return e
+			}
+			if err := rs.Append(int64(d.Year()), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
