@@ -65,11 +65,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				ctr.state = Eval
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
 				return false, nil
 			}
 			if ap.Limit == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				proc.SetInputBatch(nil)
 				return true, nil
 			}

@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
@@ -144,7 +145,7 @@ func (t *Table) NewReader(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
 	}

@@ -114,7 +114,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				if bat == nil {
 					break
 				}
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 			}
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.localRegsCnt--
