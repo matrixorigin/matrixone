@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"strconv"
@@ -480,6 +481,18 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			if err := rs.Append(int64(v.ToDate().DayOfWeek2()), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// PI
+
+func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(pi.GetPi(), false); err != nil {
+			return err
 		}
 	}
 	return nil

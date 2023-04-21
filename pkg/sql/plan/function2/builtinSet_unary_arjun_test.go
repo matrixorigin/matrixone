@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 )
 
@@ -1427,6 +1428,28 @@ func TestDateTimeToWeekday(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initPiTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test pi",
+			//TODO: Validate if T_int8 is ok
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false, []float64{math.Pi}, []bool{false}),
+		},
+	}
+}
+
+func TestPi(t *testing.T) {
+	testCases := initPiTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Pi)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
