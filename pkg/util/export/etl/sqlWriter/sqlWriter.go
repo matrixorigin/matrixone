@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,6 +38,7 @@ type BaseSqlWriter struct {
 	db      *sql.DB
 	address string
 	ctx     context.Context
+	dbMux   sync.Mutex
 }
 
 type SqlWriter interface {
@@ -171,7 +173,7 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 		// refresh connection if invalid connection
 		if strings.Contains(err.Error(), "invalid connection") {
-			// db, _ = sw.initOrRefreshDBConn(true)
+			db, _ = sw.initOrRefreshDBConn(true)
 		}
 
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
@@ -189,31 +191,35 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
-	err := sw.db.Close()
+	sw.dbMux.Lock()
+	defer sw.dbMux.Unlock()
+	var err error
+	if sw.db == nil {
+		err = sw.db.Close()
+	}
 	sw.db = nil
 	return 0, err
 }
 
 func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
-	if sw.db == nil || forceNewConn {
-		if sw.db != nil {
-			sw.db.Close()
-			sw.db = nil
-		}
+	sw.dbMux.Lock()
+	defer sw.dbMux.Unlock()
+
+	initFunc := func() error {
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			sw.db = nil
-			return nil, errNotReady
+			return errNotReady
 		}
 
 		addressFunc := GetSQLWriterDBAddressFunc()
 		if addressFunc == nil {
 			sw.db = nil
-			return nil, errNotReady
+			return errNotReady
 		}
 		dbAddress, err := addressFunc(context.Background())
 		if err != nil {
-			return nil, err
+			return err
 		}
 		dsn :=
 			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=15s&writeTimeout=15s&timeout=15s",
@@ -221,12 +227,22 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 				dbUser.Password,
 				dbAddress)
 		db, err := sql.Open("mysql", dsn)
-		logutil.Error("sqlWriter db connected", zap.String("address", dbAddress))
+		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
 		if err != nil {
-			return nil, err
+			db.Close()
+			return err
 		}
 		sw.db = db
 		sw.address = dbAddress
+		return nil
 	}
+
+	if forceNewConn || sw.db == nil {
+		err := initFunc()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return sw.db, nil
 }
