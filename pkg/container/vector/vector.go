@@ -842,6 +842,259 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	}
 }
 
+// GetConstSetFunction: A more sensible function for const vector set,
+// which avoids having to do type conversions and type judgements every time you append.
+func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64, length int) error {
+	switch typ.Oid {
+	case types.T_bool:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[bool](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_int8:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[int8](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_int16:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[int16](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_int32:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[int32](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_int64:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[int64](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_uint8:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[uint8](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_uint16:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[uint16](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_uint32:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint32(0), true, mp)
+			}
+			ws := MustFixedCol[uint32](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_uint64:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[uint64](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_float32:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[float32](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_float64:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[float64](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_date:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Date](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_datetime:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Datetime](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_time:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Time](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Timestamp](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Decimal64](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Decimal128](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_uuid:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Uuid](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_TS:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.TS](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Rowid](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			v.area = v.area[:0]
+			if w.IsConst() {
+				return SetConstBytes(v, ws[0].GetByteSlice(w.area), length, mp)
+			}
+			return SetConstBytes(v, ws[sel].GetByteSlice(w.area), length, mp)
+		}
+	case types.T_Blockid:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Blockid](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetConstSetFunction", typ))
+	}
+}
+
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
 	return appendOneFixed(v, 0, true, mp)
 }
