@@ -152,27 +152,14 @@ func (c *Compile) run(s *Scope) error {
 	case Normal:
 		defer c.fillAnalyzeInfo()
 		return s.Run(c)
-	case Merge:
+	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
 		}
 
-		for _, in := range s.Instructions {
-			if arg, ok := in.Arg.(vm.ModificationArgument); ok {
-				c.setAffectedRows(arg.AffectedRows())
-				break
-			}
-		}
-		return nil
-	case MergeInsert:
-		defer c.fillAnalyzeInfo()
-		err := s.MergeRun(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows())
+		c.setAffectedRows(s.affectedRows())
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -2295,4 +2282,17 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		tmp.Free(proc.Mp())
 	}
 	return vec, nil
+}
+
+func (s *Scope) affectedRows() uint64 {
+	affectedRows := uint64(0)
+	for _, in := range s.Instructions {
+		if arg, ok := in.Arg.(vm.ModificationArgument); ok {
+			if marg, ok := arg.(*mergeblock.Argument); ok {
+				return marg.AffectedRows()
+			}
+			affectedRows += arg.AffectedRows()
+		}
+	}
+	return affectedRows
 }
