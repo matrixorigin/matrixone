@@ -17,6 +17,7 @@ package objectio
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ObjectWriter = objectWriterV1
@@ -34,26 +35,51 @@ var (
 )
 
 const (
-	IOET_ObjectMeta_V1 = 1
-	IOET_ColumnData_V1 = 1
+	IOET_ObjectMeta_V1  = 1
+	IOET_ColumnData_V1  = 1
+	IOET_BloomFilter_V1 = 1
+	IOET_ZoneMap_V1     = 1
 
-	IOET_ObjectMeta_CurrVer = IOET_ObjectMeta_V1
-	IOET_ColumnData_CurrVer = IOET_ColumnData_V1
+	IOET_ObjectMeta_CurrVer  = IOET_ObjectMeta_V1
+	IOET_ColumnData_CurrVer  = IOET_ColumnData_V1
+	IOET_BloomFilter_CurrVer = IOET_BloomFilter_V1
+	IOET_ZoneMap_CurrVer     = IOET_ZoneMap_V1
 )
 
 func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V1}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, DecodeBloomFilterV1)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
 }
 
-func EncodeColumnDataV1(ioe IOEntry) (buf []byte, err error) {
-	return ioe.MarshalBinary()
+func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
+	return ioe.(*vector.Vector).MarshalBinary()
 }
 
-func DecodeColumnDataV1(buf []byte) (ioe IOEntry, err error) {
+func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 	vec := vector.NewVec(types.Type{})
 	if err = vec.UnmarshalBinary(buf); err != nil {
 		return
 	}
 	return vec, err
+}
+
+func DecodeBloomFilterV1(buf []byte) (ioe any, err error) {
+	indexes := make([]StaticFilter, 0)
+	bf := BloomFilter(buf)
+	count := bf.BlockCount()
+	for i := uint32(0); i < count; i++ {
+		buf := bf.GetBloomFilter(i)
+		if len(buf) == 0 {
+			indexes = append(indexes, nil)
+			continue
+		}
+		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
+		if err != nil {
+			return nil, err
+		}
+		indexes = append(indexes, index)
+	}
+	return indexes, nil
 }

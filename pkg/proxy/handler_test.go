@@ -41,14 +41,15 @@ import (
 )
 
 type testProxyHandler struct {
-	ctx     context.Context
-	st      *stopper.Stopper
-	logger  *log.MOLogger
-	hc      *mockHAKeeperClient
-	mc      clusterservice.MOCluster
-	re      *rebalancer
-	ru      Router
-	closeFn func()
+	ctx        context.Context
+	st         *stopper.Stopper
+	logger     *log.MOLogger
+	hc         *mockHAKeeperClient
+	mc         clusterservice.MOCluster
+	re         *rebalancer
+	ru         Router
+	closeFn    func()
+	counterSet *counterSet
 }
 
 func newTestProxyHandler(t *testing.T) *testProxyHandler {
@@ -73,6 +74,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 			st.Stop()
 			cancel()
 		},
+		counterSet: newCounterSet(),
 	}
 }
 
@@ -122,6 +124,8 @@ func TestHandler_Handle(t *testing.T) {
 	}()
 	_, err = db.Exec("anystmt")
 	require.NoError(t, err)
+
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {
@@ -213,6 +217,8 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	}()
 	_, err = db.Exec("anystmt")
 	require.NoError(t, err)
+
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 }
 
 func TestHandler_HandleEvent(t *testing.T) {
@@ -279,4 +285,6 @@ func TestHandler_HandleEvent(t *testing.T) {
 		}
 	}
 	require.NoError(t, err1)
+
+	require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
 }

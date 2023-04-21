@@ -18,8 +18,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -119,7 +117,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
-			if vec.Length() > int(txnbase.MaxNodeRows) {
+			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}
@@ -127,7 +125,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		}
 	default:
 		for k := range idx.tree {
-			if vec.Length() > int(txnbase.MaxNodeRows) {
+			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
 				vec = containers.MakeVector(kType)
 			}

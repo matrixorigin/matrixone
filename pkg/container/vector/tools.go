@@ -16,6 +16,8 @@ package vector
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
-	"strings"
 )
 
 func MustFixedCol[T any](v *Vector) []T {
@@ -146,8 +147,8 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
+	sz := v.typ.TypeSize()
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
-		sz := v.typ.TypeSize()
 		ndata, err := m.Grow(v.data, tgtCap*sz)
 		if err != nil {
 			return err
@@ -155,6 +156,7 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 		v.data = ndata[:cap(ndata)]
 		v.setupColFromData()
 	}
+	v.data = v.data[:(v.length+rows)*sz]
 	return nil
 }
 

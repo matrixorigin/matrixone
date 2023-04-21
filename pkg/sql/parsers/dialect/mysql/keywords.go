@@ -551,5 +551,7 @@ func init() {
 		"subscriptions":            SUBSCRIPTIONS,
 		"publications":             PUBLICATIONS,
 		"roles":                    ROLES,
+		"backend":                  BACKEND,
+		"servers":                  SERVERS,
 	}
 }

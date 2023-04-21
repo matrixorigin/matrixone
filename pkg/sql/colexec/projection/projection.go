@@ -16,6 +16,7 @@ package projection
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,6 +53,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	anal.Input(bat, isFirst)
@@ -62,8 +64,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for i := range ap.ctr.projExecutors {
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			bat.Clean(proc.Mp())
-			rbat.Clean(proc.Mp())
 			return false, err
 		}
 		rbat.Vecs[i] = vec
@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	bat.Clean(proc.Mp())
+	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil

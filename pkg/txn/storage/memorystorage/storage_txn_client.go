@@ -69,6 +69,10 @@ func (*StorageTxnClient) Close() error {
 	return nil
 }
 
+func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta

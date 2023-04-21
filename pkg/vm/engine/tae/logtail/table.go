@@ -133,8 +133,8 @@ type TxnTable struct {
 	*model.AOT[BlockT, RowT]
 }
 
-func blockCompareFn(a, b BlockT) bool {
-	return a.bornTS.Less(b.bornTS)
+func (blk *txnBlock) Less(b BlockT) bool {
+	return blk.bornTS.Less(b.bornTS)
 }
 
 func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
@@ -158,7 +158,7 @@ func NewTxnTable(blockSize int, now func() types.TS) *TxnTable {
 		AOT: model.NewAOT(
 			blockSize,
 			factory,
-			blockCompareFn,
+			(*txnBlock).Less,
 		),
 	}
 }

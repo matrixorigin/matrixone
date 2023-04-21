@@ -1221,6 +1221,9 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
+	// XXX BUG
+	// relation index of arg.Conditions should be rewritten to 0 here.
+
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)

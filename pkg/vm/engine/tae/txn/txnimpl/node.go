@@ -43,13 +43,13 @@ func NewNode(
 ) *node {
 	impl := new(node)
 	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
-	impl.storage.pnode = newPersistedNode(impl.baseNode)
-	impl.storage.pnode.Ref()
+	// impl.storage.pnode = newPersistedNode(impl.baseNode)
+	// impl.storage.pnode.Ref()
 	return impl
 }
 
 func (n *node) Close() error {
-	n.storage.pnode.close()
+	// n.storage.pnode.close()
 	return nil
 }
 
