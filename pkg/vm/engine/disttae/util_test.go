@@ -128,16 +128,16 @@ func makeTableDefForTest(columns []string) *plan.TableDef {
 }
 
 func TestBlockMetaMarshal(t *testing.T) {
+	location := []byte("test")
 	meta := BlockMeta{
-		Info: catalog.BlockInfo{
-			MetaLoc: []byte("test"),
-		},
+		Info: catalog.BlockInfo{},
 		Zonemap: [][64]byte{
 			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
 			makeZonemapForTest(types.T_blob, []byte("a"), []byte("h")),
 			// makeZonemapForTest(types.T_varchar, "a", "h"),
 		},
 	}
+	meta.Info.SetMetaLocation(location)
 	data := blockMarshal(meta)
 	meta0 := blockUnmarshal(data)
 	require.Equal(t, meta, meta0)

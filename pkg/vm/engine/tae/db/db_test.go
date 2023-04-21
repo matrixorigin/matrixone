@@ -4022,9 +4022,9 @@ func TestBlockRead(t *testing.T) {
 		BlockID:    bid,
 		SegmentID:  sid,
 		EntryState: true,
-		MetaLoc:    metaloc,
-		DeltaLoc:   deltaloc,
 	}
+	info.SetMetaLocation(metaloc)
+	info.SetDeltaLocation(deltaloc)
 
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
