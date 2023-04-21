@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -492,6 +493,32 @@ func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Proc
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(pi.GetPi(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DISABLE_FAULT_INJECTION
+
+func DisableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	fault.Disable()
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(true, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ENABLE_FAULT_INJECTION
+
+func EnableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	fault.Enable()
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(true, false); err != nil {
 			return err
 		}
 	}
