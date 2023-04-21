@@ -1248,3 +1248,124 @@ func TestDateStringToYear(t *testing.T) {
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/e8259e975b2c256e529bf26c0ac278fe0df8e97c/pkg/sql/plan/function/builtin/unary/year_test.go#L150
 }
+
+// Week
+
+func initDateToWeekTestCase() []tcTemp {
+	d11, _ := types.ParseDateCast("2003-12-30")
+	d12, _ := types.ParseDateCast("2004-01-02")
+	d13, _ := types.ParseDateCast("2004-12-31")
+	d14, _ := types.ParseDateCast("2005-01-01")
+
+	d21, _ := types.ParseDateCast("2001-02-16")
+	d22, _ := types.ParseDateCast("2012-06-18")
+	d23, _ := types.ParseDateCast("2015-09-25")
+	d24, _ := types.ParseDateCast("2022-12-05")
+	return []tcTemp{
+		{
+			info: "test date to week - first and last week",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d11, d12, d13, d14},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1, 1, 53, 53},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to week - normal",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d21, d22, d23, d24},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{7, 25, 39, 49},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to week - null",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d11},
+					[]bool{true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0},
+				[]bool{true}),
+		},
+		//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L52
+	}
+}
+
+func TestDateToWeek(t *testing.T) {
+	testCases := initDateToWeekTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeek)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDateTimeToWeekTestCase() []tcTemp {
+	d11, _ := types.ParseDatetime("2003-12-30 13:11:10", 6)
+	d12, _ := types.ParseDatetime("2004-01-02 19:22:10", 6)
+	d13, _ := types.ParseDatetime("2004-12-31 00:00:00", 6)
+	d14, _ := types.ParseDatetime("2005-01-01 04:05:06", 6)
+
+	d21, _ := types.ParseDatetime("2001-02-16 13:11:10", 6)
+	d22, _ := types.ParseDatetime("2012-06-18 19:22:10", 6)
+	d23, _ := types.ParseDatetime("2015-09-25 00:00:00", 6)
+	d24, _ := types.ParseDatetime("2022-12-05 04:05:06", 6)
+	return []tcTemp{
+		{
+			info: "test datetime to week - first and last week",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d11, d12, d13, d14},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1, 1, 53, 53},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to week - normal",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d21, d22, d23, d24},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{7, 25, 39, 49},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to week - null",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d11},
+					[]bool{true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestDateTimeToWeek(t *testing.T) {
+	testCases := initDateTimeToWeekTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeek)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+
+}
