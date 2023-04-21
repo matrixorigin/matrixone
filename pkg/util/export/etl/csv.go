@@ -75,10 +75,12 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 			}
 			w.writer = nil
 			w.buf = nil
+			w.sqlWriter.FlushAndClose()
 			return m, nil
 		} else {
 			w.writer = nil
 			w.buf = nil
+			w.sqlWriter.FlushAndClose()
 			return n, nil
 		}
 	} else {

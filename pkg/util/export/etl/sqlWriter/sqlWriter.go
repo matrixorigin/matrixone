@@ -191,7 +191,9 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
-	return 0, sw.db.Close()
+	err := sw.db.Close()
+	sw.db = nil
+	return 0, err
 }
 
 func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
