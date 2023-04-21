@@ -61,8 +61,12 @@ type Vector struct {
 
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
-	v.data = v.data[:0]
-	v.area = v.area[:0]
+	if v.data != nil {
+		v.data = v.data[:0]
+	}
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.nsp = &nulls.Nulls{}
 	v.length = 0
 	v.capacity = cap(v.data) / v.typ.TypeSize()
@@ -116,17 +120,6 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
-}
-
-// Reset the memory of vector but do not release
-func (v *Vector) Reset() {
-	if v.area != nil {
-		v.area = v.area[:0]
-	}
-	if v.nsp != nil && v.nsp.Np != nil {
-		v.nsp.Np.Clear()
-	}
-	v.SetLength(0)
 }
 
 func (v *Vector) NeedDup() bool {

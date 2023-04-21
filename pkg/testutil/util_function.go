@@ -586,7 +586,8 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 		num--
 		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
 		// XXX maybe free is unnecessary.
-		fc.result.GetResultVector().Reset()
+		typ := fc.result.GetResultVector().GetType()
+		fc.result.GetResultVector().Reset(*typ)
 		if err != nil {
 			return err
 		}

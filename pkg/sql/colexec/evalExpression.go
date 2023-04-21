@@ -195,7 +195,8 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 			return nil, err
 		}
 	}
-	expr.resultVector.GetResultVector().Reset()
+	typ := expr.resultVector.GetResultVector().GetType()
+	expr.resultVector.GetResultVector().Reset(*typ)
 
 	if err = expr.evalFn(
 		expr.parameterResults, expr.resultVector, proc, batches[0].Length()); err != nil {
