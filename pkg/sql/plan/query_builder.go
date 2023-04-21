@@ -228,19 +228,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-	case plan.Node_SINK_SCAN:
-		internalRemapping := &ColRefRemapping{
-			globalToLocal: make(map[[2]int32][2]int32),
-		}
-		tag := node.BindingTags[0]
-		for i := range node.ProjectList {
-			globalRef := [2]int32{tag, int32(i)}
-			internalRemapping.addColRef(globalRef)
-		}
-		for i := range node.ProjectList {
-			remapping.addColRef(internalRemapping.localToGlobal[i])
-		}
-
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
@@ -652,160 +639,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
-	case plan.Node_PRE_INSERT:
-		nodeTag := node.BindingTags[0]
-		for _, expr := range node.ProjectList {
-			increaseRefCnt(expr, colRefCnt)
-		}
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
-		if err != nil {
-			return nil, err
-		}
-		//for _, globalRef := range childRemapping.localToGlobal {
-		//	if colRefCnt[globalRef] == 0 {
-		//		continue
-		//	}
-		//	remapping.addColRef(globalRef)
-		//}
-		//for i, expr := range node.ProjectList {
-		//	remapping.addColRef([2]int32{nodeTag, int32(i)})
-		//	decreaseRefCnt(expr, colRefCnt)
-		//}
-		for i, expr := range node.ProjectList {
-			remapping.addColRef([2]int32{nodeTag, int32(i)})
-			decreaseRefCnt(expr, colRefCnt)
-
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		oldPrejectLen := len(node.ProjectList)
-		//node.ProjectList = node.ProjectList[0:0]
-		for i := range node.PreInsertCtx.HiddenColumnTyp {
-			pos := int32(oldPrejectLen + i)
-			remapping.addColRef([2]int32{nodeTag, pos})
-		}
-
-		//childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		//for i, globalRef := range childRemapping.localToGlobal {
-		//	// remapping.addColRef(globalRef)
-		//	node.ProjectList = append(node.ProjectList, &plan.Expr{
-		//		Typ: childProjList[i].Typ,
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: 0,
-		//				ColPos: int32(i),
-		//				Name:   builder.nameByColRef[globalRef],
-		//			},
-		//		},
-		//	})
-		//}
-
-		for i, typ := range node.PreInsertCtx.HiddenColumnTyp {
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(i),
-						Name:   node.PreInsertCtx.HiddenColumnName[i],
-					},
-				},
-			})
-		}
-
-	case plan.Node_INSERT, plan.Node_DELETE:
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
-		if err != nil {
-			return nil, err
-		}
-		for _, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
-		}
-
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		for i, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
-
-	case plan.Node_PRE_INSERT_UK:
-		nodeTag := node.BindingTags[0]
-		for _, expr := range node.ProjectList {
-			increaseRefCnt(expr, colRefCnt)
-		}
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
-		if err != nil {
-			return nil, err
-		}
-		for _, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-			remapping.addColRef(globalRef)
-		}
-		remapping.addColRef([2]int32{nodeTag, 0})
-		decreaseRefCnt(&plan.Expr{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: nodeTag,
-					ColPos: 0,
-				},
-			},
-		}, colRefCnt)
-		for _, expr := range node.ProjectList {
-			decreaseRefCnt(expr, colRefCnt)
-		}
-		node.ProjectList = node.ProjectList[0:0]
-		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ: node.PreInsertUkCtx.UkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: -1,
-					ColPos: 0,
-					Name:   catalog.IndexTableIndexColName,
-				},
-			},
-		})
-		if node.PreInsertUkCtx.PkColumn > -1 {
-			decreaseRefCnt(&plan.Expr{
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: nodeTag,
-						ColPos: 1,
-					},
-				},
-			}, colRefCnt)
-			remapping.addColRef([2]int32{nodeTag, 1})
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.PreInsertUkCtx.PkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: 1,
-						Name:   catalog.IndexTableIndexColName,
-					},
-				},
-			})
-		}
-
 	case plan.Node_FILTER:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
@@ -860,7 +693,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
-	case plan.Node_PROJECT, plan.Node_MATERIAL, plan.Node_SINK, plan.Node_PRE_DELETE:
+	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
 
 		var neededProj []int32

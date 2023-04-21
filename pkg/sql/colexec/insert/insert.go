@@ -19,12 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -110,22 +104,22 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	return false, nil
 }
 
-func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-	res := batch.NewWithSize(len(attrs))
-	res.SetAttributes(attrs)
-	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	for _, w := range s3Writers {
-		//deep copy.
-		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
-		if err != nil {
-			return
-		}
-	}
-	proc.SetInputBatch(res)
-	return
-}
+// func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
+// 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+// 	res := batch.NewWithSize(len(attrs))
+// 	res.SetAttributes(attrs)
+// 	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+// 	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
+// 	for _, w := range s3Writers {
+// 		//deep copy.
+// 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
+// 		if err != nil {
+// 			return
+// 		}
+// 	}
+// 	proc.SetInputBatch(res)
+// 	return
+// }
 
 func analyze(proc *process.Process, idx int) func() {
 	t := time.Now()

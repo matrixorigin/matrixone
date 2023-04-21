@@ -36,6 +36,7 @@ type Argument struct {
 	Engine   engine.Engine
 	IsRemote bool // mark if this insert is cn2s3 directly
 	// s3Writers []*colexec.S3Writer
+	InsertCtx *InsertCtx
 }
 
 type InsertCtx struct {
