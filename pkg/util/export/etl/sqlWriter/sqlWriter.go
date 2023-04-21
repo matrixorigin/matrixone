@@ -164,7 +164,12 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	stmt, cnt, _ := generateInsertStatement(records, tbl)
 	_, err = db.Exec(stmt)
 	if err != nil {
-		logutil.Error("sqlWriter db exec failed", zap.String("dsn", sw.dsn), zap.Error(err))
+		logutil.Error("sqlWriter db insert failed", zap.String("dsn", sw.dsn), zap.Error(err))
+		// if table not exist return, no need to retry
+		// todo: create table if not exist
+		if strings.Contains(err.Error(), "no such table") {
+			return 0, err
+		}
 		db, _ := sw.initOrRefreshDBConn(true)
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
 			cnt, err = bulkInsert(db, records, tbl, 1000)
