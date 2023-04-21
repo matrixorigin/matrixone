@@ -11,6 +11,8 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
+	types "github.com/matrixorigin/matrixone/pkg/container/types"
+	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -465,18 +467,18 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 }
 
 // Read mocks base method.
-func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool) (*batch.Batch, error) {
+func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 engine.VectorPool) (*batch.Batch, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(*batch.Batch)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Read indicates an expected call of Read.
-func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
 // MockDatabase is a mock of Database interface.
@@ -830,4 +832,53 @@ func (m *MockEngine) Rollback(ctx context.Context, op client.TxnOperator) error 
 func (mr *MockEngineMockRecorder) Rollback(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockEngine)(nil).Rollback), ctx, op)
+}
+
+// MockVectorPool is a mock of VectorPool interface.
+type MockVectorPool struct {
+	ctrl     *gomock.Controller
+	recorder *MockVectorPoolMockRecorder
+}
+
+// MockVectorPoolMockRecorder is the mock recorder for MockVectorPool.
+type MockVectorPoolMockRecorder struct {
+	mock *MockVectorPool
+}
+
+// NewMockVectorPool creates a new mock instance.
+func NewMockVectorPool(ctrl *gomock.Controller) *MockVectorPool {
+	mock := &MockVectorPool{ctrl: ctrl}
+	mock.recorder = &MockVectorPoolMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockVectorPool) EXPECT() *MockVectorPoolMockRecorder {
+	return m.recorder
+}
+
+// GetVector mocks base method.
+func (m *MockVectorPool) GetVector(typ types.Type) *vector.Vector {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVector", typ)
+	ret0, _ := ret[0].(*vector.Vector)
+	return ret0
+}
+
+// GetVector indicates an expected call of GetVector.
+func (mr *MockVectorPoolMockRecorder) GetVector(typ interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVector", reflect.TypeOf((*MockVectorPool)(nil).GetVector), typ)
+}
+
+// PutBatch mocks base method.
+func (m *MockVectorPool) PutBatch(bat *batch.Batch) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "PutBatch", bat)
+}
+
+// PutBatch indicates an expected call of PutBatch.
+func (mr *MockVectorPoolMockRecorder) PutBatch(bat interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PutBatch", reflect.TypeOf((*MockVectorPool)(nil).PutBatch), bat)
 }
