@@ -164,7 +164,6 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	stmt, cnt, _ := generateInsertStatement(records, tbl)
 	_, err = db.Exec(stmt)
 	if err != nil {
-		logutil.Error("sqlWriter insert failed", zap.String("address", sw.address), zap.Error(err))
 		// if table not exist return, no need to retry
 		// todo: create table if not exist
 		if strings.Contains(err.Error(), "no such table") {

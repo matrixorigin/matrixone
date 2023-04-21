@@ -31,7 +31,7 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	sqlWriter = &BaseSqlWriter{}
+	sqlWriter *BaseSqlWriter
 
 	once sync.Once
 )
