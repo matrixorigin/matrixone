@@ -153,6 +153,12 @@ var (
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
+
+	// defaultKillRountinesInterval default: 1 minutes
+	defaultKillRountinesInterval = 1
+
+	//defaultCleanKillQueueInterval default: 60 minutes
+	defaultCleanKillQueueInterval = 60
 )
 
 // FrontendParameters of the frontend
@@ -295,6 +301,10 @@ type FrontendParameters struct {
 	PrintDebug bool `toml:"printDebug"`
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
+
+	KillRountinesInterval int `toml:"killRountinesInterval"`
+
+	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
 
 	// ProxyEnabled indicates that proxy module is enabled and something extra
 	// is needed, such as update the salt.
