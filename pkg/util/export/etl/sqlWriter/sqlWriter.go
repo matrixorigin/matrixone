@@ -172,7 +172,7 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 		// refresh connection if invalid connection
 		if strings.Contains(err.Error(), "invalid connection") {
-			db, _ = sw.initOrRefreshDBConn(true)
+			// db, _ = sw.initOrRefreshDBConn(true)
 		}
 
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
