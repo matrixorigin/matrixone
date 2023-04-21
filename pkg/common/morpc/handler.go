@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -208,7 +207,7 @@ func (s *handler[REQ, RESP]) getHandler(
 			getLogger().Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
-		resp.WrapError(errors.New("skip request by filter"))
+		resp.WrapError(moerr.NewInvalidInputNoCtx("skip request by filter"))
 		return handleFuncCtx[REQ, RESP]{}, false
 	}
 
