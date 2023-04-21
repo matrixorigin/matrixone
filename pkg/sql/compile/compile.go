@@ -1917,7 +1917,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			ranges = append(ranges, subranges...)
+			ranges = append(ranges, subranges[1:]...)
 		}
 	}
 
@@ -1955,7 +1955,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// for multi cn in luanch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		return putBlocksInCurrentCN(c, ranges, rel, n, engineType), nil
+		return putBlocksInCurrentCN(c, ranges, rel, n), nil
 	}
 	// disttae engine , hash s3 objects to fixed CN
 	if engineType == engine.Disttae {
@@ -2022,7 +2022,8 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 	})
 	//add memory table block
-	nodes[0].Data = append(nodes[0].Data, []byte{})
+	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
+	ranges = ranges[1:]
 	// only memory table block
 	if len(ranges) == 0 {
 		return nodes
@@ -2064,7 +2065,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	return newNodes
 }
 
-func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node, engineType engine.EngineType) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{
@@ -2072,10 +2073,6 @@ func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *p
 		Rel:  rel,
 		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
 	})
-	if engineType == engine.Disttae {
-		//add memory table block
-		nodes[0].Data = append(nodes[0].Data, []byte{})
-	}
 	nodes[0].Data = append(nodes[0].Data, ranges...)
 	return nodes
 }
