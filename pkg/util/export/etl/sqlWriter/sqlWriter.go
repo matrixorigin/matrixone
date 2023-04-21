@@ -212,10 +212,6 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 	defer sw.dbMux.Unlock()
 
 	initFunc := func() error {
-		if sw.db != nil {
-			sw.db.Close()
-			sw.db = nil
-		}
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			sw.db = nil
@@ -232,7 +228,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=15s&writeTimeout=15s&timeout=15s",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=30s&writeTimeout=60s&timeout=30s",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
@@ -242,12 +238,21 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			logutil.Info("sqlWriter db initialized err", zap.String("address", dbAddress), zap.Error(err))
 			return err
 		}
-		sw.db = db
-		sw.address = dbAddress
+		if sw.db != nil {
+			sw.db.Close()
+			sw.db = db
+			sw.address = dbAddress
+		}
 		return nil
 	}
 
 	if forceNewConn || sw.db == nil {
+		if sw.db != nil {
+			err := sw.db.Ping()
+			if err == nil {
+				return sw.db, nil
+			}
+		}
 		logutil.Info("sqlWriter db will init", zap.Bool("forceNewConn", forceNewConn))
 		err := initFunc()
 		if err != nil {
