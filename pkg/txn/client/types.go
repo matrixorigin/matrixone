@@ -33,6 +33,8 @@ type TxnClientCreateOption func(*txnClient)
 // TxnClient transaction client, the operational entry point for transactions.
 // Each CN node holds one instance of TxnClient.
 type TxnClient interface {
+	// Minimum Active Transaction Timestamp
+	MinTimestamp() timestamp.Timestamp
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
 	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)

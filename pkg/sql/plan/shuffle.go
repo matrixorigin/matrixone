@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package plan
 
-func init() {
-	//TODO for passing static check
-	_ = blockInfoMarshal
-	_ = genModifedBlocks
-	_ = needRead
-	_ = inBlockMap
+func SimpleHashToRange(bytes []byte, upperLimit int) int {
+	lenBytes := len(bytes)
+	//sample five bytes
+	return (int(bytes[0])*(int(bytes[lenBytes/4])+int(bytes[lenBytes/2])+int(bytes[lenBytes*3/4])) + int(bytes[lenBytes-1])) % upperLimit
 }
