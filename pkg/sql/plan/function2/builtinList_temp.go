@@ -755,6 +755,103 @@ var tempListForUnaryFunctions1 = []FuncNew{
 	},
 
 	{
+		functionId: NEXTVAL,
+		class:      plan.Function_STRICT,
+		layout:     UNKNOW_KIND_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Nextval,
+			},
+		},
+	},
+
+	{
+		functionId: SETVAL,
+		class:      plan.Function_STRICT,
+		layout:     UNKNOW_KIND_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Setval,
+			},
+			{
+				overloadId: 1,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_bool,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Setval,
+			},
+		},
+	},
+
+	{
+		functionId: CURRVAL,
+		class:      plan.Function_STRICT,
+		layout:     UNKNOW_KIND_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Currval,
+			},
+		},
+	},
+
+	{
+		functionId: LASTVAL,
+		class:      plan.Function_STRICT,
+		layout:     UNKNOW_KIND_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            nil,
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Lastval,
+			},
+		},
+	},
+
+	{
 		functionId: GIT_VERSION,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
