@@ -256,7 +256,7 @@ func Test_ShowFunctionsShouldBeRefactored(t *testing.T) {
 	for id := range alreadyRegistered {
 		result = append(result, fmt.Sprintf("%v", fromIDtoName[id]))
 	}
-	sort.Sort(sort.StringSlice(result))
+	sort.Strings(result)
 
 	for i, name := range result {
 		fmt.Printf("%d: %s\n", i+1, name)
