@@ -146,8 +146,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
-		ctr.cleanEqVectors(mp)
 		ctr.cleanHashMap()
 	}
 }
@@ -171,15 +169,6 @@ func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
 			ctr.evecs[i].vec.Free(mp)
 			ctr.evecs[i].vec = nil
-		}
-	}
-}
-
-func (ctr *container) cleanEqVectors(mp *mpool.MPool) {
-	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].needFree && ctr.buildEqEvecs[i].vec != nil {
-			ctr.buildEqEvecs[i].vec.Free(mp)
-			ctr.buildEqEvecs[i].vec = nil
 		}
 	}
 }

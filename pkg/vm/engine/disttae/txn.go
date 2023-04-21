@@ -159,9 +159,9 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 		s3Writer.InitBuffers(mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
-			s3Writer.Put(mp[key][i])
+			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(mp[key]), txn.proc, false)
+		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
 
 		if err != nil {
 			return err

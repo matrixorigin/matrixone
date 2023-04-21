@@ -55,7 +55,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	}
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
-		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
+		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
 		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
 		mvcc:      mvcc,
 	}
@@ -127,7 +127,7 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
 	var link *common.GenericSortedDList[*DeleteNode]
 	if link = chain.links[row]; link == nil {
-		link = common.NewGenericSortedDList(compareDeleteNode)
+		link = common.NewGenericSortedDList((*DeleteNode).Less)
 		n := link.Insert(deleteNode)
 		deleteNode.viewNodes[row] = n
 		chain.links[row] = link

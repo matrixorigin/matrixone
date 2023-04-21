@@ -43,7 +43,8 @@ const (
 // }
 
 type localSegment struct {
-	entry      *catalog.SegmentEntry
+	entry *catalog.SegmentEntry
+
 	appendable InsertNode
 	//index for primary key
 	index TableIndex
@@ -58,11 +59,10 @@ type localSegment struct {
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
-	entry := catalog.NewStandaloneSegment(
-		table.entry,
-		table.store.txn.GetStartTS())
 	return &localSegment{
-		entry:   entry,
+		entry: catalog.NewStandaloneSegment(
+			table.entry,
+			table.store.txn.GetStartTS()),
 		nodes:   make([]InsertNode, 0),
 		index:   NewSimpleTableIndex(),
 		appends: make([]*appendCtx, 0),
@@ -83,13 +83,13 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 
 // register a non-appendable insertNode.
 func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
+	sid := metaLoc.Name().SegmentId()
 	meta := catalog.NewStandaloneBlockWithLoc(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		nil,
+		objectio.NewBlockid(&sid, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS(),
 		metaLoc,
 		deltaLoc)
-	seg.entry.AddEntryLocked(meta)
 	n := NewNode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -103,11 +103,12 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 
 // register an appendable insertNode.
 func (seg *localSegment) registerANode() {
+	entry := seg.entry
 	meta := catalog.NewStandaloneBlock(
-		seg.entry,
-		objectio.NewBlockid(&seg.entry.ID, 0, uint16(len(seg.nodes))),
+		entry,
+		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
-	seg.entry.AddEntryLocked(meta)
+	entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
 		seg.table.store.dataFactory.Fs,
@@ -451,15 +452,19 @@ func (seg *localSegment) Rows() (n uint32) {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	id = seg.entry.AsCommonID()
 	if !seg.table.schema.HasPK() {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		id = seg.table.entry.AsCommonID()
+		id.SegmentID, id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
+	id = seg.entry.AsCommonID()
 	if v, ok := filter.Val.([]byte); ok {
 		offset, err = seg.index.Search(string(v))
 	} else {
 		offset, err = seg.index.Search(filter.Val)
+	}
+	if err != nil {
+		return
 	}
 	return
 }

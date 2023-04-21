@@ -73,6 +73,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			continue
 		}
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)

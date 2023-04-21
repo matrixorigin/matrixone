@@ -175,7 +175,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			bat.Clean(proc.Mp())
 			return false, err
 		}
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 	}
 }
 

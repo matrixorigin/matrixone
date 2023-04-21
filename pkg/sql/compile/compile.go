@@ -19,14 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"net"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -258,6 +255,7 @@ func (c *Compile) Run(_ uint64) error {
 			return e
 		}
 	}
+	c.proc.FreeVectors()
 	return nil
 }
 
@@ -403,30 +401,7 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	client := cnclient.GetRPCClient()
 	c.cnList, err = c.e.Nodes()
-	if client != nil {
-		for i := 0; i < len(c.cnList); i++ {
-			addrs := strings.Split(c.cnList[i].Addr, ":")
-			if len(addrs) != 2 {
-				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
-			}
-			// InValid Addr, this should be docker addr,
-			// "cn-0","cn-1", just skip it
-			if address := net.ParseIP(addrs[0]); address == nil {
-				continue
-			}
-			if isSameCN(c.addr, c.cnList[i].Addr) {
-				continue
-			}
-			err := client.Ping(ctx, c.cnList[i].Addr)
-			// ping failed
-			if err != nil {
-				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
-				i--
-			}
-		}
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -2207,6 +2182,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		}
 		if tmp.IsConstNull() {
 			vector.AppendFixed(vec, 0, true, proc.Mp())
+			tmp.Free(proc.Mp())
 			continue
 		}
 		switch typ.Oid {
@@ -2251,6 +2227,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
+		tmp.Free(proc.Mp())
 	}
 	return vec, nil
 }
