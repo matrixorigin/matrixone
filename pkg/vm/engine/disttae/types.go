@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +53,8 @@ const (
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
 )
+
+var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
 
