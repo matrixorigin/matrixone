@@ -874,3 +874,123 @@ func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 	}
 	return nil
 }
+
+func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	fromVec := parameters[0]
+	toVec := result.GetResultVector()
+
+	sels := make([]int32, fromVec.Length())
+	for j := 0; j < len(sels); j++ {
+		sels[j] = int32(j)
+	}
+	toVec.Union(fromVec, sels, proc.GetMPool())
+	return nil
+}
+
+func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Hour()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.Hour()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Minute()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.Minute()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Sec()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(uint8(v.Sec()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
