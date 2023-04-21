@@ -165,31 +165,31 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	stmt, cnt, _ := generateInsertStatement(records, tbl)
 	_, err = db.Exec(stmt)
 	if err != nil {
-		// if table not exist return, no need to retry
-		// todo: create table if not exist
-		if strings.Contains(err.Error(), "no such table") {
-			return 0, err
-		}
-
-		// refresh connection if invalid connection
-		if strings.Contains(err.Error(), "invalid connection") {
-			newDb, newDbErr := sw.initOrRefreshDBConn(true)
-			if newDbErr != nil {
-				logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(newDbErr))
-				return 0, newDbErr
-			} else {
-				db = newDb
-			}
-		}
-
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
 			cnt, err = bulkInsert(db, records, tbl, 1000)
+			if err != nil {
+				logutil.Error("sqlWriter db insert bulk retry failed", zap.String("address", sw.address), zap.Error(err))
+				return 0, err
+			}
 		} else {
-			_, err = db.Exec(stmt)
-		}
-		if err != nil {
-			logutil.Error("sqlWriter db insert retry failed", zap.String("address", sw.address), zap.Error(err))
+			logutil.Error("sqlWriter db insert failed", zap.String("address", sw.address), zap.Error(err))
 			return 0, err
+			// if table not exist return, no need to retry
+			// todo: create table if not exist
+			//if strings.Contains(err.Error(), "no such table") {
+			//	return 0, err
+			//}
+			// refresh connection if invalid connection
+			//if strings.Contains(err.Error(), "invalid connection") {
+			//	newDb, newDbErr := sw.initOrRefreshDBConn(true)
+			//	if newDbErr != nil {
+			//		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(newDbErr))
+			//		return 0, newDbErr
+			//	} else {
+			//		db = newDb
+			//	}
+			//}
+			// _, err = db.Exec(stmt)
 		}
 		return cnt, nil
 	}
