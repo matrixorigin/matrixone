@@ -46,7 +46,7 @@ func buildInsertPlans(
 func buildUpdatePlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
-	beginIdx int, sourceStep int32) error {
+	beginIdx int, sourceStep int32, isMultiUpdate bool) error {
 	// build delete plans
 	lastNodeId, err := buildDeletePlans(ctx, builder, bindCtx, objRef, tableDef, beginIdx, sourceStep)
 	if err != nil {
@@ -80,6 +80,45 @@ func buildUpdatePlans(
 		ProjectList: projectProjection,
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
+
+	if isMultiUpdate {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		groupByExprs := make([]*Expr, len(lastNode.ProjectList))
+		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
+		for i, e := range lastNode.ProjectList {
+			name := ""
+			if col, ok := e.Expr.(*plan.Expr_Col); ok {
+				name = col.Col.Name
+			}
+			groupByExprs[i] = &plan.Expr{
+				Typ: e.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   name,
+					},
+				},
+			}
+			aggNodeProjection[i] = &plan.Expr{
+				Typ: e.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(i),
+						Name:   name,
+					},
+				},
+			}
+		}
+		aggNode := &Node{
+			NodeType:    plan.Node_AGG,
+			Children:    []int32{lastNodeId},
+			GroupBy:     groupByExprs,
+			ProjectList: projectProjection,
+		}
+		lastNodeId = builder.appendNode(aggNode, bindCtx)
+	}
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep = builder.appendStep(lastNodeId)
@@ -121,6 +160,8 @@ func buildDeletePlans(
 		ProjectList: projectProjection,
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
+
+	// append agg for multi delete?
 
 	isPartitionTable := false
 	partExprIdx := -1
@@ -338,7 +379,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					}
 
 					//make preinsert_uk plan,  to build the batch to insert
-					newSourceStep, err := makePreInsertUkPlan(builder, bindCtx, tableDef, uniqueSourceStep, i)
+					newSourceStep, err := appendPreInsertUkNode(builder, bindCtx, tableDef, uniqueSourceStep, i)
 					if err != nil {
 						return err
 					}
@@ -675,9 +716,9 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	return lastNodeId
 }
 
-// makePreInsertUkPlan  build preinsert plan.
+// appendPreInsertUkNode  build preinsert plan.
 // sink_scan -> preinsert_uk -> sink
-func makePreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, sourceStep int32, indexIdx int) (int32, error) {
+func appendPreInsertUkNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, sourceStep int32, indexIdx int) (int32, error) {
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	var useColumns []int32

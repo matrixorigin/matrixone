@@ -453,7 +453,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
-			panic("dddd")
 			return nil, err
 		}
 		scope, err := c.compileApQuery(qry, scopes)
