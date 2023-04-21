@@ -23,7 +23,9 @@ import (
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"go.uber.org/zap"
 )
 
 const PACKET_LARGE_ERROR = "packet for query is too large"
@@ -47,15 +49,6 @@ func (sw *BaseSqlWriter) GetContent() string {
 }
 func (sw *BaseSqlWriter) WriteRow(row *table.Row) error {
 	return nil
-}
-
-func jsonEscape(i string) string {
-	b, err := json.Marshal(i)
-	if err != nil {
-		panic(err)
-	}
-	s := string(b)
-	return s[1 : len(s)-1]
 }
 
 func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
@@ -141,7 +134,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		_, err = db.Exec(stmt)
 		if err != nil {
 			if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-				chunkSize = chunkSize / 2
+				chunkSize = len(chunk) / 2
 				_, err = bulkInsert(db, chunk, tbl, chunkSize)
 			} else {
 				// simple retry
@@ -165,11 +158,13 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	}
 	db, dbErr := sw.initOrRefreshDBConn(false)
 	if dbErr != nil {
+		logutil.Error("sqlWriter", zap.String("dsn", sw.dsn), zap.Error(dbErr))
 		return 0, dbErr
 	}
 	stmt, cnt, _ := generateInsertStatement(records, tbl)
 	_, err = db.Exec(stmt)
 	if err != nil {
+		logutil.Error("sqlWriter db exec failed", zap.String("dsn", sw.dsn), zap.Error(err))
 		db, _ := sw.initOrRefreshDBConn(true)
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
 			cnt, err = bulkInsert(db, records, tbl, 1000)
@@ -177,6 +172,7 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 			_, err = db.Exec(stmt)
 		}
 		if err != nil {
+			logutil.Error("sqlWriter db exec failed again", zap.String("dsn", sw.dsn), zap.Error(err))
 			return 0, err
 		}
 		return cnt, nil
@@ -192,11 +188,13 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 	if sw.db == nil || forceNewConn {
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
+			sw.db = nil
 			return nil, errNotReady
 		}
 
 		addressFunc := GetSQLWriterDBAddressFunc()
 		if addressFunc == nil {
+			sw.db = nil
 			return nil, errNotReady
 		}
 		dbAddress, err := addressFunc(context.Background())
