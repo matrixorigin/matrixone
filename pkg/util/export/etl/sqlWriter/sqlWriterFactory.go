@@ -31,7 +31,7 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	sqlWriter *BaseSqlWriter
+	sqlWriter atomic.Value
 
 	once sync.Once
 )
@@ -70,9 +70,9 @@ func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 
 func NewSqlWriter(ctx context.Context) *BaseSqlWriter {
 	once.Do(func() {
-		sqlWriter = &BaseSqlWriter{
+		sqlWriter.Store(&BaseSqlWriter{
 			ctx: ctx,
-		}
+		})
 	})
-	return sqlWriter
+	return sqlWriter.Load().(*BaseSqlWriter)
 }
