@@ -1497,16 +1497,185 @@ var tempListForUnaryFunctions1 = []FuncNew{
 //
 //	NewOp is new execute code. I set it empty now.
 var tempListForBinaryFunctions2 = []FuncNew{
+
+	{
+		functionId: ENDSWITH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: EndsWith,
+			},
+		},
+	},
+	{
+		functionId: EXTRACT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: ExtractFromDatetime,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: ExtractFromDate,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: ExtractFromTime,
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: ExtractFromVarchar,
+			},
+		},
+	},
+	{
+		functionId: FINDINSET,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: FindInSet,
+			},
+		},
+	},
+	{
+		functionId: INSTR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: Instr,
+			},
+		},
+	},
+	{
+		functionId: LEFT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Left,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_char.ToType()
+				},
+				NewOp: Left,
+			},
+		},
+	},
+	{
+		functionId: STARTSWITH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				NewOp: Startswith,
+			},
+		},
+	},
+	{
+		functionId: TIMEDIFF,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_time, types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: TimeDiff[types.Time],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: TimeDiff[types.Datetime],
+			},
+		},
+	},
+	{
+		functionId: POW,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: Power,
+			},
+		},
+	},
+
 	// function `date_format`
-	// function `endswith`
-	// function `startswith`
-	// function `extract`
-	// function `find_in_set`
-	// function `in_str`
-	// function `left`
-	// function `power`
 	// function `show_visible_bin`
 	// function `str_to_date`, `to_date`
-	// function `timediff`
-	{},
 }
