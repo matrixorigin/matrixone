@@ -22,6 +22,8 @@ import (
 	"testing"
 )
 
+// Hex
+
 func initHexStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -95,6 +97,8 @@ func TestHexInt64(t *testing.T) {
 	}
 }
 
+// Length
+
 func initBlobLengthTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -156,6 +160,8 @@ func TestLength(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// LengthUTF8
 
 func initLengthUTF8TestCase() []tcTemp {
 	return []tcTemp{
@@ -298,6 +304,8 @@ func TestLengthUTF8(t *testing.T) {
 	}
 }
 
+// Ltrim
+
 func initLtrimTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -325,6 +333,8 @@ func TestLtrim(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// Rtrim
 
 func initRtrimTestCase() []tcTemp {
 	return []tcTemp{
@@ -697,6 +707,8 @@ func TestRtrim(t *testing.T) {
 	}
 }
 
+// Reverse
+
 func initReverseTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -794,6 +806,8 @@ func TestReverse(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// Oct
 
 func initOctUint8TestCase() []tcTemp {
 	e1, _, _ := types.Parse128("14")
@@ -1055,6 +1069,8 @@ func TestOctInt64(t *testing.T) {
 	//TODO: Previous OctFloat didn't have testcase. Should we add new testcases?
 }
 
+// Month
+
 func initDateToMonthTestCase() []tcTemp {
 	d1, _ := types.ParseDateCast("2004-04-03")
 	d2, _ := types.ParseDateCast("2004-08-03")
@@ -1142,6 +1158,8 @@ func TestDateStringToMonth(t *testing.T) {
 	}
 	//TODO: Ignoring Scalar Nulls: Original code: https://github.com/m-schen/matrixone/blob/823b5524f1c6eb189ee9652013bdf86b99e5571e/pkg/sql/plan/function/builtin/unary/month_test.go#L150
 }
+
+// Year
 
 func initDateToYearTestCase() []tcTemp {
 	d1, _ := types.ParseDateCast("2004-04-03")
