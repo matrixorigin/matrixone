@@ -303,7 +303,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)
