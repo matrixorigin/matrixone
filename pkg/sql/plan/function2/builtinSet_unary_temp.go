@@ -15,16 +15,21 @@
 package function2
 
 import (
-	"time"
-
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/json_quote"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/json_unquote"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+	"io"
+	"strings"
+	"time"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -480,6 +485,389 @@ func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 				return err
 			}
 			if err := rs.AppendBytes(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	fSingle := json_unquote.JsonSingle
+	if ivecs[0].GetType().Oid.IsMySQLString() {
+		fSingle = json_unquote.StringSingle
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := fSingle(v)
+			if err != nil {
+				return err
+			}
+			if err := rs.AppendBytes([]byte(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+const (
+	blobsize = 65536 // 2^16-1
+)
+
+func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
+	if fs == nil || err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	ctx := context.TODO()
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	Filepath, null := ivec.GetStrValue(0)
+	if null {
+		if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+		return nil
+	}
+	fs := proc.FileService
+	r, err := ReadFromFile(string(Filepath), fs)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	ctx, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if len(ctx) > blobsize {
+		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	if len(ctx) == 0 {
+		if err = rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err = rs.AppendBytes(ctx, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func MoMemUsage(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "no mpool name")
+	}
+	if !ivecs[0].IsConst() {
+		moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input")
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	v, null := ivec.GetStrValue(0)
+	if null {
+		if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+	} else {
+		memUsage := mpool.ReportMemUsage(string(v))
+		if err := rs.AppendBytes([]byte(memUsage), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func moMemUsageCmd(cmd string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "no mpool name")
+	}
+	if !ivecs[0].IsConst() {
+		moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input")
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	v, null := ivec.GetStrValue(0)
+	if null {
+		if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+	} else {
+		ok := mpool.MPoolControl(string(v), cmd)
+		if err := rs.AppendBytes([]byte(ok), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func MoEnableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return moMemUsageCmd("enable_detail", ivecs, result, proc, length)
+}
+
+func MoDisableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return moMemUsageCmd("enable_detail", ivecs, result, proc, length)
+}
+
+const (
+	MaxAllowedValue = 8000
+)
+
+func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
+	var ilen int
+	if v < 0 {
+		ilen = 0
+	} else {
+		ilen = int(v)
+		if ilen > MaxAllowedValue || ilen < 0 {
+			return "", moerr.NewInvalidInputNoCtx("the space count is greater than max allowed value %d", MaxAllowedValue)
+		}
+	}
+	return strings.Repeat(" ", ilen), nil
+}
+
+func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := FillSpaceNumber(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.ToTime(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.ToTime(scale), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			t, e := types.ParseInt64ToTime(v, 0)
+			if e != nil {
+				return moerr.NewOutOfRangeNoCtx("time", "'%d'", v)
+			}
+			if err := rs.Append(t, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			t, e := types.ParseTime(string(v), 6)
+			if e != nil {
+				return moerr.NewOutOfRangeNoCtx("time", "'%s'", string(v))
+			}
+			if err := rs.Append(t, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			t, e := types.ParseDecimal128ToTime(v, scale, 6)
+			if e != nil {
+				return moerr.NewOutOfRangeNoCtx("time", "'%s'", v.Format(0))
+			}
+			if err := rs.Append(t, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.ToTimestamp(proc.SessionInfo.TimeZone), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.ToTimestamp(proc.SessionInfo.TimeZone), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, string(v), 6)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(val, false); err != nil {
 				return err
 			}
 		}

@@ -490,7 +490,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: JsonUnquote,
 			},
 			{
 				overloadId: 1,
@@ -498,7 +498,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: JsonUnquote,
 			},
 			{
 				overloadId: 2,
@@ -506,7 +506,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: JsonUnquote,
 			},
 			{
 				overloadId: 3,
@@ -514,7 +514,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil,
+				NewOp: JsonUnquote,
 			},
 		},
 	},
@@ -605,7 +605,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
-				NewOp: nil,
+				NewOp: LoadFile,
 			},
 			{
 				overloadId: 0,
@@ -614,7 +614,7 @@ var tempListForUnaryFunctions1 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
-				NewOp: nil,
+				NewOp: LoadFile,
 			},
 		},
 	},
@@ -1100,12 +1100,218 @@ var tempListForUnaryFunctions1 = []FuncNew{
 		},
 	},
 
-	// function `MO_MEMORY_USAGE`
-	// function `MO_ENABLE_MEMORY_USAGE_DETAIL`
-	// function `MO_DISABLE_MEMORY_USAGE_DETAIL`
-	// function `space`
-	// function `time`
-	// function `time_of_day`
+	{
+		functionId: MO_MEMORY_USAGE,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: MoMemUsage,
+			},
+		},
+	},
+
+	{
+		functionId: MO_ENABLE_MEMORY_USAGE_DETAIL,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: MoEnableMemUsageDetail,
+			},
+		},
+	},
+
+	{
+		functionId: MO_DISABLE_MEMORY_USAGE_DETAIL,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: MoDisableMemUsageDetail,
+			},
+		},
+	},
+
+	{
+		functionId: SPACE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: SpaceNumber[uint64],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: SpaceNumber[int64],
+			},
+		},
+	},
+
+	{
+		functionId: TIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: TimeToTime,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DateToTime,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DatetimeToTime,
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: Int64ToTime,
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: Decimal128ToTime,
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DateStringToTime,
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DateStringToTime,
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DateStringToTime,
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				NewOp: DateStringToTime,
+			},
+		},
+	},
+
+	{
+		functionId: TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: DateToTimestamp,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: DatetimeToTimestamp,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: TimestampToTimestamp,
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: DateStringToTimestamp,
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				NewOp: DateStringToTimestamp,
+			},
+		},
+	},
+
 	// function `timestamp`
 	// function `values`
 }
