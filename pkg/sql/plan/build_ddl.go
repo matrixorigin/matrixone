@@ -2061,6 +2061,7 @@ func maybeAddPrimaryKey(def *plan.CreateTable) *ColDef {
 					OriginString: "",
 				},
 				NotNull: true,
+				Primary: true,
 			})
 		def.TableDef.Pkey = &PrimaryKeyDef{
 			Names:       []string{catalog.FakePrimaryKeyColName},
