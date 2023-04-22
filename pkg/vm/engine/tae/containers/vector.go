@@ -172,16 +172,14 @@ func (vec *vector[T]) HasNull() bool {
 }
 
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.foreachWindow(0, vec.Length(), op, sels)
+	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
 }
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	err = vec.foreachWindow(offset, length, op, sels)
-	return
-}
-
-func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
-	return vec.foreachWindow(0, vec.Length(), op, sels)
+	if vec.downstreamVector.GetType().IsVarlen() {
+		return ForeachWindowVarlen(vec, offset, length, nil, op, sels)
+	}
+	return ForeachWindowFixed[T](vec, offset, length, nil, op, sels)
 }
 
 func (vec *vector[T]) Close() {
@@ -261,81 +259,6 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-
-	if !vec.HasNull() {
-		var v T
-		if _, ok := any(v).([]byte); !ok {
-			// Optimization for :- Vectors which are 1. not containing nulls & 2. not byte[]
-			slice := vec.Slice().([]T)
-			slice = slice[offset : offset+length]
-			if sels == nil || sels.IsEmpty() {
-				for i, elem := range slice {
-					var vv any
-					isNull := false
-					if vec.IsNull(i + offset) {
-						isNull = true
-						vv = nil
-					} else {
-						vv = elem
-					}
-					if err = op(vv, isNull, i+offset); err != nil {
-						break
-					}
-				}
-			} else {
-				idxes := sels.ToArray()
-				end := offset + length
-				for _, idx := range idxes {
-					if int(idx) < offset {
-						continue
-					} else if int(idx) >= end {
-						break
-					}
-
-					var vv any
-					isNull := false
-					if vec.IsNull(int(idx)) {
-						isNull = true
-						vv = nil
-					} else {
-						vv = slice[int(idx)-offset]
-					}
-					if err = op(vv, isNull, int(idx)); err != nil {
-						break
-					}
-				}
-			}
-			return
-		}
-
-	}
-	if sels == nil || sels.IsEmpty() {
-		for i := offset; i < offset+length; i++ {
-			elem := vec.ShallowGet(i)
-			if err = op(elem, vec.IsNull(i), i); err != nil {
-				break
-			}
-		}
-	} else {
-
-		idxes := sels.ToArray()
-		end := offset + length
-		for _, idx := range idxes {
-			if int(idx) < offset {
-				continue
-			} else if int(idx) >= end {
-				break
-			}
-			elem := vec.ShallowGet(int(idx))
-			if err = op(elem, vec.IsNull(int(idx)), int(idx)); err != nil {
-				break
-			}
-		}
-	}
-	return
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
