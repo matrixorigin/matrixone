@@ -1810,7 +1810,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_time.ToType()
 				},
-				NewOp: nil, //TimeDiff[types.Time],
+				NewOp: TimeDiff[types.Time],
 			},
 			{
 				overloadId: 1,
@@ -1818,7 +1818,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_time.ToType()
 				},
-				NewOp: nil, //TimeDiff[types.Datetime],
+				NewOp: TimeDiff[types.Datetime],
 			},
 		},
 	},
