@@ -1454,3 +1454,25 @@ func TestPi(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initUTCTimestampTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test UTCTimestamp",
+			//TODO: Validate: Original Code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/utctimestamp_test.go#L24
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{})},
+			expect: testutil.NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{}, []bool{}),
+		},
+	}
+}
+
+func TestUTCTimestamp(t *testing.T) {
+	testCases := initUTCTimestampTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}

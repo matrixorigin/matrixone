@@ -17,10 +17,12 @@ package function2
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/get_timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -487,6 +489,8 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
+// ********* Multi from here on *******
+
 // PI
 
 func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -522,5 +526,81 @@ func EnableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 	}
+	return nil
+}
+
+func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if ivecs[0].IsConst() || !ivecs[0].IsConstNull() {
+		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
+	}
+
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[bool](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err = rs.Append(false, true); err != nil {
+				return err
+			}
+		} else {
+
+			//TODO: Need validation. Original code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/faultinj.go#L61
+			if err = fault.RemoveFaultPoint(proc.Ctx, function2Util.QuickBytesToStr(v)); err != nil {
+				return err
+			} else {
+				if err = rs.Append(true, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if ivecs[0].IsConst() || !ivecs[0].IsConstNull() {
+		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
+	}
+
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+
+			iv, _, ok := fault.TriggerFault(function2Util.QuickBytesToStr(v))
+			if !ok {
+
+				//TODO: Need validation. Original code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/faultinj.go#L73
+				// Original code: 		return vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp()), nil
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.Append(iv, true); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(get_timestamp.GetUTCTimestamp(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	return nil
 }
