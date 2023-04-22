@@ -47,7 +47,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-func builtInCurrentTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
@@ -147,7 +147,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
-func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -171,7 +171,7 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 	return nil
 }
 
-func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -195,7 +195,7 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
-func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -219,7 +219,7 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -243,7 +243,7 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -267,7 +267,7 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -292,7 +292,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func builtInConcatCheck(overloads []overload, inputs []types.Type) checkResult {
+func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		shouldCast := false
 
@@ -319,7 +319,7 @@ func builtInConcatCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -359,7 +359,7 @@ const (
 
 // MOLogDate parse 'YYYY/MM/DD' date from input string.
 // return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
-func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Date](result)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 
@@ -393,7 +393,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -471,7 +471,7 @@ func builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
-func builtInDatabase(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -483,7 +483,7 @@ func builtInDatabase(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-func builtInCurrentRole(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRole(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes([]byte(proc.SessionInfo.GetRole()), false); err != nil {
@@ -493,7 +493,7 @@ func builtInCurrentRole(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func builtInCurrentAccountID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(proc.SessionInfo.AccountId, false); err != nil {
@@ -503,7 +503,7 @@ func builtInCurrentAccountID(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
-func builtInCurrentAccountName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentAccountName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes([]byte(proc.SessionInfo.Account), false); err != nil {
@@ -513,7 +513,7 @@ func builtInCurrentAccountName(parameters []*vector.Vector, result vector.Functi
 	return nil
 }
 
-func builtInCurrentRoleID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRoleID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(proc.SessionInfo.RoleId, false); err != nil {
@@ -523,7 +523,7 @@ func builtInCurrentRoleID(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func builtInCurrentRoleName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRoleName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes([]byte(proc.SessionInfo.Role), false); err != nil {
@@ -533,7 +533,7 @@ func builtInCurrentRoleName(parameters []*vector.Vector, result vector.FunctionR
 	return nil
 }
 
-func builtInCurrentUserID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentUserID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(proc.SessionInfo.UserId, false); err != nil {
@@ -543,7 +543,7 @@ func builtInCurrentUserID(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func builtInCurrentUserName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes([]byte(proc.SessionInfo.User), false); err != nil {
@@ -595,7 +595,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
-func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -621,7 +621,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -647,7 +647,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Uuid](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		val, err := uuid.NewUUID()
@@ -661,7 +661,7 @@ func builtInUUID(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
 		val := types.CurrentTimestamp().Unix()

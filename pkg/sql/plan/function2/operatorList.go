@@ -838,4 +838,263 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
+
+	// operator `unary_plus`
+	// e.g : select +a;
+	{
+		functionId: UNARY_PLUS,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[uint8],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint16},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[uint16],
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[uint32],
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[uint64],
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[int8],
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[int16],
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[int32],
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[int64],
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[float32],
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[float64],
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[types.Decimal64],
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryPlus[types.Decimal128],
+			},
+		},
+	},
+
+	// operator `unary_minus`
+	// e.g : select -a;
+	{
+		functionId: UNARY_MINUS,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[int8],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[int16],
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[int32],
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[int64],
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[float32],
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinus[float64],
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinusDecimal64,
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewOp: operatorUnaryMinusDecimal128,
+			},
+		},
+	},
+
+	// operator `unary_tilde`
+	{
+		functionId: UNARY_TILDE,
+		class:      plan.Function_STRICT,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[int8],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[int16],
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[int32],
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[int64],
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[uint8],
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_uint16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[uint16],
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[uint32],
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				NewOp: operatorUnaryTilde[uint64],
+			},
+		},
+	},
 }

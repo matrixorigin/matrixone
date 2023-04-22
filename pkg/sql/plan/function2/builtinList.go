@@ -788,7 +788,7 @@ var supportedBuiltins = []FuncNew{
 		},
 	},
 
-	// function `unix_timstamp`
+	// function `unix_timestamp`
 	{
 		functionId: UNIX_TIMESTAMP,
 		class:      plan.Function_STRICT,

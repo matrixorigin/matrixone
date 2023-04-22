@@ -29,10 +29,10 @@ import (
 )
 
 const (
-	DEFAULT_ESCAPE_CHAR = '\\'
+	DefaultEscapeChar = '\\'
 )
 
-func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	replace := func(s string) string {
 		var oldCharactor rune
 
@@ -131,15 +131,15 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		// opt rule #3: [_%]somethingInBetween[_%]
 		if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 			c0, c1 := expr[0], expr[n-1]
-			if n > 2 && expr[n-2] == DEFAULT_ESCAPE_CHAR {
-				c1 = DEFAULT_ESCAPE_CHAR
+			if n > 2 && expr[n-2] == DefaultEscapeChar {
+				c1 = DefaultEscapeChar
 			}
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 				// Rule 4.1: no wild card, so it is a simple compare eq.
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
-					if err := rs.Append(len(v1) == n && bytes.Equal(expr, []byte(v1)), null1); err != nil {
+					if err := rs.Append(len(v1) == n && bytes.Equal(expr, v1), null1); err != nil {
 						return err
 					}
 				}
@@ -157,7 +157,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c0 == '%' && !(c1 == '%' || c1 == '_'):
 				// Rule 4.3, %foobarzoo, it turns into a suffix match.
-				suffix := function2Util.RemoveEscapeChar(expr[1:], DEFAULT_ESCAPE_CHAR)
+				suffix := function2Util.RemoveEscapeChar(expr[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(bytes.HasSuffix(v1, suffix), null1); err != nil {
@@ -168,7 +168,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c1 == '_' && !(c0 == '%' || c0 == '_'):
 				// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
-				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DEFAULT_ESCAPE_CHAR)
+				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(len(v1) == n && bytes.Equal(prefix, v1[:n-1]), null1); err != nil {
@@ -179,7 +179,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c1 == '%' && !(c0 == '%' || c0 == '_'):
 				// Rule 4.5 foobarzoo%, prefix match
-				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DEFAULT_ESCAPE_CHAR)
+				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(bytes.HasPrefix(v1, prefix), null1); err != nil {
@@ -190,7 +190,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c0 == '%' && c1 == '%':
 				// Rule 4.6 %foobarzoo%, now it is contains
-				substr := function2Util.RemoveEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
+				substr := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(bytes.Contains(v1, substr), null1); err != nil {
@@ -201,7 +201,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c0 == '%' && c1 == '_':
 				// Rule 4.7 %foobarzoo_,
-				suffix := function2Util.RemoveEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
+				suffix := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(len(v1) > 0 && bytes.HasSuffix(v1[:len(v1)-1], suffix), null1); err != nil {
@@ -212,7 +212,7 @@ func likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			case c0 == '_' && c1 == '%':
 				// Rule 4.8 _foobarzoo%
-				prefix := function2Util.RemoveEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
+				prefix := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if err := rs.Append(len(v1) > 0 && bytes.HasPrefix(v1[1:], prefix), null1); err != nil {
@@ -268,7 +268,7 @@ var (
 	}
 )
 
-func caseCheck(overloads []overload, inputs []types.Type) checkResult {
+func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
 
 	needCast := false
@@ -408,7 +408,7 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[T], 0, len(vecs)/2)
@@ -466,7 +466,7 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 	return nil
 }
 
-func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[types.Varlena], 0, len(vecs)/2)
@@ -535,7 +535,7 @@ var (
 	}
 )
 
-func iffCheck(overloads []overload, inputs []types.Type) checkResult {
+func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
 		needCast := false
@@ -621,7 +621,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
@@ -648,7 +648,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 	return nil
 }
 
-func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
@@ -670,6 +670,93 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(p1.GetValue(i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if err := rs.Append(-v, null); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorUnaryMinusDecimal64(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
+	rs := vector.MustFunctionResult[types.Decimal64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.Minus(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func operatorUnaryMinusDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.Minus(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func funcBitInversion[T constraints.Integer](x T) uint64 {
+	if x > 0 {
+		n := uint64(x)
+		return ^n
+	} else {
+		return uint64(^x)
+	}
+}
+
+func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(funcBitInversion(v), null); err != nil {
+				return err
+			}
+		}
+
 	}
 	return nil
 }

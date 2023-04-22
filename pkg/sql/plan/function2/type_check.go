@@ -114,6 +114,29 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// a fixed type match method without any type convert. (const null exception)
+func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
+	for i, o := range overload {
+		if len(o.args) != len(inputs) {
+			continue
+		}
+		allSame := true
+		for j := range o.args {
+			if o.args[j] == types.T_any {
+				continue
+			}
+			if o.args[j] != inputs[j].Oid {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return newCheckResultWithSuccess(i)
+		}
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
