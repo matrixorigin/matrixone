@@ -464,6 +464,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithEnableCNBasedConsistency())
 		}
+		if s.cfg.Txn.EnableRefreshExpression {
+			opts = append(opts,
+				client.WithEnableRefreshExpression())
+		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
 			sender,

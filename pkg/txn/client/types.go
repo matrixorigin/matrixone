@@ -45,6 +45,16 @@ type TxnClient interface {
 	Close() error
 }
 
+// TxnClientWithFeature is similar to TxnClient, except that some methods have been added to determine
+// whether certain features are supported.
+type TxnClientWithFeature interface {
+	TxnClient
+	// RefreshExpressionEnabled return true if refresh expression feature enabled
+	RefreshExpressionEnabled() bool
+	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
+	CNBasedConsistencyEnabled() bool
+}
+
 // TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
