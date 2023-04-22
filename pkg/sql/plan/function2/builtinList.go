@@ -787,4 +787,70 @@ var supportedBuiltins = []FuncNew{
 			},
 		},
 	},
+
+	// function `unix_timstamp`
+	{
+		functionId: UNIX_TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: builtInUnixTimestamp,
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: builtInUnixTimestamp,
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: builtInUnixTimestampVarcharToInt64,
+			},
+			{
+				overloadId: 3,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, 6)
+				},
+				NewOp: builtInUnixTimestampVarcharToDecimal128,
+			},
+		},
+	},
+
+	// function `uuid`
+	{
+		functionId: UUID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				NewOp: builtInUUID,
+			},
+		},
+	},
 }

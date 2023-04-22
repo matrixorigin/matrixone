@@ -16,6 +16,7 @@ package function2
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
+	"time"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length uint64) error {
@@ -640,6 +642,125 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Uuid](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		val, err := uuid.NewUUID()
+		if err != nil {
+			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
+		}
+		if err = rs.Append(types.Uuid(val), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[int64](result)
+	if len(parameters) == 0 {
+		val := types.CurrentTimestamp().Unix()
+		for i := uint64(0); i < uint64(0); i++ {
+			if err := rs.Append(val, false); err != nil {
+				return nil
+			}
+		}
+		return nil
+	}
+
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		if v1 < 0 || null1 {
+			// XXX v1 < 0 need to raise error here.
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := v1.Unix()
+			if err := rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mustTimestamp(loc *time.Location, s string) types.Timestamp {
+	ts, err := types.ParseTimestamp(loc, s, 6)
+	if err != nil {
+		ts = 0
+	}
+	return ts
+}
+
+func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := mustTimestamp(proc.SessionInfo.TimeZone, string(v1))
+			if err := rs.Append(val.Unix(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+var _ = builtInUnixTimestampVarcharToFloat64
+
+func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			val := mustTimestamp(proc.SessionInfo.TimeZone, string(v1))
+			if err := rs.Append(val.UnixToFloat(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+
+	var d types.Decimal128
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			val := mustTimestamp(proc.SessionInfo.TimeZone, string(v1))
+			rval, err := val.UnixToDecimal128()
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(rval, false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
