@@ -479,3 +479,73 @@ func builtInDatabase(parameters []*vector.Vector, result vector.FunctionResultWr
 	}
 	return nil
 }
+
+func builtInCurrentRole(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.AppendBytes([]byte(proc.SessionInfo.GetRole()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentAccountID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint32](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(proc.SessionInfo.AccountId, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentAccountName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.AppendBytes([]byte(proc.SessionInfo.Account), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentRoleID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint32](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(proc.SessionInfo.RoleId, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentRoleName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.AppendBytes([]byte(proc.SessionInfo.Role), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentUserID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint32](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(proc.SessionInfo.UserId, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInCurrentUserName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.AppendBytes([]byte(proc.SessionInfo.User), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}

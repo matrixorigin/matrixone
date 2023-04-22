@@ -557,4 +557,137 @@ var supportedBuiltins = []FuncNew{
 			},
 		},
 	},
+
+	// function `current_account_id`
+	{
+		functionId: CURRENT_ACCOUNT_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				NewOp: builtInCurrentAccountID,
+			},
+		},
+	},
+
+	// function `current_role_id`
+	{
+		functionId: CURRENT_ROLE_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				NewOp: builtInCurrentRoleID,
+			},
+		},
+	},
+
+	// function `current_user_id`
+	{
+		functionId: CURRENT_USER_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				NewOp: builtInCurrentUserID,
+			},
+		},
+	},
+
+	// function `current_role`
+	{
+		functionId: CURRENT_ROLE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInCurrentRole,
+			},
+		},
+	},
+
+	// function `current_account_name`
+	{
+		functionId: CURRENT_ACCOUNT_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInCurrentAccountName,
+			},
+		},
+	},
+
+	// function `current_role_name`
+	{
+		functionId: CURRENT_ROLE_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInCurrentRoleName,
+			},
+		},
+	},
+
+	// function `current_user_name`
+	{
+		functionId: CURRENT_USER_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInCurrentUserName,
+			},
+		},
+	},
 }
