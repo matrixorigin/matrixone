@@ -489,6 +489,8 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
+// Info functions
+
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
 
@@ -500,6 +502,7 @@ func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	}
 	return nil
 }
+
 func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 

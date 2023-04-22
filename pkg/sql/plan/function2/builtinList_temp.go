@@ -1659,7 +1659,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
-				NewOp: nil, //EndsWith,
+				NewOp: EndsWith,
 			},
 		},
 	},
@@ -1676,7 +1676,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil, //ExtractFromDatetime,
+				NewOp: ExtractFromDatetime,
 			},
 			{
 				overloadId: 1,
@@ -1684,7 +1684,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil, //ExtractFromDate,
+				NewOp: ExtractFromDate,
 			},
 			{
 				overloadId: 2,
@@ -1692,7 +1692,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil, //ExtractFromTime,
+				NewOp: ExtractFromTime,
 			},
 			{
 				overloadId: 3,
@@ -1700,7 +1700,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil, //ExtractFromVarchar,
+				NewOp: ExtractFromVarchar,
 			},
 		},
 	},
@@ -1717,7 +1717,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				NewOp: nil, //FindInSet,
+				NewOp: FindInSet,
 			},
 		},
 	},
@@ -1734,7 +1734,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
-				NewOp: nil, //Instr,
+				NewOp: Instr,
 			},
 		},
 	},
@@ -1751,7 +1751,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: nil, // Left,
+				NewOp: Left,
 			},
 			{
 				overloadId: 1,
@@ -1759,7 +1759,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_char.ToType()
 				},
-				NewOp: nil, //Left,
+				NewOp: Left,
 			},
 		},
 	},
@@ -1776,7 +1776,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
-				NewOp: nil, //Startswith,
+				NewOp: StartsWith,
 			},
 		},
 	},
@@ -1835,7 +1835,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
-				NewOp: nil, //Power,
+				NewOp: Power,
 			},
 		},
 	},
