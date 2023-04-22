@@ -81,8 +81,9 @@ func Call(
 		getLogger().Fatal("invalid argument",
 			zap.Any("argument", arg))
 	}
-
+	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	txnOp := proc.TxnOperator
+	needRetry := false
 	for _, target := range arg.targets {
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
@@ -118,12 +119,24 @@ func Call(
 			return false, err
 		}
 
-		vec := bat.GetVector(target.refreshTimestampIndexInBatch)
-		ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
-		n := priVec.Length()
-		for i := 0; i < n; i++ {
-			vector.AppendFixed(vec, ts, false, proc.Mp())
+		if txnFeature.RefreshExpressionEnabled() {
+			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
+			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
+			n := priVec.Length()
+			for i := 0; i < n; i++ {
+				vector.AppendFixed(vec, ts, false, proc.Mp())
+			}
+			continue
 		}
+
+		// if need to retry, do not return the retry error immediately, first try to get all
+		// the locks to avoid another conflict when retrying
+		if !needRetry && !refreshTS.IsEmpty() {
+			needRetry = true
+		}
+	}
+	if needRetry {
+		return true, moerr.NewTxnNeedRetry(proc.Ctx)
 	}
 	return false, nil
 }

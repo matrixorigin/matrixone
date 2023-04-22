@@ -79,6 +79,15 @@ func WithEnableCNBasedConsistency() TxnClientCreateOption {
 	}
 }
 
+// WithEnableRefreshExpression in RC mode, in the event of a conflict, the later transaction needs
+// to see the latest data after the previous transaction commits. At this time we need to re-read
+// the data, re-read the latest data, and re-compute the expression.
+func WithEnableRefreshExpression() TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.enableRefreshExpression = true
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
@@ -89,6 +98,7 @@ type txnClient struct {
 	timestampWaiter            TimestampWaiter
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
+	enableRefreshExpression    bool
 
 	mu struct {
 		sync.RWMutex
