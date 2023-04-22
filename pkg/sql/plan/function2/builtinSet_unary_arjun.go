@@ -506,6 +506,7 @@ func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Proc
 // DISABLE_FAULT_INJECTION
 
 func DisableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	//TODO: Validate. Should this be called inside the for loop
 	fault.Disable()
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -519,6 +520,7 @@ func DisableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapp
 // ENABLE_FAULT_INJECTION
 
 func EnableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	//TODO: Validate. Should this be called inside the for loop
 	fault.Enable()
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -583,7 +585,7 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 					return err
 				}
 			} else {
-				if err = rs.Append(iv, true); err != nil {
+				if err = rs.Append(iv, false); err != nil {
 					return err
 				}
 			}
