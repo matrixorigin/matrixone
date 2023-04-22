@@ -35,7 +35,7 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 // type ItBytesOp func(v []byte, isNull bool, row int) error
 
 type Vector interface {
-	GetType() types.Type
+	GetType() *types.Type
 
 	// Deep copy ops
 	Get(i int) any

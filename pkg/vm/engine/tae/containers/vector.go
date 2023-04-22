@@ -101,8 +101,8 @@ func (vec *vector[T]) NullMask() *cnNulls.Nulls {
 	return vec.downstreamVector.GetNulls()
 }
 
-func (vec *vector[T]) GetType() types.Type {
-	return *vec.downstreamVector.GetType()
+func (vec *vector[T]) GetType() *types.Type {
+	return vec.downstreamVector.GetType()
 }
 
 func (vec *vector[T]) Extend(src Vector) {
@@ -231,7 +231,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		opts.Allocator = allocator[0]
 	}
 
-	cloned := NewVector[T](vec.GetType(), opts)
+	cloned := NewVector[T](*vec.GetType(), opts)
 	var err error
 	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
 	if err != nil {
@@ -445,7 +445,7 @@ func (vec *vector[T]) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
-	if vec.GetType() != o.GetType() {
+	if *vec.GetType() != *o.GetType() {
 		return false
 	}
 	if vec.HasNull() != o.HasNull() {

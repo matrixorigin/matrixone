@@ -205,7 +205,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
-				entry := common.TypeStringValue(vec.GetType(), any(v1), false)
+				entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}, nil)
 	}
@@ -242,7 +242,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 					if commitTS.Greater(txn.GetStartTS()) {
 						return txnif.ErrTxnWWConflict
 					}
-					entry := common.TypeStringValue(vec.GetType(), any(v1), false)
+					entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 				}, nil)
 		}
@@ -256,7 +256,7 @@ func dedupNABlkClosure(
 	def *catalog.ColDef) func(any, bool, int) error {
 	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
-			entry := common.TypeStringValue(vec.GetType(), v, false)
+			entry := common.TypeStringValue(*vec.GetType(), v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return nil
@@ -298,7 +298,7 @@ func dedupABlkClosureFactory(
 				if commitTS.Greater(txn.GetStartTS()) {
 					return txnif.ErrTxnWWConflict
 				}
-				entry := common.TypeStringValue(vec.GetType(), v1, false)
+				entry := common.TypeStringValue(*vec.GetType(), v1, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}, nil)
 		}
