@@ -44,6 +44,7 @@ type FunctionTestInput struct {
 	typ      types.Type
 	values   any
 	nullList []bool
+	isConst  bool
 }
 
 // FunctionTestResult
@@ -63,6 +64,15 @@ func NewFunctionTestInput(typ types.Type, values any, nullList []bool) FunctionT
 		typ:      typ,
 		values:   values,
 		nullList: nullList,
+	}
+}
+
+func NewFunctionTestConstInput(typ types.Type, values any, nullList []bool) FunctionTestInput {
+	return FunctionTestInput{
+		typ:      typ,
+		values:   values,
+		nullList: nullList,
+		isConst:  true,
 	}
 }
 
@@ -100,6 +110,9 @@ func NewFunctionTestCase(
 		}
 		// new the vector.
 		f.parameters[i] = newVectorByType(proc.Mp(), typ, inputs[i].values, nsp)
+		if inputs[i].isConst {
+			f.parameters[i].SetClass(vector.CONSTANT)
+		}
 	}
 	// new the result
 	if len(f.parameters) == 0 {

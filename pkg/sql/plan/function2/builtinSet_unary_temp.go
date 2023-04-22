@@ -994,3 +994,29 @@ func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	return nil
 }
+
+func doBinary(orig []byte) []byte {
+	if len(orig) > types.MaxBinaryLen {
+		return orig[:types.MaxBinaryLen]
+	} else {
+		return orig
+	}
+}
+
+func Binary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.AppendBytes(doBinary(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
