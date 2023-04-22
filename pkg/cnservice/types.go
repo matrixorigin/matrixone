@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -42,7 +44,8 @@ import (
 )
 
 var (
-	defaultListenAddress = "127.0.0.1:6002"
+	defaultListenAddress    = "127.0.0.1:6002"
+	defaultCtlListenAddress = "127.0.0.1:19958"
 	// TODO(fagongzi): make rc and pessimistic as default
 	defaultTxnIsolation = txn.TxnIsolation_SI
 	defaultTxnMode      = txn.TxnMode_Optimistic
@@ -178,9 +181,13 @@ type Config struct {
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
 	} `toml:"txn"`
+
+	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
+	Ctl ctlservice.Config `toml:"ctl"`
 }
 
 func (c *Config) Validate() error {
+	foundMachineHost := ""
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
@@ -189,6 +196,8 @@ func (c *Config) Validate() error {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
 	}
 	if c.Role == "" {
 		c.Role = metadata.CNRole_TP.String()
@@ -247,6 +256,7 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 	return nil
@@ -290,6 +300,7 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	ctlservice             ctlservice.CtlService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager

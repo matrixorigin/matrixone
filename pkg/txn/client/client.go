@@ -239,6 +239,14 @@ func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Times
 	return ts
 }
 
+func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
+	return client.adjustTimestamp(timestamp.Timestamp{})
+}
+
+func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
+	client.updateLastCommitTS(ts)
+}
+
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {
 	var i int
 
