@@ -489,6 +489,85 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
+func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L170
+		if err := rs.Append(0, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L192
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(""), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L206
+		if err := rs.Append(proc.SessionInfo.LastInsertID, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func LastQueryIDWithoutParam(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	return nil
+}
+
+func RolesGraphml(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L281
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(""), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func RowCount(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code:https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L295
+		if err := rs.Append(0, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func User(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L94
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(proc.SessionInfo.GetUserHost()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ********* Multi from here on *******
 
 // PI
