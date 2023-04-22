@@ -499,6 +499,33 @@ var supportedBuiltins = []FuncNew{
 		},
 	},
 
+	// function `log`
+	{
+		functionId: LOG,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInLn,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				NewOp: builtInLog,
+			},
+		},
+	},
+
 	// function `atan`
 	{
 		functionId: ATAN,
@@ -687,6 +714,76 @@ var supportedBuiltins = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				NewOp: builtInCurrentUserName,
+			},
+		},
+	},
+
+	// function `lpad`
+	{
+		functionId: LPAD,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInLpad,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: builtInLpad,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: builtInLpad,
+			},
+		},
+	},
+
+	// function `rpad`
+	{
+		functionId: RPAD,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: builtInRpad,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: builtInRpad,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				NewOp: builtInRpad,
 			},
 		},
 	},

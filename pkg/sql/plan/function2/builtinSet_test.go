@@ -124,3 +124,143 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+func Test_BuiltIn_Rpad(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			info: "test rpad('hello', num, '#') with num = 0, 1, 10",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello", "hello", "hello"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0, 1, 10}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"#", "#", "#"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "h", "hello#####"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test rpad('hello', num, '#@&') with num = 15",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{15}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"#@&"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"hello#@&#@&#@&#"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test rpad('hello', num, '#@&') with num = 15, -1",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello", "hello"}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{15, -1}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"#@&", "#@&"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"hello#@&#@&#@&#", ""}, []bool{false, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test rpad('你好', num, '再见') with num = 10",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"你好"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{10}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"再见"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"你好再见再见再见再见"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_BuiltIn_Lpad(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			info: "test lpad('hello', num, '#') with num = 1, 10 \n" +
+				"test lpad('hello', num, '#@&') with num = 15",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello", "hello", "hello"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 10, 15}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"#", "#", "#@&"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"h", "#####hello", "#@&#@&#@&#hello"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test lpad('12345678', num, 'abcdefgh') with num = 10",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"12345678"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{10}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefgh"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"ab12345678"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test lpad('你好', num, '再见') with num = 10",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"你好"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{10}, nil),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"再见"}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"再见再见再见再见你好"}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}

@@ -242,3 +242,34 @@ func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 	return nil
 }
+
+func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v1 == float64(1) || v2 == float64(1) {
+				return moerr.NewInvalidArg(proc.Ctx, "log base", 1)
+			}
+			tempV1, err := momath.Ln(v1)
+			if err != nil {
+				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+			}
+			tempV2, err := momath.Ln(v2)
+			if err != nil {
+				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+			}
+			if err = rs.Append(tempV1/tempV2, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

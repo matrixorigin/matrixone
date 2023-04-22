@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strings"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length uint64) error {
@@ -544,6 +545,100 @@ func builtInCurrentUserName(parameters []*vector.Vector, result vector.FunctionR
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes([]byte(proc.SessionInfo.User), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func doLpad(src string, tgtLen int64, pad string) (string, bool) {
+	const MaxTgtLen = int64(16 * 1024 * 1024)
+
+	srcRune, padRune := []rune(src), []rune(pad)
+	srcLen, padLen := len(srcRune), len(padRune)
+
+	if tgtLen < 0 || tgtLen > MaxTgtLen {
+		return "", true
+	} else if int(tgtLen) < srcLen {
+		return string(srcRune[:tgtLen]), false
+	} else if int(tgtLen) == srcLen {
+		return src, false
+	} else if padLen == 0 {
+		return "", false
+	} else {
+		r := int(tgtLen) - srcLen
+		p, m := r/padLen, r%padLen
+		return strings.Repeat(pad, p) + string(padRune[:m]) + src, false
+	}
+}
+
+func doRpad(src string, tgtLen int64, pad string) (string, bool) {
+	const MaxTgtLen = int64(16 * 1024 * 1024)
+
+	srcRune, padRune := []rune(src), []rune(pad)
+	srcLen, padLen := len(srcRune), len(padRune)
+
+	if tgtLen < 0 || tgtLen > MaxTgtLen {
+		return "", true
+	} else if int(tgtLen) < srcLen {
+		return string(srcRune[:tgtLen]), false
+	} else if int(tgtLen) == srcLen {
+		return src, false
+	} else if padLen == 0 {
+		return "", false
+	} else {
+		r := int(tgtLen) - srcLen
+		p, m := r/padLen, r%padLen
+		return src + strings.Repeat(pad, p) + string(padRune[:m]), false
+	}
+}
+
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	p3 := vector.GenerateFunctionStrParameter(parameters[2])
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetStrValue(i)
+		if !(null1 || null2 || null3) {
+			rval, shouldNull := doLpad(string(v1), v2, string(v3))
+			if !shouldNull {
+				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	p3 := vector.GenerateFunctionStrParameter(parameters[2])
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetStrValue(i)
+		if !(null1 || null2 || null3) {
+			rval, shouldNull := doRpad(string(v1), v2, string(v3))
+			if !shouldNull {
+				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.AppendBytes(nil, true); err != nil {
 			return err
 		}
 	}
