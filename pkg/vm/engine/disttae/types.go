@@ -19,6 +19,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -55,6 +56,8 @@ const (
 	MO_PRIMARY_OFF                = 2
 	INIT_ROWID_OFFSET             = math.MaxUint32
 )
+
+var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
 
@@ -267,7 +270,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []BlockMeta
+	blks       []catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp

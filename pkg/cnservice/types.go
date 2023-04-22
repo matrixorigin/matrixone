@@ -171,6 +171,12 @@ type Config struct {
 		// EnableCNBasedConsistency ensure that all the transactions on a CN can read
 		// the writes of the previous committed transaction
 		EnableCNBasedConsistency bool `toml:"enable-cn-based-consistency"`
+		// EnableRefreshExpressionIn RC mode, in the event of a conflict, the later transaction
+		// needs to see the latest data after the previous transaction commits. At this time we
+		// need to re-read the data, re-read the latest data, and re-compute the expression. This
+		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
+		// to return a retry error and let the whole computation re-execute.
+		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
 	} `toml:"txn"`
 }
 

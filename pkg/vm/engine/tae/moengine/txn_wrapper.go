@@ -62,6 +62,10 @@ func (w *wrappedEngine) Close() error {
 	return w.engine.Close()
 }
 
+func (*wrappedEngine) MinTimestamp() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 type wrappedTx struct {
 	tx Txn
 }

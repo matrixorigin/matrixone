@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package client
 
-func init() {
-	//TODO for passing static check
-	_ = blockInfoMarshal
-	_ = genModifedBlocks
-	_ = needRead
-	_ = inBlockMap
+func (client *txnClient) RefreshExpressionEnabled() bool {
+	return client.enableRefreshExpression
+}
+
+func (client *txnClient) CNBasedConsistencyEnabled() bool {
+	return client.enableCNBasedConsistency
 }

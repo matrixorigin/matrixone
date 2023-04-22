@@ -302,14 +302,14 @@ select 1 << 2;
 4
 select -1 << 2;
 -1 << 2
-18446744073709551612
+-4
 select null << 2;
 null << 2
 NULL
 select a << 2, b << 2 from t1;
 a << 2	b << 2
-18446744073709551612	4
-18446744073709551596	20
+-4	4
+-20	20
 delete from t1;
 insert into t1 values (-5, 1024);
 select 1024 >> 2;
@@ -317,7 +317,7 @@ select 1024 >> 2;
 256
 select -5 >> 2;
 -5 >> 2
-4611686018427387902
+-2
 select null >> 2;
 null >> 2
 NULL
