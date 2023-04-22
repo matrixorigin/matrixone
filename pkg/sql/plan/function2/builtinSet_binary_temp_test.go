@@ -80,7 +80,7 @@ func initTimeDiffInTimeTestCase() []tcTemp {
 	}
 }
 
-func TestTimeDiffInTimeString(t *testing.T) {
+func TestTimeDiffInTime(t *testing.T) {
 	testCases := initTimeDiffInTimeTestCase()
 
 	proc := testutil.NewProcess()
@@ -91,7 +91,7 @@ func TestTimeDiffInTimeString(t *testing.T) {
 	}
 }
 
-func initDatetimeDiffInDatetimeTestCase() []tcTemp {
+func initTimeDiffInDatetimeTestCase() []tcTemp {
 	// Test case 1
 	t11, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)
 	t12, _ := types.ParseDatetime("2012-12-12 11:11:11", 6)
@@ -149,12 +149,151 @@ func initDatetimeDiffInDatetimeTestCase() []tcTemp {
 	}
 }
 
-func TestDatetimeDiffInDatetimeString(t *testing.T) {
-	testCases := initDatetimeDiffInDatetimeTestCase()
+func TestTimeDiffInDateTime(t *testing.T) {
+	testCases := initTimeDiffInDatetimeTestCase()
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiff[types.Datetime])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TIMESTAMPDIFF
+
+func initTimestampDiffTestCase() []tcTemp {
+	cases := []struct {
+		name   string
+		inputs []string
+		want   int64
+	}{
+		{
+			name:   "TEST01",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "microsecond"},
+			want:   2660588000000,
+		},
+		{
+			name:   "TEST02",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "second"},
+			want:   2660588,
+		},
+		{
+			name:   "TEST03",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "minute"},
+			want:   44343,
+		},
+		{
+			name:   "TEST04",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "hour"},
+			want:   739,
+		},
+		{
+			name:   "TEST05",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "day"},
+			want:   30,
+		},
+		{
+			name:   "TEST06",
+			inputs: []string{"2017-12-01 12:15:12", "2018-01-08 12:15:12", "week"},
+			want:   5,
+		},
+		{
+			name:   "TEST07",
+			inputs: []string{"2017-11-01 12:15:12", "2018-01-01 12:15:12", "month"},
+			want:   2,
+		},
+		{
+			name:   "TEST08",
+			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "quarter"},
+			want:   4,
+		},
+		{
+			name:   "TEST09",
+			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "year"},
+			want:   1,
+		},
+		{
+			name:   "TEST10",
+			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "microsecond"},
+			want:   -2660588000000,
+		},
+		{
+			name:   "TEST11",
+			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "second"},
+			want:   -2660588,
+		},
+		{
+			name:   "TEST12",
+			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "minute"},
+
+			want: -44343,
+		},
+		{
+			name:   "TEST13",
+			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "hour"},
+
+			want: -739,
+		},
+		{
+			name:   "TEST14",
+			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "day"},
+
+			want: -30,
+		},
+		{
+			name:   "TEST15",
+			inputs: []string{"2018-01-08 12:15:12", "2017-12-01 12:15:12", "week"},
+			want:   -5,
+		},
+		{
+			name:   "TEST16",
+			inputs: []string{"2018-01-01 12:15:12", "2017-11-01 12:15:12", "month"},
+			want:   -2,
+		},
+		{
+			name:   "TEST17",
+			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "quarter"},
+			want:   -4,
+		},
+		{
+			name:   "TEST18",
+			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "year"},
+			want:   -1,
+		},
+	}
+
+	var testInputs []tcTemp
+	for _, c := range cases {
+
+		i1 := c.inputs[2]
+		i2, _ := types.ParseDatetime(c.inputs[0], 6)
+		i3, _ := types.ParseDatetime(c.inputs[1], 6)
+
+		o := c.want
+
+		testInputs = append(testInputs, tcTemp{
+
+			info: "test TimestampDiff " + c.name,
+			inputs: []testutil.FunctionTestInput{
+				// Create a input entry <String, Datetime1, Datetime2>
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{i1}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i2}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i3}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{o}, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestTimestampDiff(t *testing.T) {
+	testCases := initTimestampDiffTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TimestampDiff)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

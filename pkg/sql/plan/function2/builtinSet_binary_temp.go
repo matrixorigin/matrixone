@@ -17,6 +17,8 @@ package function2
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/datediff"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -121,5 +123,26 @@ func timeDiff[T timediff.DiffT](v1, v2 T) (types.Time, error) {
 // TIMESTAMPDIFF
 
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	//TODO: ignoring maxLen: Original code:https://github.com/m-schen/matrixone/blob/d2921c8ea5ecd9f38ad224159d3c62543894e807/pkg/sql/plan/function/builtin/multi/timestampdiff.go#L35
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			res, _ := datediff.TimeStampDiff(function2Util.QuickBytesToStr(v1), v2, v3)
+			if err = rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
