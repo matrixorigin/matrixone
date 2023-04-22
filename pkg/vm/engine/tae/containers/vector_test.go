@@ -453,7 +453,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil)
+	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -473,7 +473,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil)
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
