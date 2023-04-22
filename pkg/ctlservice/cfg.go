@@ -1,8 +1,6 @@
 package ctlservice
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 )
 
@@ -15,5 +13,4 @@ type Config struct {
 // Adjust adjust config, setup default configs
 func (c *Config) Adjust(machineHost, defaultListenAddress string) {
 	c.Address.Adjust(machineHost, defaultListenAddress)
-	fmt.Printf("%+v\n", c.Address)
 }
