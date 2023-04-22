@@ -155,7 +155,9 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n += int64(len(buf))
 
+	t := vec.downstreamVector.GetType()
 	vec.releaseDownstream()
+	vec.downstreamVector = cnVector.NewVec(*t)
 	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
 		return 0, err
 	}
@@ -186,9 +188,13 @@ func (vec *vector[T]) Close() {
 }
 
 func (vec *vector[T]) releaseDownstream() {
+	if vec.downstreamVector == nil {
+		return
+	}
 	if !vec.downstreamVector.NeedDup() {
 		vec.downstreamVector.Free(vec.mpool)
 	}
+	vec.downstreamVector = nil
 }
 
 func (vec *vector[T]) Allocated() int {
