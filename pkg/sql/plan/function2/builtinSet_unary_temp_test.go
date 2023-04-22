@@ -1077,3 +1077,33 @@ func TestSecond(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initBinaryTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test hour",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello"},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_binary.ToType(), false,
+				[]string{"hello"},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestBinary(t *testing.T) {
+	testCases := initBinaryTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, Binary)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
