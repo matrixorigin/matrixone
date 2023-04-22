@@ -222,6 +222,20 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
 }
 
+// GetEngineType mocks base method.
+func (m *MockRelation) GetEngineType() engine.EngineType {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetEngineType")
+	ret0, _ := ret[0].(engine.EngineType)
+	return ret0
+}
+
+// GetEngineType indicates an expected call of GetEngineType.
+func (mr *MockRelationMockRecorder) GetEngineType() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEngineType", reflect.TypeOf((*MockRelation)(nil).GetEngineType))
+}
+
 // GetHideKeys mocks base method.
 func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
