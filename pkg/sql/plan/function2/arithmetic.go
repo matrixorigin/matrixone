@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+	"math"
 )
 
 func plusOperatorSupports(typ1, typ2 types.Type) bool {
@@ -590,5 +591,80 @@ func floatIntegerDiv[T float32 | float64](parameters []*vector.Vector, result ve
 }
 
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	paramType := parameters[0].GetType()
+	switch paramType.Oid {
+	case types.T_uint8:
+		return intMod[uint8](parameters, result, uint64(length))
+	case types.T_uint16:
+		return intMod[uint16](parameters, result, uint64(length))
+	case types.T_uint32:
+		return intMod[uint32](parameters, result, uint64(length))
+	case types.T_uint64:
+		return intMod[uint64](parameters, result, uint64(length))
+	case types.T_int8:
+		return intMod[int8](parameters, result, uint64(length))
+	case types.T_int16:
+		return intMod[int16](parameters, result, uint64(length))
+	case types.T_int32:
+		return intMod[int32](parameters, result, uint64(length))
+	case types.T_int64:
+		return intMod[int64](parameters, result, uint64(length))
+	case types.T_float32:
+		return floatMod[float32](parameters, result, uint64(length))
+	case types.T_float64:
+		return floatMod[float64](parameters, result, uint64(length))
+	}
+	panic("unreached code")
+}
+
+func intMod[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < length; i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v2 == 0 {
+				if err := rs.Append(v1, false); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(v1%v2, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func floatMod[T constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < length; i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v2 == 0 {
+				if err := rs.Append(v1, false); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(T(math.Mod(float64(v1), float64(v2))), false); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
