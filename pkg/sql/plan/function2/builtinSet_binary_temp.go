@@ -76,3 +76,9 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	return nil
 }
+
+// TIMESTAMPDIFF
+
+func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}

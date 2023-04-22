@@ -591,6 +591,7 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}
 	return nil
 }
+
 func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -598,9 +599,5 @@ func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			return err
 		}
 	}
-	return nil
-}
-
-func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	return nil
 }
