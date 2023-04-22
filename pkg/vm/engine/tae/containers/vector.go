@@ -172,16 +172,16 @@ func (vec *vector[T]) HasNull() bool {
 }
 
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.foreachWindow(0, vec.Length(), op, sels, false)
+	return vec.foreachWindow(0, vec.Length(), op, sels)
 }
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	err = vec.foreachWindow(offset, length, op, sels, false)
+	err = vec.foreachWindow(offset, length, op, sels)
 	return
 }
 
 func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
-	return vec.foreachWindow(0, vec.Length(), op, sels, true)
+	return vec.foreachWindow(0, vec.Length(), op, sels)
 }
 
 func (vec *vector[T]) Close() {
@@ -263,7 +263,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 }
 
-func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.Bitmap, shallow bool) (err error) {
+func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 
 	if !vec.HasNull() {
 		var v T
@@ -314,12 +314,7 @@ func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.B
 	}
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(i)
-			} else {
-				elem = vec.Get(i)
-			}
+			elem := vec.ShallowGet(i)
 			if err = op(elem, vec.IsNull(i), i); err != nil {
 				break
 			}
@@ -334,13 +329,7 @@ func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.B
 			} else if int(idx) >= end {
 				break
 			}
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(int(idx))
-			} else {
-				elem = vec.Get(int(idx))
-			}
-
+			elem := vec.ShallowGet(int(idx))
 			if err = op(elem, vec.IsNull(int(idx)), int(idx)); err != nil {
 				break
 			}

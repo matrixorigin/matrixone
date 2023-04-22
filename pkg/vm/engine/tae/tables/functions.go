@@ -280,7 +280,7 @@ func dedupABlkClosureFactory(
 					tsVec = nil
 				}
 			}()
-			return vec.ForeachShallow(func(v2 any, _ bool, row int) (err error) {
+			return vec.Foreach(func(v2 any, _ bool, row int) (err error) {
 				// logutil.Infof("%v, %v, %d", v1, v2, row)
 				if mask != nil && mask.ContainsInt(row) {
 					return

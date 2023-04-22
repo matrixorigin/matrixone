@@ -49,7 +49,7 @@ func TestVectorShallowForeach(t *testing.T) {
 			}
 		}
 
-		vec.ForeachShallow(func(v any, isNull bool, row int) error {
+		vec.Foreach(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
 				assert.True(t, isNull)
 			}
@@ -533,7 +533,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.ForeachShallow(func(any, bool, int) error {
+			vec.Foreach(func(any, bool, int) error {
 				return nil
 			}, nil)
 		}
@@ -563,7 +563,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.ForeachShallow(func(any, bool, int) (err error) {
+			vec.Foreach(func(any, bool, int) (err error) {
 				return
 			}, nil)
 		}
