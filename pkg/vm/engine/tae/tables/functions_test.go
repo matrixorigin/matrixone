@@ -30,9 +30,6 @@ func BenchmarkFunctions(b *testing.B) {
 		vec2.Append(int64(i), false)
 	}
 
-	// op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupNABlkFunctions, vec, nil, nil)
-	// containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op)
-
 	b.Run("old-dedup-int64", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -95,10 +92,8 @@ func BenchmarkFunctions(b *testing.B) {
 		}
 	})
 
-	// op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
-	// containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
 	b.Run("new-dedup-achars", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil)
