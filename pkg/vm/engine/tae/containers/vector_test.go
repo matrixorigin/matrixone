@@ -48,12 +48,6 @@ func TestVectorShallowForeach(t *testing.T) {
 				}
 			}
 		}
-		vec.ForeachWindowShallow(0, 10, func(v any, isNull bool, row int) error {
-			if row%2 == 0 {
-				assert.True(t, isNull)
-			}
-			return nil
-		}, nil)
 
 		vec.ForeachShallow(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {

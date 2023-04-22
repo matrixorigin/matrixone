@@ -174,15 +174,14 @@ func (vec *vector[T]) HasNull() bool {
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
+
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
 	return
 }
+
 func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindowShallow(0, vec.Length(), op, sels)
-}
-func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
-	return vec.forEachWindowWithBias(offset, length, op, sels, 0, true)
+	return vec.forEachWindowWithBias(0, vec.Length(), op, sels, 0, true)
 }
 
 func (vec *vector[T]) Close() {
