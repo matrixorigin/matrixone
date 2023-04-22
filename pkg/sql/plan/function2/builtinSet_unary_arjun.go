@@ -524,11 +524,72 @@ func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return nil
 }
 
-func LastQueryIDWithoutParam(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		cnt := int64(len(proc.SessionInfo.QueryId))
+		if cnt == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		// LAST_QUERY_ID(-1) returns the most recently-executed query (equivalent to LAST_QUERY_ID()).
+		var idx int
+		idx, err = makeQueryIdIdx(-1, cnt, proc)
+		if err != nil {
+			//TODO: Validate: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L223
+			return err
+		}
+
+		if err = rs.AppendBytes(function2Util.QuickStrToBytes(proc.SessionInfo.QueryId[idx]), false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
+	// https://docs.snowflake.com/en/sql-reference/functions/last_query_id.html
+	var idx int
+	if loc < 0 {
+		if loc < -cnt {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+		}
+		idx = int(loc + cnt)
+	} else {
+		if loc > cnt {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+		}
+		idx = int(loc)
+	}
+	return idx, nil
+}
+
+func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	//TODO: Not at all sure about this. Should we do null check
+	// Validate: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L245
+	loc, _ := ivec.GetValue(0)
+	for i := uint64(0); i < uint64(length); i++ {
+		cnt := int64(len(proc.SessionInfo.QueryId))
+		if cnt == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		var idx int
+		idx, err = makeQueryIdIdx(loc, cnt, proc)
+		if err != nil {
+			return err
+		}
+
+		if err = rs.AppendBytes(function2Util.QuickStrToBytes(proc.SessionInfo.QueryId[idx]), false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
