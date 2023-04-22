@@ -78,5 +78,5 @@ delete from t2;
 insert into t2 values();
 select * from t2;
 col1    col2
-2999    null
+9    null
 drop table t2;
