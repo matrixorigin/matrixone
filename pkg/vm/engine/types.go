@@ -171,6 +171,14 @@ const (
 	PrimaryKey
 )
 
+type EngineType int8
+
+const (
+	Disttae EngineType = iota
+	Memory
+	UNKNOWN
+)
+
 func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	for _, ct := range c.Cts {
@@ -362,6 +370,8 @@ type Relation interface {
 
 	//max and min values
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
+
+	GetEngineType() EngineType
 }
 
 type Reader interface {

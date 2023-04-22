@@ -305,11 +305,11 @@ func (n *baseNode) TryUpgrade() (err error) {
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
-	def := n.meta.GetSchema().ColDefs[colIdx]
+	def := n.table.entry.GetSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
 		n.fs,
-		n.meta.AsCommonID(),
+		nil,
 		def,
 		location)
 }

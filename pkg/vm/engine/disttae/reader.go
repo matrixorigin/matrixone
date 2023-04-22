@@ -52,7 +52,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 	defer func() { r.blks = r.blks[1:] }()
 
-	info := &r.blks[0].Info
+	info := &r.blks[0]
 
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {
@@ -93,7 +93,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
