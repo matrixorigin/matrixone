@@ -119,38 +119,40 @@ func (vec *vector[T]) Slice() any {
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var bs bytes.Buffer
 
-	// 1. Vector bytes
-	var buf []byte
-	if buf, err = vec.downstreamVector.MarshalBinary(); err != nil {
-		return 0, err
+	var size int64
+	_, _ = bs.Write(types.EncodeInt64(&size))
+
+	if err = vec.downstreamVector.MarshalBinaryWithBuffer(&bs); err != nil {
+		return
 	}
 
-	//0. Length of vector bytes [8 bytes]
-	i64 := int64(len(buf))
-	buf = append(types.EncodeInt64(&i64), buf...)
+	size = int64(bs.Len() - 8)
 
-	var writtenBytes int
-	if writtenBytes, err = w.Write(buf); err != nil {
-		return 0, err
+	buf := bs.Bytes()
+	copy(buf[:8], types.EncodeInt64(&size))
+
+	if _, err = w.Write(buf); err != nil {
+		return
 	}
 
-	return int64(writtenBytes), nil
+	n = int64(len(buf))
+	return
 }
 
 func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	// 0. Length [8 bytes]
-	lengthBytes := make([]byte, 8)
-	if _, err = r.Read(lengthBytes); err != nil {
-		return 0, err
+	buf := make([]byte, 8)
+	if _, err = r.Read(buf); err != nil {
+		return
 	}
-	length := types.DecodeInt64(lengthBytes[:8])
+
 	n += 8
 
 	// 1. Whole DN Vector
-	buf := make([]byte, length)
+	buf = make([]byte, types.DecodeInt64(buf[:]))
 	if _, err = r.Read(buf); err != nil {
-		return 0, err
+		return
 	}
 
 	n += int64(len(buf))
@@ -159,10 +161,10 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	vec.releaseDownstream()
 	vec.downstreamVector = cnVector.NewVec(*t)
 	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
-		return 0, err
+		return
 	}
 
-	return n, nil
+	return
 }
 
 func (vec *vector[T]) HasNull() bool {
