@@ -172,16 +172,16 @@ func (vec *vector[T]) HasNull() bool {
 }
 
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindow(0, vec.Length(), op, sels)
+	return vec.foreachWindow(0, vec.Length(), op, sels, false)
 }
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
+	err = vec.foreachWindow(offset, length, op, sels, false)
 	return
 }
 
 func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
-	return vec.forEachWindowWithBias(0, vec.Length(), op, sels, 0, true)
+	return vec.foreachWindow(0, vec.Length(), op, sels, true)
 }
 
 func (vec *vector[T]) Close() {
@@ -263,19 +263,19 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 }
 
-func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
+func (vec *vector[T]) foreachWindow(offset, length int, op ItOp, sels *roaring.Bitmap, shallow bool) (err error) {
 
 	if !vec.HasNull() {
 		var v T
 		if _, ok := any(v).([]byte); !ok {
 			// Optimization for :- Vectors which are 1. not containing nulls & 2. not byte[]
 			slice := vec.Slice().([]T)
-			slice = slice[offset+bias : offset+length+bias]
+			slice = slice[offset : offset+length]
 			if sels == nil || sels.IsEmpty() {
 				for i, elem := range slice {
 					var vv any
 					isNull := false
-					if vec.IsNull(i + offset + bias) {
+					if vec.IsNull(i + offset) {
 						isNull = true
 						vv = nil
 					} else {
@@ -297,7 +297,7 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 
 					var vv any
 					isNull := false
-					if vec.IsNull(int(idx) + bias) {
+					if vec.IsNull(int(idx)) {
 						isNull = true
 						vv = nil
 					} else {
@@ -316,11 +316,11 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 		for i := offset; i < offset+length; i++ {
 			var elem any
 			if shallow {
-				elem = vec.ShallowGet(i + bias)
+				elem = vec.ShallowGet(i)
 			} else {
-				elem = vec.Get(i + bias)
+				elem = vec.Get(i)
 			}
-			if err = op(elem, vec.IsNull(i+bias), i); err != nil {
+			if err = op(elem, vec.IsNull(i), i); err != nil {
 				break
 			}
 		}
@@ -336,12 +336,12 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 			}
 			var elem any
 			if shallow {
-				elem = vec.ShallowGet(int(idx) + bias)
+				elem = vec.ShallowGet(int(idx))
 			} else {
-				elem = vec.Get(int(idx) + bias)
+				elem = vec.Get(int(idx))
 			}
 
-			if err = op(elem, vec.IsNull(int(idx)+bias), int(idx)); err != nil {
+			if err = op(elem, vec.IsNull(int(idx)), int(idx)); err != nil {
 				break
 			}
 		}
