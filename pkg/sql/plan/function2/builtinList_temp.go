@@ -1136,6 +1136,23 @@ var tempListForUnaryFunctions1 = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: MO_DISABLE_MEMORY_USAGE_DETAIL,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: MoDisableMemUsageDetail,
+			},
+		},
+	},
 
 	{
 		functionId: MO_CTL,

@@ -635,7 +635,7 @@ func MoEnableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResult
 }
 
 func MoDisableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moMemUsageCmd("enable_detail", ivecs, result, proc, length)
+	return moMemUsageCmd("disable_detail", ivecs, result, proc, length)
 }
 
 const (
