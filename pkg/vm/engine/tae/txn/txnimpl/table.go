@@ -19,14 +19,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-
 	"github.com/RoaringBitmap/roaring"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -106,16 +106,20 @@ type txnTable struct {
 	idx int
 }
 
-func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
+func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
+	schema := entry.GetVisibleSchema(store.txn)
+	if schema == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No visible schema for ts %s", store.txn.GetStartTS().ToString())
+	}
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
-		schema:      entry.GetSchema(),
+		schema:      schema,
 		deleteNodes: make(map[common.ID]*deleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  newTxnEntries(),
 	}
-	return tbl
+	return tbl, nil
 }
 
 func (tbl *txnTable) PrePreareTransfer() (err error) {
@@ -511,7 +515,9 @@ func (tbl *txnTable) IsDeleted() bool {
 	return tbl.dropEntry != nil
 }
 
-func (tbl *txnTable) GetSchema() *catalog.Schema {
+// GetLocalSchema returns the schema remains in the txn table, rather than the
+// latest schema in TableEntry
+func (tbl *txnTable) GetLocalSchema() *catalog.Schema {
 	return tbl.schema
 }
 
@@ -803,14 +809,22 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	return
 }
 
-func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
+func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
+	switch req.Kind {
+	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment:
+	default:
+		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
-	isNewNode, err := tbl.entry.UpdateConstraint(tbl.store.txn, cstr)
+	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
-	return
+	//TODO(aptend):
+	// 1.update local schema
+	// 2.handle written data in localseg, keep the batch aligned with the new schema
+	return err
 }
 
 func (tbl *txnTable) UncommittedRows() uint32 {

@@ -40,10 +40,11 @@ message CNStore {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  uint64          Tick               = 6;
-  NodeState       State              = 7;
-  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
+  string          CtlAddress         = 5;
+  metadata.CNRole Role               = 6;
+  uint64          Tick               = 7;
+  NodeState       State              = 8;
+  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
 }
 
 message DNStore {
@@ -58,6 +59,7 @@ message DNStore {
   string LogtailServerAddress = 6;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
+  string          CtlAddress         = 8;
 }
 
 message LogStore {
@@ -101,8 +103,9 @@ message CNStoreHeartbeat {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  bool            TaskServiceCreated = 6;
+  string          CtlAddress         = 5;
+  metadata.CNRole Role               = 6;
+  bool            TaskServiceCreated = 7;
 }
 
 
@@ -157,6 +160,7 @@ message DNStoreHeartbeat {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
+  string          CtlAddress         = 7;
 };
 
 message RSMState {
@@ -417,9 +421,10 @@ message CNStoreInfo {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  bool            TaskServiceCreated = 6;
-  map<string, metadata.LabelList> Labels = 7 [(gogoproto.nullable) = false];
+  string          CtlAddress         = 5;
+  metadata.CNRole Role               = 6;
+  bool            TaskServiceCreated = 7;
+  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -441,6 +446,7 @@ message DNStoreInfo {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
+  string CtlAddress         = 7;
 }
 
 // DNState contains all DN details known to the HAKeeper.

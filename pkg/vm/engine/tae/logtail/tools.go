@@ -43,7 +43,7 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 		}
 		v := vec.Get(i)
 		vIsNull := vec.IsNull(i)
-		_, _ = w.WriteString(common.TypeStringValue(typ, v, vIsNull, opts...))
+		_, _ = w.WriteString(common.TypeStringValue(*typ, v, vIsNull, opts...))
 		first = false
 	}
 

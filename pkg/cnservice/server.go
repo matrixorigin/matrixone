@@ -150,11 +150,16 @@ func NewService(
 		opt(srv)
 	}
 
+	srv.initCtlService()
 	return srv, nil
 }
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+
+	if err := s.ctlservice.Start(); err != nil {
+		return err
+	}
 
 	err := s.runMoServer()
 	if err != nil {
@@ -213,6 +218,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.lockService != nil {
 		if err := s.lockService.Close(); err != nil {
+			return err
+		}
+	}
+	if s.ctlservice != nil {
+		if err := s.ctlservice.Close(); err != nil {
 			return err
 		}
 	}

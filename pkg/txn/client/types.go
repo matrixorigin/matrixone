@@ -45,6 +45,16 @@ type TxnClient interface {
 	Close() error
 }
 
+// TxnClientWithCtl TxnClient to support ctl command.
+type TxnClientWithCtl interface {
+	TxnClient
+
+	// GetLatestCommitTS get latest commit timestamp
+	GetLatestCommitTS() timestamp.Timestamp
+	// SetLatestCommitTS set latest commit timestamp
+	SetLatestCommitTS(timestamp.Timestamp)
+}
+
 // TxnClientWithFeature is similar to TxnClient, except that some methods have been added to determine
 // whether certain features are supported.
 type TxnClientWithFeature interface {
