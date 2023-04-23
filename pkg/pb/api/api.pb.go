@@ -57,6 +57,43 @@ func (OpCode) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_00212fb1f9d3bf1c, []int{0}
 }
 
+type AlterKind int32
+
+const (
+	AlterKind_Invalid          AlterKind = 0
+	AlterKind_AddColumn        AlterKind = 1
+	AlterKind_DropColumn       AlterKind = 2
+	AlterKind_RenameTable      AlterKind = 3
+	AlterKind_UpdateComment    AlterKind = 4
+	AlterKind_UpdateConstraint AlterKind = 5
+)
+
+var AlterKind_name = map[int32]string{
+	0: "Invalid",
+	1: "AddColumn",
+	2: "DropColumn",
+	3: "RenameTable",
+	4: "UpdateComment",
+	5: "UpdateConstraint",
+}
+
+var AlterKind_value = map[string]int32{
+	"Invalid":          0,
+	"AddColumn":        1,
+	"DropColumn":       2,
+	"RenameTable":      3,
+	"UpdateComment":    4,
+	"UpdateConstraint": 5,
+}
+
+func (x AlterKind) String() string {
+	return proto.EnumName(AlterKind_name, int32(x))
+}
+
+func (AlterKind) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{1}
+}
+
 type Entry_EntryType int32
 
 const (
@@ -778,8 +815,419 @@ func (m *MetadataCkp) GetBat() *Batch {
 	return nil
 }
 
+type AlterTableConstraint struct {
+	Constraints          []byte   `protobuf:"bytes,1,opt,name=constraints,proto3" json:"constraints,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterTableConstraint) Reset()         { *m = AlterTableConstraint{} }
+func (m *AlterTableConstraint) String() string { return proto.CompactTextString(m) }
+func (*AlterTableConstraint) ProtoMessage()    {}
+func (*AlterTableConstraint) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{10}
+}
+func (m *AlterTableConstraint) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableConstraint) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableConstraint.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableConstraint) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableConstraint.Merge(m, src)
+}
+func (m *AlterTableConstraint) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableConstraint) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableConstraint.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableConstraint proto.InternalMessageInfo
+
+func (m *AlterTableConstraint) GetConstraints() []byte {
+	if m != nil {
+		return m.Constraints
+	}
+	return nil
+}
+
+type AlterTableComment struct {
+	Comment              string   `protobuf:"bytes,1,opt,name=comment,proto3" json:"comment,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterTableComment) Reset()         { *m = AlterTableComment{} }
+func (m *AlterTableComment) String() string { return proto.CompactTextString(m) }
+func (*AlterTableComment) ProtoMessage()    {}
+func (*AlterTableComment) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{11}
+}
+func (m *AlterTableComment) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableComment) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableComment.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableComment) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableComment.Merge(m, src)
+}
+func (m *AlterTableComment) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableComment) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableComment.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableComment proto.InternalMessageInfo
+
+func (m *AlterTableComment) GetComment() string {
+	if m != nil {
+		return m.Comment
+	}
+	return ""
+}
+
+type AlterTableRenameTable struct {
+	OldName              string   `protobuf:"bytes,1,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	NewName              string   `protobuf:"bytes,2,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterTableRenameTable) Reset()         { *m = AlterTableRenameTable{} }
+func (m *AlterTableRenameTable) String() string { return proto.CompactTextString(m) }
+func (*AlterTableRenameTable) ProtoMessage()    {}
+func (*AlterTableRenameTable) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{12}
+}
+func (m *AlterTableRenameTable) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableRenameTable) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableRenameTable.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableRenameTable) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableRenameTable.Merge(m, src)
+}
+func (m *AlterTableRenameTable) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableRenameTable) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableRenameTable.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableRenameTable proto.InternalMessageInfo
+
+func (m *AlterTableRenameTable) GetOldName() string {
+	if m != nil {
+		return m.OldName
+	}
+	return ""
+}
+
+func (m *AlterTableRenameTable) GetNewName() string {
+	if m != nil {
+		return m.NewName
+	}
+	return ""
+}
+
+type AlterTableAddColumn struct {
+	Column               *plan.ColDef `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
+	InsertPosition       int32        `protobuf:"varint,2,opt,name=insert_position,json=insertPosition,proto3" json:"insert_position,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	XXX_unrecognized     []byte       `json:"-"`
+	XXX_sizecache        int32        `json:"-"`
+}
+
+func (m *AlterTableAddColumn) Reset()         { *m = AlterTableAddColumn{} }
+func (m *AlterTableAddColumn) String() string { return proto.CompactTextString(m) }
+func (*AlterTableAddColumn) ProtoMessage()    {}
+func (*AlterTableAddColumn) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{13}
+}
+func (m *AlterTableAddColumn) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableAddColumn) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableAddColumn.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableAddColumn) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableAddColumn.Merge(m, src)
+}
+func (m *AlterTableAddColumn) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableAddColumn) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableAddColumn.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableAddColumn proto.InternalMessageInfo
+
+func (m *AlterTableAddColumn) GetColumn() *plan.ColDef {
+	if m != nil {
+		return m.Column
+	}
+	return nil
+}
+
+func (m *AlterTableAddColumn) GetInsertPosition() int32 {
+	if m != nil {
+		return m.InsertPosition
+	}
+	return 0
+}
+
+type AlterTableDropColumn struct {
+	LogicalIdx           uint32   `protobuf:"varint,1,opt,name=logical_idx,json=logicalIdx,proto3" json:"logical_idx,omitempty"`
+	SequenceNum          uint32   `protobuf:"varint,2,opt,name=sequence_num,json=sequenceNum,proto3" json:"sequence_num,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterTableDropColumn) Reset()         { *m = AlterTableDropColumn{} }
+func (m *AlterTableDropColumn) String() string { return proto.CompactTextString(m) }
+func (*AlterTableDropColumn) ProtoMessage()    {}
+func (*AlterTableDropColumn) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{14}
+}
+func (m *AlterTableDropColumn) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableDropColumn) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableDropColumn.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableDropColumn) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableDropColumn.Merge(m, src)
+}
+func (m *AlterTableDropColumn) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableDropColumn) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableDropColumn.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableDropColumn proto.InternalMessageInfo
+
+func (m *AlterTableDropColumn) GetLogicalIdx() uint32 {
+	if m != nil {
+		return m.LogicalIdx
+	}
+	return 0
+}
+
+func (m *AlterTableDropColumn) GetSequenceNum() uint32 {
+	if m != nil {
+		return m.SequenceNum
+	}
+	return 0
+}
+
+type AlterTableReq struct {
+	TableId uint64    `protobuf:"varint,1,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
+	DbId    uint64    `protobuf:"varint,2,opt,name=db_id,json=dbId,proto3" json:"db_id,omitempty"`
+	Kind    AlterKind `protobuf:"varint,3,opt,name=kind,proto3,enum=api.AlterKind" json:"kind,omitempty"`
+	// Types that are valid to be assigned to Operation:
+	//	*AlterTableReq_AddColumn
+	//	*AlterTableReq_DropColumn
+	//	*AlterTableReq_RenameTable
+	//	*AlterTableReq_UpdateComment
+	//	*AlterTableReq_UpdateCstr
+	Operation            isAlterTableReq_Operation `protobuf_oneof:"operation"`
+	XXX_NoUnkeyedLiteral struct{}                  `json:"-"`
+	XXX_unrecognized     []byte                    `json:"-"`
+	XXX_sizecache        int32                     `json:"-"`
+}
+
+func (m *AlterTableReq) Reset()         { *m = AlterTableReq{} }
+func (m *AlterTableReq) String() string { return proto.CompactTextString(m) }
+func (*AlterTableReq) ProtoMessage()    {}
+func (*AlterTableReq) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{15}
+}
+func (m *AlterTableReq) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableReq) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableReq.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableReq) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableReq.Merge(m, src)
+}
+func (m *AlterTableReq) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableReq) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableReq.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableReq proto.InternalMessageInfo
+
+type isAlterTableReq_Operation interface {
+	isAlterTableReq_Operation()
+	MarshalTo([]byte) (int, error)
+	ProtoSize() int
+}
+
+type AlterTableReq_AddColumn struct {
+	AddColumn *AlterTableAddColumn `protobuf:"bytes,4,opt,name=add_column,json=addColumn,proto3,oneof" json:"add_column,omitempty"`
+}
+type AlterTableReq_DropColumn struct {
+	DropColumn *AlterTableDropColumn `protobuf:"bytes,5,opt,name=drop_column,json=dropColumn,proto3,oneof" json:"drop_column,omitempty"`
+}
+type AlterTableReq_RenameTable struct {
+	RenameTable *AlterTableRenameTable `protobuf:"bytes,6,opt,name=rename_table,json=renameTable,proto3,oneof" json:"rename_table,omitempty"`
+}
+type AlterTableReq_UpdateComment struct {
+	UpdateComment *AlterTableComment `protobuf:"bytes,7,opt,name=update_comment,json=updateComment,proto3,oneof" json:"update_comment,omitempty"`
+}
+type AlterTableReq_UpdateCstr struct {
+	UpdateCstr *AlterTableConstraint `protobuf:"bytes,8,opt,name=update_cstr,json=updateCstr,proto3,oneof" json:"update_cstr,omitempty"`
+}
+
+func (*AlterTableReq_AddColumn) isAlterTableReq_Operation()     {}
+func (*AlterTableReq_DropColumn) isAlterTableReq_Operation()    {}
+func (*AlterTableReq_RenameTable) isAlterTableReq_Operation()   {}
+func (*AlterTableReq_UpdateComment) isAlterTableReq_Operation() {}
+func (*AlterTableReq_UpdateCstr) isAlterTableReq_Operation()    {}
+
+func (m *AlterTableReq) GetOperation() isAlterTableReq_Operation {
+	if m != nil {
+		return m.Operation
+	}
+	return nil
+}
+
+func (m *AlterTableReq) GetTableId() uint64 {
+	if m != nil {
+		return m.TableId
+	}
+	return 0
+}
+
+func (m *AlterTableReq) GetDbId() uint64 {
+	if m != nil {
+		return m.DbId
+	}
+	return 0
+}
+
+func (m *AlterTableReq) GetKind() AlterKind {
+	if m != nil {
+		return m.Kind
+	}
+	return AlterKind_Invalid
+}
+
+func (m *AlterTableReq) GetAddColumn() *AlterTableAddColumn {
+	if x, ok := m.GetOperation().(*AlterTableReq_AddColumn); ok {
+		return x.AddColumn
+	}
+	return nil
+}
+
+func (m *AlterTableReq) GetDropColumn() *AlterTableDropColumn {
+	if x, ok := m.GetOperation().(*AlterTableReq_DropColumn); ok {
+		return x.DropColumn
+	}
+	return nil
+}
+
+func (m *AlterTableReq) GetRenameTable() *AlterTableRenameTable {
+	if x, ok := m.GetOperation().(*AlterTableReq_RenameTable); ok {
+		return x.RenameTable
+	}
+	return nil
+}
+
+func (m *AlterTableReq) GetUpdateComment() *AlterTableComment {
+	if x, ok := m.GetOperation().(*AlterTableReq_UpdateComment); ok {
+		return x.UpdateComment
+	}
+	return nil
+}
+
+func (m *AlterTableReq) GetUpdateCstr() *AlterTableConstraint {
+	if x, ok := m.GetOperation().(*AlterTableReq_UpdateCstr); ok {
+		return x.UpdateCstr
+	}
+	return nil
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*AlterTableReq) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*AlterTableReq_AddColumn)(nil),
+		(*AlterTableReq_DropColumn)(nil),
+		(*AlterTableReq_RenameTable)(nil),
+		(*AlterTableReq_UpdateComment)(nil),
+		(*AlterTableReq_UpdateCstr)(nil),
+	}
+}
+
 func init() {
 	proto.RegisterEnum("api.OpCode", OpCode_name, OpCode_value)
+	proto.RegisterEnum("api.AlterKind", AlterKind_name, AlterKind_value)
 	proto.RegisterEnum("api.Entry_EntryType", Entry_EntryType_name, Entry_EntryType_value)
 	proto.RegisterType((*Vector)(nil), "api.Vector")
 	proto.RegisterType((*Batch)(nil), "api.Batch")
@@ -791,63 +1239,93 @@ func init() {
 	proto.RegisterType((*Checkpoint)(nil), "api.Checkpoint")
 	proto.RegisterType((*CatalogCkp)(nil), "api.CatalogCkp")
 	proto.RegisterType((*MetadataCkp)(nil), "api.MetadataCkp")
+	proto.RegisterType((*AlterTableConstraint)(nil), "api.AlterTableConstraint")
+	proto.RegisterType((*AlterTableComment)(nil), "api.AlterTableComment")
+	proto.RegisterType((*AlterTableRenameTable)(nil), "api.AlterTableRenameTable")
+	proto.RegisterType((*AlterTableAddColumn)(nil), "api.AlterTableAddColumn")
+	proto.RegisterType((*AlterTableDropColumn)(nil), "api.AlterTableDropColumn")
+	proto.RegisterType((*AlterTableReq)(nil), "api.AlterTableReq")
 }
 
 func init() { proto.RegisterFile("api.proto", fileDescriptor_00212fb1f9d3bf1c) }
 
 var fileDescriptor_00212fb1f9d3bf1c = []byte{
-	// 805 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x55, 0xcd, 0x8e, 0xe3, 0x44,
-	0x10, 0x1e, 0xc7, 0x71, 0x9c, 0x94, 0xb3, 0xb3, 0xde, 0x66, 0x0e, 0x66, 0x80, 0x6c, 0xf0, 0x4a,
-	0x28, 0xfc, 0x6c, 0x22, 0x65, 0xef, 0x73, 0x98, 0x0c, 0x82, 0x48, 0xc3, 0xce, 0xca, 0x84, 0x5d,
-	0x09, 0x21, 0x59, 0x6d, 0xbb, 0x37, 0xd3, 0x8a, 0xdd, 0x6e, 0xec, 0x9a, 0x61, 0x72, 0x87, 0x17,
-	0xe0, 0x09, 0xb8, 0xf3, 0x22, 0x5c, 0x90, 0x78, 0x04, 0x34, 0x5c, 0x80, 0xa7, 0x40, 0x5d, 0x8e,
-	0x33, 0xac, 0x04, 0x7b, 0xdd, 0x4b, 0x54, 0xf5, 0xd5, 0x57, 0x9d, 0xef, 0xeb, 0xaa, 0x4e, 0x60,
-	0xc0, 0xb5, 0x9c, 0xea, 0xaa, 0xc4, 0x92, 0xd9, 0x5c, 0xcb, 0xe3, 0xc7, 0x6b, 0x89, 0x97, 0x57,
-	0xc9, 0x34, 0x2d, 0x8b, 0xd9, 0xba, 0x5c, 0x97, 0x33, 0xaa, 0x25, 0x57, 0x2f, 0x29, 0xa3, 0x84,
-	0xa2, 0xa6, 0xe7, 0xf8, 0x3e, 0xca, 0x42, 0xd4, 0xc8, 0x0b, 0xbd, 0x03, 0x40, 0xe7, 0x5c, 0x35,
-	0x71, 0xf8, 0xb3, 0x05, 0xbd, 0xe7, 0x22, 0xc5, 0xb2, 0x62, 0x0c, 0xba, 0x19, 0x47, 0x1e, 0x58,
-	0x63, 0x6b, 0x32, 0x8c, 0x28, 0x66, 0x23, 0xe8, 0xe2, 0x56, 0x8b, 0xa0, 0x33, 0xb6, 0x26, 0xde,
-	0x1c, 0xa6, 0xd4, 0xb9, 0xda, 0x6a, 0x11, 0x11, 0xce, 0x8e, 0xa1, 0xaf, 0xae, 0xf2, 0x9c, 0x27,
-	0xb9, 0x08, 0xec, 0xb1, 0x35, 0xe9, 0x47, 0xfb, 0x9c, 0xf9, 0x60, 0xab, 0x5a, 0x07, 0x5d, 0x3a,
-	0xce, 0x84, 0xec, 0x6d, 0xe8, 0xcb, 0x3a, 0x4e, 0x4b, 0x55, 0x63, 0xe0, 0x10, 0xdb, 0x95, 0xf5,
-	0xc2, 0xa4, 0x86, 0x9c, 0x0b, 0x15, 0xf4, 0xc6, 0xd6, 0xe4, 0x5e, 0x64, 0x42, 0x23, 0x87, 0x57,
-	0x82, 0x07, 0x6e, 0x23, 0xc7, 0xc4, 0xe1, 0x09, 0x38, 0xa7, 0x1c, 0xd3, 0x4b, 0x76, 0x04, 0x0e,
-	0x47, 0xac, 0xea, 0xc0, 0x1a, 0xdb, 0x93, 0x41, 0xd4, 0x24, 0xec, 0x21, 0x74, 0xaf, 0x45, 0x5a,
-	0x07, 0x9d, 0xb1, 0x3d, 0xf1, 0xe6, 0xde, 0xd4, 0xdc, 0x5b, 0x63, 0x2e, 0xa2, 0x42, 0xf8, 0x1c,
-	0xdc, 0x95, 0xd1, 0xb6, 0x3c, 0x63, 0x6f, 0x81, 0x93, 0x25, 0xb1, 0xcc, 0xc8, 0x6e, 0x37, 0xea,
-	0x66, 0xc9, 0x32, 0x33, 0x20, 0x12, 0xd8, 0x69, 0x40, 0x34, 0xe0, 0xfb, 0x30, 0xd4, 0xbc, 0x42,
-	0x89, 0xb2, 0x54, 0xa6, 0x66, 0x53, 0xcd, 0xdb, 0x63, 0xcb, 0x2c, 0xfc, 0xd1, 0x82, 0xc3, 0x2f,
-	0xb7, 0x2a, 0x3d, 0x2f, 0xd7, 0x2b, 0x2e, 0xf3, 0x48, 0x7c, 0xcb, 0x1e, 0x83, 0x9b, 0xaa, 0xf8,
-	0x92, 0x5f, 0x0b, 0xfa, 0x06, 0x6f, 0x7e, 0x34, 0xbd, 0x9b, 0xc3, 0xaa, 0x8d, 0xa2, 0x5e, 0xaa,
-	0x3e, 0xe7, 0xd7, 0x62, 0x47, 0xff, 0x8e, 0x2b, 0xdc, 0xdd, 0xf5, 0xff, 0xd2, 0x5f, 0x70, 0x85,
-	0x2c, 0x04, 0x07, 0xf7, 0x97, 0xee, 0xcd, 0x87, 0x64, 0x75, 0x67, 0x2d, 0x6a, 0x4a, 0xe1, 0x37,
-	0x70, 0xff, 0x15, 0x4d, 0xb5, 0x36, 0x56, 0xd2, 0x8d, 0x8e, 0xf3, 0x32, 0xe5, 0x46, 0x39, 0x29,
-	0x1b, 0x44, 0x5e, 0xba, 0xd1, 0xe7, 0x3b, 0x88, 0x7d, 0x00, 0xfd, 0xb4, 0x2c, 0x0a, 0xae, 0xb2,
-	0xf6, 0x1e, 0x81, 0x0e, 0xff, 0x54, 0x61, 0xb5, 0x8d, 0xf6, 0xb5, 0xf0, 0x04, 0x1e, 0x3c, 0xab,
-	0x84, 0x49, 0x25, 0xbe, 0xa8, 0x24, 0x8a, 0x45, 0x91, 0xb1, 0x0f, 0x01, 0x84, 0xe1, 0xc5, 0xb9,
-	0xac, 0x91, 0x66, 0xf3, 0x6a, 0xfb, 0x80, 0xaa, 0xe7, 0xb2, 0xc6, 0xf0, 0xd7, 0x0e, 0x38, 0x04,
-	0xb2, 0x27, 0x6d, 0x13, 0x6d, 0x9a, 0x91, 0x74, 0x38, 0x3f, 0xba, 0x6b, 0x6a, 0x3e, 0x69, 0xe7,
-	0x9a, 0x76, 0x13, 0x9a, 0x55, 0x22, 0x97, 0x77, 0xc3, 0x72, 0x29, 0x5f, 0x66, 0xec, 0x21, 0x78,
-	0x66, 0x77, 0x13, 0x5e, 0x8b, 0xbb, 0x71, 0x41, 0x0b, 0x2d, 0x33, 0xf6, 0x1e, 0x40, 0xd3, 0xab,
-	0x78, 0x21, 0x68, 0x3f, 0x07, 0xd1, 0x80, 0x90, 0xa7, 0xbc, 0x10, 0xec, 0x11, 0xdc, 0xdb, 0xf7,
-	0x13, 0xc3, 0x21, 0xc6, 0xb0, 0x05, 0x89, 0xf4, 0x0e, 0x0c, 0x5e, 0xca, 0xf6, 0x88, 0x1e, 0x11,
-	0xfa, 0x06, 0xa0, 0xe2, 0xbb, 0x60, 0x27, 0x1c, 0x69, 0x73, 0x5b, 0xff, 0xb4, 0xb6, 0x91, 0x81,
-	0xd9, 0x23, 0x38, 0xd4, 0x9b, 0x38, 0xbd, 0x14, 0xe9, 0x26, 0x4e, 0xb6, 0x71, 0xa6, 0x82, 0xfe,
-	0xd8, 0x9a, 0x38, 0x91, 0xa7, 0x37, 0x0b, 0x03, 0x9e, 0x6e, 0xcf, 0x54, 0x38, 0x83, 0xc1, 0xde,
-	0x37, 0x03, 0xe8, 0x2d, 0x55, 0x2d, 0x2a, 0xf4, 0x0f, 0x4c, 0x7c, 0x26, 0x72, 0x81, 0xc2, 0xb7,
-	0x4c, 0xfc, 0x95, 0xce, 0x38, 0x0a, 0xbf, 0x13, 0x7e, 0x6f, 0x01, 0x50, 0xbb, 0x2e, 0xa5, 0x42,
-	0xf6, 0x31, 0xf4, 0x0a, 0xa9, 0x62, 0xac, 0x5f, 0xbb, 0x7d, 0x4e, 0x21, 0xd5, 0xaa, 0x26, 0x32,
-	0xbf, 0x31, 0xe4, 0xce, 0x6b, 0xc9, 0xfc, 0x66, 0x55, 0xb7, 0xe6, 0xec, 0xff, 0x34, 0xd7, 0xc8,
-	0xe0, 0xc8, 0xf3, 0x72, 0xbd, 0xd8, 0xe8, 0x37, 0x26, 0xe3, 0x07, 0x0b, 0xbc, 0x2f, 0x04, 0x72,
-	0x33, 0xb3, 0x37, 0xa8, 0xe3, 0xa3, 0x33, 0xe8, 0x5d, 0xe8, 0x45, 0x99, 0x09, 0xe6, 0x82, 0xfd,
-	0xb4, 0xd4, 0xfe, 0x01, 0x7b, 0x00, 0xc3, 0x0b, 0xfd, 0x99, 0xc0, 0xdd, 0xbb, 0xf4, 0xff, 0x74,
-	0xd9, 0x10, 0xdc, 0x0b, 0x4d, 0x8f, 0xc8, 0xff, 0xcb, 0x65, 0x3e, 0x78, 0x17, 0xfa, 0x59, 0x25,
-	0x16, 0xf4, 0xb6, 0xfc, 0xbf, 0xdd, 0xd3, 0x93, 0x5f, 0x6e, 0x47, 0xd6, 0x6f, 0xb7, 0x23, 0xeb,
-	0xf7, 0xdb, 0xd1, 0xc1, 0x4f, 0x7f, 0x8c, 0xac, 0xaf, 0x3f, 0xf9, 0xd7, 0x5f, 0x40, 0xc1, 0xb1,
-	0x92, 0x37, 0x65, 0x25, 0xd7, 0x52, 0xb5, 0x89, 0x12, 0x33, 0xbd, 0x59, 0xcf, 0x74, 0x32, 0xe3,
-	0x5a, 0x26, 0x3d, 0xfa, 0xad, 0x7f, 0xf2, 0x4f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xcb, 0xae, 0x84,
-	0xbf, 0x49, 0x06, 0x00, 0x00,
+	// 1198 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x56, 0xcd, 0x6e, 0xdb, 0xc6,
+	0x16, 0x16, 0xf5, 0xaf, 0x43, 0x49, 0xa6, 0x27, 0xbe, 0x17, 0x8a, 0xef, 0xbd, 0x8e, 0x2e, 0x53,
+	0xb4, 0x6a, 0xda, 0xd8, 0x80, 0xb3, 0x69, 0x81, 0x20, 0x41, 0x2c, 0x17, 0xb5, 0xd0, 0x24, 0x0e,
+	0x58, 0x27, 0x01, 0x82, 0x02, 0xc4, 0x88, 0x33, 0x91, 0x07, 0x22, 0x67, 0xc6, 0xe4, 0xc8, 0xb1,
+	0xf7, 0xed, 0x0b, 0xf4, 0x09, 0xba, 0x2d, 0xfa, 0x22, 0xdd, 0x14, 0xe8, 0x23, 0x14, 0xe9, 0xa6,
+	0xed, 0x53, 0x14, 0x73, 0x48, 0x4a, 0x72, 0xda, 0x66, 0x9b, 0x8d, 0x71, 0xce, 0x77, 0x7e, 0x74,
+	0x7e, 0x3e, 0x9e, 0x31, 0x74, 0xa8, 0x16, 0xbb, 0x3a, 0x55, 0x46, 0x91, 0x1a, 0xd5, 0x62, 0xfb,
+	0xf6, 0x4c, 0x98, 0xd3, 0xc5, 0x74, 0x37, 0x52, 0xc9, 0xde, 0x4c, 0xcd, 0xd4, 0x1e, 0xda, 0xa6,
+	0x8b, 0x97, 0xa8, 0xa1, 0x82, 0x52, 0x1e, 0xb3, 0xbd, 0x61, 0x44, 0xc2, 0x33, 0x43, 0x13, 0x5d,
+	0x00, 0xa0, 0x63, 0x2a, 0x73, 0xd9, 0xff, 0xc1, 0x81, 0xe6, 0x33, 0x1e, 0x19, 0x95, 0x12, 0x02,
+	0x75, 0x46, 0x0d, 0x1d, 0x38, 0x43, 0x67, 0xd4, 0x0d, 0x50, 0x26, 0x3b, 0x50, 0x37, 0x97, 0x9a,
+	0x0f, 0xaa, 0x43, 0x67, 0xe4, 0xee, 0xc3, 0x2e, 0x46, 0x9e, 0x5c, 0x6a, 0x1e, 0x20, 0x4e, 0xb6,
+	0xa1, 0x2d, 0x17, 0x71, 0x4c, 0xa7, 0x31, 0x1f, 0xd4, 0x86, 0xce, 0xa8, 0x1d, 0x2c, 0x75, 0xe2,
+	0x41, 0x4d, 0x66, 0x7a, 0x50, 0xc7, 0x74, 0x56, 0x24, 0xd7, 0xa1, 0x2d, 0xb2, 0x30, 0x52, 0x32,
+	0x33, 0x83, 0x06, 0x7a, 0xb7, 0x44, 0x36, 0xb6, 0xaa, 0x75, 0x8e, 0xb9, 0x1c, 0x34, 0x87, 0xce,
+	0xa8, 0x17, 0x58, 0xd1, 0x96, 0x43, 0x53, 0x4e, 0x07, 0xad, 0xbc, 0x1c, 0x2b, 0xfb, 0xf7, 0xa0,
+	0x71, 0x40, 0x4d, 0x74, 0x4a, 0xb6, 0xa0, 0x41, 0x8d, 0x49, 0xb3, 0x81, 0x33, 0xac, 0x8d, 0x3a,
+	0x41, 0xae, 0x90, 0x1b, 0x50, 0x3f, 0xe7, 0x51, 0x36, 0xa8, 0x0e, 0x6b, 0x23, 0x77, 0xdf, 0xdd,
+	0xb5, 0x73, 0xcb, 0x9b, 0x0b, 0xd0, 0xe0, 0x3f, 0x83, 0xd6, 0x89, 0xad, 0x6d, 0x72, 0x48, 0xae,
+	0x41, 0x83, 0x4d, 0x43, 0xc1, 0xb0, 0xdd, 0x7a, 0x50, 0x67, 0xd3, 0x09, 0xb3, 0xa0, 0x41, 0xb0,
+	0x9a, 0x83, 0xc6, 0x82, 0xff, 0x87, 0xae, 0xa6, 0xa9, 0x11, 0x46, 0x28, 0x69, 0x6d, 0x35, 0xb4,
+	0xb9, 0x4b, 0x6c, 0xc2, 0xfc, 0x6f, 0x1d, 0xe8, 0x7f, 0x79, 0x29, 0xa3, 0x87, 0x6a, 0x76, 0x42,
+	0x45, 0x1c, 0xf0, 0x33, 0x72, 0x1b, 0x5a, 0x91, 0x0c, 0x4f, 0xe9, 0x39, 0xc7, 0x5f, 0x70, 0xf7,
+	0xb7, 0x76, 0x57, 0x7b, 0x38, 0x29, 0xa5, 0xa0, 0x19, 0xc9, 0x23, 0x7a, 0xce, 0x0b, 0xf7, 0x57,
+	0x54, 0x9a, 0x62, 0xd6, 0xff, 0xe8, 0xfe, 0x9c, 0x4a, 0x43, 0x7c, 0x68, 0x98, 0xe5, 0xd0, 0xdd,
+	0xfd, 0x2e, 0xb6, 0x5a, 0xb4, 0x16, 0xe4, 0x26, 0xff, 0x2b, 0xd8, 0xb8, 0x52, 0x53, 0xa6, 0x6d,
+	0x2b, 0xd1, 0x5c, 0x87, 0xb1, 0x8a, 0xa8, 0xad, 0x1c, 0x2b, 0xeb, 0x04, 0x6e, 0x34, 0xd7, 0x0f,
+	0x0b, 0x88, 0xbc, 0x0f, 0xed, 0x48, 0x25, 0x09, 0x95, 0xac, 0x9c, 0x23, 0x60, 0xf2, 0xcf, 0xa4,
+	0x49, 0x2f, 0x83, 0xa5, 0xcd, 0xbf, 0x07, 0x9b, 0x4f, 0x52, 0x6e, 0x55, 0x61, 0x9e, 0xa7, 0xc2,
+	0xf0, 0x71, 0xc2, 0xc8, 0x87, 0x00, 0xdc, 0xfa, 0x85, 0xb1, 0xc8, 0x0c, 0xee, 0xe6, 0x6a, 0x78,
+	0x07, 0xad, 0x0f, 0x45, 0x66, 0xfc, 0x9f, 0xaa, 0xd0, 0x40, 0x90, 0xdc, 0x29, 0x83, 0x90, 0x69,
+	0xb6, 0xa4, 0xfe, 0xfe, 0xd6, 0x2a, 0x28, 0xff, 0x8b, 0x9c, 0xcb, 0xc3, 0xad, 0x68, 0xa9, 0x84,
+	0x5d, 0xae, 0x96, 0xd5, 0x42, 0x7d, 0xc2, 0xc8, 0x0d, 0x70, 0x2d, 0x77, 0xa7, 0x34, 0xe3, 0xab,
+	0x75, 0x41, 0x09, 0x4d, 0x18, 0xf9, 0x1f, 0x40, 0x1e, 0x2b, 0x69, 0xc2, 0x91, 0x9f, 0x9d, 0xa0,
+	0x83, 0xc8, 0x63, 0x9a, 0x70, 0x72, 0x13, 0x7a, 0xcb, 0x78, 0xf4, 0x68, 0xa0, 0x47, 0xb7, 0x04,
+	0xd1, 0xe9, 0x3f, 0xd0, 0x79, 0x29, 0xca, 0x14, 0x4d, 0x74, 0x68, 0x5b, 0x00, 0x8d, 0xff, 0x85,
+	0xda, 0x94, 0x1a, 0x64, 0x6e, 0xd9, 0x3f, 0xd2, 0x36, 0xb0, 0x30, 0xb9, 0x09, 0x7d, 0x3d, 0x0f,
+	0xa3, 0x53, 0x1e, 0xcd, 0xc3, 0xe9, 0x65, 0xc8, 0xe4, 0xa0, 0x3d, 0x74, 0x46, 0x8d, 0xc0, 0xd5,
+	0xf3, 0xb1, 0x05, 0x0f, 0x2e, 0x0f, 0xa5, 0xbf, 0x07, 0x9d, 0x65, 0xdf, 0x04, 0xa0, 0x39, 0x91,
+	0x19, 0x4f, 0x8d, 0x57, 0xb1, 0xf2, 0x21, 0x8f, 0xb9, 0xe1, 0x9e, 0x63, 0xe5, 0xa7, 0x9a, 0x51,
+	0xc3, 0xbd, 0xaa, 0xff, 0xb5, 0x03, 0x80, 0xe1, 0x5a, 0x09, 0x69, 0xc8, 0x47, 0xd0, 0x4c, 0x84,
+	0x0c, 0x4d, 0xf6, 0x56, 0xf6, 0x35, 0x12, 0x21, 0x4f, 0x32, 0x74, 0xa6, 0x17, 0xd6, 0xb9, 0xfa,
+	0x56, 0x67, 0x7a, 0x71, 0x92, 0x95, 0xcd, 0xd5, 0xfe, 0xb6, 0xb9, 0xbc, 0x0c, 0x6a, 0x68, 0xac,
+	0x66, 0xe3, 0xb9, 0x7e, 0x67, 0x65, 0x7c, 0xe3, 0x80, 0xfb, 0x88, 0x1b, 0x6a, 0x77, 0xf6, 0x2e,
+	0xeb, 0xf8, 0x04, 0xb6, 0x1e, 0xc4, 0x86, 0xa7, 0xf8, 0x69, 0xe2, 0xa5, 0x4b, 0xa9, 0x5d, 0xcf,
+	0x10, 0xdc, 0x68, 0xa9, 0x65, 0xc5, 0xc9, 0x5d, 0x87, 0xfc, 0xdb, 0xb0, 0xb9, 0x1e, 0x99, 0x24,
+	0x5c, 0x1a, 0x32, 0x80, 0x56, 0x94, 0x8b, 0xc5, 0xa7, 0x5b, 0xaa, 0xfe, 0x23, 0xf8, 0xd7, 0xca,
+	0x3d, 0xe0, 0x96, 0x96, 0x28, 0xda, 0x0f, 0x45, 0xc5, 0x2c, 0xe7, 0x69, 0x11, 0xa3, 0x62, 0x86,
+	0x34, 0xbd, 0x0e, 0x6d, 0xc9, 0x5f, 0xe5, 0xa6, 0x6a, 0x6e, 0x92, 0xfc, 0x95, 0x35, 0xf9, 0x0c,
+	0xae, 0xad, 0xd2, 0x3d, 0x60, 0x6c, 0xac, 0xe2, 0x45, 0x22, 0xc9, 0x7b, 0xd0, 0x8c, 0x50, 0x2a,
+	0xc6, 0xd8, 0xcd, 0x1f, 0x84, 0xb1, 0x8a, 0x0f, 0xf9, 0xcb, 0xa0, 0xb0, 0x91, 0x0f, 0x60, 0x43,
+	0x20, 0x5d, 0x43, 0xad, 0x32, 0x3c, 0x91, 0x98, 0xbe, 0x11, 0xf4, 0x73, 0xf8, 0x49, 0x81, 0xfa,
+	0x2f, 0xd6, 0xa7, 0x73, 0x98, 0x2a, 0x5d, 0xfc, 0xcc, 0x0d, 0x70, 0x63, 0x35, 0x13, 0x11, 0x8d,
+	0x43, 0xc1, 0x2e, 0xf0, 0xb7, 0x7a, 0x01, 0x14, 0xd0, 0x84, 0x5d, 0xd8, 0x3b, 0x96, 0xf1, 0xb3,
+	0x05, 0x97, 0x11, 0x0f, 0xe5, 0x22, 0xc1, 0xf4, 0xbd, 0xc0, 0x2d, 0xb1, 0xc7, 0x8b, 0xc4, 0xff,
+	0xbe, 0x06, 0xbd, 0xf5, 0x89, 0x9c, 0x5d, 0x39, 0x19, 0xce, 0xd5, 0x93, 0xb1, 0x7c, 0x0c, 0xaa,
+	0x6b, 0x8f, 0x81, 0x0f, 0xf5, 0xb9, 0x90, 0xf9, 0x01, 0xe9, 0xef, 0xf7, 0x71, 0xb5, 0x98, 0xf1,
+	0x0b, 0x21, 0x59, 0x80, 0x36, 0xf2, 0x29, 0x00, 0x65, 0x2c, 0x2c, 0x86, 0x52, 0xc7, 0xa1, 0x0c,
+	0x56, 0x9e, 0x57, 0xc7, 0x77, 0x54, 0x09, 0x3a, 0x74, 0x39, 0xcb, 0xbb, 0xe0, 0xb2, 0x54, 0xe9,
+	0x32, 0xb6, 0x81, 0xb1, 0xd7, 0xdf, 0x88, 0x5d, 0x0d, 0xe5, 0xa8, 0x12, 0x00, 0x5b, 0x8d, 0xe8,
+	0x3e, 0x74, 0x53, 0xdc, 0x72, 0x98, 0xbf, 0x03, 0x4d, 0x0c, 0xdf, 0x7e, 0x23, 0x7c, 0x8d, 0x08,
+	0x47, 0x95, 0xc0, 0x4d, 0xd7, 0x78, 0x71, 0x1f, 0xfa, 0x0b, 0xbc, 0x1d, 0x61, 0xc9, 0xa8, 0xfc,
+	0x5c, 0xfd, 0xfb, 0x8d, 0x14, 0x05, 0xf5, 0x8e, 0x2a, 0x41, 0x2f, 0xf7, 0x2f, 0xb9, 0x78, 0x17,
+	0xdc, 0x32, 0x41, 0x66, 0x52, 0xbc, 0x61, 0x7f, 0xad, 0x7f, 0x45, 0x79, 0x5b, 0x7f, 0x91, 0x20,
+	0x33, 0xe9, 0x81, 0x0b, 0x1d, 0xa5, 0x79, 0x8a, 0x6f, 0xce, 0xad, 0x43, 0x68, 0x1e, 0xeb, 0xb1,
+	0x62, 0x9c, 0xb4, 0xa0, 0xf6, 0x58, 0x69, 0xaf, 0x42, 0x36, 0xa1, 0x7b, 0xac, 0x3f, 0xe7, 0xa6,
+	0x78, 0xbd, 0xbc, 0xdf, 0x5a, 0xa4, 0x0b, 0xad, 0x63, 0x8d, 0x4f, 0x8d, 0xf7, 0x7b, 0x8b, 0x78,
+	0xe0, 0x1e, 0xeb, 0x27, 0x29, 0x96, 0x23, 0x8c, 0xf7, 0x47, 0xeb, 0xd6, 0x19, 0x74, 0x96, 0xeb,
+	0x21, 0x2e, 0xb4, 0x26, 0xf2, 0x9c, 0xc6, 0x82, 0x79, 0x15, 0xd2, 0x83, 0xce, 0x72, 0x09, 0x9e,
+	0x43, 0xfa, 0x00, 0xab, 0xb9, 0x7a, 0x55, 0xb2, 0x01, 0xee, 0xda, 0xa0, 0xbc, 0x1a, 0xd9, 0x84,
+	0xde, 0xd3, 0xf5, 0x5e, 0xbd, 0x3a, 0xd9, 0x02, 0xaf, 0x84, 0xca, 0x8e, 0xbc, 0xc6, 0xc1, 0xbd,
+	0x1f, 0x5f, 0xef, 0x38, 0x3f, 0xbf, 0xde, 0x71, 0x7e, 0x79, 0xbd, 0x53, 0xf9, 0xee, 0xd7, 0x1d,
+	0xe7, 0xc5, 0xc7, 0x6b, 0xff, 0x9b, 0x25, 0xd4, 0xa4, 0xe2, 0x42, 0xa5, 0x62, 0x26, 0x64, 0xa9,
+	0x48, 0xbe, 0xa7, 0xe7, 0xb3, 0x3d, 0x3d, 0xdd, 0xa3, 0x5a, 0x4c, 0x9b, 0xf8, 0x4f, 0xd8, 0x9d,
+	0x3f, 0x03, 0x00, 0x00, 0xff, 0xff, 0x7b, 0x9d, 0x56, 0x8c, 0xe2, 0x09, 0x00, 0x00,
 }
 
 func (m *Vector) Marshal() (dAtA []byte, err error) {
@@ -1448,6 +1926,352 @@ func (m *MetadataCkp) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *AlterTableConstraint) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableConstraint) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableConstraint) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Constraints) > 0 {
+		i -= len(m.Constraints)
+		copy(dAtA[i:], m.Constraints)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.Constraints)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableComment) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableComment) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableComment) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Comment) > 0 {
+		i -= len(m.Comment)
+		copy(dAtA[i:], m.Comment)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.Comment)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableRenameTable) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableRenameTable) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableRenameTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.NewName) > 0 {
+		i -= len(m.NewName)
+		copy(dAtA[i:], m.NewName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.NewName)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.OldName) > 0 {
+		i -= len(m.OldName)
+		copy(dAtA[i:], m.OldName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.OldName)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableAddColumn) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableAddColumn) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableAddColumn) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.InsertPosition != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.InsertPosition))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Column != nil {
+		{
+			size, err := m.Column.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableDropColumn) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableDropColumn) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableDropColumn) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.SequenceNum != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.SequenceNum))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.LogicalIdx != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.LogicalIdx))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableReq) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableReq) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Operation != nil {
+		{
+			size := m.Operation.ProtoSize()
+			i -= size
+			if _, err := m.Operation.MarshalTo(dAtA[i:]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if m.Kind != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.Kind))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.DbId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.DbId))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.TableId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.TableId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableReq_AddColumn) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_AddColumn) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.AddColumn != nil {
+		{
+			size, err := m.AddColumn.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	return len(dAtA) - i, nil
+}
+func (m *AlterTableReq_DropColumn) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_DropColumn) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.DropColumn != nil {
+		{
+			size, err := m.DropColumn.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
+	return len(dAtA) - i, nil
+}
+func (m *AlterTableReq_RenameTable) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_RenameTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.RenameTable != nil {
+		{
+			size, err := m.RenameTable.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	return len(dAtA) - i, nil
+}
+func (m *AlterTableReq_UpdateComment) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_UpdateComment) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.UpdateComment != nil {
+		{
+			size, err := m.UpdateComment.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
+	}
+	return len(dAtA) - i, nil
+}
+func (m *AlterTableReq_UpdateCstr) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_UpdateCstr) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.UpdateCstr != nil {
+		{
+			size, err := m.UpdateCstr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x42
+	}
+	return len(dAtA) - i, nil
+}
 func encodeVarintApi(dAtA []byte, offset int, v uint64) int {
 	offset -= sovApi(v)
 	base := offset
@@ -1713,6 +2537,180 @@ func (m *MetadataCkp) ProtoSize() (n int) {
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableConstraint) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Constraints)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableComment) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Comment)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableRenameTable) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.OldName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = len(m.NewName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableAddColumn) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Column != nil {
+		l = m.Column.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.InsertPosition != 0 {
+		n += 1 + sovApi(uint64(m.InsertPosition))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableDropColumn) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.LogicalIdx != 0 {
+		n += 1 + sovApi(uint64(m.LogicalIdx))
+	}
+	if m.SequenceNum != 0 {
+		n += 1 + sovApi(uint64(m.SequenceNum))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableReq) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.TableId != 0 {
+		n += 1 + sovApi(uint64(m.TableId))
+	}
+	if m.DbId != 0 {
+		n += 1 + sovApi(uint64(m.DbId))
+	}
+	if m.Kind != 0 {
+		n += 1 + sovApi(uint64(m.Kind))
+	}
+	if m.Operation != nil {
+		n += m.Operation.ProtoSize()
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableReq_AddColumn) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.AddColumn != nil {
+		l = m.AddColumn.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	return n
+}
+func (m *AlterTableReq_DropColumn) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.DropColumn != nil {
+		l = m.DropColumn.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	return n
+}
+func (m *AlterTableReq_RenameTable) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RenameTable != nil {
+		l = m.RenameTable.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	return n
+}
+func (m *AlterTableReq_UpdateComment) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.UpdateComment != nil {
+		l = m.UpdateComment.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	return n
+}
+func (m *AlterTableReq_UpdateCstr) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.UpdateCstr != nil {
+		l = m.UpdateCstr.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
 	}
 	return n
 }
@@ -3270,6 +4268,767 @@ func (m *MetadataCkp) Unmarshal(dAtA []byte) error {
 			if err := m.Bat.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableConstraint) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableConstraint: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableConstraint: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Constraints", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Constraints = append(m.Constraints[:0], dAtA[iNdEx:postIndex]...)
+			if m.Constraints == nil {
+				m.Constraints = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableComment) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableComment: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableComment: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Comment", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Comment = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableRenameTable) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableRenameTable: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableRenameTable: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OldName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OldName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NewName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NewName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableAddColumn) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableAddColumn: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableAddColumn: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Column", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Column == nil {
+				m.Column = &plan.ColDef{}
+			}
+			if err := m.Column.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field InsertPosition", wireType)
+			}
+			m.InsertPosition = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.InsertPosition |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableDropColumn) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableDropColumn: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableDropColumn: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LogicalIdx", wireType)
+			}
+			m.LogicalIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LogicalIdx |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SequenceNum", wireType)
+			}
+			m.SequenceNum = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SequenceNum |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableReq) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableReq: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableReq: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TableId", wireType)
+			}
+			m.TableId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TableId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DbId", wireType)
+			}
+			m.DbId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DbId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Kind", wireType)
+			}
+			m.Kind = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Kind |= AlterKind(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AddColumn", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableAddColumn{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_AddColumn{v}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DropColumn", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableDropColumn{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_DropColumn{v}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RenameTable", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableRenameTable{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_RenameTable{v}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpdateComment", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableComment{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_UpdateComment{v}
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpdateCstr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableConstraint{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_UpdateCstr{v}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

@@ -30,14 +30,15 @@ import (
 
 type objectWriterV1 struct {
 	sync.RWMutex
-	object   *Object
-	blocks   []blockData
-	totalRow uint32
-	colmeta  []ColumnMeta
-	buffer   *ObjectBuffer
-	fileName string
-	lastId   uint32
-	name     ObjectName
+	object      *Object
+	blocks      []blockData
+	totalRow    uint32
+	colmeta     []ColumnMeta
+	buffer      *ObjectBuffer
+	fileName    string
+	lastId      uint32
+	name        ObjectName
+	compressBuf []byte
 }
 
 type blockData struct {
@@ -141,15 +142,16 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	extent := NewExtent(compress.None, offset, 0, length)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 
-	metadata := new(bytes.Buffer)
-	writeIoHeader(IOET_ObjMeta, IOET_ObjectMeta_CurrVer, metadata)
-	metadata.Write(objectMeta)
-	metadata.Write(blockIndex)
+	var buf bytes.Buffer
+	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
+	buf.Write(EncodeIOEntryHeader(&h))
+	buf.Write(objectMeta)
+	buf.Write(blockIndex)
 	// writer block metadata
 	for _, block := range w.blocks {
-		metadata.Write(block.meta)
+		buf.Write(block.meta)
 	}
-	return w.WriteWithCompress(offset, metadata.Bytes())
+	return w.WriteWithCompress(offset, buf.Bytes())
 }
 
 func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
@@ -169,8 +171,9 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 }
 
 func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	bloomFilter := new(bytes.Buffer)
-	writeIoHeader(IOET_BF, IOET_BloomFilter_CurrVer, bloomFilter)
+	buf := new(bytes.Buffer)
+	h := IOEntryHeader{IOET_BF, IOET_BloomFilter_CurrVer}
+	buf.Write(EncodeIOEntryHeader(&h))
 	bloomFilterStart := uint32(0)
 	bloomFilterIndex := BuildBlockIndex(blockCount)
 	bloomFilterIndex.SetBlockCount(blockCount)
@@ -180,16 +183,17 @@ func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([
 		bloomFilterIndex.SetBlockMetaPos(uint32(i), bloomFilterStart, n)
 		bloomFilterStart += n
 	}
-	bloomFilter.Write(bloomFilterIndex)
+	buf.Write(bloomFilterIndex)
 	for _, block := range w.blocks {
-		bloomFilter.Write(block.bloomFilter)
+		buf.Write(block.bloomFilter)
 	}
-	return w.WriteWithCompress(offset, bloomFilter.Bytes())
+	return w.WriteWithCompress(offset, buf.Bytes())
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	zoneMapArea := new(bytes.Buffer)
-	writeIoHeader(IOET_ZM, IOET_ZoneMap_CurrVer, zoneMapArea)
+	buf := new(bytes.Buffer)
+	h := IOEntryHeader{IOET_ZM, IOET_ZoneMap_CurrVer}
+	buf.Write(EncodeIOEntryHeader(&h))
 	zoneMapAreaStart := uint32(0)
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
 	zoneMapAreaIndex.SetBlockCount(blockCount)
@@ -199,13 +203,13 @@ func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([
 		zoneMapAreaIndex.SetBlockMetaPos(uint32(i), zoneMapAreaStart, n)
 		zoneMapAreaStart += n
 	}
-	zoneMapArea.Write(zoneMapAreaIndex)
+	buf.Write(zoneMapAreaIndex)
 	for _, block := range w.blocks {
 		for i := range block.data {
-			zoneMapArea.Write(block.meta.ColumnMeta(uint16(i)).ZoneMap())
+			buf.Write(block.meta.ColumnMeta(uint16(i)).ZoneMap())
 		}
 	}
-	return w.WriteWithCompress(offset, zoneMapArea.Bytes())
+	return w.WriteWithCompress(offset, buf.Bytes())
 }
 
 func (w *objectWriterV1) getMaxIndex() uint16 {
@@ -334,12 +338,19 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
+	var tmpData []byte
 	dataLen := len(buf)
-	data = make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(buf, data, compress.Lz4); err != nil {
+	compressBlockBound := lz4.CompressBlockBound(dataLen)
+	if len(w.compressBuf) < compressBlockBound {
+		w.compressBuf = make([]byte, compressBlockBound)
+	}
+	if tmpData, err = compress.Compress(buf, w.compressBuf[:compressBlockBound], compress.Lz4); err != nil {
 		return
 	}
-	extent = NewExtent(compress.Lz4, offset, uint32(len(data)), uint32(dataLen))
+	length := uint32(len(tmpData))
+	data = make([]byte, length)
+	copy(data, tmpData[:length])
+	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return
 }
 
@@ -355,7 +366,8 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 	var buf bytes.Buffer
 	for i, vec := range bat.Vecs {
 		buf.Reset()
-		writeIoHeader(IOET_ColData, IOET_ColumnData_CurrVer, &buf)
+		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
+		buf.Write(EncodeIOEntryHeader(&h))
 		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
 			return err

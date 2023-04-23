@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -174,6 +173,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return 0, nil
 }
 
+func (tbl *txnTable) GetEngineType() engine.EngineType {
+	return engine.Disttae
+}
+
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
 	// if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
@@ -256,7 +259,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				ranges = append(ranges, blockMarshal(blk))
+				ranges = append(ranges, blockInfoMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
@@ -420,18 +423,20 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 
 	// Write S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+
 		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
-		ibat := batch.New(true, bat.Attrs)
+		ibat := batch.NewWithSize(len(bat.Attrs))
+		ibat.SetAttributes(bat.Attrs)
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
 		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
-		i := rand.Int() % len(tbl.db.txn.dnStores)
-		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
+		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
 	}
-	ibat := batch.New(true, bat.Attrs)
+	ibat := batch.NewWithSize(len(bat.Attrs))
+	ibat.SetAttributes(bat.Attrs)
 	for j := range bat.Vecs {
 		ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 	}
@@ -573,9 +578,9 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]BlockMeta, len(ranges))
+	blks := make([]catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = blockUnmarshal(ranges[i])
+		blks[i] = BlockInfoUnmarshal(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -589,7 +594,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []BlockMeta{blks[i]},
+				blks:       []catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {

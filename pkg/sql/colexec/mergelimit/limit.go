@@ -77,12 +77,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 
 		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Limit {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -50,6 +51,9 @@ func New(
 		LastInsertID: new(uint64),
 		LockService:  lockService,
 		Aicm:         aicm,
+		vp: &vectorPool{
+			vecs: make(map[uint8][]*vector.Vector),
+		},
 	}
 }
 
@@ -65,6 +69,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
 	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
+	proc.vp = p.vp
 	proc.mp = p.Mp()
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
@@ -168,4 +173,75 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 
 func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
+}
+
+func (proc *Process) PutBatch(bat *batch.Batch) {
+	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+		return
+	}
+	for i := range bat.Vecs {
+		if bat.Vecs[i] != nil {
+			if !bat.Vecs[i].IsConst() {
+				proc.vp.putVector(bat.Vecs[i])
+			} else {
+				bat.Vecs[i].Free(proc.Mp())
+			}
+		}
+	}
+	bat.Vecs = nil
+	for _, agg := range bat.Aggs {
+		if agg != nil {
+			agg.Free(proc.Mp())
+		}
+	}
+	if len(bat.Zs) != 0 {
+		proc.Mp().PutSels(bat.Zs)
+		bat.Zs = nil
+	}
+}
+
+func (proc *Process) FreeVectors() {
+	proc.vp.freeVectors(proc.Mp())
+}
+
+func (proc *Process) PutVector(vec *vector.Vector) {
+	proc.vp.putVector(vec)
+}
+
+func (proc *Process) GetVector(typ types.Type) *vector.Vector {
+	if vec := proc.vp.getVector(typ); vec != nil {
+		vec.Reset(typ)
+		return vec
+	}
+	return vector.NewVec(typ)
+}
+
+func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
+	vp.Lock()
+	defer vp.Unlock()
+	for k, vecs := range vp.vecs {
+		for _, vec := range vecs {
+			vec.Free(mp)
+		}
+		delete(vp.vecs, k)
+	}
+}
+
+func (vp *vectorPool) putVector(vec *vector.Vector) {
+	vp.Lock()
+	defer vp.Unlock()
+	key := uint8(vec.GetType().Oid)
+	vp.vecs[key] = append(vp.vecs[key], vec)
+}
+
+func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
+	vp.Lock()
+	defer vp.Unlock()
+	key := uint8(typ.Oid)
+	if vecs := vp.vecs[key]; len(vecs) > 0 {
+		vec := vecs[0]
+		vp.vecs[key] = vecs[1:]
+		return vec
+	}
+	return nil
 }

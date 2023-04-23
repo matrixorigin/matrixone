@@ -217,3 +217,46 @@ type BackendOption func(*remoteBackend)
 
 // CodecOption codec options
 type CodecOption func(*messageCodec)
+
+// MethodBasedMessage defines messages based on Request and Response patterns in RPC. And
+// different processing logic can be implemented according to the Method in Request.
+type MethodBasedMessage interface {
+	Message
+	// Reset reset message
+	Reset()
+	// Method message type
+	Method() uint32
+	// SetMethod set message type.
+	SetMethod(uint32)
+	// WrapError wrap error into message, and transport to remote endpoint.
+	WrapError(error)
+	// UnwrapError parse error from the message.
+	UnwrapError() error
+}
+
+// HandlerOption message handler option
+type HandlerOption[REQ, RESP MethodBasedMessage] func(*handler[REQ, RESP])
+
+// HandleFunc request handle func
+type HandleFunc[REQ, RESP MethodBasedMessage] func(context.Context, REQ, RESP) error
+
+// MessageHandler receives and handle requests from client.
+type MessageHandler[REQ, RESP MethodBasedMessage] interface {
+	// Start start the txn server
+	Start() error
+	// Close the txn server
+	Close() error
+	// RegisterHandleFunc register request handler func
+	RegisterHandleFunc(method uint32, handleFunc HandleFunc[REQ, RESP], async bool) MessageHandler[REQ, RESP]
+	// Handle handle at local
+	Handle(ctx context.Context, req REQ) RESP
+}
+
+// MessagePool message pool is used to reuse request and response to avoid allocate.
+type MessagePool[REQ, RESP MethodBasedMessage] interface {
+	AcquireRequest() REQ
+	ReleaseRequest(REQ)
+
+	AcquireResponse() RESP
+	ReleaseResponse(RESP)
+}

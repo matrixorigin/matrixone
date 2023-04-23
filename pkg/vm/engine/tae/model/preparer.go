@@ -50,9 +50,10 @@ func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
 func (preparer *PreparedCompactedBlockData) Close() {
 	if preparer.Columns != nil {
 		preparer.Columns.Close()
+		preparer.Columns = nil
 	}
-	preparer.Columns.Close()
 	if preparer.SortKey != nil {
 		preparer.SortKey.Close()
+		preparer.SortKey = nil
 	}
 }
