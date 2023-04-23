@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"regexp"
 	"time"
 
@@ -1362,7 +1361,6 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 			steps[i] = 0
 		}
 		currentBlocks += len(infos[i])
-		logutil.Infof("!!!!!!!objectName %v , step: %v, blocks number %v", infos[i][0].MetaLocation(), steps[i], len(infos[i]))
 	}
 	return infos, steps
 }
@@ -1388,5 +1386,6 @@ func distributeBlocksToBlockReaders(ctx context.Context, fs fileservice.FileServ
 		}
 	}
 	rds[0].steps = steps
+	rds[0].infos = infos
 	return rds
 }

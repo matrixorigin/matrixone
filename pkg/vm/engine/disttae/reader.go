@@ -50,7 +50,10 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
-	defer func() { r.blks = r.blks[1:] }()
+	defer func() {
+		r.blks = r.blks[1:]
+		r.currentStep++
+	}()
 
 	info := r.blks[0]
 
@@ -88,7 +91,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	//prefetch some objects
-	for len(r.steps) > 0 && r.steps[0] == 0 {
+	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		blockio.PrefetchInner(r.colIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
