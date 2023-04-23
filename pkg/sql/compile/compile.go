@@ -531,7 +531,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate{
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
 			rs = c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
