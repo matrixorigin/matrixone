@@ -163,6 +163,10 @@ func (rel *baseRelation) GetTableID(_ context.Context) uint64 {
 	return rel.handle.ID()
 }
 
+func (rel *baseRelation) GetDBID(_ context.Context) uint64 {
+	return 0
+}
+
 func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
 	return rel.handle.ID()
 }

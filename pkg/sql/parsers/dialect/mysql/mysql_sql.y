@@ -39,6 +39,7 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
+    alterColpos *tree.AlterColPos
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -233,7 +234,7 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -517,7 +518,8 @@ import (
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
-%type <alterTableOption> alter_option alter_table_drop alter_table_alter
+%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterColpos> pos_info
 %type <indexVisibility> visibility
 
 %type <tableOption> table_option
@@ -2508,13 +2510,55 @@ ADD table_elem
     {
         $$ = tree.AlterTableOption($2)
     }
-|   ALTER alter_table_alter
+| ALTER alter_table_alter
     {
     	$$ = tree.AlterTableOption($2)
     }
 | table_option
     {
-        $$ =  tree.AlterTableOption($1)
+        $$ = tree.AlterTableOption($1)
+    }
+| RENAME TO alter_table_rename
+    {
+        $$ = tree.AlterTableOption($3)
+    }
+| ADD COLUMN column_def pos_info
+    {
+        $$ = tree.AlterTableOption(
+            &tree.AlterAddCol{
+                Column: $3,
+                Pos: $4,
+            },
+        )
+    }
+
+pos_info:
+    {
+        $$ = &tree.AlterColPos{
+            Pos: -1,
+        }
+    }
+|   FIRST
+    {
+         $$ = &tree.AlterColPos{
+            Pos: 0,
+        }
+    }
+|   AFTER column_name
+    {
+         $$ = &tree.AlterColPos{
+            PreColName: $2,
+            Pos: -2,
+        }
+    }
+
+
+alter_table_rename:
+    table_name_unresolved
+    {
+        $$ = &tree.AlterTableName{
+            Name: $1,
+        }
     }
 
 alter_table_drop:
@@ -2530,6 +2574,13 @@ alter_table_drop:
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropKey,
             Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($1.Compare()),
         }
     }
 |   COLUMN ident 
@@ -8985,6 +9036,7 @@ equal_opt:
 //|   EXPLAIN
 //|   FALSE
 //|   FIRST
+//|   AFTER
 //|   FOR
 //|   FORCE
 //|   FROM

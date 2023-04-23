@@ -283,3 +283,7 @@ message AlterTableReq {
         AlterTableConstraint update_cstr = 8;
     }
 }
+
+message AlterTableBody {
+    repeated AlterTableReq req = 1;
+}

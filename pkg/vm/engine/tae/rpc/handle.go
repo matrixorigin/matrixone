@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -525,13 +526,9 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
-		case []catalog.UpdateConstraint:
+		case []*api.AlterTableReq:
 			for _, cmd := range cmds {
-				req := apipb.NewUpdateConstraintReq(
-					cmd.DatabaseId,
-					cmd.TableId,
-					string(cmd.Constraint))
-				if err = h.CacheTxnRequest(ctx, meta, req, nil); err != nil {
+				if err = h.CacheTxnRequest(ctx, meta, cmd, nil); err != nil {
 					return err
 				}
 			}

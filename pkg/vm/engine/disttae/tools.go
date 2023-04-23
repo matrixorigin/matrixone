@@ -112,37 +112,20 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constraint []byte,
+func genAlterTableTuple(tblId, dbId uint64, tblName, dbName string, alterBody *api.AlterTableBody,
 	m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(5)
-	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
+	bat := batch.NewWithSize(1)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
 	bat.SetZs(1, m)
+	idx := catalog.MO_TABLES_UPDATE_ALTERTABLE
+	bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
 
-	{
-		idx := catalog.MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
-		if err := vector.AppendFixed(bat.Vecs[idx], tblId, false, m); err != nil {
+	for i := 0; i < len(alterBody.Req); i++ {
+		bytes, err := alterBody.Req[i].Marshal()
+		if err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // relname
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tblName), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(dbName), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // reldatabase_id
-		if err := vector.AppendFixed(bat.Vecs[idx], dbId, false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
-		if err := vector.AppendBytes(bat.Vecs[idx], constraint, false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], bytes, false, m); err != nil {
 			return nil, err
 		}
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -39,9 +40,10 @@ import (
 )
 
 var (
-	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	createIndexTableForamt                = "create table %s.`%s` (%s);"
+	insertIntoIndexTableWithPKeyFormat           = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoOnceColIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat        = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	createIndexTableForamt                       = "create table %s.`%s` (%s);"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -155,6 +157,39 @@ func (s *Scope) AlterView(c *Compile) error {
 	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
 }
 
+func addAlterKind(alterKind []api.AlterKind, kind api.AlterKind) []api.AlterKind {
+	for i := range alterKind {
+		if alterKind[i] == kind {
+			return alterKind
+		}
+	}
+	alterKind = append(alterKind, kind)
+	return alterKind
+}
+
+func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int32) ([]*plan.ColDef, int32, error) {
+	if pos == 0 {
+		cols = append([]*plan.ColDef{def}, cols...)
+		return cols, pos, nil
+	} else if pos == -1 {
+		length := len(cols)
+		cols = append(cols, nil)
+		copy(cols[length:], cols[length-1:])
+		cols[length-1] = def
+		return cols, int32(length - 1), nil
+	}
+	var idx int
+	for idx = 0; idx < len(cols); idx++ {
+		if cols[idx].Name == colName {
+			cols = append(cols, nil)
+			copy(cols[idx+2:], cols[idx+1:])
+			cols[idx+1] = def
+			return cols, int32(idx + 1), nil
+		}
+	}
+	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
+}
+
 func (s *Scope) AlterTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
@@ -202,10 +237,16 @@ func (s *Scope) AlterTable(c *Compile) error {
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
-	var addIndex *plan.IndexDef
-	var dropIndex *plan.IndexDef
+	var addIndex []*plan.IndexDef
+	var dropIndex []*plan.IndexDef
 	var alterIndex *plan.IndexDef
 
+	var alterKind []api.AlterKind
+	var comment string
+	var oldName, newName string
+	var addCol []*plan.AlterAddCol
+	var dropCol []*plan.AlterDropCol
+	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
@@ -221,9 +262,10 @@ func (s *Scope) AlterTable(c *Compile) error {
 					}
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
+				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 				for i, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
-						dropIndex = indexdef
+						dropIndex = append(dropIndex, indexdef)
 						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
 						// drop index table
 						if indexdef.TableExist {
@@ -237,13 +279,34 @@ func (s *Scope) AlterTable(c *Compile) error {
 						break
 					}
 				}
+			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
+				alterKind = append(alterKind, api.AlterKind_DropColumn)
+				var idx int
+				for idx = 0; idx < len(cols); idx++ {
+					if cols[idx].Name == constraintName {
+						drop := &plan.AlterDropCol{
+							Idx: uint32(idx),
+							Seq: 0,
+						}
+						dropCol = append(dropCol, drop)
+						copy(cols[idx:], cols[idx+1:])
+						cols = cols[0 : len(cols)-1]
+						break
+					}
+				}
 			}
 		case *plan.AlterTable_Action_AddFk:
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			addIndex = indexDef
+			for i := range addIndex {
+				if indexDef.IndexName == addIndex[i].IndexName {
+					return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+				}
+			}
+			addIndex = append(addIndex, indexDef)
 			// build and update constraint def
 			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
 			if err != nil {
@@ -296,7 +359,11 @@ func (s *Scope) AlterTable(c *Compile) error {
 				}
 
 				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
-					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+					if len(indexDef.Parts) == 1 {
+						insetSQL = fmt.Sprintf(insertIntoOnceColIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+					} else {
+						insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
+					}
 				} else {
 					pkeyName := tableDef.Pkey.PkeyColName
 					var pKeyMsg string
@@ -332,13 +399,35 @@ func (s *Scope) AlterTable(c *Compile) error {
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterComment:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
+			comment = act.AlterComment.NewComment
+		case *plan.AlterTable_Action_AlterName:
+			alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
+			oldName = act.AlterName.OldName
+			newName = act.AlterName.NewName
+		case *plan.AlterTable_Action_AddCol:
+			alterKind = append(alterKind, api.AlterKind_AddColumn)
+			col := &plan.ColDef{
+				Name: act.AddCol.Name,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  act.AddCol.Type,
+			}
+			var pos int32
+			cols, pos, err = getAddColPos(cols, col, act.AddCol.PreName, act.AddCol.Pos)
+			if err != nil {
+				return err
+			}
+			act.AddCol.Pos = pos
+			addCol = append(addCol, act.AddCol)
 		}
 	}
 
 	// reset origin table's constraint
 	var oldCt *engine.ConstraintDef
 	newCt := &engine.ConstraintDef{
-		Cts: []engine.Constraint{},
+		Cts:       []engine.Constraint{},
+		AlterBody: &api.AlterTableBody{},
 	}
 	for _, def := range oldDefs {
 		if ct, ok := def.(*engine.ConstraintDef); ok {
@@ -369,15 +458,16 @@ func (s *Scope) AlterTable(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			if dropIndex != nil {
+			for in := range dropIndex { //if dropIndex != nil {
 				for i, idx := range t.Indexes {
-					if dropIndex.IndexName == idx.IndexName {
+					if dropIndex[in].IndexName == idx.IndexName {
 						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
+						break
 					}
 				}
 			}
-			if addIndex != nil {
-				t.Indexes = append(t.Indexes, addIndex)
+			for i := range addIndex {
+				t.Indexes = append(t.Indexes, addIndex[i])
 			}
 
 			if alterIndex != nil {
@@ -399,8 +489,37 @@ func (s *Scope) AlterTable(c *Compile) error {
 	}
 	if !originHasIndexDef && addIndex != nil {
 		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
-			Indexes: []*plan.IndexDef{addIndex},
+			Indexes: []*plan.IndexDef(addIndex),
 		})
+	}
+
+	var addColIdx int
+	var dropColIdx int
+	for _, kind := range alterKind {
+		var req *api.AlterTableReq
+		switch kind {
+		case api.AlterKind_UpdateConstraint:
+			ct, err := newCt.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			req = api.NewUpdateConstraintReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), string(ct))
+		case api.AlterKind_UpdateComment:
+			req = api.NewUpdateCommentReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), comment)
+		case api.AlterKind_RenameTable:
+			req = api.NewRenameTableReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), oldName, newName)
+		case api.AlterKind_AddColumn:
+			name := addCol[addColIdx].Name
+			typ := addCol[addColIdx].Type
+			pos := addCol[addColIdx].Pos
+			addColIdx++
+			req = api.NewAddColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), name, typ, pos)
+		case api.AlterKind_DropColumn:
+			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
+			dropColIdx++
+		default:
+		}
+		newCt.AlterBody.Req = append(newCt.AlterBody.Req, req)
 	}
 
 	err = rel.UpdateConstraint(c.ctx, newCt)

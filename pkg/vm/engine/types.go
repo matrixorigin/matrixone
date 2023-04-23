@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -159,7 +160,8 @@ func (*ClusterByDef) tableDef()  {}
 func (*ConstraintDef) tableDef() {}
 
 type ConstraintDef struct {
-	Cts []Constraint
+	Cts       []Constraint
+	AlterBody *api.AlterTableBody
 }
 
 type ConstraintType int8
@@ -362,6 +364,8 @@ type Relation interface {
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
 	GetTableID(context.Context) uint64
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)

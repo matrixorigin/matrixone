@@ -362,7 +362,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	if err != nil {
 		return err
 	}
-	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, ct, tbl.db.txn.proc.Mp())
+	bat, err := genAlterTableTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, c.AlterBody, tbl.db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -499,6 +499,10 @@ func (tbl *txnTable) DelTableDef(ctx context.Context, def engine.TableDef) error
 
 func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 	return tbl.tableId
+}
+
+func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
+	return tbl.db.databaseId
 }
 
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
