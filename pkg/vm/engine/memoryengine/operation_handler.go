@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"encoding"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -188,145 +189,123 @@ func handle(
 	meta txn.TxnMeta,
 	_ metadata.DNShard,
 	op uint32,
-	req any,
+	req encoding.BinaryMarshaler,
+	resp encoding.BinaryUnmarshaler,
 ) (
-	ret any,
 	err error,
 ) {
 
 	switch op {
 
 	case OpCreateDatabase:
-		var r CreateDatabaseResp
-		request := req.(CreateDatabaseReq)
-		err = handler.HandleCreateDatabase(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*CreateDatabaseResp)
+		request := req.(*CreateDatabaseReq)
+		err = handler.HandleCreateDatabase(ctx, meta, request, response)
 
 	case OpOpenDatabase:
-		var r OpenDatabaseResp
-		request := req.(OpenDatabaseReq)
-		err = handler.HandleOpenDatabase(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*OpenDatabaseResp)
+		request := req.(*OpenDatabaseReq)
+		err = handler.HandleOpenDatabase(ctx, meta, request, response)
 
 	case OpGetDatabases:
-		var r GetDatabasesResp
-		request := req.(GetDatabasesReq)
-		err = handler.HandleGetDatabases(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetDatabasesResp)
+		request := req.(*GetDatabasesReq)
+		err = handler.HandleGetDatabases(ctx, meta, request, response)
 
 	case OpDeleteDatabase:
-		var r DeleteDatabaseResp
-		request := req.(DeleteDatabaseReq)
-		err = handler.HandleDeleteDatabase(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*DeleteDatabaseResp)
+		request := req.(*DeleteDatabaseReq)
+		err = handler.HandleDeleteDatabase(ctx, meta, request, response)
 
 	case OpCreateRelation:
-		var r CreateRelationResp
-		request := req.(CreateRelationReq)
-		err = handler.HandleCreateRelation(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*CreateRelationResp)
+		request := req.(*CreateRelationReq)
+		err = handler.HandleCreateRelation(ctx, meta, request, response)
 
 	case OpDeleteRelation:
-		var r DeleteRelationResp
-		request := req.(DeleteRelationReq)
-		err = handler.HandleDeleteRelation(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*DeleteRelationResp)
+		request := req.(*DeleteRelationReq)
+		err = handler.HandleDeleteRelation(ctx, meta, request, response)
 
 	case OpTruncateRelation:
-		var r TruncateRelationResp
-		request := req.(TruncateRelationReq)
-		handler.HandleTruncateRelation(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*TruncateRelationResp)
+		request := req.(*TruncateRelationReq)
+		handler.HandleTruncateRelation(ctx, meta, request, response)
 
 	case OpOpenRelation:
-		var r OpenRelationResp
-		request := req.(OpenRelationReq)
-		err = handler.HandleOpenRelation(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*OpenRelationResp)
+		request := req.(*OpenRelationReq)
+		err = handler.HandleOpenRelation(ctx, meta, request, response)
 
 	case OpGetRelations:
-		var r GetRelationsResp
-		request := req.(GetRelationsReq)
-		err = handler.HandleGetRelations(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetRelationsResp)
+		request := req.(*GetRelationsReq)
+		err = handler.HandleGetRelations(ctx, meta, request, response)
 
 	case OpAddTableDef:
-		var r AddTableDefResp
-		request := req.(AddTableDefReq)
-		err = handler.HandleAddTableDef(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*AddTableDefResp)
+		request := req.(*AddTableDefReq)
+		err = handler.HandleAddTableDef(ctx, meta, request, response)
 
 	case OpDelTableDef:
-		var r DelTableDefResp
-		request := req.(DelTableDefReq)
-		err = handler.HandleDelTableDef(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*DelTableDefResp)
+		request := req.(*DelTableDefReq)
+		err = handler.HandleDelTableDef(ctx, meta, request, response)
 
 	case OpDelete:
-		var r DeleteResp
-		request := req.(DeleteReq)
-		err = handler.HandleDelete(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*DeleteResp)
+		request := req.(*DeleteReq)
+		err = handler.HandleDelete(ctx, meta, request, response)
 
 	case OpGetPrimaryKeys:
-		var r GetPrimaryKeysResp
-		request := req.(GetPrimaryKeysReq)
-		err = handler.HandleGetPrimaryKeys(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetPrimaryKeysResp)
+		request := req.(*GetPrimaryKeysReq)
+		err = handler.HandleGetPrimaryKeys(ctx, meta, request, response)
 
 	case OpGetTableColumns:
-		var r GetTableColumnsResp
-		request := req.(GetTableColumnsReq)
-		err = handler.HandleGetTableColumns(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetTableColumnsResp)
+		request := req.(*GetTableColumnsReq)
+		err = handler.HandleGetTableColumns(ctx, meta, request, response)
 
 	case OpGetTableDefs:
-		var r GetTableDefsResp
-		request := req.(GetTableDefsReq)
-		err = handler.HandleGetTableDefs(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetTableDefsResp)
+		request := req.(*GetTableDefsReq)
+		err = handler.HandleGetTableDefs(ctx, meta, request, response)
 
 	case OpGetHiddenKeys:
-		var r GetHiddenKeysResp
-		request := req.(GetHiddenKeysReq)
-		err = handler.HandleGetHiddenKeys(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*GetHiddenKeysResp)
+		request := req.(*GetHiddenKeysReq)
+		err = handler.HandleGetHiddenKeys(ctx, meta, request, response)
 
 	case OpUpdate:
-		var r UpdateResp
-		request := req.(UpdateReq)
-		err = handler.HandleUpdate(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*UpdateResp)
+		request := req.(*UpdateReq)
+		err = handler.HandleUpdate(ctx, meta, request, response)
 
 	case OpWrite, OpPreCommit:
-		var r WriteResp
-		request := req.(WriteReq)
-		err = handler.HandleWrite(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*WriteResp)
+		request := req.(*WriteReq)
+		err = handler.HandleWrite(ctx, meta, request, response)
 
 	case OpNewTableIter:
-		var r NewTableIterResp
-		request := req.(NewTableIterReq)
-		err = handler.HandleNewTableIter(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*NewTableIterResp)
+		request := req.(*NewTableIterReq)
+		err = handler.HandleNewTableIter(ctx, meta, request, response)
 
 	case OpRead:
-		var r ReadResp
-		request := req.(ReadReq)
-		err = handler.HandleRead(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*ReadResp)
+		request := req.(*ReadReq)
+		err = handler.HandleRead(ctx, meta, request, response)
 
 	case OpCloseTableIter:
-		var r CloseTableIterResp
-		request := req.(CloseTableIterReq)
-		err = handler.HandleCloseTableIter(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*CloseTableIterResp)
+		request := req.(*CloseTableIterReq)
+		err = handler.HandleCloseTableIter(ctx, meta, request, response)
 
 	case OpTableStats:
-		var r TableStatsResp
-		request := req.(TableStatsReq)
-		err = handler.HandleTableStats(ctx, meta, &request, &r)
-		ret = r
+		response := resp.(*TableStatsResp)
+		request := req.(*TableStatsReq)
+		err = handler.HandleTableStats(ctx, meta, request, response)
 
 	default:
 		panic(fmt.Sprintf("unknown operation %v", op))

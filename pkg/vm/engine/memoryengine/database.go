@@ -56,7 +56,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		false,
 		d.engine.allShards,
 		OpCreateRelation,
-		CreateRelationReq{
+		&CreateRelationReq{
 			ID:           id,
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
@@ -89,7 +89,7 @@ func (d *Database) Truncate(ctx context.Context, relName string) (uint64, error)
 		false,
 		d.engine.allShards,
 		OpTruncateRelation,
-		TruncateRelationReq{
+		&TruncateRelationReq{
 			NewTableID:   newId,
 			OldTableID:   ID(oldId),
 			DatabaseID:   d.id,
@@ -112,7 +112,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		false,
 		d.engine.allShards,
 		OpDeleteRelation,
-		DeleteRelationReq{
+		&DeleteRelationReq{
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
 			Name:         strings.ToLower(relName),
@@ -137,7 +137,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		true,
 		d.engine.anyShard,
 		OpOpenRelation,
-		OpenRelationReq{
+		&OpenRelationReq{
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
 			Name:         relName,
@@ -175,7 +175,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		true,
 		d.engine.anyShard,
 		OpGetRelations,
-		GetRelationsReq{
+		&GetRelationsReq{
 			DatabaseID: d.id,
 		},
 	)
