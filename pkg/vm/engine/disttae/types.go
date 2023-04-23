@@ -37,6 +37,11 @@ import (
 )
 
 const (
+	PREFETCH_THRESHOLD = 128
+	PREFETCH_ROUNDS    = 16
+)
+
+const (
 	INSERT = iota
 	DELETE
 	UPDATE
@@ -237,7 +242,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []catalog.BlockInfo
+	blks       []*catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp

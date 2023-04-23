@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -579,25 +578,12 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]catalog.BlockInfo, len(ranges))
+	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
 		blks[i] = BlockInfoUnmarshal(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
-
-	if colNames != nil {
-		if len(ranges) > num {
-			//if blocks less than cpu number, do not prefetch
-			infos, steps := groupBlocksToObjects(blks, num)
-			//prefetch some objects
-			for len(steps) > 0 && steps[0] == 0 {
-				blockio.BlockPrefetch(colNames, tableDef, tbl.db.txn.engine.fs, [][]*catalog.BlockInfo{infos[0]})
-				infos = infos[1:]
-				steps = steps[1:]
-			}
-		}
-	}
 
 	if len(ranges) < num {
 		for i := range ranges {
@@ -608,7 +594,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []catalog.BlockInfo{blks[i]},
+				blks:       []*catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -828,7 +814,7 @@ func (tbl *txnTable) updateLocalState(
 			}
 			iter.Close()
 			if n > 1 {
-				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */ ]
+				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */]
 				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
 				return moerr.NewDuplicateEntry(
 					ctx,

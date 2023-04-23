@@ -52,7 +52,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 	defer func() { r.blks = r.blks[1:] }()
 
-	info := &r.blks[0]
+	info := r.blks[0]
 
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {
