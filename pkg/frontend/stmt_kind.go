@@ -112,6 +112,7 @@ If it is Case1,Case3, Then
 	Create/Drop database reports error
 
 If it is Case2, Then
+
 	Create/Drop database as other statement.
 
 If it is Case4, Then

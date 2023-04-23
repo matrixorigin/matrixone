@@ -637,7 +637,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		if err != nil {
 			return err
 		}
-		proc.SetCacheForAutoCol(name+attr.Name)
+		proc.SetCacheForAutoCol(name + attr.Name)
 		bat := makeAutoIncrBatch(name+attr.Name, proc.Aicm.MaxSize, 1, proc.Mp())
 		if err = rel2.Write(ctx, bat); err != nil {
 			return err
