@@ -237,6 +237,11 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		if err := vector.AppendBytes(bat.Vecs[idx], tbl.constraint, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // schema_version
+		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }

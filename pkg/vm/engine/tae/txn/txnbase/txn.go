@@ -15,7 +15,9 @@
 package txnbase
 
 import (
+	"context"
 	"fmt"
+	"runtime/trace"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -259,6 +261,9 @@ func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
+	probe := trace.StartRegion(context.Background(), "Commit")
+	defer probe.End()
+
 	err = txn.doCommit(false)
 	return
 }

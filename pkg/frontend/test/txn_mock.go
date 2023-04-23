@@ -53,6 +53,20 @@ func (mr *MockTxnClientMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockTxnClient)(nil).Close))
 }
 
+// MinTimestamp mocks base method.
+func (m *MockTxnClient) MinTimestamp() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MinTimestamp")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// MinTimestamp indicates an expected call of MinTimestamp.
+func (mr *MockTxnClientMockRecorder) MinTimestamp() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MinTimestamp", reflect.TypeOf((*MockTxnClient)(nil).MinTimestamp))
+}
+
 // New mocks base method.
 func (m *MockTxnClient) New(ctx context.Context, commitTS timestamp.Timestamp, options ...client.TxnOption) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
