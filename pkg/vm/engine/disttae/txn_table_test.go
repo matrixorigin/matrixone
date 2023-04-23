@@ -139,7 +139,7 @@ func TestPrimaryKeyCheck(t *testing.T) {
 	err = table.Delete(
 		ctx,
 		getRowIDsBatch(table),
-		"",
+		catalog.Row_ID,
 	)
 	assert.Nil(t, err)
 	err = table.Write(

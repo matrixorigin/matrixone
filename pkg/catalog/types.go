@@ -131,6 +131,7 @@ const (
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
 	BlockMeta_ID              = "block_id"
+	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
@@ -138,7 +139,11 @@ const (
 	BlockMeta_CommitTs        = "committs"
 	BlockMeta_SegmentID       = "segment_id"
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
-
+	BlockMeta_Type            = "%!%mo__meta_type"
+	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
+	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
+	BlockMetaOffset    = "%!%mo__meta_offset"
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"

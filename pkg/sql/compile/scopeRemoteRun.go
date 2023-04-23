@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -114,17 +115,6 @@ func CnServerMessageHandler(
 	return receiver.sendEndMessage()
 }
 
-func fillEngineForInsert(s *Scope, e engine.Engine) {
-	for i := range s.Instructions {
-		if s.Instructions[i].Op == vm.Insert {
-			s.Instructions[i].Arg.(*insert.Argument).Engine = e
-		}
-	}
-	for i := range s.PreScopes {
-		fillEngineForInsert(s.PreScopes[i], e)
-	}
-}
-
 // cnMessageHandle deal the received message at cn-server.
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
@@ -160,7 +150,6 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		fillEngineForInsert(s, c.e)
 		s = refactorScope(c, c.ctx, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
@@ -608,6 +597,36 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ParentIdx:    t.InsertCtx.ParentIdx,
 			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
+	case *deletion.Argument:
+		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
+		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
+			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
+		}
+		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
+		}
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+
+		}
+		in.Delete = &pipeline.Deletion{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
+			// deleteCtx
+			CanTruncate:    t.DeleteCtx.CanTruncate,
+			DelRef:         t.DeleteCtx.DelRef,
+			IdxIdx:         t.DeleteCtx.IdxIdx,
+			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
+			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
+			OnSetRef:       t.DeleteCtx.OnSetRef,
+			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
+			OnSetUpdateCol: onSetUpdateCols,
+			OnSetIdx:       onSetIdxs,
+		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
 			Affected:        t.Affected,
@@ -907,6 +926,35 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
 	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch opr.Op {
+	case vm.Deletion:
+		t := opr.GetDelete()
+		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
+		for i := 0; i < len(t.OnSetUpdateCol); i++ {
+			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
+		}
+		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
+		for i := 0; i < len(t.OnSetIdx); i++ {
+			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
+		}
+		v.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			Nbucket:      t.NBucket,
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:    t.CanTruncate,
+				DelRef:         t.DelRef,
+				IdxIdx:         t.IdxIdx,
+				OnRestrictIdx:  t.OnRestrictIdx,
+				OnCascadeIdx:   t.OnCascadeIdx,
+				OnSetRef:       t.OnSetRef,
+				OnSetTableDef:  t.OnSetTableDef,
+				OnSetUpdateCol: onSetUpdateCols,
+				OnSetIdx:       onSetIdxs,
+			},
+		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
