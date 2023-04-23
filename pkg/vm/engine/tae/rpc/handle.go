@@ -319,7 +319,7 @@ func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req apipb.SyncLogTailReq,
+	req *apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
@@ -327,7 +327,7 @@ func (h *Handle) HandleGetLogTail(
 		tae.BGCheckpointRunner,
 		tae.LogtailMgr,
 		tae.Catalog,
-		req,
+		*req,
 		true)
 	if err != nil {
 		return err
@@ -339,7 +339,7 @@ func (h *Handle) HandleGetLogTail(
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.FlushTable,
+	req *db.FlushTable,
 	resp *apipb.SyncLogTailResp) (err error) {
 
 	// We use current TS instead of transaction ts.
@@ -359,7 +359,7 @@ func (h *Handle) HandleFlushTable(
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.Checkpoint,
+	req *db.Checkpoint,
 	resp *apipb.SyncLogTailResp) (err error) {
 
 	timeout := req.FlushDuration
@@ -374,7 +374,7 @@ func (h *Handle) HandleForceCheckpoint(
 func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.InspectDN,
+	req *db.InspectDN,
 	resp *db.InspectResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	args, _ := shlex.Split(req.Operation)
@@ -475,7 +475,7 @@ func (h *Handle) CacheTxnRequest(
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req apipb.PrecommitWriteCmd,
+	req *apipb.PrecommitWriteCmd,
 	resp *apipb.SyncLogTailResp) (err error) {
 	var e any
 

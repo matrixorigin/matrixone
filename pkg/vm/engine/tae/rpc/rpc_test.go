@@ -201,7 +201,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		txn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -404,7 +404,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		txn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -526,7 +526,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		txn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -593,7 +593,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		createDbTxn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -668,7 +668,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		createTbTxn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -709,7 +709,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		insertTxn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,
@@ -766,7 +766,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		deleteTxn,
-		api.PrecommitWriteCmd{
+		&api.PrecommitWriteCmd{
 			//UserId:    ac.userId,
 			//AccountId: ac.accountId,
 			//RoleId:    ac.roleId,

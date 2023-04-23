@@ -15,14 +15,14 @@
 package taestorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	"encoding"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	"io"
 )
 
 // Read implements storage.TxnTAEStorage
@@ -47,7 +47,20 @@ func (s *taeStorage) Read(
 
 }
 
-func handleRead[Req any, Resp any](
+func handleRead[
+	Req any, PReq interface {
+		// anonymous constraint
+		encoding.BinaryUnmarshaler
+		// make Req convertible to its pointer type
+		*Req
+	},
+	Resp any, PResp interface {
+		// anonymous constraint
+		encoding.BinaryMarshaler
+		// make Resp convertible to its pointer type
+		*Resp
+	},
+](
 	ctx context.Context,
 	s *taeStorage,
 	txnMeta txn.TxnMeta,
@@ -55,8 +68,8 @@ func handleRead[Req any, Resp any](
 	fn func(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req Req,
-		resp *Resp,
+		preq PReq,
+		presp PResp,
 	) (
 		err error,
 	),
@@ -65,32 +78,32 @@ func handleRead[Req any, Resp any](
 	err error,
 ) {
 
-	var req Req
+	var preq PReq = new(Req)
 	if len(payload) != 0 {
-		if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+		if err := preq.UnmarshalBinary(payload); err != nil {
 			return nil, err
 		}
 	}
 
-	var resp Resp
-	defer logReq("read", req, txnMeta, &resp, &err)()
+	var presp PResp = new(Resp)
+	defer logReq("read", preq, txnMeta, presp, &err)()
 	defer func() {
-		if closer, ok := (any)(resp).(io.Closer); ok {
+		if closer, ok := (any)(presp).(io.Closer); ok {
 			_ = closer.Close()
 		}
 	}()
 
-	err = fn(ctx, txnMeta, req, &resp)
+	err = fn(ctx, txnMeta, preq, presp)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data, err := presp.MarshalBinary()
+	if err != nil {
 		return nil, err
 	}
 	res = &readResult{
-		payload: buf.Bytes(),
+		payload: data,
 	}
 
 	return res, nil

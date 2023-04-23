@@ -116,13 +116,37 @@ type FlushTable struct {
 	TableID    uint64
 }
 
+func (m *FlushTable) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *FlushTable) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type Checkpoint struct {
 	FlushDuration time.Duration
+}
+
+func (m *Checkpoint) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *Checkpoint) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }
 
 type InspectDN struct {
 	AccessInfo AccessInfo
 	Operation  string
+}
+
+func (m *InspectDN) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InspectDN) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }
 
 type CreateDatabaseResp struct {
@@ -224,17 +248,25 @@ type InspectResp struct {
 	Payload []byte `json:"-"`
 }
 
+func (m *InspectResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InspectResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 const (
 	InspectNormal = 0
 	InspectCata   = 1
 )
 
-func (r *InspectResp) GetResponse() any {
-	var ret any = r
-	switch r.Typ {
+func (m *InspectResp) GetResponse() any {
+	var ret any = m
+	switch m.Typ {
 	case InspectCata:
 		ret = new(CatalogResp)
-		types.Decode(r.Payload, ret)
+		types.Decode(m.Payload, ret)
 	}
 	return ret
 }

@@ -15,9 +15,9 @@
 package taestorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	"encoding"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -49,8 +49,18 @@ func (s *taeStorage) Write(
 }
 
 func handleWrite[
-	Req any,
-	Resp any,
+	Req any, PReq interface {
+		// anonymous constraint
+		encoding.BinaryUnmarshaler
+		// make Req convertible to its pointer type
+		*Req
+	},
+	Resp any, PResp interface {
+		// anonymous constraint
+		encoding.BinaryMarshaler
+		// make Resp convertible to its pointer type
+		*Resp
+	},
 ](
 	ctx context.Context,
 	s *taeStorage,
@@ -59,8 +69,8 @@ func handleWrite[
 	fn func(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req Req,
-		resp *Resp,
+		preq PReq,
+		presp PResp,
 	) (
 		err error,
 	),
@@ -69,24 +79,24 @@ func handleWrite[
 	err error,
 ) {
 
-	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	var preq PReq = new(Req)
+	if err := preq.UnmarshalBinary(payload); err != nil {
 		return nil, err
 	}
 
-	var resp Resp
-	defer logReq("write", req, meta, &resp, &err)()
+	var presp PResp = new(Resp)
+	defer logReq("write", preq, meta, presp, &err)()
 
-	err = fn(ctx, meta, req, &resp)
+	err = fn(ctx, meta, preq, presp)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data, err := presp.MarshalBinary()
+	if err != nil {
 		return nil, err
 	}
-	res = buf.Bytes()
+	res = data
 
 	return
 }
