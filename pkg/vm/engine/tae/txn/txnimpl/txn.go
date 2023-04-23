@@ -52,7 +52,9 @@ func (txn *txnImpl) CreateDatabase(name, createSql, datTyp string) (db handle.Da
 	return txn.Store.CreateDatabase(name, createSql, datTyp)
 }
 
-func (txn *txnImpl) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
+	name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+	txn.bindCtxInfo(ctx)
 	return txn.Store.CreateDatabaseWithID(name, createSql, datTyp, id)
 }
 

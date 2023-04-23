@@ -636,8 +636,12 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
-	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatTyp, req.DatabaseId, txn)
-	if err != nil {
+	if _, err = txn.CreateDatabaseWithCtx(
+		ctx,
+		req.Name,
+		req.CreateSql,
+		req.DatTyp,
+		req.DatabaseId); err != nil {
 		return
 	}
 	resp.ID = req.DatabaseId
