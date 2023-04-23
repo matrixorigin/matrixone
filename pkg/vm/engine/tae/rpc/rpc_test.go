@@ -421,7 +421,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.NoError(t, err)
 	tbH, err := dbH.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	hideDef, err := getHideKeys(tbH)
+	hideDef, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 
 	rows := 0
@@ -673,12 +673,12 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 	dbId := dbH.GetID()
 	assert.True(t, dbTestId == dbId)
-	names, _ = tableNames(dbH)
+	names, _ = TableNamesOfDB(dbH)
 	assert.Equal(t, 2, len(names))
 	tbH, err := dbH.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbH.ID()
-	rDefs, _ := tableDefs(tbH)
+	rDefs, _ := TableDefs(tbH)
 	//assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
@@ -734,7 +734,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	_ = it.Close()
 
 	// read row ids
-	hideCol, err := getHideKeys(tbH)
+	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 
 	it = tbH.MakeBlockIt()
@@ -913,12 +913,12 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 	dbId := dbH.GetID()
 	assert.True(t, dbTestId == dbId)
-	names, _ = tableNames(dbH)
+	names, _ = TableNamesOfDB(dbH)
 	assert.Equal(t, 1, len(names))
 	tbH, err := dbH.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbH.ID()
-	rDefs, _ := tableDefs(tbH)
+	rDefs, _ := TableDefs(tbH)
 	assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
@@ -995,7 +995,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	_ = it.Close()
 
 	// read row ids
-	hideCol, err := getHideKeys(tbH)
+	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 	it = tbH.MakeBlockIt()
 	cv, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
@@ -1205,12 +1205,12 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 	dbId := dbH.GetID()
 	assert.True(t, dbTestId == dbId)
-	names, _ = tableNames(dbH)
+	names, _ = TableNamesOfDB(dbH)
 	assert.Equal(t, 1, len(names))
 	tbH, err := dbH.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbH.ID()
-	rDefs, _ := tableDefs(tbH)
+	rDefs, _ := TableDefs(tbH)
 	assert.Equal(t, 3, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
@@ -1306,7 +1306,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	}
 	_ = it.Close()
 
-	hideCol, err := getHideKeys(tbH)
+	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 	it = tbH.MakeBlockIt()
 	v, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
@@ -1556,12 +1556,12 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		dbId := dbH.GetID()
 		assert.True(t, dbTestId == dbId)
 		//txn should wait here.
-		names, _ := tableNames(dbH)
+		names, _ := TableNamesOfDB(dbH)
 		assert.Equal(t, 1, len(names))
 		tbH, err := dbH.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
 		tbTestId = tbH.ID()
-		rDefs, _ := tableDefs(tbH)
+		rDefs, _ := TableDefs(tbH)
 		assert.Equal(t, 3, len(rDefs))
 		rAttr := rDefs[0].(*engine.AttributeDef).Attr
 		assert.Equal(t, true, rAttr.Default.NullAbility)
@@ -1644,7 +1644,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 		tbH, err := dbH.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
-		hideCol, err := getHideKeys(tbH)
+		hideCol, err := GetHideKeysOfTable(tbH)
 		assert.NoError(t, err)
 
 		it := tbH.MakeBlockIt()

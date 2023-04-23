@@ -690,7 +690,7 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	if err = createRelation(ctx, dbH, req.Name, req.RelationId, req.Defs); err != nil {
+	if err = CreateRelation(ctx, dbH, req.Name, req.RelationId, req.Defs); err != nil {
 		return
 	}
 
@@ -803,7 +803,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		//Appends a batch of data into table.
-		err = appendBatch(tb, req.Batch)
+		err = AppendDataToTable(tb, req.Batch)
 		return
 	}
 	//handle delete
