@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -63,13 +63,6 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		bat := hashBuild(t, tc)
@@ -88,6 +81,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 	for _, tc := range tcs {
@@ -106,6 +100,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 
@@ -151,7 +146,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 4),
 	}
-	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	fr, _ := function2.GetFunctionByName(ctx, "=", ts)
+	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
