@@ -111,8 +111,8 @@ type Engine interface {
 	GetDatabase(ctx context.Context, databaseName string, txn Txn) (Database, error)
 	GetDatabaseByID(ctx context.Context, id uint64, txn Txn) (Database, error)
 
-	// GetTAE returns tae db struct
-	GetTAE(ctx context.Context) *db.DB
+	// GetDB returns tae db struct
+	GetDB() *db.DB
 
 	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
 	ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error

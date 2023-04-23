@@ -207,7 +207,7 @@ func (e *txnEngine) GetDatabaseByID(_ context.Context, id uint64, txnHandle Txn)
 	return db, nil
 }
 
-func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
+func (e *txnEngine) GetDB() *db.DB {
 	return e.impl
 }
 func (e *txnEngine) FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error {

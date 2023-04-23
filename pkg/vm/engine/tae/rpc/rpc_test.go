@@ -66,7 +66,6 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
-	txnEngine := handle.GetTxnEngine()
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
@@ -133,7 +132,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	}
 	//var entries []*api.Entry
 	entries := make([]*api.Entry, 0)
-	txn := mock1PCTxn(txnEngine)
+	txn := mock1PCTxn(handle.db)
 	dbTestID := IDAlloc.NextDB()
 	createDbEntries, err := makeCreateDatabaseEntries(
 		"",
@@ -323,7 +322,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		roleId:    0,
 	}
 	var entries []*api.Entry
-	txn := mock1PCTxn(txnEngine)
+	txn := mock1PCTxn(handle.db)
 	dbTestID := IDAlloc.NextDB()
 	createDbEntries, err := makeCreateDatabaseEntries(
 		"",
@@ -522,7 +521,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.NoError(t, err)
 	delApiEntries = append(delApiEntries, deleteS3BlkEntry)
 
-	txn = mock1PCTxn(txnEngine)
+	txn = mock1PCTxn(handle.db)
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		txn,
@@ -589,7 +588,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		IDAlloc.NextDB(),
 		handle.m)
 	assert.Nil(t, err)
-	createDbTxn := mock1PCTxn(txnEngine)
+	createDbTxn := mock1PCTxn(handle.db)
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		createDbTxn,
@@ -639,7 +638,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	}
 	assert.Nil(t, err)
 
-	createTbTxn := mock1PCTxn(txnEngine)
+	createTbTxn := mock1PCTxn(handle.db)
 
 	createTbEntries, err := makeCreateTableEntries(
 		"",
@@ -701,7 +700,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 
 	//DML: insert batch into table
-	insertTxn := mock1PCTxn(txnEngine)
+	insertTxn := mock1PCTxn(handle.db)
 	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
@@ -752,7 +751,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.Nil(t, err)
 
 	//delete 20 rows
-	deleteTxn := mock1PCTxn(handle.GetTxnEngine())
+	deleteTxn := mock1PCTxn(handle.db)
 	batch.SetLength(hideBat, 20)
 	deleteEntry, _ := makePBEntry(
 		DELETE,
@@ -835,7 +834,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommitting},
 		{typ: CmdCommit},
 	}
-	txnMeta := mock2PCTxn(txnEngine)
+	txnMeta := mock2PCTxn(handle.db)
 	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -907,7 +906,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommitting},
 		{typ: CmdCommit},
 	}
-	txnMeta = mock2PCTxn(txnEngine)
+	txnMeta = mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -951,13 +950,13 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommitting},
 		{typ: CmdCommit},
 	}
-	insertTxn := mock2PCTxn(txnEngine)
+	insertTxn := mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
 
 	//start 2PC txn ,rollback it after prepared
-	rollbackTxn := mock2PCTxn(txnEngine)
+	rollbackTxn := mock2PCTxn(handle.db)
 	//insert 20 rows, then rollback the txn
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
@@ -1032,13 +1031,13 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommitting},
 		{typ: CmdCommit},
 	}
-	deleteTxn := mock2PCTxn(txnEngine)
+	deleteTxn := mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, deleteTxn, txnCmds)
 	assert.Nil(t, err)
 
 	//start a 2PC txn ,rollback it after prepared.
-	rollbackTxn = mock2PCTxn(txnEngine)
+	rollbackTxn = mock2PCTxn(handle.db)
 	deleteEntry, _ = makePBEntry(
 		DELETE,
 		dbId,
@@ -1121,7 +1120,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdPrepare},
 		{typ: CmdCommit},
 	}
-	txnMeta := mock2PCTxn(txnEngine)
+	txnMeta := mock2PCTxn(handle.db)
 	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -1192,7 +1191,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdPrepare},
 		{typ: CmdCommit},
 	}
-	txnMeta = mock2PCTxn(txnEngine)
+	txnMeta = mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -1235,13 +1234,13 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdPrepare},
 		{typ: CmdCommit},
 	}
-	insertTxn := mock2PCTxn(txnEngine)
+	insertTxn := mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
 
 	//start 2PC txn ,rollback it after prepared
-	rollbackTxn := mock2PCTxn(txnEngine)
+	rollbackTxn := mock2PCTxn(handle.db)
 	//insert 20 rows ,then rollback
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
@@ -1266,7 +1265,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.Nil(t, err)
 
 	//start 2PC txn , rollback it when it is ACTIVE.
-	rollbackTxn = mock2PCTxn(txnEngine)
+	rollbackTxn = mock2PCTxn(handle.db)
 	//insert 10 rows ,then rollback
 	//batch.SetLength(moBat, 10)
 	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 10))
@@ -1339,14 +1338,14 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdCommitting},
 		{typ: CmdCommit},
 	}
-	deleteTxn := mock2PCTxn(txnEngine)
+	deleteTxn := mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, deleteTxn, txnCmds)
 	assert.Nil(t, err)
 
 	//start a 2PC txn ,rollback it after prepared.
 	// delete 20 rows ,then rollback
-	rollbackTxn = mock2PCTxn(txnEngine)
+	rollbackTxn = mock2PCTxn(handle.db)
 	deleteEntry, _ = makePBEntry(
 		DELETE,
 		dbId,
@@ -1427,7 +1426,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				EntryList: createDbEntries},
 		},
 	}
-	txnMeta := mock2PCTxn(txnEngine)
+	txnMeta := mock2PCTxn(handle.db)
 	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -1536,7 +1535,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 		{typ: CmdPrepare},
 	}
-	txnMeta = mock2PCTxn(txnEngine)
+	txnMeta = mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -1594,7 +1593,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 		{typ: CmdPrepare},
 	}
-	insertTxn := mock2PCTxn(txnEngine)
+	insertTxn := mock2PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
@@ -1653,7 +1652,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 
 	hideBats := containers.SplitBatch(hideBat, 5)
 	//delete 20 rows by 2PC txn
-	deleteTxn := mock2PCTxn(txnEngine)
+	deleteTxn := mock2PCTxn(handle.db)
 	//batch.SetLength(hideBat, 20)
 	deleteEntry, err := makePBEntry(
 		DELETE,

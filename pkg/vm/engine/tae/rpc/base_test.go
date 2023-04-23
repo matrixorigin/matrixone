@@ -167,10 +167,10 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	return mh
 }
 
-func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
-	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
+	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
 }
 
@@ -185,10 +185,10 @@ func mockDNShard(id uint64) metadata.DNShard {
 	}
 }
 
-func mock2PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
-	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
+	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
 	return txnMeta

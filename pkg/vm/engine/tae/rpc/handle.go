@@ -309,12 +309,12 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	return h.eng.Close()
+	return h.db.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	return h.eng.Destroy()
+	return
 }
 
 func (h *Handle) HandleGetLogTail(
@@ -322,12 +322,11 @@ func (h *Handle) HandleGetLogTail(
 	meta txn.TxnMeta,
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
-	tae := h.eng.GetTAE(context.Background())
 	res, err := logtail.HandleSyncLogTailReq(
 		ctx,
-		tae.BGCheckpointRunner,
-		tae.LogtailMgr,
-		tae.Catalog,
+		h.db.BGCheckpointRunner,
+		h.db.LogtailMgr,
+		h.db.Catalog,
 		req,
 		true)
 	if err != nil {
@@ -377,13 +376,12 @@ func (h *Handle) HandleInspectDN(
 	meta txn.TxnMeta,
 	req db.InspectDN,
 	resp *db.InspectResp) (err error) {
-	tae := h.eng.GetTAE(context.Background())
 	args, _ := shlex.Split(req.Operation)
 	logutil.Info("Inspect", zap.Strings("args", args))
 	b := &bytes.Buffer{}
 
 	inspectCtx := &inspectContext{
-		db:     tae,
+		db:     h.db,
 		acinfo: &req.AccessInfo,
 		args:   args,
 		out:    b,
@@ -406,7 +404,7 @@ func (h *Handle) prefetch(ctx context.Context,
 	if err != nil {
 		return nil
 	}
-	pref, err := blockio.BuildPrefetchParams(h.eng.GetTAE(ctx).Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Fs.Service, loc)
 	if err != nil {
 		return nil
 	}
@@ -817,7 +815,7 @@ func (h *Handle) HandleWrite(
 		//wait for loading deleted row-id done.
 		nctx := context.Background()
 		if deadline, ok := ctx.Deadline(); ok {
-			nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		columnIdx := 0
 		var reader *blockio.BlockReader
@@ -829,7 +827,7 @@ func (h *Handle) HandleWrite(
 			}
 			if reader == nil {
 				reader, err = blockio.NewObjectReader(
-					h.eng.GetTAE(nctx).Fs.Service, location)
+					h.db.Fs.Service, location)
 				if err != nil {
 					return
 				}
