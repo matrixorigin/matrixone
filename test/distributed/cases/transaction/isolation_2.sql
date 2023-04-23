@@ -161,6 +161,7 @@ select b, c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 
 ------------------------------
+-- @bvt:issue#9124
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
@@ -174,6 +175,7 @@ truncate table dis_temp_01;
 rollback ;
 select * from dis_temp_01;
 drop table dis_temp_01;
+-- @bvt:issue
 
 start transaction;
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
@@ -287,6 +289,7 @@ update dis_table_04 set b=(select 'kkkk')  where a=879;
 select * from dis_table_04;
 -- @session}
 ----------------------------
+-- @bvt:issue#9124
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
@@ -302,6 +305,7 @@ select * from dis_table_05;
 select * from dis_table_05;
 -- @session}
 drop table dis_table_05;
+-- @bvt:issue
 
 -- auto_increment 主键冲突
 use isolation_2;
