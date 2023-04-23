@@ -104,6 +104,7 @@ const (
 	SystemRelAttr_Partition   = "partition_info"
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
+	SystemRelAttr_Version     = "rel_version"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -204,6 +205,7 @@ const (
 	MO_TABLES_PARTITION_INFO_IDX = 13
 	MO_TABLES_VIEWDEF_IDX        = 14
 	MO_TABLES_CONSTRAINT_IDX     = 15
+	MO_TABLES_VERSION_IDX        = 16
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -387,6 +389,7 @@ var (
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
+		SystemRelAttr_Version,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -449,6 +452,7 @@ var (
 		types.New(types.T_blob, 0, 0),       // partition_info
 		types.New(types.T_blob, 0, 0),       // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
+		types.New(types.T_uint32, 0, 0),     // schema_version
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),  // att_uniq_name

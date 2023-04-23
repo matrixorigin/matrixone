@@ -173,7 +173,7 @@ func HandleSyncLogTailReq(
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
+		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(did, tid, end)
 			// try again after flushing
 			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
@@ -251,9 +251,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -279,7 +279,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 				dstBatch = b.insBatch
 				// fill unique syscol fields if inserting
 				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
-					txnimpl.FillColumnRow(entry, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
+					txnimpl.FillColumnRow(entry, tblNode, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
 				}
 			} else {
 				dstBatch = b.delBatch
@@ -290,15 +290,15 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
 			tableID := entry.GetID()
 			commitTs := tblNode.GetEnd()
-			for _, usercol := range entry.GetSchema().ColDefs {
+			for _, usercol := range node.BaseNode.Schema.ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
 				commitVec.Append(commitTs, false)
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			}
 		}
 	}
@@ -369,13 +369,12 @@ func catalogEntry2Batch[
 	e T,
 	node N,
 	schema *catalog.Schema,
-	fillDataRow func(e T, node N, attr string, col containers.Vector, ts types.TS),
+	fillDataRow func(e T, node N, attr string, col containers.Vector),
 	rowid types.Rowid,
 	commitTs types.TS,
-	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
+		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid, false)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
@@ -404,7 +403,8 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 	}
 	b.BlockFn = b.VisitBlk
 
-	schema := tbl.GetSchema()
+	// TODO(aptend): there can be more than one schema.
+	schema := tbl.GetLastestSchema()
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID

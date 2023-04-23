@@ -364,7 +364,7 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
-			tblName := tbl.entry.GetSchema().Name
+			tblName := tbl.GetLocalSchema().Name
 			tid := tbl.entry.ID
 			rotateTable(dbName, tblName, dbid, tid)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {
