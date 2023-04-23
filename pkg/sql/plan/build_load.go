@@ -18,11 +18,9 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
@@ -103,36 +101,37 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)
-	if newTableDef.Pkey != nil && newTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		newTableDef.Cols = append(newTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId)
+	if err != nil {
+		return nil, err
 	}
-	if newTableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(newTableDef.ClusterBy.Name) {
-		newTableDef.Cols = append(newTableDef.Cols, MakeHiddenColDefByName(newTableDef.ClusterBy.Name))
-	}
-	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, newTableDef, lastNodeId, false)
-
-	insertNode := &plan.Node{
-		Children: []int32{lastNodeId},
-		NodeType: plan.Node_INSERT,
-		Stats:    &plan.Stats{},
-		InsertCtx: &plan.InsertCtx{
-			Ref:             objRef,
-			TableDef:        newTableDef,
-			AddAffectedRows: true,
-			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-		},
-	}
-	lastNodeId = builder.appendNode(insertNode, bindCtx)
 	query := builder.qry
 	query.StmtType = plan.Query_INSERT
-	query.Steps = []int32{lastNodeId}
+	query.LoadTag = true
+
+	// lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, newTableDef, lastNodeId, false)
+
+	// insertNode := &plan.Node{
+	// 	Children: []int32{lastNodeId},
+	// 	NodeType: plan.Node_INSERT,
+	// 	Stats:    &plan.Stats{},
+	// 	InsertCtx: &plan.InsertCtx{
+	// 		Ref:             objRef,
+	// 		TableDef:        newTableDef,
+	// 		AddAffectedRows: true,
+	// 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+	// 	},
+	// }
+	// lastNodeId = builder.appendNode(insertNode, bindCtx)
+	// query := builder.qry
+	// query.StmtType = plan.Query_INSERT
+	// query.Steps = []int32{lastNodeId}
 
 	pn := &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
 		},
 	}
-	pn.GetQuery().LoadTag = true
 	return pn, nil
 }
 

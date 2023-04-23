@@ -102,6 +102,10 @@ func buildUpdateExpr(builder *QueryBuilder, info *dmlTableInfo) ([]map[int]*Expr
 						return nil, err
 					}
 				}
+				err = checkNotNull(builder.GetContext(), newExpr, tableDef, col)
+				if err != nil {
+					return nil, err
+				}
 				newExpr, err = forceCastExpr(builder.GetContext(), newExpr, col.Typ)
 				if err != nil {
 					return nil, err

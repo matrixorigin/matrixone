@@ -881,24 +881,27 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	if !isConstantNull {
 		return nil
 	}
-
-	if col.NotNull {
+	if col.Default != nil && !col.Default.NullAbility {
 		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	}
 
-	if (col.Primary && !col.Typ.AutoIncr) ||
-		(col.Default != nil && !col.Default.NullAbility) {
-		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
-	}
+	// if col.NotNull {
+	// 	return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	// }
 
-	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-		names := tableDef.Pkey.Names
-		for _, name := range names {
-			if name == col.Name {
-				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
-			}
-		}
-	}
+	// if (col.Primary && !col.Typ.AutoIncr) ||
+	// 	(col.Default != nil && !col.Default.NullAbility) {
+	// 	return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	// }
+
+	// if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+	// 	names := tableDef.Pkey.Names
+	// 	for _, name := range names {
+	// 		if name == col.Name {
+	// 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
+	// 		}
+	// 	}
+	// }
 
 	return nil
 }
