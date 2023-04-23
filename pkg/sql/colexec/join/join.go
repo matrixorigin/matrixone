@@ -34,7 +34,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	for i := range ap.ctr.evecs {
 		ap.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[0][i])

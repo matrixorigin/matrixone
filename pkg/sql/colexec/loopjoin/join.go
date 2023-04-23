@@ -108,9 +108,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i := 0; i < count; i++ {
 		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
 			ctr.bat.Length(), ctr.cfs); err != nil {
+			rbat.Clean(proc.Mp())
 			return err
 		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return err
