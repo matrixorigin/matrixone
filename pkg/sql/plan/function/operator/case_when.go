@@ -178,6 +178,8 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
+		rs.GetType().Width = thenv.GetType().Width
+		rs.GetType().Scale = thenv.GetType().Scale
 		whencols := vector.MustFixedCol[bool](whenv)
 		thencols := vector.MustFixedCol[T](thenv)
 		switch {
