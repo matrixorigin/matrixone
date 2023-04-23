@@ -696,8 +696,11 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				errChan <- errReceive
 				return
 			}
-
-			if err := receiveMsgAndForward(c, messagesReceive, reg.Ch, mp); err != nil {
+			var ch chan *batch.Batch
+			if reg != nil {
+				ch = reg.Ch
+			}
+			if err := receiveMsgAndForward(c, messagesReceive, ch, mp, s.Proc); err != nil {
 				reg.Ch <- nil
 				errChan <- err
 				return
@@ -708,7 +711,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	}
 }
 
-func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {
+func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool, proc *process.Process) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
@@ -751,7 +754,13 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			if err != nil {
 				return err
 			}
-			forwardCh <- bat
+			if forwardCh == nil {
+				// used for delete
+				proc.SetInputBatch(bat)
+			} else {
+				// used for BroadCastJoin
+				forwardCh <- bat
+			}
 			dataBuffer = nil
 		}
 	}
