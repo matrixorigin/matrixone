@@ -15,7 +15,10 @@
 package txnimpl
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -49,7 +52,9 @@ func (txn *txnImpl) CreateDatabase(name, createSql, datTyp string) (db handle.Da
 	return txn.Store.CreateDatabase(name, createSql, datTyp)
 }
 
-func (txn *txnImpl) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
+	name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+	txn.bindCtxInfo(ctx)
 	return txn.Store.CreateDatabaseWithID(name, createSql, datTyp, id)
 }
 
@@ -69,6 +74,21 @@ func (txn *txnImpl) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err
 	return txn.Store.UnsafeGetRelation(dbId, id)
 }
 
+func (txn *txnImpl) bindCtxInfo(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
+	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)
+	rid, _ := ctx.Value(defines.RoleIDKey{}).(uint32)
+	if okt {
+		txn.BindAccessInfo(tid, uid, rid)
+	}
+}
+func (txn *txnImpl) GetDatabaseWithCtx(ctx context.Context, name string) (db handle.Database, err error) {
+	txn.bindCtxInfo(ctx)
+	return txn.Store.GetDatabase(name)
+}
 func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.GetDatabase(name)
 }

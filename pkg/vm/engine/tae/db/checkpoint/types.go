@@ -46,7 +46,7 @@ type Runner interface {
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) (types.TS, error)
 
-	FlushTable(dbID, tableID uint64, ts types.TS) error
+	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 	GCByTS(ctx context.Context, ts types.TS) error
 
 	// for test, delete in next phase

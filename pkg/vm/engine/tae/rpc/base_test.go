@@ -32,10 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
@@ -160,16 +157,16 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
+		db: tae,
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
 }
 
-func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
-	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
+	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
 }
 
@@ -184,10 +181,10 @@ func mockDNShard(id uint64) metadata.DNShard {
 	}
 }
 
-func mock2PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
-	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
+	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
 	return txnMeta
@@ -767,15 +764,3 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	}
 	return rbat, nil
 }
-
-func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
-	bat *batch.Batch) *containers.Batch {
-	taeBatch := containers.NewEmptyBatch()
-	for i, vec := range bat.Vecs {
-		v := containers.ToDNVector(vec)
-		taeBatch.AddVector(bat.Attrs[i], v)
-	}
-	return taeBatch
-}
-
-//gen LogTail
