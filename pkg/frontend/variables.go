@@ -1259,6 +1259,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
 		Default:           int8(0),
 	},
+	"cn_label": {
+		Name:              "cn_label",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cn_label"),
+		Default:           "",
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

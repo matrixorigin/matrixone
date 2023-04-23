@@ -79,14 +79,39 @@ message Insert{
   bool IsRemote     = 2;
 
   // InsertCtx
-  repeated int32 on_duplicate_idx           = 3;
-  map<string, plan.Expr> on_duplicate_expr  = 4;
-  plan.ObjectRef ref              = 5;
-  plan.TableDef table_def         = 6;
-  map<string, int32> parent_idx   = 7;
-  plan.ClusterTable ClusterTable  = 8;
-	repeated int32 idx_idx 				  = 9;
+  plan.ObjectRef ref              = 3;
+  plan.TableDef table_def         = 4;
+  map<string, int32> parent_idx   = 5;
+  plan.ClusterTable ClusterTable  = 6;
+	repeated int32 idx_idx 				  = 7;
 
+}
+
+message Array{
+  repeated int32 array = 1;
+}
+
+message Map{
+  map<string, int32> mp = 1;
+}
+
+message Deletion{
+  uint64 Ts = 1;
+  uint64 AffectedRows = 2;
+  bool RemoteDelete = 3;
+  uint32 IBucket =4;
+  uint32 NBucket = 5;
+  // DeleteCtx
+  bool CanTruncate = 6;
+  repeated plan.ObjectRef DelRef = 7;
+  repeated int32 IdxIdx = 8;
+  repeated int32 OnRestrictIdx = 9;
+  repeated int32 OnCascadeIdx = 10;
+  repeated plan.ObjectRef OnSetRef = 11;
+  repeated plan.TableDef OnSetTableDef = 12;
+  repeated Map OnSetUpdateCol = 13;
+  repeated Array OnSetIdx = 14;
+  map<string,int32> SegmentMap = 15;
 }
 
 message PreInsert {
@@ -274,21 +299,22 @@ message Instruction{
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
-  OnDuplicateKey on_duplicate_key = 18;
-  PreInsert pre_insert               = 19;
-  repeated plan.OrderBySpec order_by = 20;
-  repeated plan.Expr    project_list = 21;
-  plan.Expr    filter = 22;
-  uint64    limit = 23;
-  uint64    offset = 24;
+  Deletion delete = 18;
+  OnDuplicateKey on_duplicate_key = 19;
+  PreInsert pre_insert               = 20;
+  repeated plan.OrderBySpec order_by = 21;
+  repeated plan.Expr    project_list = 22;
+  plan.Expr    filter = 23;
+  uint64    limit = 24;
+  uint64    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 25;
+  bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 26;
+  bool isLast = 27;
   
-  RightJoin right_join = 27;
-  RightSemiJoin right_semi_join = 28;
-  RightAntiJoin right_anti_join = 29;
+  RightJoin right_join = 28;
+  RightSemiJoin right_semi_join = 29;
+  RightAntiJoin right_anti_join = 30;
 
 }
 
