@@ -367,8 +367,7 @@ func (h *Handle) HandleForceCheckpoint(
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.eng.ForceCheckpoint(ctx,
-		currTs, timeout)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
 	return err
 }
 

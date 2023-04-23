@@ -210,9 +210,6 @@ func (e *txnEngine) GetDatabaseByID(_ context.Context, id uint64, txnHandle Txn)
 func (e *txnEngine) GetDB() *db.DB {
 	return e.impl
 }
-func (e *txnEngine) FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error {
-	return e.impl.FlushTable(ctx, tenantID, databaseId, tableId, ts)
-}
 
 func (e *txnEngine) Nodes() (engine.Nodes, error) {
 	return nil, nil

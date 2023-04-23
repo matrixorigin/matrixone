@@ -114,7 +114,6 @@ type Engine interface {
 	// GetDB returns tae db struct
 	GetDB() *db.DB
 
-	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
 	ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error
 }
 

@@ -18,7 +18,9 @@ import (
 	"context"
 	"io"
 	"sync/atomic"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
@@ -83,6 +85,29 @@ func (db *DB) FlushTable(
 	ts types.TS) (err error) {
 	err = db.BGCheckpointRunner.FlushTable(ctx, dbId, tableId, ts)
 	return
+}
+
+func (db *DB) ForceCheckpoint(
+	ctx context.Context,
+	ts types.TS,
+	flushDuration time.Duration) (err error) {
+	// FIXME: cannot disable with a running job
+	db.BGCheckpointRunner.DisableCheckpoint()
+	defer db.BGCheckpointRunner.EnableCheckpoint()
+	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
+	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	if err != nil {
+		return err
+	}
+	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts); err != nil {
+		return err
+	}
+	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
+	_, err = db.Wal.RangeCheckpoint(1, lsn)
+	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	return err
 }
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
