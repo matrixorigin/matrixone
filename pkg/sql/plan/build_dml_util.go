@@ -103,6 +103,7 @@ func buildDeletePlans(
 	// append project Node to fetch the columns of this table
 	// we will opt it to only keep row_id/pk column in delete. but we need more columns in update
 	projectProjection := make([]*Expr, len(tableDef.Cols))
+	rowIdIdx := -1
 	for i, col := range tableDef.Cols {
 		projectProjection[i] = &plan.Expr{
 			Typ: col.Typ,
@@ -114,6 +115,9 @@ func buildDeletePlans(
 				},
 			},
 		}
+		if col.Typ.Id == int32(types.T_Rowid) {
+			rowIdIdx = i
+		}
 	}
 	projectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
@@ -122,7 +126,8 @@ func buildDeletePlans(
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	// append agg for multi delete?
+	//when update multi table. we append agg node:
+	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
 	if isMulti {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(lastNode.ProjectList))
@@ -160,6 +165,32 @@ func buildDeletePlans(
 			ProjectList: aggNodeProjection,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)
+
+		// we need filter null in left join/right join
+		// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
+		// we can not let null rows in batch go to insert Node
+		rowIdExpr := &plan.Expr{
+			Typ: aggNodeProjection[rowIdIdx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(rowIdIdx),
+					Name:   catalog.Row_ID,
+				},
+			},
+		}
+		nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{rowIdExpr})
+		if err != nil {
+			return -1, err
+		}
+		filterProjection := getProjectionByLastNode(builder, lastNodeId)
+		filterNode := &Node{
+			NodeType:    plan.Node_FILTER,
+			Children:    []int32{lastNodeId},
+			FilterList:  []*Expr{nullCheckExpr},
+			ProjectList: filterProjection,
+		}
+		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}
 
 	isPartitionTable := false
