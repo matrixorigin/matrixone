@@ -15,8 +15,11 @@
 package txnbase
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -42,6 +45,8 @@ type TxnBlock struct {
 	Seg handle.Segment
 }
 
+var _ handle.Relation = &TxnRelation{}
+
 func (db *TxnDatabase) GetID() uint64                                                   { return 0 }
 func (db *TxnDatabase) GetName() string                                                 { return "" }
 func (db *TxnDatabase) String() string                                                  { return "" }
@@ -64,6 +69,7 @@ func (rel *TxnRelation) Size(attr string) int64                 { return 0 }
 func (rel *TxnRelation) GetCardinality(attr string) int64       { return 0 }
 func (rel *TxnRelation) Schema() any                            { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
+func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt  { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
 func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
@@ -71,6 +77,7 @@ func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Locati
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                        { return nil }
+func (rel *TxnRelation) GetDB() (handle.Database, error)                                     { return nil, nil }
 func (rel *TxnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error)            { return }
 func (rel *TxnRelation) SoftDeleteSegment(id types.Uuid) (err error)                         { return }
 func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                  { return }
@@ -94,7 +101,7 @@ func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error) { retu
 func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
-func (rel *TxnRelation) UpdateConstraint(cstr []byte) (err error) { return }
+func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
 
 func (seg *TxnSegment) GetMeta() any                     { return nil }
 func (seg *TxnSegment) String() string                   { return "" }

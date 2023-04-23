@@ -377,7 +377,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	defer sortKey.Close()
 	rows := make([]uint32, 0)
-	err = sortKey.ForeachShallow(func(v any, _ bool, offset int) error {
+	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
 		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
 			row := uint32(offset)
 			rows = append(rows, row)
@@ -571,7 +571,7 @@ func (blk *ablock) inMemoryBatchDedup(
 
 	def := blk.meta.GetSchema().GetSingleSortKey()
 	v, isNull := mnode.GetValueByRow(int(dupRow), def.Idx)
-	entry := common.TypeStringValue(keys.GetType(), v, isNull)
+	entry := common.TypeStringValue(*keys.GetType(), v, isNull)
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -57,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAppend(t *testing.T) {
@@ -5028,7 +5030,7 @@ func TestGCDropTable(t *testing.T) {
 	tae.restart()
 }
 
-func TestUpdateCstr(t *testing.T) {
+func TestAlterTableBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -5039,6 +5041,7 @@ func TestUpdateCstr(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	schema.Constraint = []byte("start version")
+	schema.Comment = "comment version"
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
@@ -5048,16 +5051,18 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ := db.GetRelationByName("test")
-	err := tbl.UpdateConstraint([]byte("version 1"))
-	assert.NoError(t, err)
+	err := tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 1"))
+	require.NoError(t, err)
+	err = tbl.AlterTable(context.Background(), api.NewUpdateCommentReq(0, 0, "comment version 1"))
+	require.NoError(t, err)
 	err = txn.Commit()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ = db.GetRelationByName("test")
-	err = tbl.UpdateConstraint([]byte("version 2"))
-	assert.NoError(t, err)
+	err = tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 2"))
+	require.NoError(t, err)
 	txn.Commit()
 
 	tots := func(ts types.TS) *timestamp.Timestamp {
@@ -5073,10 +5078,16 @@ func TestUpdateCstr(t *testing.T) {
 
 	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	assert.Equal(t, 3, cstrCol.Length())
-	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
 	tae.restart()
 
@@ -5088,15 +5099,23 @@ func TestUpdateCstr(t *testing.T) {
 
 	bat, _ = batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	assert.Equal(t, 3, cstrCol.Length())
-	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	commetCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL2))
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	_, err = db.DropRelationByName("test")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	txn.Commit()
 
 	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -5105,9 +5124,9 @@ func TestUpdateCstr(t *testing.T) {
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
 	}, true)
 
-	assert.Equal(t, 2, len(resp.Commands)) // create and drop
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.Equal(t, 2, len(resp.Commands)) // create and drop
+	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
@@ -5921,13 +5940,13 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.createRelAndAppend(bats[0], true)
 
 	_, rel := tae.getRelation()
-	partioned := rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned := rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -5940,7 +5959,7 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 }
 

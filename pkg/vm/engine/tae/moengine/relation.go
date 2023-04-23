@@ -16,11 +16,13 @@ package moengine
 
 import (
 	"context"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -57,21 +59,27 @@ func (*baseRelation) DelTableDef(_ context.Context, def engine.TableDef) error {
 }
 
 func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.Schema().(*catalog.Schema)
 	defs, _ := SchemaToDefs(schema)
 	return defs, nil
 }
 
-func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
+// TODO(aptend) only cn-dn mode available, so this can be removed probably.
+func (rel *baseRelation) UpdateConstraint(ctx context.Context, def *engine.ConstraintDef) error {
 	bin, err := def.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	return rel.handle.UpdateConstraint(bin)
+	db, err := rel.handle.GetDB()
+	if err != nil {
+		return err
+	}
+	req := apipb.NewUpdateConstraintReq(db.GetID(), rel.handle.ID(), string(bin))
+	return rel.handle.AlterTable(ctx, req)
 }
 
-func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
-	return rel.handle.UpdateConstraint(bin)
+func (rel *baseRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
+	return rel.handle.AlterTable(ctx, req)
 }
 
 func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
@@ -91,11 +99,11 @@ func (rel *baseRelation) Rows(c context.Context) (int64, error) {
 }
 
 func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
-	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	return rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 }
 
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 	if !schema.HasPK() {
 		return nil, nil
 	}
@@ -115,7 +123,7 @@ func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute,
 // Might that can be done in the future
 
 func (rel *baseRelation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetLastestSchema()
 	if schema.PhyAddrKey == nil {
 		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
 	}

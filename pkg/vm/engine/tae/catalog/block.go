@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -208,7 +209,7 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 	entry.blkData = dataFactory(entry)
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
-func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
+func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetLastestSchema() }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.BaseEntryImpl.PrepareRollback()

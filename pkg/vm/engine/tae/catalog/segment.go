@@ -103,11 +103,12 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	}
 	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid types.Blockid
-	if table.schema.Name == SystemTableSchema.Name {
+	schema := table.GetLastestSchema()
+	if schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
-	} else if table.schema.Name == SystemDBSchema.Name {
+	} else if schema.Name == SystemDBSchema.Name {
 		bid = SystemBlock_DB_ID
-	} else if table.schema.Name == SystemColumnSchema.Name {
+	} else if schema.Name == SystemColumnSchema.Name {
 		bid = SystemBlock_Columns_ID
 	} else {
 		panic("not supported")
