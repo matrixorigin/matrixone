@@ -53,6 +53,7 @@ import (
 // TODO::GC the abandoned txn.
 type Handle struct {
 	eng moengine.TxnEngine
+	db  *db.DB
 	mu  struct {
 		sync.RWMutex
 		//map txn id to txnContext.
@@ -86,6 +87,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 
 	h := &Handle{
 		eng: moengine.NewEngine(tae),
+		db:  tae,
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -156,13 +158,13 @@ func (h *Handle) HandleCommit(
 			}
 			//Need to roll back the txn.
 			if err != nil {
-				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn, _ = h.db.GetTxnByIDCtx(meta.GetID())
 				txn.Rollback()
 				return
 			}
 		}
 	}
-	txn, err = h.eng.GetTxnByID(meta.GetID())
+	txn, err = h.db.GetTxnByIDCtx(meta.GetID())
 	if err != nil {
 		return
 	}
@@ -191,8 +193,7 @@ func (h *Handle) HandleRollback(
 	if ok {
 		return
 	}
-	var txn moengine.Txn
-	txn, err = h.eng.GetTxnByID(meta.GetID())
+	txn, err := h.db.GetTxnByIDCtx(meta.GetID())
 
 	if err != nil {
 		return err
@@ -204,8 +205,7 @@ func (h *Handle) HandleRollback(
 func (h *Handle) HandleCommitting(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
-	var txn moengine.Txn
-	txn, err = h.eng.GetTxnByID(meta.GetID())
+	txn, err := h.db.GetTxnByIDCtx(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -272,13 +272,13 @@ func (h *Handle) HandlePrepare(
 			}
 			//need to rollback the txn
 			if err != nil {
-				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn, _ = h.db.GetTxnByIDCtx(meta.GetID())
 				txn.Rollback()
 				return
 			}
 		}
 	}
-	txn, err = h.eng.GetTxnByID(meta.GetID())
+	txn, err = h.db.GetTxnByIDCtx(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}

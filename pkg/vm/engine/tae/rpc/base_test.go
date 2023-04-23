@@ -161,6 +161,7 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 
 	mh.Handle = &Handle{
 		eng: moengine.NewEngine(tae),
+		db:  tae,
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
