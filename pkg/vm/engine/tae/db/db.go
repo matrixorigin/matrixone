@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"io"
 	"sync/atomic"
 
@@ -76,10 +77,11 @@ type DB struct {
 }
 
 func (db *DB) FlushTable(
+	ctx context.Context,
 	tenantID uint32,
 	dbId, tableId uint64,
 	ts types.TS) (err error) {
-	err = db.BGCheckpointRunner.FlushTable(dbId, tableId, ts)
+	err = db.BGCheckpointRunner.FlushTable(ctx, dbId, tableId, ts)
 	return
 }
 

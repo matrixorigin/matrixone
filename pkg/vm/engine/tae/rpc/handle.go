@@ -348,7 +348,8 @@ func (h *Handle) HandleFlushTable(
 	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.eng.FlushTable(ctx,
+	err = h.db.FlushTable(
+		ctx,
 		req.AccessInfo.AccountID,
 		req.DatabaseID,
 		req.TableID,
