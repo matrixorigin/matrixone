@@ -49,14 +49,14 @@ func NewSimpleTableIndex() *simpleTableIndex {
 }
 
 func DedupOp[T comparable](
-	t types.Type,
+	t *types.Type,
 	attr string,
 	vs any,
 	tree map[any]uint32) (err error) {
 	vals := vs.([]T)
 	for _, v := range vals {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v, false)
+			entry := common.TypeStringValue(*t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 	}
@@ -64,7 +64,7 @@ func DedupOp[T comparable](
 }
 
 func InsertOp[T comparable](
-	t types.Type,
+	t *types.Type,
 	attr string,
 	input any,
 	start, count int,
@@ -76,7 +76,7 @@ func InsertOp[T comparable](
 		set := make(map[T]bool)
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				entry := common.TypeStringValue(t, v, false)
+				entry := common.TypeStringValue(*t, v, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			set[v] = true
@@ -85,7 +85,7 @@ func InsertOp[T comparable](
 	}
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(t, v, false)
+			entry := common.TypeStringValue(*t, v, false)
 			return moerr.NewDuplicateEntryNoCtx(entry, attr)
 		}
 		tree[v] = fromRow
@@ -248,7 +248,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			for i := start; i < start+count; i++ {
 				v := string(vs.Get(i).([]byte))
 				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(colType, []byte(v), false)
+					entry := common.TypeStringValue(*colType, []byte(v), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, attr)
 				}
 				set[v] = true
@@ -258,7 +258,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		for i := start; i < start+count; i++ {
 			v := string(vs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v), false)
+				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 			idx.tree[v] = row
@@ -342,7 +342,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.Get(i).([]byte))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, []byte(v), false)
+				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)
 			}
 		}
