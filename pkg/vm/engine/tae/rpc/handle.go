@@ -72,6 +72,10 @@ type txnContext struct {
 	toCreate map[uint64]*catalog2.Schema
 }
 
+func (h *Handle) GetDB() *db.DB {
+	return h.db
+}
+
 func (h *Handle) GetTxnEngine() moengine.TxnEngine {
 	return h.eng
 }
@@ -684,13 +688,12 @@ func (h *Handle) HandleCreateRelation(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	db, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
+	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return
 	}
 
-	err = db.CreateRelationWithID(ctx, req.Name, req.RelationId, req.Defs)
-	if err != nil {
+	if err = createRelation(ctx, dbH, req.Name, req.RelationId, req.Defs); err != nil {
 		return
 	}
 
