@@ -461,7 +461,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		blks[i] = BlockInfoUnmarshal(ranges[i])
 		blks[i].EntryState = false
 	}
-	if len(ranges) < num {
+	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:         e.fs,
@@ -480,7 +480,8 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	}
 
 	infos, steps := groupBlocksToObjects(blks, num)
-	blockReaders := distributeBlocksToBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr, infos, steps)
+	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
+	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
 	}

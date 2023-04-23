@@ -1365,7 +1365,7 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 	return infos, steps
 }
 
-func distributeBlocksToBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = &blockReader{
@@ -1377,6 +1377,10 @@ func distributeBlocksToBlockReaders(ctx context.Context, fs fileservice.FileServ
 			ctx:        ctx,
 		}
 	}
+	return rds
+}
+
+func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		for j := range infos[i] {
@@ -1385,6 +1389,7 @@ func distributeBlocksToBlockReaders(ctx context.Context, fs fileservice.FileServ
 			readerIndex = readerIndex % num
 		}
 	}
+
 	rds[0].steps = steps
 	rds[0].infos = infos
 	return rds
