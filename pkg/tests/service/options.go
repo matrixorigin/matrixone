@@ -278,12 +278,6 @@ func (opt Options) WithDNUseMEMStorage() Options {
 	return opt
 }
 
-// WithCNUseTAEEngine use tae engine as cn engine
-func (opt Options) WithCNUseTAEEngine() Options {
-	opt.storage.cnEngine = cnservice.EngineTAE
-	return opt
-}
-
 // WithCNUseDistributedTAEEngine use distributed tae engine as cn engine
 func (opt Options) WithCNUseDistributedTAEEngine() Options {
 	opt.storage.cnEngine = cnservice.EngineDistributedTAE

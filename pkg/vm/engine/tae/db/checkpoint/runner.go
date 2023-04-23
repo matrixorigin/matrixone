@@ -396,7 +396,7 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
 }
-func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
