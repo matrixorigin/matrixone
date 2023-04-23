@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
@@ -96,9 +95,8 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
 
-func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, err error) {
-	txnID := txnOperator.Txn().ID
-	txn = db.TxnMgr.GetTxnByCtx(txnID)
+func (db *DB) GetTxnByIDCtx(id []byte) (txn txnif.AsyncTxn, err error) {
+	txn = db.TxnMgr.GetTxnByCtx(id)
 	if txn == nil {
 		err = moerr.NewNotFoundNoCtx()
 	}
