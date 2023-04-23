@@ -617,7 +617,7 @@ func (h *Handle) HandleCreateDatabase(
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
@@ -646,7 +646,7 @@ func (h *Handle) HandleDropDatabase(
 	req *db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
@@ -670,7 +670,7 @@ func (h *Handle) HandleCreateRelation(
 	req *db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
@@ -704,7 +704,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	req *db.DropOrTruncateRelationReq,
 	resp *db.DropOrTruncateRelationResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
@@ -742,7 +742,7 @@ func (h *Handle) HandleWrite(
 			req.Cancel()
 		}
 	}()
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
@@ -862,7 +862,7 @@ func (h *Handle) HandleUpdateConstraint(
 	meta txn.TxnMeta,
 	req *db.UpdateConstraintReq,
 	resp *db.UpdateConstraintResp) (err error) {
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err

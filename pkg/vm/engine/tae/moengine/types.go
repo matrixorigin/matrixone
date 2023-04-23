@@ -17,7 +17,6 @@ package moengine
 import (
 	"bytes"
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -113,8 +112,6 @@ type Engine interface {
 
 	// GetDB returns tae db struct
 	GetDB() *db.DB
-
-	ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error
 }
 
 type TxnEngine interface {
@@ -122,10 +119,8 @@ type TxnEngine interface {
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
 	StartTxnWithNow(info []byte) (txn Txn, err error)
-	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
 	GetTxnByID(id []byte) (txn Txn, err error)
 	Close() error
-	Destroy() error
 }
 
 var _ TxnEngine = &txnEngine{}

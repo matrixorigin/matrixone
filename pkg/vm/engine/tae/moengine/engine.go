@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -227,10 +225,6 @@ func (e *txnEngine) GetTxnByID(id []byte) (txn Txn, err error) {
 	return e.impl.GetTxn(string(id))
 }
 
-func (e *txnEngine) GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error) {
-	return e.impl.GetOrCreateTxnWithMeta(info, id, ts)
-}
-
 func (e *txnEngine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute
 	return
@@ -238,28 +232,4 @@ func (e *txnEngine) Hints() (h engine.Hints) {
 
 func (e *txnEngine) Close() (err error) {
 	return e.impl.Close()
-}
-
-func (e *txnEngine) Destroy() (err error) {
-	panic(moerr.NewNYINoCtx("Pls implement me!"))
-}
-
-func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error {
-	e.impl.BGCheckpointRunner.DisableCheckpoint()
-	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
-	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
-	t0 := time.Now()
-	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
-	if err != nil {
-		return err
-	}
-	err = e.impl.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
-	if err != nil {
-		return err
-	}
-	lsn := e.impl.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = e.impl.Wal.RangeCheckpoint(1, lsn)
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
-	return err
 }
