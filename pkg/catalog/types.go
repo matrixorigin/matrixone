@@ -17,6 +17,7 @@ package catalog
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -239,10 +240,26 @@ type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
-	MetaLoc    objectio.Location
-	DeltaLoc   objectio.Location
+	MetaLoc    [objectio.LocationLen]byte
+	DeltaLoc   [objectio.LocationLen]byte
 	CommitTs   types.TS
 	SegmentID  types.Uuid
+}
+
+func (b *BlockInfo) MetaLocation() objectio.Location {
+	return b.MetaLoc[:]
+}
+
+func (b *BlockInfo) SetMetaLocation(metaLoc objectio.Location) {
+	b.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
+}
+
+func (b *BlockInfo) DeltaLocation() objectio.Location {
+	return b.DeltaLoc[:]
+}
+
+func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
+	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
 }
 
 // used for memengine and tae
