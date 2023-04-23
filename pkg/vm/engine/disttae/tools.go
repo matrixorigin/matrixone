@@ -1367,15 +1367,15 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 	return infos, steps
 }
 
-func distributeBlocksToBlockReaders(ctx context.Context, num int, tbl *txnTable, expr *plan.Expr, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = &blockReader{
-			fs:         tbl.db.txn.engine.fs,
-			tableDef:   tbl.getTableDef(),
-			primaryIdx: tbl.primaryIdx,
+			fs:         fs,
+			tableDef:   tblDef,
+			primaryIdx: primaryIdx,
 			expr:       expr,
-			ts:         tbl.db.txn.meta.SnapshotTS,
+			ts:         ts,
 			ctx:        ctx,
 		}
 	}

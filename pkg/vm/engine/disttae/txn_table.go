@@ -604,7 +604,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 	}
 
 	infos, steps := groupBlocksToObjects(blks, num)
-	blockReaders := distributeBlocksToBlockReaders(ctx, num, tbl, expr, infos, steps)
+	blockReaders := distributeBlocksToBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primaryIdx, ts, num, expr, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
 	}

@@ -478,32 +478,11 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		}
 		return rds, nil
 	}
-	step := len(ranges) / num
-	if step < 1 {
-		step = 1
-	}
+
+	infos, steps := groupBlocksToObjects(blks, num)
+	blockReaders := distributeBlocksToBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr, infos, steps)
 	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         e.fs,
-				tableDef:   tblDef,
-				primaryIdx: -1,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         e.fs,
-				tableDef:   tblDef,
-				primaryIdx: -1,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
+		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }
