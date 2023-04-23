@@ -262,16 +262,24 @@ const (
 )
 
 func (m *InspectResp) GetResponse() any {
-	var ret any = m
 	switch m.Typ {
 	case InspectCata:
-		ret = new(CatalogResp)
-		types.Decode(m.Payload, ret)
+		resp := new(CatalogResp)
+		types.Decode(m.Payload, resp)
+		return resp
 	}
-	return ret
+	return m
 }
 
 type CatalogResp struct {
 	Item string         `json:"Item,omitempty"`
 	Sub  []*CatalogResp `json:"Sub,omitempty"`
+}
+
+func (m *CatalogResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *CatalogResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }

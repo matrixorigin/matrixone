@@ -107,11 +107,13 @@ type Type struct {
 	Scale int32
 }
 
+// ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() int {
 	return 2*4 + 4*3
 }
 
-func (t *Type) MarshalTo(data []byte) (int, error) {
+// MarshalToSizedBuffer is used by gogoproto.
+func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
@@ -125,6 +127,23 @@ func (t *Type) MarshalTo(data []byte) (int, error) {
 	return 20, nil
 }
 
+// MarshalTo is used by gogoproto.
+func (t *Type) MarshalTo(data []byte) (int, error) {
+	size := t.ProtoSize()
+	return t.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (t *Type) Marshal() ([]byte, error) {
+	data := make([]byte, t.ProtoSize())
+	n, err := t.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
 func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
@@ -139,6 +158,14 @@ func (t *Type) Unmarshal(data []byte) error {
 	return nil
 }
 
+func (t *Type) MarshalBinary() ([]byte, error) {
+	return t.Marshal()
+}
+
+func (t *Type) UnmarshalBinary(data []byte) error {
+	return t.Unmarshal(data)
+}
+
 type Date int32
 
 type Datetime int64
@@ -146,10 +173,12 @@ type Timestamp int64
 type Time int64
 
 type Decimal64 uint64
+
 type Decimal128 struct {
 	B0_63   uint64
 	B64_127 uint64
 }
+
 type Decimal256 struct {
 	B0_63    uint64
 	B64_127  uint64
@@ -166,11 +195,89 @@ type Uuid [16]byte
 // See txts.go for impl.
 type TS [TxnTsSize]byte
 
+// ProtoSize is used by gogoproto.
+func (ts *TS) ProtoSize() int {
+	return TxnTsSize
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (ts *TS) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < ts.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, ts[:])
+	return n, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (ts *TS) MarshalTo(data []byte) (int, error) {
+	size := ts.ProtoSize()
+	return ts.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (ts *TS) Marshal() ([]byte, error) {
+	data := make([]byte, ts.ProtoSize())
+	n, err := ts.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
+func (ts *TS) Unmarshal(data []byte) error {
+	if len(data) < ts.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(ts[:], data)
+	return nil
+}
+
 // Rowid
 type Rowid [RowidSize]byte
 
 // Blockid
 type Blockid [BlockidSize]byte
+
+// ProtoSize is used by gogoproto.
+func (b *Blockid) ProtoSize() int {
+	return BlockidSize
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (b *Blockid) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < b.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, b[:])
+	return n, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (b *Blockid) MarshalTo(data []byte) (int, error) {
+	size := b.ProtoSize()
+	return b.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (b *Blockid) Marshal() ([]byte, error) {
+	data := make([]byte, b.ProtoSize())
+	n, err := b.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
+func (b *Blockid) Unmarshal(data []byte) error {
+	if len(data) < b.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(b[:], data)
+	return nil
+}
 
 // Fixed bytes.   Deciaml64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.

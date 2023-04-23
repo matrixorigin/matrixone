@@ -65,3 +65,9 @@ message InspectResp {
     string Message              = 2;
     bytes Payload               = 3;
 }
+
+message CatalogResp {
+    option (gogoproto.typedecl) = false;
+    string Item                 = 1;
+    repeated CatalogResp Sub    = 2;
+}

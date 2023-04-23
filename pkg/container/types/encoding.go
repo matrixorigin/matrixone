@@ -19,7 +19,7 @@ package types
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding"
 	"fmt"
 	"io"
 	"unsafe"
@@ -71,17 +71,12 @@ func DecodeSlice[T any](v []byte) []T {
 	return nil
 }
 
-func Encode(v interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-
-	if err := gob.NewEncoder(&buf).Encode(v); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+func Encode(v encoding.BinaryMarshaler) ([]byte, error) {
+	return v.MarshalBinary()
 }
 
-func Decode(data []byte, v interface{}) error {
-	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
+func Decode(data []byte, v encoding.BinaryUnmarshaler) error {
+	return v.UnmarshalBinary(data)
 }
 
 func EncodeJson(v bytejson.ByteJson) ([]byte, error) {
