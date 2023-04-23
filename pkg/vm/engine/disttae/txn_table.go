@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -585,6 +586,19 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
 
+	if colNames != nil {
+		if len(ranges) > num {
+			//if blocks less than cpu number, do not prefetch
+			infos, steps := groupBlocksToObjects(blks, num)
+			//prefetch some objects
+			for len(steps) > 0 && steps[0] == 0 {
+				blockio.BlockPrefetch(colNames, tableDef, tbl.db.txn.engine.fs, [][]*catalog.BlockInfo{infos[0]})
+				infos = infos[1:]
+				steps = steps[1:]
+			}
+		}
+	}
+
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
@@ -602,32 +616,11 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 		}
 		return rds, nil
 	}
-	step := (len(ranges)) / num
-	if step < 1 {
-		step = 1
-	}
+
+	infos, steps := groupBlocksToObjects(blks, num)
+	blockReaders := distributeBlocksToBlockReaders(ctx, num, tbl, expr, infos, steps)
 	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
+		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }
@@ -835,7 +828,7 @@ func (tbl *txnTable) updateLocalState(
 			}
 			iter.Close()
 			if n > 1 {
-				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */]
+				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */ ]
 				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
 				return moerr.NewDuplicateEntry(
 					ctx,

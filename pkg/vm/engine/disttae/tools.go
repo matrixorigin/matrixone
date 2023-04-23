@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"regexp"
 	"time"
 
@@ -1336,4 +1337,56 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	default:
 		return false, nil
 	}
+}
+
+func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+	var infos [][]*catalog.BlockInfo
+	objMap := make(map[string]int, 0)
+	lenObjs := 0
+	for i := range blocks {
+		block := blocks[i]
+		objName := block.MetaLocation().Name().String()
+		if idx, ok := objMap[objName]; ok {
+			infos[idx] = append(infos[idx], block)
+		} else {
+			objMap[objName] = lenObjs
+			lenObjs++
+			infos = append(infos, []*catalog.BlockInfo{block})
+		}
+	}
+	steps := make([]int, len(infos))
+	currentBlocks := 0
+	for i := range infos {
+		steps[i] = (currentBlocks - PREFETCH_THRESHOLD) / PREFETCH_ROUNDS
+		if steps[i] < 0 {
+			steps[i] = 0
+		}
+		currentBlocks += len(infos[i])
+		logutil.Infof("!!!!!!!objectName %v , step: %v, blocks number %v", infos[i][0].MetaLocation(), steps[i], len(infos[i]))
+	}
+	return infos, steps
+}
+
+func distributeBlocksToBlockReaders(ctx context.Context, num int, tbl *txnTable, expr *plan.Expr, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+	rds := make([]*blockReader, num)
+	for i := 0; i < num; i++ {
+		rds[i] = &blockReader{
+			fs:         tbl.db.txn.engine.fs,
+			tableDef:   tbl.getTableDef(),
+			primaryIdx: tbl.primaryIdx,
+			expr:       expr,
+			ts:         tbl.db.txn.meta.SnapshotTS,
+			ctx:        ctx,
+		}
+	}
+	readerIndex := 0
+	for i := range infos {
+		for j := range infos[i] {
+			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
+			readerIndex++
+			readerIndex = readerIndex % num
+		}
+	}
+	rds[0].steps = steps
+	return rds
 }
