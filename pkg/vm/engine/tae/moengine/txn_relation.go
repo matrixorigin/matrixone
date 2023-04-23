@@ -32,6 +32,7 @@ import (
 
 var (
 	_ engine.Relation = (*txnRelation)(nil)
+	_ Relation        = (*txnRelation)(nil)
 )
 
 func newRelation(h handle.Relation) *txnRelation {
@@ -73,7 +74,7 @@ func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vect
 
 func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) error {
 	data := bat.Vecs[0]
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.handle.Schema().(*catalog.Schema)
 	logutil.Debugf("Delete col: %v", col)
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
 	if data.GetType().Oid == types.T_any {

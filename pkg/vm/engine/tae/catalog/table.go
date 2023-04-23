@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -101,7 +103,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
-	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{})
+	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -144,9 +146,10 @@ func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
 		return false
 	}
-	return entry.schema.Name == pkgcatalog.MO_DATABASE ||
-		entry.schema.Name == pkgcatalog.MO_TABLES ||
-		entry.schema.Name == pkgcatalog.MO_COLUMNS
+	name := entry.GetLastestSchema().Name
+	return name == pkgcatalog.MO_DATABASE ||
+		name == pkgcatalog.MO_TABLES ||
+		name == pkgcatalog.MO_COLUMNS
 }
 
 func (entry *TableEntry) GetRows() uint64 {
@@ -223,19 +226,30 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	return nil
 }
 
-func (entry *TableEntry) GetSchema() *Schema {
+// GetLastestSchema returns the latest committed schema
+func (entry *TableEntry) GetLastestSchema() *Schema {
 	return entry.schema
 }
 
+// GetVisibleSchema returns committed schema visible at the given txn
+func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader) *Schema {
+	entry.RLock()
+	defer entry.RUnlock()
+	node := entry.GetVisibleNode(txn)
+	if node != nil {
+		return node.BaseNode.Schema
+	}
+	return nil
+}
+
 func (entry *TableEntry) GetColDefs() []*ColDef {
-	colDefs := entry.schema.ColDefs
-	colDefs = append(colDefs, entry.schema.PhyAddrKey)
-	return colDefs
+	return entry.GetLastestSchema().ColDefs
 }
 
 func (entry *TableEntry) GetFullName() string {
 	if len(entry.fullName) == 0 {
-		entry.fullName = genTblFullName(entry.schema.AcInfo.TenantID, entry.schema.Name)
+		schema := entry.GetLastestSchema()
+		entry.fullName = genTblFullName(schema.AcInfo.TenantID, schema.Name)
 	}
 	return entry.fullName
 }
@@ -272,11 +286,12 @@ func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
 	return entry.StringLockedWithLevel(level)
 }
 func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
+	name := entry.GetLastestSchema().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
-			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.ID, name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), name)
 }
 
 func (entry *TableEntry) StringLocked() string {
@@ -422,7 +437,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	return
 }
 
-func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
@@ -437,10 +452,12 @@ func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isN
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
-	node.BaseNode.Update(
-		&TableMVCCNode{
-			SchemaConstraints: string(cstr),
-		})
+
+	// TODO(aptend): if apply failed, delete the new mvcc node
+	node.BaseNode.Schema.ApplyAlterTable(req)
+	if isNewNode {
+		node.BaseNode.Schema.Version += 1
+	}
 	return
 }
 
@@ -451,7 +468,7 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
+			Schema: schema,
 		},
 	}
 	entry.Insert(node)

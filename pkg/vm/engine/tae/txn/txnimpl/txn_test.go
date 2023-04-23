@@ -207,7 +207,7 @@ func TestAppend(t *testing.T) {
 	rows := uint64(MaxNodeRows) / 8 * 3
 	brows := rows / 3
 
-	bat := catalog.MockBatch(tbl.GetSchema(), int(rows))
+	bat := catalog.MockBatch(tbl.GetLocalSchema(), int(rows))
 	defer bat.Close()
 	bats := bat.Split(3)
 

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -58,7 +59,7 @@ type Relation interface {
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
 	GetSchema(ctx context.Context) *catalog.Schema
 
-	UpdateConstraintWithBin(context.Context, []byte) error
+	AlterTable(context.Context, *apipb.AlterTableReq) error
 
 	//Write just append data into txn's workspace, instead of applying data into state machine.
 	Write(context.Context, *batch.Batch) error

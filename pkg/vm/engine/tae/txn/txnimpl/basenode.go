@@ -143,7 +143,7 @@ func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 }
 
 func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.bnode.table.entry.GetSchema()
+	schema := n.bnode.table.GetLocalSchema()
 	if n.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
@@ -175,7 +175,7 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.bnode.table.entry.GetSchema().PhyAddrKey.Idx]
+	vec := n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }
@@ -305,7 +305,7 @@ func (n *baseNode) TryUpgrade() (err error) {
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
-	def := n.table.entry.GetSchema().ColDefs[colIdx]
+	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
 		n.fs,
