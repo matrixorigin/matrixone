@@ -50,12 +50,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
-	isMultiUpdate := len(tblInfo.tableDefs) > 1
 	for i, tableDef := range tblInfo.tableDefs {
 		updateBindCtx := NewBindContext(builder, nil)
 		thisIdx := beginIdx
 		beginIdx = beginIdx + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, tblInfo.objRef[i], tableDef, updateExprs[i], thisIdx, sourceStep, isMultiUpdate)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, tblInfo.objRef[i], tableDef, updateExprs[i], thisIdx, sourceStep, tblInfo.isMulti)
 		if err != nil {
 			return nil, err
 		}
@@ -108,6 +107,8 @@ func buildUpdateExpr(builder *QueryBuilder, info *dmlTableInfo) ([]map[int]*Expr
 					return nil, err
 				}
 				newExprs[i] = newExpr
+			} else if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+				newExprs[i] = DeepCopyExpr(col.OnUpdate.Expr)
 			}
 		}
 		updateExprs[idx] = newExprs

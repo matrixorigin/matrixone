@@ -48,7 +48,7 @@ func buildUpdatePlans(
 	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
 	beginIdx int, sourceStep int32, isMultiUpdate bool) error {
 	// build delete plans
-	lastNodeId, err := buildDeletePlans(ctx, builder, bindCtx, objRef, tableDef, beginIdx, sourceStep)
+	lastNodeId, err := buildDeletePlans(ctx, builder, bindCtx, objRef, tableDef, beginIdx, sourceStep, isMultiUpdate)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,49 @@ func buildUpdatePlans(
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	if isMultiUpdate {
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep = builder.appendStep(lastNodeId)
+
+	// build insert plan with update expr.
+	insertBindCtx := NewBindContext(builder, nil)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, updateExprs, sourceStep, false)
+
+	return err
+}
+
+// buildDeletePlans  build preinsert plan.
+// sink_scan -> project -> predelete[build partition] -> join[unique key] ->  [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
+func buildDeletePlans(
+	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef,
+	beginIdx int, sourceStep int32, isMulti bool) (int32, error) {
+	var err error
+	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+
+	// append project Node to fetch the columns of this table
+	// we will opt it to only keep row_id/pk column in delete. but we need more columns in update
+	projectProjection := make([]*Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		projectProjection[i] = &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(beginIdx + i),
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+	}
+	lastNodeId = builder.appendNode(projectNode, bindCtx)
+
+	// append agg for multi delete?
+	if isMulti {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(lastNode.ProjectList))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
@@ -115,53 +157,10 @@ func buildUpdatePlans(
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{lastNodeId},
 			GroupBy:     groupByExprs,
-			ProjectList: projectProjection,
+			ProjectList: aggNodeProjection,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)
 	}
-
-	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	sourceStep = builder.appendStep(lastNodeId)
-
-	// build insert plan with update expr.
-	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, updateExprs, sourceStep, false)
-
-	return err
-}
-
-// buildDeletePlans  build preinsert plan.
-// sink_scan -> project -> predelete[build partition] -> join[unique key] ->  [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
-func buildDeletePlans(
-	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef,
-	beginIdx int, sourceStep int32) (int32, error) {
-	var err error
-	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
-
-	// append project Node to fetch the columns of this table
-	// we will opt it to only keep row_id/pk column in delete. but we need more columns in update
-	projectProjection := make([]*Expr, len(tableDef.Cols))
-	for i, col := range tableDef.Cols {
-		projectProjection[i] = &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(beginIdx + i),
-					Name:   col.Name,
-				},
-			},
-		}
-	}
-	projectNode := &Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeId},
-		ProjectList: projectProjection,
-	}
-	lastNodeId = builder.appendNode(projectNode, bindCtx)
-
-	// append agg for multi delete?
 
 	isPartitionTable := false
 	partExprIdx := -1

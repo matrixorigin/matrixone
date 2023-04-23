@@ -54,7 +54,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	beginIdx := 0
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
-		lastNodeId, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep)
+		lastNodeId, err = buildDeletePlans(ctx, builder, deleteBindCtx, tblInfo.objRef[i], tableDef, beginIdx, sourceStep, tblInfo.isMulti)
 		if err != nil {
 			return nil, err
 		}

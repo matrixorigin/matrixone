@@ -67,6 +67,7 @@ type dmlTableInfo struct {
 	tableDefs      []*TableDef
 	isClusterTable []bool
 	haveConstraint bool
+	isMulti        bool
 	updateCol      []map[string]int32     // name=updated col.Name  value=col position in TableDef.Cols
 	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
 	oldColPosMap   []map[string]int       // origin table values to their position in derived table
@@ -161,6 +162,7 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		nameToIdx: make(map[string]int),
 		idToName:  make(map[uint64]string),
 		alias:     make(map[string]int),
+		isMulti:   tblInfo.isMulti,
 	}
 	for alias, columns := range usedTbl {
 		idx := tblInfo.alias[alias]
@@ -204,6 +206,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+		tblInfo.isMulti = true
 		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
