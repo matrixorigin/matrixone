@@ -191,6 +191,8 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+	ses.setRoutineManager(rm)
+	ses.setRoutine(routine)
 
 	routine.setSession(ses)
 	pro.SetSession(ses)

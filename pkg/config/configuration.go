@@ -435,6 +435,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.PrintDebugInterval == 0 {
 		fp.PrintDebugInterval = defaultPrintDebugInterval
 	}
+
+	if fp.KillRountinesInterval == 0 {
+		fp.KillRountinesInterval = defaultKillRountinesInterval
+	}
+
+	if fp.CleanKillQueueInterval == 0 {
+		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
+	}
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
