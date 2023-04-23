@@ -51,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -3181,11 +3180,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.cleanCache()
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetDebugString(), err.Error(),
-			zap.String("sql", sql))
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			fmt.Println(err)
-		}
+		logError(ses.GetDebugString(), err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
