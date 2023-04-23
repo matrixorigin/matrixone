@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"golang.org/x/net/context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -82,6 +83,7 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
+	GetDatabaseWithCtx(ctx context.Context, name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 }
