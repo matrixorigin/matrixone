@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	gotrace "runtime/trace"
 	"sync"
 	"syscall"
 	"time"
@@ -95,9 +94,6 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
-	region := gotrace.StartRegion(ctx, "HandleCommit")
-	defer region.End()
-
 	start := time.Now()
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
