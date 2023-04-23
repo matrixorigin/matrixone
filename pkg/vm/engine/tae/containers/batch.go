@@ -198,7 +198,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	for i, vec := range bat.Vecs {
 		buffer.Append([]byte(bat.Attrs[i]), false)
 		vt := vec.GetType()
-		buffer.Append(types.EncodeType(&vt), false)
+		buffer.Append(types.EncodeType(vt), false)
 	}
 	if tmpn, err = buffer.WriteTo(w); err != nil {
 		return

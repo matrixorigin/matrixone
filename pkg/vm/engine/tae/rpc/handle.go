@@ -94,14 +94,15 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
+	start := time.Now()
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	logutil.Infof("HandleCommit start : %X\n",
 		string(meta.GetID()))
 	defer func() {
-		logutil.Infof("HandleCommit end : %X\n",
-			string(meta.GetID()))
+		logutil.Infof("HandleCommit end : %X, %s\n",
+			string(meta.GetID()), time.Since(start))
 	}()
 	//Handle precommit-write command for 1PC
 	var txn moengine.Txn

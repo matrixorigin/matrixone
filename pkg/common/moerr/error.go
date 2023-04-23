@@ -176,7 +176,8 @@ const (
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
 	ErrTAEDebug                  uint16 = 20626
-	ErrDuplicateKey              uint16 = 20626
+	ErrDuplicateKey              uint16 = 20627
+	ErrTxnNeedRetry              uint16 = 20628
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -319,6 +320,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -924,6 +926,10 @@ func NewAppendableSegmentNotFound(ctx context.Context) *Error {
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrAppendableBlockNotFound)
+}
+
+func NewTxnNeedRetry(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnNeedRetry)
 }
 
 func NewDeadLockDetected(ctx context.Context) *Error {

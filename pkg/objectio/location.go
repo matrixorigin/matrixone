@@ -71,7 +71,7 @@ func (l Location) ID() uint16 {
 }
 
 func (l Location) IsEmpty() bool {
-	return len(l) == 0
+	return len(l) < LocationLen || types.DecodeInt64(l[:ObjectNameLen]) == 0
 }
 
 func (l Location) String() string {
