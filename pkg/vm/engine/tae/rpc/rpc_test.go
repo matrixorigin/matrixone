@@ -1405,7 +1405,6 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
-	txnEngine := handle.GetTxnEngine()
 	schema := catalog.MockSchema(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
@@ -1606,22 +1605,22 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//start 1PC txn , read table
-		txn, err := txnEngine.StartTxnWithNow(nil)
+		txn, err := handle.db.StartTxnWithNow(nil)
 		assert.NoError(t, err)
-		ctx := context.TODO()
-		dbH, err := txnEngine.GetDatabase(ctx, dbName, txn)
+		dbH, err := txn.GetDatabase(dbName)
 		assert.NoError(t, err)
-		tbH, err := dbH.GetRelation(ctx, schema.Name)
+		tbH, err := dbH.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
-		tbReaders, _ := tbH.NewReader(ctx, 1, nil, nil)
-		for _, reader := range tbReaders {
-			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m, nil)
-			assert.Nil(t, err)
-			if bat != nil {
-				len := bat.Vecs[0].Length()
-				assert.Equal(t, 100, len)
-			}
+
+		it := tbH.MakeBlockIt()
+		for it.Valid() {
+			v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+			assert.NoError(t, err)
+			defer v.Close()
+			assert.Equal(t, 100, v.Length())
+			it.Next()
 		}
+		_ = it.Close()
 		txn.Commit()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
@@ -1639,20 +1638,24 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	//read row ids
 	var delBat *batch.Batch
 	{
-		txn, err := txnEngine.StartTxn(nil)
+		txn, err := handle.db.StartTxn(nil)
 		assert.NoError(t, err)
-		ctx = context.TODO()
-		dbH, err := txnEngine.GetDatabase(ctx, dbName, txn)
+		dbH, err := txn.GetDatabase(dbName)
 		assert.NoError(t, err)
-		tbH, err := dbH.GetRelation(ctx, schema.Name)
+		tbH, err := dbH.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
-		hideCol, err := tbH.GetHideKeys(ctx)
+		hideCol, err := getHideKeys(tbH)
 		assert.NoError(t, err)
-		reader, _ := tbH.NewReader(ctx, 1, nil, nil)
-		delBat, err = reader[0].Read(ctx, []string{hideCol[0].Name}, nil, handle.m, nil)
-		assert.Nil(t, err)
-		err = txn.Commit()
-		assert.Nil(t, err)
+
+		it := tbH.MakeBlockIt()
+		v, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
+		assert.NoError(t, err)
+		_ = it.Close()
+
+		delBat = batch.New(true, []string{hideCol[0].Name})
+		delBat.Vecs[0] = v.GetData().GetDownstreamVector()
+
+		assert.NoError(t, txn.Commit())
 	}
 
 	hideBats := containers.SplitBatch(delBat, 5)
@@ -1673,9 +1676,6 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{
 			typ: CmdPreCommitWrite,
 			cmd: api.PrecommitWriteCmd{
-				//UserId:    ac.userId,
-				//AccountId: ac.accountId,
-				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{deleteEntry}},
 		},
 		{typ: CmdPrepare},
@@ -1687,24 +1687,25 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		//read, there should be 80 rows left.
-		txn, err := txnEngine.StartTxnWithNow(nil)
+		txn, err := handle.db.StartTxnWithNow(nil)
 		assert.NoError(t, err)
-		ctx := context.TODO()
-		dbH, err := txnEngine.GetDatabase(ctx, dbName, txn)
+		dbH, err := txn.GetDatabase(dbName)
 		assert.NoError(t, err)
-		tbH, err := dbH.GetRelation(ctx, schema.Name)
+		tbH, err := dbH.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
-		tbReaders, _ := tbH.NewReader(ctx, 2, nil, nil)
-		for _, reader := range tbReaders {
-			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m, nil)
-			assert.Nil(t, err)
-			if bat != nil {
-				len := bat.Vecs[0].Length()
-				assert.Equal(t, 80, len)
-			}
+
+		it := tbH.MakeBlockIt()
+		for it.Valid() {
+			v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+			assert.NoError(t, err)
+			defer v.Close()
+			v.ApplyDeletes()
+			assert.Equal(t, 80, v.Length())
+			it.Next()
 		}
-		err = txn.Commit()
-		assert.Nil(t, err)
+		_ = it.Close()
+
+		assert.NoError(t, txn.Commit())
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
 		wg.Done()

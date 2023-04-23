@@ -52,9 +52,8 @@ import (
 
 // TODO::GC the abandoned txn.
 type Handle struct {
-	eng moengine.TxnEngine
-	db  *db.DB
-	mu  struct {
+	db *db.DB
+	mu struct {
 		sync.RWMutex
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
@@ -76,10 +75,6 @@ func (h *Handle) GetDB() *db.DB {
 	return h.db
 }
 
-func (h *Handle) GetTxnEngine() moengine.TxnEngine {
-	return h.eng
-}
-
 func NewTAEHandle(path string, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
@@ -90,8 +85,7 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	}
 
 	h := &Handle{
-		eng: moengine.NewEngine(tae),
-		db:  tae,
+		db: tae,
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
@@ -665,7 +659,7 @@ func (h *Handle) HandleDropDatabase(
 		logutil.Infof("[precommit] drop database end: %s\n", txn.String())
 	}()
 
-	if err = h.eng.DropDatabaseByID(ctx, req.ID, txn); err != nil {
+	if _, err = txn.DropDatabaseByID(req.ID); err != nil {
 		return
 	}
 	resp.ID = req.ID
@@ -722,19 +716,17 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
 	}()
 
-	db, err := h.eng.GetDatabaseByID(ctx, req.DatabaseID, txn)
+	db, err := txn.GetDatabaseByID(req.DatabaseID)
 	if err != nil {
 		return
 	}
 
 	if req.IsDrop {
-		err = db.DropRelationByID(ctx, req.ID)
-		if err != nil {
+		if _, err = db.DropRelationByID(req.ID); err != nil {
 			return
 		}
-		return
 	}
-	err = db.TruncateRelationByID(ctx, req.ID, req.NewId)
+	_, err = db.TruncateByID(req.ID, req.NewId)
 	return err
 }
 
@@ -767,12 +759,12 @@ func (h *Handle) HandleWrite(
 		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
 	}()
 
-	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return
 	}
 
-	tb, err := dbase.GetRelationByID(ctx, req.TableID)
+	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
 		return
 	}
@@ -789,7 +781,6 @@ func (h *Handle) HandleWrite(
 				locations = append(locations, location)
 			}
 			err = tb.AddBlksWithMetaLoc(
-				ctx,
 				nil,
 				locations)
 			return
@@ -814,7 +805,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		//Appends a batch of data into table.
-		err = tb.Write(ctx, req.Batch)
+		err = appendBatch(tb, req.Batch)
 		return
 	}
 	//handle delete
@@ -850,17 +841,16 @@ func (h *Handle) HandleWrite(
 				return
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
-
-			err = tb.DeleteByPhyAddrKeys(ctx, vec.GetDownstreamVector())
-			if err != nil {
-				vec.Close()
+			defer vec.Close()
+			if err = tb.DeleteByPhyAddrKeys(vec); err != nil {
 				return
 			}
-			vec.Close()
 		}
 		return
 	}
-	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
+	vec := containers.ToDNVector(req.Batch.GetVector(0))
+	defer vec.Close()
+	err = tb.DeleteByPhyAddrKeys(vec)
 	return
 }
 
@@ -879,19 +869,19 @@ func (h *Handle) HandleUpdateConstraint(
 	req.Constraint = nil
 	logutil.Infof("[precommit] update cstr: %+v cstr %d bytes\n txn: %s\n", req, len(cstr), txn.String())
 
-	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return
 	}
 
-	tbl, err := dbase.GetRelationByID(ctx, req.TableId)
+	tbl, err := dbase.GetRelationByID(req.TableId)
 	if err != nil {
 		return
 	}
 
-	tbl.UpdateConstraintWithBin(ctx, cstr)
+	err = tbl.UpdateConstraint(cstr)
 
-	return nil
+	return
 }
 
 func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {

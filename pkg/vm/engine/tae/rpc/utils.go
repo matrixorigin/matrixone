@@ -20,11 +20,13 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -59,6 +61,13 @@ func tableNames(db handle.Database) ([]string, error) {
 		it.Next()
 	}
 	return names, nil
+}
+
+func appendBatch(rel handle.Relation, bat *batch.Batch) (err error) {
+	dnBat := containers.ToDNBatch(bat)
+	defer dnBat.Close()
+	err = rel.Append(dnBat)
+	return
 }
 
 func getHideKeys(rel handle.Relation) ([]*engine.Attribute, error) {

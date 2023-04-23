@@ -95,7 +95,6 @@ type Database interface {
 // moengine.Engine is only used by taeStorage
 type Engine interface {
 	DropDatabase(ctx context.Context, databaseName string, txn Txn) error
-	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
 	CreateDatabase(ctx context.Context, databaseName, datTyp string, txn Txn) error
 
@@ -104,7 +103,6 @@ type Engine interface {
 
 	// GetDatabase returns a handle for a database
 	GetDatabase(ctx context.Context, databaseName string, txn Txn) (Database, error)
-	GetDatabaseByID(ctx context.Context, id uint64, txn Txn) (Database, error)
 
 	// GetDB returns tae db struct
 	GetDB() *db.DB

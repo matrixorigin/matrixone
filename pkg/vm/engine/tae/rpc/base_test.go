@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
@@ -158,8 +157,7 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
-		db:  tae,
+		db: tae,
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
