@@ -514,3 +514,19 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 	}
 	return
 }
+
+func Int32ToUint32(x int32) uint32 {
+	ux := uint32(x) << 1
+	if x < 0 {
+		ux = ^ux
+	}
+	return ux
+}
+
+func Uint32ToInt32(ux uint32) int32 {
+	x := int32(ux >> 1)
+	if ux&1 != 0 {
+		x = ^x
+	}
+	return x
+}

@@ -26,154 +26,154 @@ type OperationHandler interface {
 	HandleOpenDatabase(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req OpenDatabaseReq,
+		req *OpenDatabaseReq,
 		resp *OpenDatabaseResp,
 	) error
 
 	HandleGetDatabases(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetDatabasesReq,
+		req *GetDatabasesReq,
 		resp *GetDatabasesResp,
 	) error
 
 	HandleOpenRelation(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req OpenRelationReq,
+		req *OpenRelationReq,
 		resp *OpenRelationResp,
 	) error
 
 	HandleGetRelations(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetRelationsReq,
+		req *GetRelationsReq,
 		resp *GetRelationsResp,
 	) error
 
 	HandleGetPrimaryKeys(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetPrimaryKeysReq,
+		req *GetPrimaryKeysReq,
 		resp *GetPrimaryKeysResp,
 	) error
 
 	HandleGetTableColumns(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetTableColumnsReq,
+		req *GetTableColumnsReq,
 		resp *GetTableColumnsResp,
 	) error
 
 	HandleGetTableDefs(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetTableDefsReq,
+		req *GetTableDefsReq,
 		resp *GetTableDefsResp,
 	) error
 
 	HandleGetHiddenKeys(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req GetHiddenKeysReq,
+		req *GetHiddenKeysReq,
 		resp *GetHiddenKeysResp,
 	) error
 
 	HandleNewTableIter(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req NewTableIterReq,
+		req *NewTableIterReq,
 		resp *NewTableIterResp,
 	) error
 
 	HandleRead(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req ReadReq,
+		req *ReadReq,
 		resp *ReadResp,
 	) error
 
 	HandleCloseTableIter(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req CloseTableIterReq,
+		req *CloseTableIterReq,
 		resp *CloseTableIterResp,
 	) error
 
 	HandleCreateDatabase(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req CreateDatabaseReq,
+		req *CreateDatabaseReq,
 		resp *CreateDatabaseResp,
 	) error
 
 	HandleDeleteDatabase(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req DeleteDatabaseReq,
+		req *DeleteDatabaseReq,
 		resp *DeleteDatabaseResp,
 	) error
 
 	HandleCreateRelation(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req CreateRelationReq,
+		req *CreateRelationReq,
 		resp *CreateRelationResp,
 	) error
 
 	HandleDeleteRelation(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req DeleteRelationReq,
+		req *DeleteRelationReq,
 		resp *DeleteRelationResp,
 	) error
 
 	HandleTruncateRelation(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req TruncateRelationReq,
+		req *TruncateRelationReq,
 		resp *TruncateRelationResp,
 	) error
 
 	HandleAddTableDef(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req AddTableDefReq,
+		req *AddTableDefReq,
 		resp *AddTableDefResp,
 	) error
 
 	HandleDelTableDef(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req DelTableDefReq,
+		req *DelTableDefReq,
 		resp *DelTableDefResp,
 	) error
 
 	HandleDelete(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req DeleteReq,
+		req *DeleteReq,
 		resp *DeleteResp,
 	) error
 
 	HandleUpdate(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req UpdateReq,
+		req *UpdateReq,
 		resp *UpdateResp,
 	) error
 
 	HandleWrite(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req WriteReq,
+		req *WriteReq,
 		resp *WriteResp,
 	) error
 
 	HandleTableStats(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req TableStatsReq,
+		req *TableStatsReq,
 		resp *TableStatsResp,
 	) error
 }
@@ -198,112 +198,134 @@ func handle(
 
 	case OpCreateDatabase:
 		var r CreateDatabaseResp
-		err = handler.HandleCreateDatabase(ctx, meta, req.(CreateDatabaseReq), &r)
+		request := req.(CreateDatabaseReq)
+		err = handler.HandleCreateDatabase(ctx, meta, &request, &r)
 		ret = r
 
 	case OpOpenDatabase:
 		var r OpenDatabaseResp
-		err = handler.HandleOpenDatabase(ctx, meta, req.(OpenDatabaseReq), &r)
+		request := req.(OpenDatabaseReq)
+		err = handler.HandleOpenDatabase(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetDatabases:
 		var r GetDatabasesResp
-		err = handler.HandleGetDatabases(ctx, meta, req.(GetDatabasesReq), &r)
+		request := req.(GetDatabasesReq)
+		err = handler.HandleGetDatabases(ctx, meta, &request, &r)
 		ret = r
 
 	case OpDeleteDatabase:
 		var r DeleteDatabaseResp
-		err = handler.HandleDeleteDatabase(ctx, meta, req.(DeleteDatabaseReq), &r)
+		request := req.(DeleteDatabaseReq)
+		err = handler.HandleDeleteDatabase(ctx, meta, &request, &r)
 		ret = r
 
 	case OpCreateRelation:
 		var r CreateRelationResp
-		err = handler.HandleCreateRelation(ctx, meta, req.(CreateRelationReq), &r)
+		request := req.(CreateRelationReq)
+		err = handler.HandleCreateRelation(ctx, meta, &request, &r)
 		ret = r
 
 	case OpDeleteRelation:
 		var r DeleteRelationResp
-		err = handler.HandleDeleteRelation(ctx, meta, req.(DeleteRelationReq), &r)
+		request := req.(DeleteRelationReq)
+		err = handler.HandleDeleteRelation(ctx, meta, &request, &r)
 		ret = r
 
 	case OpTruncateRelation:
 		var r TruncateRelationResp
-		handler.HandleTruncateRelation(ctx, meta, req.(TruncateRelationReq), &r)
+		request := req.(TruncateRelationReq)
+		handler.HandleTruncateRelation(ctx, meta, &request, &r)
 		ret = r
 
 	case OpOpenRelation:
 		var r OpenRelationResp
-		err = handler.HandleOpenRelation(ctx, meta, req.(OpenRelationReq), &r)
+		request := req.(OpenRelationReq)
+		err = handler.HandleOpenRelation(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetRelations:
 		var r GetRelationsResp
-		err = handler.HandleGetRelations(ctx, meta, req.(GetRelationsReq), &r)
+		request := req.(GetRelationsReq)
+		err = handler.HandleGetRelations(ctx, meta, &request, &r)
 		ret = r
 
 	case OpAddTableDef:
 		var r AddTableDefResp
-		err = handler.HandleAddTableDef(ctx, meta, req.(AddTableDefReq), &r)
+		request := req.(AddTableDefReq)
+		err = handler.HandleAddTableDef(ctx, meta, &request, &r)
 		ret = r
 
 	case OpDelTableDef:
 		var r DelTableDefResp
-		err = handler.HandleDelTableDef(ctx, meta, req.(DelTableDefReq), &r)
+		request := req.(DelTableDefReq)
+		err = handler.HandleDelTableDef(ctx, meta, &request, &r)
 		ret = r
 
 	case OpDelete:
 		var r DeleteResp
-		err = handler.HandleDelete(ctx, meta, req.(DeleteReq), &r)
+		request := req.(DeleteReq)
+		err = handler.HandleDelete(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetPrimaryKeys:
 		var r GetPrimaryKeysResp
-		err = handler.HandleGetPrimaryKeys(ctx, meta, req.(GetPrimaryKeysReq), &r)
+		request := req.(GetPrimaryKeysReq)
+		err = handler.HandleGetPrimaryKeys(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetTableColumns:
 		var r GetTableColumnsResp
-		err = handler.HandleGetTableColumns(ctx, meta, req.(GetTableColumnsReq), &r)
+		request := req.(GetTableColumnsReq)
+		err = handler.HandleGetTableColumns(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetTableDefs:
 		var r GetTableDefsResp
-		err = handler.HandleGetTableDefs(ctx, meta, req.(GetTableDefsReq), &r)
+		request := req.(GetTableDefsReq)
+		err = handler.HandleGetTableDefs(ctx, meta, &request, &r)
 		ret = r
 
 	case OpGetHiddenKeys:
 		var r GetHiddenKeysResp
-		err = handler.HandleGetHiddenKeys(ctx, meta, req.(GetHiddenKeysReq), &r)
+		request := req.(GetHiddenKeysReq)
+		err = handler.HandleGetHiddenKeys(ctx, meta, &request, &r)
 		ret = r
 
 	case OpUpdate:
 		var r UpdateResp
-		err = handler.HandleUpdate(ctx, meta, req.(UpdateReq), &r)
+		request := req.(UpdateReq)
+		err = handler.HandleUpdate(ctx, meta, &request, &r)
 		ret = r
 
 	case OpWrite, OpPreCommit:
 		var r WriteResp
-		err = handler.HandleWrite(ctx, meta, req.(WriteReq), &r)
+		request := req.(WriteReq)
+		err = handler.HandleWrite(ctx, meta, &request, &r)
 		ret = r
 
 	case OpNewTableIter:
 		var r NewTableIterResp
-		err = handler.HandleNewTableIter(ctx, meta, req.(NewTableIterReq), &r)
+		request := req.(NewTableIterReq)
+		err = handler.HandleNewTableIter(ctx, meta, &request, &r)
 		ret = r
 
 	case OpRead:
 		var r ReadResp
-		err = handler.HandleRead(ctx, meta, req.(ReadReq), &r)
+		request := req.(ReadReq)
+		err = handler.HandleRead(ctx, meta, &request, &r)
 		ret = r
 
 	case OpCloseTableIter:
 		var r CloseTableIterResp
-		err = handler.HandleCloseTableIter(ctx, meta, req.(CloseTableIterReq), &r)
+		request := req.(CloseTableIterReq)
+		err = handler.HandleCloseTableIter(ctx, meta, &request, &r)
 		ret = r
 
 	case OpTableStats:
 		var r TableStatsResp
-		err = handler.HandleTableStats(ctx, meta, req.(TableStatsReq), &r)
+		request := req.(TableStatsReq)
+		err = handler.HandleTableStats(ctx, meta, &request, &r)
 		ret = r
 
 	default:
