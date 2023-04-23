@@ -479,7 +479,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	for account, killRecord := range tempKillQueue {
 		if rtMap, ok := accountId2RoutineMap[account]; ok {
 			for rt, version := range rtMap {
-				if rt != nil && (version+1)%math.MaxUint64-1 <= killRecord.version {
+				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
 					rt.killConnection(false)
 				}
