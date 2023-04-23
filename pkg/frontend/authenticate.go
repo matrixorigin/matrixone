@@ -2676,13 +2676,6 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 		}
 	}
 
-	//if alter account open, remove the account from the kill queue
-	if accountExist {
-		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen {
-			ses.getRoutineManager().accountRoutine.deKillQueue(int64(targetAccountId))
-		}
-	}
-
 	return err
 handleFailed:
 	//ROLLBACK the transaction

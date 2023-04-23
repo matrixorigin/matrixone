@@ -92,6 +92,9 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
 	}
+	if len(ar.accountId2Routine[tenantID]) == 0 {
+		delete(ar.accountId2Routine, tenantID)
+	}
 }
 
 func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
@@ -103,16 +106,6 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	ar.killIdQueue[tenantID] = KillRecord
-
-}
-
-func (ar *AccountRoutineManager) deKillQueue(tenantID int64) {
-	if tenantID == sysAccountID {
-		return
-	}
-	ar.killQueueMu.Lock()
-	defer ar.killQueueMu.Unlock()
-	delete(ar.killIdQueue, tenantID)
 
 }
 
@@ -469,12 +462,8 @@ func (rm *RoutineManager) printDebug() {
 
 func (rm *RoutineManager) KillRoutineConnections() {
 	ar := rm.accountRoutine
-	ar.accountRoutineMu.RLock()
-	accountId2RoutineMap := ar.accountId2Routine
-	ar.accountRoutineMu.RUnlock()
-	ar.killQueueMu.RLock()
 	tempKillQueue := ar.killIdQueue
-	ar.killQueueMu.RUnlock()
+	accountId2RoutineMap := ar.accountId2Routine
 
 	for account, killRecord := range tempKillQueue {
 		if rtMap, ok := accountId2RoutineMap[account]; ok {
@@ -482,6 +471,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
 					rt.killConnection(false)
+					ar.deleteRoutine(account, rt)
 				}
 			}
 		}
@@ -491,9 +481,6 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	for toKillAccount, killRecord := range ar.killIdQueue {
 		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
 			delete(ar.killIdQueue, toKillAccount)
-			ar.accountRoutineMu.Lock()
-			delete(ar.accountId2Routine, toKillAccount)
-			ar.accountRoutineMu.Unlock()
 		}
 	}
 	ar.killQueueMu.Unlock()
