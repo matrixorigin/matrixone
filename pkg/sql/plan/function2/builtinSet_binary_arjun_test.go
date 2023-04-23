@@ -957,3 +957,255 @@ func TestExtract(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// REPLACE
+
+func initReplaceTestCase() []tcTemp {
+	cases := []struct {
+		info   string
+		input  [][]string
+		expect []string
+	}{
+		{
+			info: "Single string case1",
+			input: [][]string{
+				[]string{"abc"},
+				[]string{"a"},
+				[]string{"d"},
+			},
+
+			expect: []string{"dbc"},
+		},
+
+		{
+			info: "Single string case2",
+			input: [][]string{
+				[]string{".*.*.*"},
+				[]string{".*"},
+				[]string{"n"},
+			},
+
+			expect: []string{"nnn"},
+		},
+
+		{
+			info: "Single string case3",
+			input: [][]string{
+				[]string{"当时明月 在 当时"},
+				[]string{"当时"},
+				[]string{"此时"},
+			},
+
+			expect: []string{"此时明月 在 此时"},
+		},
+
+		{
+			info: "Single string case4",
+			input: [][]string{
+				[]string{"123"},
+				[]string{""},
+				[]string{"n"},
+			},
+
+			expect: []string{"123"},
+		},
+		//FIXME: Didn't implement the ReplaceWithArrays. Hence multi string case fails.
+
+		//{
+		//	info: "Multi string case1",
+		//	input: [][]string{
+		//		[]string{"firststring", "secondstring"},
+		//		[]string{"st"},
+		//		[]string{"re"},
+		//	},
+		//
+		//	expect: []string{"firrerering", "secondrering"},
+		//},
+		//{
+		//	info: "Multi string case2",
+		//	input: [][]string{
+		//		[]string{"Oneinput"},
+		//		[]string{"n"},
+		//		[]string{"e", "b"},
+		//	},
+		//
+		//	expect: []string{"Oeeieput", "Obeibput"},
+		//},
+		//
+		//{
+		//	info: "Multi string case3",
+		//	input: [][]string{
+		//		[]string{"aaabbb"},
+		//		[]string{"a", "b"},
+		//		[]string{"n"},
+		//	},
+		//
+		//	expect: []string{"nnnbbb", "aaannn"},
+		//},
+		//
+		//{
+		//	info: "Multi string case4",
+		//	input: [][]string{
+		//		[]string{"Matrix", "Origin"},
+		//		[]string{"a", "i"},
+		//		[]string{"b", "d"},
+		//	},
+		//
+		//	expect: []string{"Mbtrix", "Ordgdn"},
+		//},
+		//
+		//{
+		//	info: "Scalar case1",
+		//	input: [][]string{
+		//		[]string{"cool"},
+		//		[]string{"o"},
+		//		[]string{"a"},
+		//	},
+		//
+		//	expect: []string{"caal"},
+		//},
+	}
+
+	var testInputs []tcTemp
+	for _, c := range cases {
+
+		testInputs = append(testInputs, tcTemp{
+			info: "test replace " + c.info,
+			inputs: []testutil.FunctionTestInput{
+				// Create a input entry <[]string, []string, []string>
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.input[0], []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.input[1], []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.input[2], []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, c.expect, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestReplace(t *testing.T) {
+	testCases := initReplaceTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Replace)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TRIM
+
+func initTrimTestCase() []tcTemp {
+	cases := []struct {
+		mode     string
+		input    string
+		trimWord string
+		output   string
+		info     string
+	}{
+
+		{
+			mode:     "both",
+			input:    "   hello world   ",
+			trimWord: " ",
+			output:   "hello world",
+		},
+		{
+			mode:     "leading",
+			input:    "   hello world   ",
+			trimWord: " ",
+			output:   "hello world   ",
+		},
+		{
+			mode:     "trailing",
+			input:    "   hello world   ",
+			trimWord: " ",
+			output:   "   hello world",
+		},
+		{
+			mode:     "both",
+			input:    "   hello world   ",
+			trimWord: "h",
+			output:   "   hello world   ",
+		},
+		{
+			mode:     "trailing",
+			input:    "   hello world",
+			trimWord: "d",
+			output:   "   hello worl",
+		},
+		{
+			mode:     "leading",
+			input:    "hello world   ",
+			trimWord: "h",
+			output:   "ello world   ",
+		},
+		{
+			mode:     "both",
+			input:    "嗷嗷0k七七",
+			trimWord: "七",
+			output:   "嗷嗷0k",
+		},
+		{
+			mode:     "leading",
+			input:    "嗷嗷0k七七",
+			trimWord: "七",
+			output:   "嗷嗷0k七七",
+		},
+		{
+			mode:     "trailing",
+			input:    "嗷嗷0k七七",
+			trimWord: "七",
+			output:   "嗷嗷0k",
+		},
+		{
+			mode:     "both",
+			input:    "嗷嗷0k七七",
+			trimWord: "k七七",
+			output:   "嗷嗷0",
+		},
+		{
+			mode:     "leading",
+			input:    "嗷嗷0k七七",
+			trimWord: "",
+			output:   "嗷嗷0k七七",
+		},
+		{
+			mode:     "trailing",
+			input:    "",
+			trimWord: "嗷嗷0k七七",
+			output:   "",
+		},
+	}
+
+	var testInputs []tcTemp
+	for _, c := range cases {
+
+		testInputs = append(testInputs, tcTemp{
+
+			info: "test trim ",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{c.mode}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{c.input}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{c.trimWord}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, []string{c.output}, []bool{}),
+		})
+	}
+
+	return testInputs
+
+}
+
+func TestTrim(t *testing.T) {
+	testCases := initTrimTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Trim)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}

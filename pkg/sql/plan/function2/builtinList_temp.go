@@ -3195,4 +3195,93 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			},
 		},
 	},
+
+	// ****** multi ******
+	{
+		functionId: JSON_EXTRACT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				NewOp: nil, //JsonExtract,
+			},
+		},
+	},
+
+	{
+		functionId: REPLACE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Replace,
+			},
+		},
+	},
+
+	{
+		functionId: SERIAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: nil, //Serial,
+			},
+		},
+	},
+	{
+		functionId: SPLIT_PART,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: nil, //SplitPart,
+			},
+		},
+	},
+	{
+		functionId: TRIM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: Trim,
+			},
+		},
+	},
 }

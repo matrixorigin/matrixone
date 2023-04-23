@@ -567,3 +567,109 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}
 	return nil
 }
+
+func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		v3, null3 := p3.GetStrValue(i)
+
+		// TODO: Ignoring maxLen. https://github.com/m-schen/matrixone/blob/5f91a015a3d7aae5721ba94b097db13c3dcbf294/pkg/sql/plan/function/builtin/multi/replace.go#L35
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			//FIXME: Ignoring the complex logic. https://github.com/m-schen/matrixone/blob/5f91a015a3d7aae5721ba94b097db13c3dcbf294/pkg/vectorize/regular/regular_replace.go#L182
+			// FIXME: This is wrong. I haven't handled Arrays. Hence it will fail.
+			v1Str := function2Util.QuickBytesToStr(v1)
+			v2Str := function2Util.QuickBytesToStr(v2)
+			var res string
+			if v2Str == "" {
+				res = v1Str
+			} else {
+				res = strings.ReplaceAll(v1Str, v2Str, function2Util.QuickBytesToStr(v3))
+			}
+
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+//TRIM
+
+func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+
+		v1, null1 := p1.GetStrValue(i)
+		src, null2 := p2.GetStrValue(i)
+		cut, null3 := p3.GetStrValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+
+			v1Str := strings.ToLower(string(v1))
+			var res string
+			switch v1Str {
+			case "both":
+				res = trimBoth(string(src), string(cut))
+			case "leading":
+				res = trimLeading(string(src), string(cut))
+			case "trailing":
+				res = trimTrailing(string(src), string(cut))
+			default:
+				return moerr.NewNotSupported(proc.Ctx, "trim type %s", v1Str)
+			}
+
+			if err = rs.AppendBytes([]byte(res), false); err != nil {
+				return err
+			}
+		}
+
+	}
+	return nil
+}
+
+func trimBoth(src, cuts string) string {
+	if len(cuts) == 0 {
+		return src
+	}
+	return trimLeading(trimTrailing(src, cuts), cuts)
+}
+
+func trimLeading(src, cuts string) string {
+	if len(cuts) == 0 {
+		return src
+	}
+	for strings.HasPrefix(src, cuts) {
+		src = src[len(cuts):]
+	}
+	return src
+}
+
+func trimTrailing(src, cuts string) string {
+	if len(cuts) == 0 {
+		return src
+	}
+	for strings.HasSuffix(src, cuts) {
+		src = src[:len(src)-len(cuts)]
+	}
+	return src
+}

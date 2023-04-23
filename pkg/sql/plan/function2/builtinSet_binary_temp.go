@@ -837,3 +837,17 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	}
 	return nil
 }
+
+// JSON_EXTRACT
+
+func JsonExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}
+
+func Serial(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}
+
+func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}
