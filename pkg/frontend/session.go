@@ -1145,6 +1145,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var tenantID int64
 	var userID int64
 	var pwd, accountStatus string
+	var accountVersion uint64
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1206,7 +1207,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 
 	//account version
-	accountVersion, err := rsset[0].GetUint64(sysTenantCtx, 0, 3)
+	accountVersion, err = rsset[0].GetUint64(sysTenantCtx, 0, 3)
+	if err != nil {
+		return nil, err
+	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
