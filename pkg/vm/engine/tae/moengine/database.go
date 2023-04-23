@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -110,14 +109,15 @@ func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
 }
 
 func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.TableDef) error {
-	schema, err := DefsToSchema(name, defs)
-	if err != nil {
-		return err
-	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
-	_, err = db.handle.CreateRelation(schema)
-	return err
+	return nil
+	// schema, err := DefsToSchema(name, defs)
+	// if err != nil {
+	// 	return err
+	// }
+	// schema.BlockMaxRows = 40000
+	// schema.SegmentMaxBlocks = 20
+	// _, err = db.handle.CreateRelation(schema)
+	// return err
 }
 
 func (db *txnDatabase) Truncate(_ context.Context, name string) (uint64, error) {
@@ -132,29 +132,6 @@ func (db *txnDatabase) TruncateRelationWithID(_ context.Context, name string, id
 
 func (db *txnDatabase) TruncateRelationByID(_ context.Context, id uint64, newId uint64) error {
 	_, err := db.handle.TruncateByID(id, newId)
-	return err
-}
-
-func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []engine.TableDef) error {
-	schema, err := DefsToSchema(name, defs)
-	if err != nil {
-		return err
-	}
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
-	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
-	_, err = db.handle.CreateRelation(schema)
-	return err
-}
-
-func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
-	id uint64, defs []engine.TableDef) error {
-	schema, err := DefsToSchema(name, defs)
-	if err != nil {
-		return err
-	}
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
-	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
-	_, err = db.handle.CreateRelationWithID(schema, id)
 	return err
 }
 

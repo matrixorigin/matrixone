@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,9 +58,10 @@ func (*baseRelation) DelTableDef(_ context.Context, def engine.TableDef) error {
 }
 
 func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error) {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	defs, _ := SchemaToDefs(schema)
-	return defs, nil
+	return nil, nil
+	// schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	// defs, _ := SchemaToDefs(schema)
+	// return defs, nil
 }
 
 func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {

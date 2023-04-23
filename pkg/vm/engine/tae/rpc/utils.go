@@ -19,7 +19,9 @@ import (
 	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -41,6 +43,36 @@ func createRelation(
 	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
 	_, err = dbH.CreateRelationWithID(schema, id)
 	return err
+}
+
+func tableDefs(rel handle.Relation) ([]engine.TableDef, error) {
+	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	return SchemaToDefs(schema)
+}
+
+func tableNames(db handle.Database) ([]string, error) {
+	var names []string
+
+	it := db.MakeRelationIt()
+	for it.Valid() {
+		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
+		it.Next()
+	}
+	return names, nil
+}
+
+func getHideKeys(rel handle.Relation) ([]*engine.Attribute, error) {
+	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	if schema.PhyAddrKey == nil {
+		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
+	}
+	key := new(engine.Attribute)
+	key.Name = schema.PhyAddrKey.Name
+	key.Type = schema.PhyAddrKey.Type
+	key.IsRowId = true
+	// key.IsHidden = true
+	logutil.Debugf("GetHideKey: %v", key)
+	return []*engine.Attribute{key}, nil
 }
 
 func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {

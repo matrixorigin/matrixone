@@ -89,9 +89,6 @@ type Database interface {
 	TruncateRelationWithID(context.Context, string, uint64) error
 	TruncateRelationByID(context.Context, uint64, uint64) error
 
-	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
-	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
-
 	GetDatabaseID(ctx context.Context) uint64
 }
 

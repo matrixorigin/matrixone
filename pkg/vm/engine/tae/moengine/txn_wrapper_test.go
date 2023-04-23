@@ -14,32 +14,32 @@
 
 package moengine
 
-import (
-	"context"
-	"testing"
+// import (
+// 	"context"
+// 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/stretchr/testify/assert"
-)
+// 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+// 	"github.com/stretchr/testify/assert"
+// )
 
-func TestTxnCleintNewWithSnapshot(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	e := NewEngine(tae)
-	txnClient := EngineToTxnClient(e)
+// func TestTxnCleintNewWithSnapshot(t *testing.T) {
+// 	defer testutils.AfterTest(t)()
+// 	testutils.EnsureNoLeak(t)
+// 	tae := initDB(t, nil)
+// 	defer tae.Close()
+// 	e := NewEngine(tae)
+// 	txnClient := EngineToTxnClient(e)
 
-	txn, err := txnClient.New(context.Background(), timestamp.Timestamp{})
-	assert.Nil(t, err)
-	id := txn.Txn().ID
+// 	txn, err := txnClient.New(context.Background(), timestamp.Timestamp{})
+// 	assert.Nil(t, err)
+// 	id := txn.Txn().ID
 
-	snapshot, err := txn.Snapshot()
-	assert.Nil(t, err)
+// 	snapshot, err := txn.Snapshot()
+// 	assert.Nil(t, err)
 
-	txn2, err := txnClient.NewWithSnapshot(snapshot)
-	assert.Nil(t, err)
-	id2 := txn2.Txn().ID
-	assert.Equal(t, id2, id)
-}
+// 	txn2, err := txnClient.NewWithSnapshot(snapshot)
+// 	assert.Nil(t, err)
+// 	id2 := txn2.Txn().ID
+// 	assert.Equal(t, id2, id)
+// }

@@ -32,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -763,15 +761,3 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	}
 	return rbat, nil
 }
-
-func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
-	bat *batch.Batch) *containers.Batch {
-	taeBatch := containers.NewEmptyBatch()
-	for i, vec := range bat.Vecs {
-		v := containers.ToDNVector(vec)
-		taeBatch.AddVector(bat.Attrs[i], v)
-	}
-	return taeBatch
-}
-
-//gen LogTail
