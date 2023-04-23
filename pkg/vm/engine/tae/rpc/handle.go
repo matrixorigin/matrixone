@@ -722,9 +722,8 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	}
 
 	if req.IsDrop {
-		if _, err = db.DropRelationByID(req.ID); err != nil {
-			return
-		}
+		_, err = db.DropRelationByID(req.ID)
+		return
 	}
 	_, err = db.TruncateByID(req.ID, req.NewId)
 	return err
