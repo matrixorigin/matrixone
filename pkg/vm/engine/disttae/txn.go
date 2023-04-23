@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -159,9 +160,9 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 		s3Writer.InitBuffers(mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
-			s3Writer.Put(mp[key][i])
+			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(mp[key]), txn.proc, false)
+		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
 
 		if err != nil {
 			return err
@@ -362,16 +363,13 @@ func blockRows(meta BlockMeta) int64 {
 	return meta.Rows
 }
 
-func blockMarshal(meta BlockMeta) []byte {
-	data, _ := types.Encode(meta)
-	return data
+func blockInfoMarshal(meta BlockMeta) []byte {
+	sz := unsafe.Sizeof(meta.Info)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&meta.Info)), sz)
 }
 
-func blockUnmarshal(data []byte) BlockMeta {
-	var meta BlockMeta
-
-	types.Decode(data, &meta)
-	return meta
+func BlockInfoUnmarshal(data []byte) catalog.BlockInfo {
+	return *(*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn

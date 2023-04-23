@@ -204,10 +204,10 @@ func TestAppend(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
 	tbl, _ := tDB.getOrSetTable(rel.ID())
-	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
+	rows := uint64(MaxNodeRows) / 8 * 3
 	brows := rows / 3
 
-	bat := catalog.MockBatch(tbl.GetSchema(), int(rows))
+	bat := catalog.MockBatch(tbl.GetLocalSchema(), int(rows))
 	defer bat.Close()
 	bats := bat.Split(3)
 

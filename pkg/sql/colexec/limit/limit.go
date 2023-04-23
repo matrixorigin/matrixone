@@ -38,6 +38,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	ap := arg.(*Argument)
@@ -47,7 +48,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	if ap.Seen >= ap.Limit {
 		proc.Reg.InputBatch = nil
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return true, nil
 	}
 	length := bat.Length()

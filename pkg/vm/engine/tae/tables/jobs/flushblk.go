@@ -70,12 +70,12 @@ func (task *flushBlkTask) Execute() error {
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
-	_, err = writer.WriteBlock(task.data)
+	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
 	if err != nil {
 		return err
 	}
 	if task.delta != nil {
-		_, err := writer.WriteBlockWithOutIndex(task.delta)
+		_, err := writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
 		if err != nil {
 			return err
 		}

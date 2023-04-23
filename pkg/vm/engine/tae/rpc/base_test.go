@@ -725,6 +725,11 @@ func genCreateTableTuple(
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // version
+		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	return bat, nil
@@ -767,7 +772,7 @@ func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
 	bat *batch.Batch) *containers.Batch {
 	taeBatch := containers.NewEmptyBatch()
 	for i, vec := range bat.Vecs {
-		v := containers.NewVectorWithSharedMemory(vec)
+		v := containers.ToDNVector(vec)
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return taeBatch

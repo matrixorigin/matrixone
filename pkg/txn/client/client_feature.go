@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package client
 
-import (
-	"testing"
+func (client *txnClient) RefreshExpressionEnabled() bool {
+	return client.enableRefreshExpression
+}
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/stretchr/testify/assert"
-)
-
-func TestFile(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	mf := NewMemFile(0)
-	stat := mf.Stat()
-	assert.Equal(t, stat.Size(), int64(0))
-	assert.Equal(t, stat.Name(), "")
-	assert.Equal(t, stat.CompressAlgo(), 0)
-	assert.Equal(t, stat.OriginSize(), int64(0))
-	assert.Equal(t, mf.GetFileType(), MemFile)
-	mf.Ref()
-	mf.Unref()
-	_, err := mf.Read(make([]byte, 0))
-	assert.Nil(t, err)
+func (client *txnClient) CNBasedConsistencyEnabled() bool {
+	return client.enableCNBasedConsistency
 }

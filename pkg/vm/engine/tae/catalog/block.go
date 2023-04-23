@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,10 +27,6 @@ import (
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
-
-func compareBlockFn(a, b *BlockEntry) int {
-	return a.ID.Compare(b.ID)
-}
 
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
@@ -135,6 +132,10 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
+func (entry *BlockEntry) Less(b *BlockEntry) int {
+	return entry.ID.Compare(b.ID)
+}
+
 func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
 
 func (entry *BlockEntry) IsAppendable() bool {
@@ -208,7 +209,7 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 	entry.blkData = dataFactory(entry)
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
-func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
+func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetLastestSchema() }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.BaseEntryImpl.PrepareRollback()

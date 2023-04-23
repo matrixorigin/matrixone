@@ -21,38 +21,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/fagongzi/goetty/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1162,6 +1159,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowAccounts{}, true},
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
+		{&tree.ShowBackendServers{}, true},
 	}
 
 	for _, a := range args {
@@ -1169,4 +1167,116 @@ func Test_StatementClassify(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, ret, a.want)
 	}
+}
+
+func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
+	ctx := context.TODO()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+	ioses := mock_frontend.NewMockIOSession(ctrl)
+	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+	ioses.EXPECT().Ref().AnyTimes()
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	if err != nil {
+		t.Error(err)
+	}
+
+	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+	var gSys GlobalSystemVariables
+	InitGlobalSystemVariables(&gSys)
+	ses := NewSession(proto, nil, pu, &gSys, false, nil)
+	ses.SetRequestContext(ctx)
+	ses.SetConnectContext(ctx)
+	ses.GetMysqlProtocol()
+	mce := NewMysqlCmdExecutor()
+	aicm := &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	mce.SetRoutineManager(rm)
+	mce.SetSession(ses)
+	proto.SetSession(ses)
+	ses.protocol = proto
+
+	convey.Convey("no labels", t, func() {
+		ses.mrs = &MysqlResultSet{}
+		cluster := clusterservice.NewMOCluster(
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				[]metadata.CNService{
+					{
+						ServiceID:  "s1",
+						SQLAddress: "addr1",
+					},
+					{
+						ServiceID:  "s2",
+						SQLAddress: "addr2",
+					},
+				},
+				nil,
+			),
+		)
+		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+		ses.SetTenantInfo(&TenantInfo{Tenant: "t1"})
+		proto.connectAttrs = map[string]string{}
+
+		err = mce.handleShowBackendServers(ctx, 0, 1)
+		require.NoError(t, err)
+		rs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(2), rs.GetRowCount())
+	})
+
+	convey.Convey("filter label", t, func() {
+		ses.mrs = &MysqlResultSet{}
+		cluster := clusterservice.NewMOCluster(
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				[]metadata.CNService{
+					{
+						ServiceID:  "s1",
+						SQLAddress: "addr1",
+						Labels: map[string]metadata.LabelList{
+							"account": {Labels: []string{"t1"}},
+						},
+					},
+					{
+						ServiceID:  "s2",
+						SQLAddress: "addr2",
+						Labels: map[string]metadata.LabelList{
+							"account": {Labels: []string{"t2"}},
+						},
+					},
+				},
+				nil,
+			),
+		)
+		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+		ses.SetTenantInfo(&TenantInfo{Tenant: "t1"})
+		proto.connectAttrs = map[string]string{}
+
+		err = mce.handleShowBackendServers(ctx, 0, 1)
+		require.NoError(t, err)
+		rs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(1), rs.GetRowCount())
+
+		row, err := rs.GetRow(ctx, 0)
+		require.NoError(t, err)
+		require.Equal(t, "s1", row[0])
+		require.Equal(t, "addr1", row[1])
+	})
 }

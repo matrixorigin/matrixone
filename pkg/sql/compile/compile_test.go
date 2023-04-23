@@ -60,10 +60,10 @@ func init() {
 		newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
 		newTestCase("select * from R limit 10", new(testing.T)),
-		//newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
-		//newTestCase("insert into R select * from R", new(testing.T)),
 		newTestCase("select count(*) from R group by uid", new(testing.T)),
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
+		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
+		newTestCase("insert into R select * from R", new(testing.T)),
 	}
 }
 
@@ -89,7 +89,8 @@ func TestCompile(t *testing.T) {
 		err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
-		//require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		tc.proc.FreeVectors()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 

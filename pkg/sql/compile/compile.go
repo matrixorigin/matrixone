@@ -18,13 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -256,6 +255,7 @@ func (c *Compile) Run(_ uint64) error {
 			return e
 		}
 	}
+	c.proc.FreeVectors()
 	return nil
 }
 
@@ -401,30 +401,7 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	client := cnclient.GetRPCClient()
 	c.cnList, err = c.e.Nodes()
-	if client != nil {
-		for i := 0; i < len(c.cnList); i++ {
-			addrs := strings.Split(c.cnList[i].Addr, ":")
-			if len(addrs) != 2 {
-				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
-			}
-			// InValid Addr, this should be docker addr,
-			// "cn-0","cn-1", just skip it
-			if address := net.ParseIP(addrs[0]); address == nil {
-				continue
-			}
-			if isSameCN(c.addr, c.cnList[i].Addr) {
-				continue
-			}
-			err := client.Ping(ctx, c.cnList[i].Addr)
-			// ping failed
-			if err != nil {
-				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
-				i--
-			}
-		}
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -1949,10 +1926,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expectedLen := len(ranges)
 	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	// If ranges == 0, it's temporary table ?
-	// XXX the code is too confused. should be removed once we remove the memory-engine.
-	if len(ranges) == 0 {
-		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
+	// If ranges == 0, dont know what type of table is this
+	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			if isPartitionTable {
@@ -1969,53 +1944,29 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 				}
 			}
-
 		}
 		return nodes, nil
 	}
 
+	engineType := rel.GetEngineType()
 	if isPartitionTable {
 		rel = nil
 	}
-
-	// In fact, the first element of Ranges is always a memory table.
-	if engine.IsMemtable(ranges[0]) {
-		if c.info.Typ == plan2.ExecTypeTP {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: 1,
-			})
-		} else {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-		ranges = ranges[1:]
+	// for multi cn in luanch mode, put all payloads in current CN
+	// maybe delete this in the future
+	if isLaunchMode(c.cnList) {
+		return putBlocksInCurrentCN(c, ranges, rel, n), nil
 	}
-
-	// 1. If the length of cn list is 1, query is small or just one cn now.
-	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
-	// Both these queries only needs to be executed on the current cn.
-	if len(ranges) == 0 {
-		return nodes, nil
+	// disttae engine , hash s3 objects to fixed CN
+	if engineType == engine.Disttae {
+		return hashBlocksToFixedCN(c, ranges, rel, n), nil
 	}
-	if len(c.cnList) == 1 {
-		if len(nodes) == 0 {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges...)
-		return nodes, nil
-	}
+	// maybe temp table on memengine , just put payloads in average
+	return putBlocksInAverage(c, ranges, rel, n), nil
+}
 
-	// determines which blocks should be read by each cn node.
+func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
@@ -2059,7 +2010,71 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 	}
-	return nodes, nil
+	return nodes
+}
+
+func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	//add memory table block
+	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
+	ranges = ranges[1:]
+	// only memory table block
+	if len(ranges) == 0 {
+		return nodes
+	}
+	//only one cn
+	if len(c.cnList) == 1 {
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes
+	}
+	//add the rest of CNs in list
+	for i := range c.cnList {
+		if c.cnList[i].Addr != c.addr {
+			nodes = append(nodes, engine.Node{
+				Rel:  rel,
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+			})
+		}
+	}
+	// sort by addr to get fixed order of CN list
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+	//to maxify locality, put blocks in the same s3 object in the same CN
+	lenCN := len(c.cnList)
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := disttae.BlockInfoUnmarshal(ranges[i])
+		objName := unmarshalledBlockInfo.MetaLocation().Name()
+		index := plan2.SimpleHashToRange(objName, lenCN)
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+	//remove empty node from nodes
+	var newNodes engine.Nodes
+	for i := range nodes {
+		if len(nodes[i].Data) > 0 {
+			newNodes = append(newNodes, nodes[i])
+		}
+	}
+	return newNodes
+}
+
+func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	nodes[0].Data = append(nodes[0].Data, ranges...)
+	return nodes
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
@@ -2111,6 +2126,15 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
+func isLaunchMode(cnlist engine.Nodes) bool {
+	for i := range cnlist {
+		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
+			return false
+		}
+	}
+	return true
+}
+
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
@@ -2155,6 +2179,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		}
 		if tmp.IsConstNull() {
 			vector.AppendFixed(vec, 0, true, proc.Mp())
+			tmp.Free(proc.Mp())
 			continue
 		}
 		switch typ.Oid {
@@ -2199,6 +2224,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
+		tmp.Free(proc.Mp())
 	}
 	return vec, nil
 }

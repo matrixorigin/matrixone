@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,27 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnbase
+package ctlservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 )
 
-const (
-	MaxNodeRows uint32 = 10000
-)
+// Config ctl service address
+type Config struct {
+	// Address ctl service address
+	Address address.Address `toml:"address"`
+}
 
-type NodeState = int32
-
-const (
-	TransientNode NodeState = iota
-	PersistNode
-)
-
-type NodeType int8
-type Node interface {
-	base.INode
-	Type() NodeType
-	ToTransient()
-	Close() error
+// Adjust adjust config, setup default configs
+func (c *Config) Adjust(machineHost, defaultListenAddress string) {
+	c.Address.Adjust(machineHost, defaultListenAddress)
 }

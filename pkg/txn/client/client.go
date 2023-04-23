@@ -15,7 +15,9 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -77,6 +79,15 @@ func WithEnableCNBasedConsistency() TxnClientCreateOption {
 	}
 }
 
+// WithEnableRefreshExpression in RC mode, in the event of a conflict, the later transaction needs
+// to see the latest data after the previous transaction commits. At this time we need to re-read
+// the data, re-read the latest data, and re-compute the expression.
+func WithEnableRefreshExpression() TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.enableRefreshExpression = true
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
@@ -87,9 +98,15 @@ type txnClient struct {
 	timestampWaiter            TimestampWaiter
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
+	enableRefreshExpression    bool
 
 	mu struct {
 		sync.RWMutex
+		txns []txn.TxnMeta
+
+		// Minimum Active Transaction Timestamp
+		minTS timestamp.Timestamp
+
 		// we maintain a CN-based last commit timestamp to ensure that
 		// a txn with that CN can see previous writes.
 		// FIXME(fagongzi): this is a remedial solution to disable the
@@ -138,8 +155,11 @@ func (client *txnClient) New(
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
 
+	client.pushTransaction(txnMeta)
+
 	options = append(options,
 		WithTxnCNCoordinator(),
+		WithTxnClose(client),
 		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
 	return newTxnOperator(
@@ -154,6 +174,12 @@ func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
 
 func (client *txnClient) Close() error {
 	return client.sender.Close()
+}
+
+func (client *txnClient) MinTimestamp() timestamp.Timestamp {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.mu.minTS
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
@@ -211,4 +237,48 @@ func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Times
 		return client.mu.latestCommitTS
 	}
 	return ts
+}
+
+func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
+	return client.adjustTimestamp(timestamp.Timestamp{})
+}
+
+func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
+	client.updateLastCommitTS(ts)
+}
+
+func (client *txnClient) popTransaction(txn txn.TxnMeta) {
+	var i int
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for i = 0; i < len(client.mu.txns); i++ {
+		if bytes.Equal(client.mu.txns[i].ID, txn.ID) {
+			break
+		}
+	}
+	client.mu.txns = append(client.mu.txns[:i], client.mu.txns[i+1:]...)
+	switch {
+	case len(client.mu.txns) == 0:
+		client.mu.minTS = timestamp.Timestamp{}
+	case i == 0:
+		client.mu.minTS = client.mu.txns[i].SnapshotTS
+	}
+}
+
+func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	i := sort.Search(len(client.mu.txns), func(i int) bool {
+		return client.mu.txns[i].SnapshotTS.GreaterEq(txn.SnapshotTS)
+	})
+	if i == len(client.mu.txns) {
+		client.mu.txns = append(client.mu.txns, txn)
+	} else {
+		client.mu.txns = append(client.mu.txns[:i+1], client.mu.txns[i:]...)
+		client.mu.txns[i] = txn
+	}
+	if client.mu.minTS.IsEmpty() || txn.SnapshotTS.Less(client.mu.minTS) {
+		client.mu.minTS = txn.SnapshotTS
+	}
 }

@@ -18,11 +18,13 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -51,6 +53,8 @@ const (
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
 )
+
+var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
 
@@ -233,7 +237,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []BlockMeta
+	blks       []catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp
@@ -247,6 +251,10 @@ type blockReader struct {
 	colNulls       []bool
 	pkidxInColIdxs int
 	pkName         string
+	// binary search info
+	init       bool
+	canCompute bool
+	searchFunc func(*vector.Vector) int
 }
 
 type blockMergeReader struct {

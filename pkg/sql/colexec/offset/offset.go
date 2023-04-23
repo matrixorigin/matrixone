@@ -37,6 +37,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	ap := arg.(*Argument)
@@ -58,7 +59,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 	ap.Seen += uint64(length)
-	bat.Clean(proc.Mp())
+	proc.PutBatch(bat)
 	proc.SetInputBatch(&batch.Batch{})
 	return false, nil
 }

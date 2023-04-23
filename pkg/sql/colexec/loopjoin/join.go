@@ -58,16 +58,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
-				continue
-			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
 				bat.Clean(proc.Mp())
 				continue
 			}
+			if ctr.bat == nil || ctr.bat.Length() == 0 {
+				proc.PutBatch(bat)
+				continue
+			}
 			err := ctr.probe(bat, ap, proc, anal, isFirst, isLast)
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			return false, err
-
 		default:
 			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
@@ -93,9 +93,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	count := bat.Length()

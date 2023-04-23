@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnimpl
+package morpc
 
-//type mockRelation struct {
-//	*txnbase.TxnRelation
-//	entry *catalog.TableEntry
-//	id    uint64
-//}
-//
-//func mockTestRelation(id uint64, schema *catalog.Schema) *mockRelation {
-//	entry := catalog.MockStaloneTableEntry(id, schema)
-//	return &mockRelation{
-//		TxnRelation: new(txnbase.TxnRelation),
-//		id:          id,
-//		entry:       entry,
-//	}
-//}
-//
-//func (rel *mockRelation) GetID() uint64 { return rel.id }
-//func (rel *mockRelation) GetMeta() any  { return rel.entry }
+import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+)
+
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
+
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+	}
+	logger = rt.Logger().Named("morpc")
+}

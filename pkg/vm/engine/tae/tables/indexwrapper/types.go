@@ -34,9 +34,6 @@ func TranslateError(err error) error {
 	if err == index.ErrNotFound {
 		return moerr.NewNotFoundNoCtx()
 	}
-	if err == index.ErrWrongType {
-		return moerr.NewInternalErrorNoCtx("wrong type")
-	}
 	return err
 }
 

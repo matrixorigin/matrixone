@@ -2,17 +2,17 @@ create account if not exists Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456' comme
 alter account abc admin_name='admin'  IDENTIFIED BY '1WERDFT3YG';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    1WERDFT3YG
+admin    *689815D0D4F7C9AA983C8AF4A0FFC6B4FD98945D
 create database testdb;
 drop database testdb;
 alter account abc admin_name='admin'  IDENTIFIED BY 'yyyy_34lifel';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    yyyy_34lifel
+admin    *2493FA35CC94EC4F3FD2A7DD8390D373A0AE4789
 alter account abc admin_name='admin'  IDENTIFIED BY 'abcddddddfsfafaffsefsfsefljofiseosfjosissssssssssssssssssssssssssssssssssssssssssssssssssssssssssss';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    abcddddddfsfafaffsefsfsefljofiseosfjosissssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+admin    *92B9C41B6E3FE34A49E8DE986E50DB297C6C5730
 show databases;
 Database
 mo_catalog
@@ -23,27 +23,27 @@ mysql
 alter account abc admin_name='admin'  IDENTIFIED BY 'Ni7893';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    Ni7893
+admin    *7A206DF84A0B3EA526DA600A66E46D1A12BAEF63
 alter account abc admin_name='admin'  IDENTIFIED BY '_1234';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    _1234
+admin    *03E8053E52E16A531B6252B1EE9A4C4599192498
 alter account abc admin_name='admin'  IDENTIFIED BY 'nnnn@12.fef';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    nnnn@12.fef
+admin    *930DFC792097721B5FBD63550DCAFCD5008D9C9C
 alter account abc admin_name='admin'  IDENTIFIED BY '密码';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    密码
+admin    *E04600BB4BC876C4A82BB0860EDE6F7829AE5D2A
 alter account abc admin_name='admin'  IDENTIFIED BY '123 456';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    123 456
+admin    *1277A1CC10DCD422C6661AE09AB7DD661A435E81
 alter account abc admin_name='admin'  IDENTIFIED BY 'test:aaa';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    test:aaa
+admin    *637FF062E3721AAE8B71B4FF9D0198FC3A4C7F6B
 drop account abc;
 create account if not exists test ADMIN_NAME '1WERDFT3YG' IDENTIFIED BY '123456';
 alter account test admin_name='1WERDFT3YG'  IDENTIFIED BY '';
@@ -60,7 +60,7 @@ create account if not exists test ADMIN_NAME 'admin' IDENTIFIED BY '123456' comm
 alter account test admin_name='admin'  IDENTIFIED BY '123456';
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    123456
+admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 drop account test;
 create account if not exists alaccount ADMIN_NAME 'WERTY12ERT' IDENTIFIED BY '123456' comment 'account comment';
 create user 'al_user_1' identified by '123456';
@@ -71,7 +71,7 @@ create database al_db;
 alter account alaccount ADMIN_NAME 'WERTY12ERT' IDENTIFIED BY 'abc@123';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='al_user_1';
 user_name    authentication_string
-al_user_1    123456
+al_user_1    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 select role_name,comments from mo_catalog.mo_role;
 role_name    comments
 accountadmin    
@@ -122,7 +122,7 @@ drop account testcomment;
 create account if not exists testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'account comment';
 select user_name, authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
-admin    123456
+admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 alter account testsuspend suspend;
 select account_name,status from mo_catalog.mo_account order by account_name;
 account_name    status
