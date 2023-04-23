@@ -251,9 +251,10 @@ type blockReader struct {
 	expr       *plan.Expr
 
 	//used for prefetch
-	infos       [][]*catalog.BlockInfo
-	steps       []int
-	currentStep int
+	infos           [][]*catalog.BlockInfo
+	steps           []int
+	currentStep     int
+	prefetchColIdxs []uint16 //need to remove rowid
 
 	// cached meta data.
 	colIdxs        []uint16
