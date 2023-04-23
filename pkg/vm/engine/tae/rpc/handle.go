@@ -44,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"go.uber.org/zap"
@@ -105,7 +104,7 @@ func (h *Handle) HandleCommit(
 			string(meta.GetID()), time.Since(start))
 	}()
 	//Handle precommit-write command for 1PC
-	var txn moengine.Txn
+	var txn txnif.AsyncTxn
 	if ok {
 		for _, e := range txnCtx.reqs {
 			switch req := e.(type) {
@@ -156,13 +155,13 @@ func (h *Handle) HandleCommit(
 			}
 			//Need to roll back the txn.
 			if err != nil {
-				txn, _ = h.db.GetTxnByIDCtx(meta.GetID())
+				txn, _ = h.db.GetTxnByID(meta.GetID())
 				txn.Rollback()
 				return
 			}
 		}
 	}
-	txn, err = h.db.GetTxnByIDCtx(meta.GetID())
+	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
 	}
@@ -191,7 +190,7 @@ func (h *Handle) HandleRollback(
 	if ok {
 		return
 	}
-	txn, err := h.db.GetTxnByIDCtx(meta.GetID())
+	txn, err := h.db.GetTxnByID(meta.GetID())
 
 	if err != nil {
 		return err
@@ -203,7 +202,7 @@ func (h *Handle) HandleRollback(
 func (h *Handle) HandleCommitting(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
-	txn, err := h.db.GetTxnByIDCtx(meta.GetID())
+	txn, err := h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -218,7 +217,7 @@ func (h *Handle) HandlePrepare(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	var txn moengine.Txn
+	var txn txnif.AsyncTxn
 	if ok {
 		//handle pre-commit write for 2PC
 		for _, e := range txnCtx.reqs {
@@ -270,13 +269,13 @@ func (h *Handle) HandlePrepare(
 			}
 			//need to rollback the txn
 			if err != nil {
-				txn, _ = h.db.GetTxnByIDCtx(meta.GetID())
+				txn, _ = h.db.GetTxnByID(meta.GetID())
 				txn.Rollback()
 				return
 			}
 		}
 	}
-	txn, err = h.db.GetTxnByIDCtx(meta.GetID())
+	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}

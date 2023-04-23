@@ -114,15 +114,15 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }
 
-func (db *DB) StartTxnWithNow(info []byte) (txnif.AsyncTxn, error) {
-	return db.TxnMgr.StartTxnWithNow(info)
+func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
+	return db.TxnMgr.StartTxnWithLatestTS(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
 
-func (db *DB) GetTxnByIDCtx(id []byte) (txn txnif.AsyncTxn, err error) {
+func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxnByCtx(id)
 	if txn == nil {
 		err = moerr.NewNotFoundNoCtx()
@@ -135,14 +135,6 @@ func (db *DB) GetOrCreateTxnWithMeta(
 	id []byte,
 	ts types.TS) (txn txnif.AsyncTxn, err error) {
 	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
-}
-
-func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
-	txn = db.TxnMgr.GetTxn(id)
-	if txn == nil {
-		err = moerr.NewTxnNotFoundNoCtx()
-	}
-	return
 }
 
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
