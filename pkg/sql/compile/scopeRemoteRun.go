@@ -602,10 +602,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:        t.IsRemote,
-			Affected:        t.Affected,
-			Ref:             t.InsertCtx.Ref,
-			AddAffectedRows: t.InsertCtx.AddAffectedRows,
+			IsRemote:          t.IsRemote,
+			Affected:          t.Affected,
+			Ref:               t.InsertCtx.Ref,
+			Attrs:             t.InsertCtx.Attrs,
+			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
+			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
+			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -916,9 +919,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Ref:             t.Ref,
-				AddAffectedRows: t.AddAffectedRows,
-				Attrs:           t.Attrs,
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
+				Attrs:                 t.Attrs,
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIdx),
 			},
 		}
 	case vm.PreInsert:

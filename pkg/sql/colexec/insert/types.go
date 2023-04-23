@@ -41,10 +41,13 @@ type Argument struct {
 
 type InsertCtx struct {
 	//insert data into Rels.
-	Rel             engine.Relation
-	Ref             *plan.ObjectRef
-	AddAffectedRows bool
-	Attrs           []string
+	Rel                   engine.Relation
+	Ref                   *plan.ObjectRef
+	AddAffectedRows       bool
+	Attrs                 []string
+	PartitionTableIDs     []uint64          // Align array index with the partition number
+	PartitionIndexInBatch int               // The array index position of the partition expression column
+	PartitionSources      []engine.Relation // Align array index with the partition number
 	//origin table's def.
 	// TableDef *plan.TableDef
 }

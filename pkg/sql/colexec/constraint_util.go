@@ -249,32 +249,73 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 	return retBatch
 }
 
-// GroupByPartition: Group data based on partition and return batch array with the same length as the number of partitions.
+// GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
 // Data from the same partition is placed in the same batch
-func GroupByPartition(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) []*batch.Batch {
+func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) []*batch.Batch {
 	vecList := make([]*vector.Vector, partitionNum)
 	for i := 0; i < partitionNum; i++ {
 		retVec := vector.NewVec(types.T_Rowid.ToType())
 		vecList[i] = retVec
 	}
 
+	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
 	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
 			partition := vector.MustFixedCol[int32](bat.Vecs[pIdx])[i]
 			if partition == -1 {
-				panic("partiton number is -1")
+				panic("partiton number is -1, the partition number is incorrect")
 			} else {
 				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
 			}
 		}
 	}
-
+	// create a batch array equal to the number of partitions
 	batches := make([]*batch.Batch, partitionNum)
 	for i := range vecList {
+		// initialize the vectors in each batch, the batch only contains a `row_id` column
 		retBatch := batch.New(true, []string{catalog.Row_ID})
 		retBatch.SetZs(vecList[i].Length(), proc.Mp())
 		retBatch.SetVector(0, vecList[i])
 		batches[i] = retBatch
+	}
+	return batches
+}
+
+// GroupByPartitionForInsert: Group data based on partition and return batch array with the same length as the number of partitions.
+// Data from the same partition is placed in the same batch
+func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []string, pIdx int, partitionNum int) []*batch.Batch {
+	// create a batch array equal to the number of partitions
+	batches := make([]*batch.Batch, partitionNum)
+	for partIdx := 0; partIdx < partitionNum; partIdx++ {
+		// initialize the vectors in each batch, corresponding to the original batch
+		partitionBatch := batch.NewWithSize(len(attrs))
+		partitionBatch.Attrs = attrs
+		for i := range partitionBatch.Attrs {
+			vecType := bat.GetVector(int32(i)).GetType()
+			retVec := vector.NewVec(*vecType)
+			partitionBatch.SetVector(int32(i), retVec)
+		}
+		batches[partIdx] = partitionBatch
+	}
+
+	// fill the data into the corresponding batch based on the different partitions to which the current row data belongs
+	for i, partition := range vector.MustFixedCol[int32](bat.Vecs[pIdx]) {
+		if !bat.Vecs[pIdx].GetNulls().Contains(uint64(i)) {
+			if partition == -1 {
+				panic("partiton number is -1, the partition number is incorrect")
+			} else {
+				//  `i` corresponds to the row number of the batch data,
+				//  `j` corresponds to the column number of the batch data
+				for j := range attrs {
+					batches[partition].GetVector(int32(j)).UnionOne(bat.Vecs[j], int64(i), proc.Mp())
+				}
+			}
+		}
+	}
+
+	for partIdx := range batches {
+		length := batches[partIdx].GetVector(0).Length()
+		batches[partIdx].SetZs(length, proc.Mp())
 	}
 	return batches
 }

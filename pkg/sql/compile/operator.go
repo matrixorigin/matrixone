@@ -524,10 +524,23 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		return nil, err
 	}
 	newCtx := &insert.InsertCtx{
-		Ref:             oldCtx.Ref,
-		AddAffectedRows: oldCtx.AddAffectedRows,
-		Rel:             originRel,
-		Attrs:           attrs,
+		Ref:                   oldCtx.Ref,
+		AddAffectedRows:       oldCtx.AddAffectedRows,
+		Rel:                   originRel,
+		Attrs:                 attrs,
+		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
+	}
+	if len(oldCtx.PartitionTableIds) > 0 {
+		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+		// get the relation instances for each partition sub table
+		for i, pTableId := range oldCtx.PartitionTableIds {
+			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
+			if err != nil {
+				return nil, err
+			}
+			newCtx.PartitionSources[i] = pRel
+		}
 	}
 
 	return &insert.Argument{

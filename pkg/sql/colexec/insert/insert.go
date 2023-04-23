@@ -16,11 +16,11 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,6 +42,8 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
+// first parameter: true represents whether the current pipeline has ended
+// first parameter: false
 func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	defer analyze(proc, idx)()
 	ap := arg.(*Argument)
@@ -84,19 +86,36 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
-		for j := range insertBat.Attrs {
-			insertBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		for i := range insertBat.Attrs {
+			insertBat.SetVector(int32(i), bat.GetVector(int32(i)))
+			insertBat.Zs = bat.Zs
 		}
-		if _, err := insertBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-			return false, err
+		//for j := range bat.Vecs {
+		//	insertBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		//}
+		//if _, err := insertBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+		//	return false, err
+		//}
+
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			insertBatches := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			for i, partitionBat := range insertBatches {
+				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+				if err != nil {
+					partitionBat.Clean(proc.Mp())
+					return false, err
+				}
+				partitionBat.Clean(proc.Mp())
+			}
+		} else {
+			// write origin table, bat will be deeply copied into txn's workspace.
+			err := insertCtx.Rel.Write(proc.Ctx, insertBat)
+			if err != nil {
+				return false, err
+			}
 		}
 
-		// write origin table, bat will be deeply copied into txn's workspace.
-		err := insertCtx.Rel.Write(proc.Ctx, insertBat)
-		if err != nil {
-			return false, err
-		}
-
+		// `insertBat` does not include partition expression columns
 		proc.SetInputBatch(insertBat)
 	}
 

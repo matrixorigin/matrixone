@@ -83,12 +83,14 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		return nil
 	}
 	newCtx := &plan.InsertCtx{
-		Ref:             DeepCopyObjectRef(ctx.Ref),
-		AddAffectedRows: ctx.AddAffectedRows,
-		IsClusterTable:  ctx.IsClusterTable,
-		TableDef:        DeepCopyTableDef(ctx.TableDef),
+		Ref:               DeepCopyObjectRef(ctx.Ref),
+		AddAffectedRows:   ctx.AddAffectedRows,
+		IsClusterTable:    ctx.IsClusterTable,
+		TableDef:          DeepCopyTableDef(ctx.TableDef),
+		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
+		PartitionIdx:      ctx.PartitionIdx,
 	}
-
+	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	return newCtx
 }
 

@@ -26,7 +26,7 @@ func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info 
 	return nil
 }
 
-// buildUpdatePlans  build insert plan.
+// buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
@@ -36,7 +36,7 @@ func buildInsertPlans(
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
-	//make insert plans
+	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
 	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, nil, sourceStep, true)
 	return err
@@ -252,9 +252,8 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 	var lastNodeId int32
 	var err error
-	// var insertUserTag int32
 
-	haveUniqueKey := haveUniqueKey(tableDef)
+	hasUniqueKey := haveUniqueKey(tableDef)
 
 	// make plan : sink_scan -> [project(if update)] -> lock -> join(check fk) -> filter -> insert -> sink/project
 	{
@@ -337,8 +336,15 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 		// append project node
 		projectProjection := getProjectionByLastNode(builder, lastNodeId)
-		if len(projectProjection) > len(tableDef.Cols) {
-			projectProjection = projectProjection[:len(tableDef.Cols)]
+		if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
+			if len(projectProjection) > len(tableDef.Cols) {
+				projectProjection = projectProjection[:len(tableDef.Cols)]
+			}
+			if tableDef.Partition != nil {
+				partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+				projectProjection = append(projectProjection, partitionExpr)
+			}
+
 			projectNode := &Node{
 				NodeType:    plan.Node_PROJECT,
 				Children:    []int32{lastNodeId},
@@ -347,21 +353,31 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			lastNodeId = builder.appendNode(projectNode, bindCtx)
 		}
 
+		// append insert node
+		insertProjection := getProjectionByLastNode(builder, lastNodeId)
 		// in this case. insert columns in front of batch
+		if len(insertProjection) > len(tableDef.Cols) {
+			insertProjection = insertProjection[:len(tableDef.Cols)]
+		}
+		// Get table partition information
+		partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+
 		insertNode := &Node{
 			NodeType: plan.Node_INSERT,
 			Children: []int32{lastNodeId},
 			InsertCtx: &plan.InsertCtx{
-				Ref:             objRef,
-				AddAffectedRows: addAffectedRows,
-				IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-				TableDef:        tableDef,
+				Ref:               objRef,
+				AddAffectedRows:   addAffectedRows,
+				IsClusterTable:    tableDef.TableType == catalog.SystemClusterRel,
+				TableDef:          tableDef,
+				PartitionTableIds: paritionTableIds,
+				PartitionIdx:      int32(partitionIdx),
 			},
-			ProjectList: getProjectionByLastNode(builder, lastNodeId),
+			ProjectList: insertProjection,
 		}
 		lastNodeId = builder.appendNode(insertNode, bindCtx)
 
-		if haveUniqueKey {
+		if hasUniqueKey {
 			// append sink
 			lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 			uniqueSourceStep := builder.appendStep(lastNodeId)
@@ -384,7 +400,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 						return err
 					}
 
-					//make insert plans(for unique key table)
+					// make insert plans(for unique key table)
 					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, nil, newSourceStep, false)
 					if err != nil {
 						return err
@@ -492,6 +508,24 @@ type deleteNodeInfo struct {
 	partTableIDs    []uint64 // Align array index with the partition number
 	partitionIdx    int      // The array index position of the partition expression column
 	addAffectedRows bool
+}
+
+// Calculate the offset index of partition expression, and the sub tableIds of the partition table
+func getPartSubTableIdsAndPartIndex(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (int, []uint64) {
+	var partitionIdx int
+	var partTableIds []uint64
+	if tableDef.Partition != nil {
+		partTableIds = make([]uint64, tableDef.Partition.PartitionNum)
+		for i, partition := range tableDef.Partition.Partitions {
+			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName)
+			partTableIds[i] = partTableDef.TblId
+		}
+		//Calculate Partition Expression Location
+		partitionIdx = len(tableDef.Cols)
+	} else {
+		partitionIdx = -1
+	}
+	return partitionIdx, partTableIds
 }
 
 func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep int32) int32 {

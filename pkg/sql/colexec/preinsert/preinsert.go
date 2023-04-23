@@ -79,6 +79,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
+	// calculate the composite primary key column and append the result vector to batch
 	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
@@ -90,6 +91,13 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
+
+	//// calculate the partition expression and append the result vector to batch
+	//err = genPartitionExpr(newBat, proc, arg.TableDef)
+	//if err != nil {
+	//	newBat.Clean(proc.GetMPool())
+	//	return false, err
+	//}
 
 	proc.SetInputBatch(newBat)
 	return false, nil
@@ -118,4 +126,20 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 		return nil
 	}
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
+}
+
+// calculate the partition expression and append the result vector to batch
+func genPartitionExpr(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
+	// Check whether it is a partition table
+	if tableDef.Partition == nil {
+		return nil
+	} else {
+		partitionVec, err := colexec.EvalExpr(bat, proc, tableDef.Partition.PartitionExpression)
+		if err != nil {
+			return err
+		}
+		bat.Attrs = append(bat.Attrs, "__mo_partition_expr__")
+		bat.Vecs = append(bat.Vecs, partitionVec)
+	}
+	return nil
 }
