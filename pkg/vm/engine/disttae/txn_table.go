@@ -213,6 +213,18 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
 
+func (tbl *txnTable) TruncateMeta(){
+	if tbl.meta == nil{
+		return
+	}
+	for i:= range tbl.meta.blocks{
+		tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
+	}
+	for i:= range tbl.meta.modifedBlocks{
+		tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
+	}
+}
+
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
 	// if err := tbl.db.txn.DumpBatch(false, 0); err != nil {
