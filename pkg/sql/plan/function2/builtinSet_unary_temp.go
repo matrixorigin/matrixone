@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/json_quote"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/json_unquote"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1016,6 +1017,42 @@ func Binary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			if err := rs.AppendBytes(doBinary(v), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func Charset(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		r := proc.SessionInfo.GetCharset()
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func Collation(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		r := proc.SessionInfo.GetCollation()
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		r := proc.SessionInfo.ConnectionID
+		if err := rs.Append(r, false); err != nil {
+			return err
 		}
 	}
 	return nil
