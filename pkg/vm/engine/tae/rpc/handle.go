@@ -136,12 +136,12 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *db.UpdateConstraintReq:
-				err = h.HandleUpdateConstraint(
+			case *apipb.AlterTableReq:
+				err = h.HandleAlterTable(
 					ctx,
 					meta,
 					req,
-					&db.UpdateConstraintResp{},
+					&db.WriteResp{},
 				)
 			case *db.WriteReq:
 				err = h.HandleWrite(
@@ -250,12 +250,12 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *db.UpdateConstraintReq:
-				err = h.HandleUpdateConstraint(
+			case *apipb.AlterTableReq:
+				err = h.HandleAlterTable(
 					ctx,
 					meta,
 					req,
-					&db.UpdateConstraintResp{},
+					&db.WriteResp{},
 				)
 			case *db.WriteReq:
 				err = h.HandleWrite(
@@ -522,15 +522,11 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := &db.UpdateConstraintReq{
-					TableName:    cmd.TableName,
-					TableId:      cmd.TableId,
-					DatabaseName: cmd.DatabaseName,
-					DatabaseId:   cmd.DatabaseId,
-					Constraint:   cmd.Constraint,
-				}
-				if err = h.CacheTxnRequest(ctx, meta, req,
-					new(db.UpdateConstraintResp)); err != nil {
+				req := apipb.NewUpdateConstraintReq(
+					cmd.DatabaseId,
+					cmd.TableId,
+					string(cmd.Constraint))
+				if err = h.CacheTxnRequest(ctx, meta, req, nil); err != nil {
 					return err
 				}
 			}
@@ -852,22 +848,20 @@ func (h *Handle) HandleWrite(
 	return
 }
 
-func (h *Handle) HandleUpdateConstraint(
+func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.UpdateConstraintReq,
-	resp *db.UpdateConstraintResp) (err error) {
+	req *apipb.AlterTableReq,
+	resp *db.WriteResp) (err error) {
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
 	}
 
-	cstr := req.Constraint
-	req.Constraint = nil
-	logutil.Infof("[precommit] update cstr: %+v cstr %d bytes\n txn: %s\n", req, len(cstr), txn.String())
+	logutil.Infof("[precommit] alter table: %+v txn: %s\n", req, txn.String())
 
-	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	dbase, err := txn.GetDatabaseByID(req.DbId)
 	if err != nil {
 		return
 	}
@@ -877,9 +871,7 @@ func (h *Handle) HandleUpdateConstraint(
 		return
 	}
 
-	err = tbl.UpdateConstraint(cstr)
-
-	return
+	return tbl.AlterTable(ctx, req)
 }
 
 func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {

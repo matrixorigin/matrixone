@@ -44,7 +44,7 @@ func CreateRelation(
 }
 
 func TableDefs(rel handle.Relation) ([]engine.TableDef, error) {
-	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.Schema().(*catalog.Schema)
 	return SchemaToDefs(schema)
 }
 
@@ -53,7 +53,7 @@ func TableNamesOfDB(db handle.Database) ([]string, error) {
 
 	it := db.MakeRelationIt()
 	for it.Valid() {
-		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
+		names = append(names, it.GetRelation().Schema().(*catalog.Schema).Name)
 		it.Next()
 	}
 	return names, nil
@@ -67,7 +67,7 @@ func AppendDataToTable(rel handle.Relation, bat *batch.Batch) (err error) {
 }
 
 func GetHideKeysOfTable(rel handle.Relation) ([]*engine.Attribute, error) {
-	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.Schema().(*catalog.Schema)
 	if schema.PhyAddrKey == nil {
 		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
 	}
