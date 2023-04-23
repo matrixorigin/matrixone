@@ -2028,7 +2028,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return nil, moerr.NewInternalError(mp.ses.requestCtx, "sendColumn need MysqlColumn")
+			return nil, moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
 		}
 
 		if isNil, err1 := mrs.ColumnIsNull(ctx, r, i); err1 != nil {
@@ -2153,7 +2153,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value)
 			}
 		default:
-			return nil, moerr.NewInternalError(mp.ses.requestCtx, "unsupported column type %d ", mysqlColumn.ColumnType())
+			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	return data, nil
@@ -2584,6 +2584,11 @@ func (mp *MysqlProtocolImpl) MakeOKPayload(affectedRows, lastInsertId uint64, st
 // MakeErrPayload exposes (*MysqlProtocolImpl).makeErrPayload() function.
 func (mp *MysqlProtocolImpl) MakeErrPayload(errCode uint16, sqlState, errorMessage string) []byte {
 	return mp.makeErrPayload(errCode, sqlState, errorMessage)
+}
+
+// MakeEOFPayload exposes (*MysqlProtocolImpl).makeEOFPayload() function.
+func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
+	return mp.makeEOFPayload(warnings, status)
 }
 
 // tryUpdateSalt tries to update salt with the value read from proxy module.
