@@ -55,7 +55,6 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
 		}
 	}
-
 }
 
 func TestBatch(t *testing.T) {
