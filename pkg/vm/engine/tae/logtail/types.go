@@ -35,13 +35,15 @@ const (
 )
 
 const (
-	SnapshotAttr_SegID                     = catalog.SnapshotAttr_SegID
-	SnapshotAttr_TID                       = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID                      = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID                         = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt                   = catalog.SegmentAttr_CreateAt
-	SegmentAttr_State                      = catalog.SegmentAttr_State
-	SegmentAttr_Sorted                     = catalog.SegmentAttr_Sorted
+	SnapshotAttr_SegID   = catalog.SnapshotAttr_SegID
+	SnapshotAttr_TID     = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID    = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID       = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt = catalog.SegmentAttr_CreateAt
+	SegmentAttr_State    = catalog.SegmentAttr_State
+	SegmentAttr_Sorted   = catalog.SegmentAttr_Sorted
+	// TODO(aptend): add SortHint and replay ckp correctly, onReplayCreateSegment. Use bytes as one column.
+	// Low priority, because replay from ckp will keep the create sequence
 	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
 	SnapshotMetaAttr_Tid                   = "table_id"

@@ -337,7 +337,10 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	if db.store.warChecker == nil {
 		db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
 	}
-	table = newTxnTable(db.store, entry)
+	table, err = newTxnTable(db.store, entry)
+	if err != nil {
+		return
+	}
 	table.idx = len(db.tables)
 	db.tables[id] = table
 	return

@@ -184,21 +184,58 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		case whenv.IsConst() && thenv.IsConst():
 			if !whenv.IsConstNull() && whencols[0] {
 				if thenv.IsConstNull() {
-					return vector.NewConstNull(t, l, proc.Mp()), nil
+					var j uint64
+					temp := make([]uint64, 0, l)
+					for j = 0; j < uint64(l); j++ {
+						if flag[j] {
+							continue
+						}
+						if whencols[j] {
+							temp = append(temp, j)
+							flag[j] = true
+						}
+					}
+					nulls.Add(rs.GetNulls(), temp...)
 				} else {
-					r := vector.NewConstFixed(t, thencols[0], l, proc.Mp())
-					r.GetType().Width = thenv.GetType().Width
-					r.GetType().Scale = thenv.GetType().Scale
-					return r, nil
+					for j := 0; j < l; j++ {
+						if flag[j] {
+							continue
+						}
+						rscols[j] = thencols[0]
+						flag[j] = true
+					}
 				}
 			}
 		case whenv.IsConst() && !thenv.IsConst():
-			rs.GetType().Width = thenv.GetType().Width
-			rs.GetType().Scale = thenv.GetType().Scale
 			if !whenv.IsConstNull() && whencols[0] {
-				copy(rscols, thencols)
-				rs.GetNulls().Or(thenv.GetNulls())
-				return rs, nil
+				if nulls.Any(thenv.GetNulls()) {
+					var j uint64
+					temp := make([]uint64, 0, l)
+					for j = 0; j < uint64(l); j++ {
+						if whencols[0] {
+							if flag[j] {
+								continue
+							}
+							if nulls.Contains(thenv.GetNulls(), j) {
+								temp = append(temp, j)
+							} else {
+								rscols[j] = thencols[j]
+							}
+							flag[j] = true
+						}
+					}
+					nulls.Add(rs.GetNulls(), temp...)
+				} else {
+					for j := 0; j < l; j++ {
+						if whencols[0] {
+							if flag[j] {
+								continue
+							}
+							rscols[j] = thencols[j]
+							flag[j] = true
+						}
+					}
+				}
 			}
 		case !whenv.IsConst() && thenv.IsConst():
 			rs.GetType().Width = thenv.GetType().Width
