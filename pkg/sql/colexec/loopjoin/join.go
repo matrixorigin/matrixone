@@ -29,9 +29,12 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	return nil
+	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -99,8 +102,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	count := bat.Length()
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+	}
 	for i := 0; i < count; i++ {
-		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+			ctr.bat.Length(), ctr.cfs); err != nil {
+			return err
+		}
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat})
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return err

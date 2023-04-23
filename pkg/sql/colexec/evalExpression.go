@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -446,4 +447,34 @@ func SafeReuseAndDupBatch(proc *process.Process, bat *batch.Batch, source *batch
 		}
 	}
 	return alloc, nil
+}
+
+func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
+	[]func(*vector.Vector, *vector.Vector, int64, int) error) {
+	rbat := batch.NewWithSize(bat.VectorCount())
+	cfs := make([]func(*vector.Vector, *vector.Vector, int64, int) error, bat.VectorCount())
+	for i, vec := range bat.Vecs {
+		typ := *vec.GetType()
+		rbat.Vecs[i] = vector.NewConstNull(typ, 0, nil)
+		cfs[i] = vector.GetConstSetFunction(typ, mp)
+	}
+	rbat.Zs = mp.GetSels()
+	return rbat, cfs
+}
+
+func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
+	cfs []func(*vector.Vector, *vector.Vector, int64, int) error) error {
+	for i, vec := range bat.Vecs {
+		if err := cfs[i](joinBat.Vecs[i], vec, sel, length); err != nil {
+			return err
+		}
+	}
+	if n := cap(joinBat.Zs); n < length {
+		joinBat.Zs = joinBat.Zs[:n]
+		for ; n < length; n++ {
+			joinBat.Zs = append(joinBat.Zs, 1)
+		}
+	}
+	joinBat.Zs = joinBat.Zs[:length]
+	return nil
 }
