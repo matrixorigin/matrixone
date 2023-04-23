@@ -264,7 +264,7 @@ var supportedBuiltins = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: builtInRegexpSubstr,
+				NewOp: newOpBuiltInRegexp().builtInRegexpSubstr,
 			},
 
 			{
@@ -273,7 +273,7 @@ var supportedBuiltins = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: builtInRegexpSubstr,
+				NewOp: newOpBuiltInRegexp().builtInRegexpSubstr,
 			},
 
 			{
@@ -282,7 +282,7 @@ var supportedBuiltins = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				NewOp: builtInRegexpSubstr,
+				NewOp: newOpBuiltInRegexp().builtInRegexpSubstr,
 			},
 		},
 	},
@@ -850,6 +850,169 @@ var supportedBuiltins = []FuncNew{
 					return types.T_uuid.ToType()
 				},
 				NewOp: builtInUUID,
+			},
+		},
+	},
+
+	// function `datediff`
+	{
+		functionId: DATEDIFF,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true, // TODO: why true.
+				args:       []types.T{types.T_date, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: builtInDateDiff,
+			},
+		},
+	},
+
+	// function `reg_match`
+	{
+		functionId: REG_MATCH,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegMatch,
+			},
+		},
+	},
+
+	// function `not_reg_match`
+	{
+		functionId: NOT_REG_MATCH,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInNotRegMatch,
+			},
+		},
+	},
+
+	// function `regexp_instr`
+	{
+		functionId: REGEXP_INSTR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpInstr,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpInstr,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpInstr,
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpInstr,
+			},
+		},
+	},
+
+	// function `regexp_like`
+	{
+		functionId: REGEXP_LIKE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpLike,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpLike,
+			},
+		},
+	},
+
+	// function `regexp_replace`
+	{
+		functionId: REGEXP_REPLACE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpReplace,
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpReplace,
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().builtInRegexpReplace,
 			},
 		},
 	},

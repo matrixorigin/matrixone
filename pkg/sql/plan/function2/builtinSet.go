@@ -27,11 +27,11 @@ import (
 	"time"
 )
 
-func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length uint64) error {
+func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < length; i++ {
+	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
@@ -363,7 +363,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	rs := vector.MustFunctionResult[types.Date](result)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 
-	container := function2Util.NewRegContainer()
+	op := newOpBuiltInRegexp()
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if null {
@@ -372,7 +372,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 		}
 		expr := function2Util.QuickBytesToStr(v)
-		match, parsedInput, err := container.RegularSubstr(expr, regexpMask, 1, 1)
+		match, parsedInput, err := op.regMap.regularSubstr(expr, regexpMask, 1, 1)
 		if err != nil {
 			return err
 		}
@@ -390,84 +390,6 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 		}
 	}
 
-	return nil
-}
-
-func builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	p2 := vector.GenerateFunctionStrParameter(parameters[1])
-
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	container := function2Util.NewRegContainer()
-	switch len(parameters) {
-	case 2:
-		for i := uint64(0); i < uint64(length); i++ {
-			v1, null1 := p1.GetStrValue(i)
-			v2, null2 := p2.GetStrValue(i)
-			if null1 || null2 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				expr, pat := function2Util.QuickBytesToStr(v1), function2Util.QuickBytesToStr(v2)
-				match, res, err := container.RegularSubstr(expr, pat, 1, 1)
-				if err != nil {
-					return err
-				}
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), !match); err != nil {
-					return err
-				}
-			}
-		}
-
-	case 3:
-		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
-		for i := uint64(0); i < uint64(length); i++ {
-			v1, null1 := p1.GetStrValue(i)
-			v2, null2 := p2.GetStrValue(i)
-			pos, null3 := positions.GetValue(i)
-			if null1 || null2 || null3 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				expr, pat := function2Util.QuickBytesToStr(v1), function2Util.QuickBytesToStr(v2)
-				match, res, err := container.RegularSubstr(expr, pat, pos, 1)
-				if err != nil {
-					return err
-				}
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), !match); err != nil {
-					return err
-				}
-			}
-		}
-
-	case 4:
-		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
-		occurrences := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
-		for i := uint64(0); i < uint64(length); i++ {
-			v1, null1 := p1.GetStrValue(i)
-			v2, null2 := p2.GetStrValue(i)
-			pos, null3 := positions.GetValue(i)
-			ocur, null4 := occurrences.GetValue(i)
-			if null1 || null2 || null3 || null4 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				expr, pat := function2Util.QuickBytesToStr(v1), function2Util.QuickBytesToStr(v2)
-				match, res, err := container.RegularSubstr(expr, pat, pos, ocur)
-				if err != nil {
-					return err
-				}
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), !match); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-
-	}
 	return nil
 }
 

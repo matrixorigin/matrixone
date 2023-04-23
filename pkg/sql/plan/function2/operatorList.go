@@ -628,9 +628,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return likeFn(parameters, result, proc, length)
-				},
+				NewOp: newOpBuiltInRegexp().likeFn,
 			},
 		},
 	},

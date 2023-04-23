@@ -243,7 +243,7 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return decimal128Minus(parameters, result, uint64(length))
 	case types.T_date:
-		return builtInDateDiff(parameters, result, proc, uint64(length))
+		return builtInDateDiff(parameters, result, proc, length)
 	case types.T_datetime:
 		return datetimeMinus(parameters, result, uint64(length))
 	}

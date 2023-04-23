@@ -119,7 +119,7 @@ var supportedAggregateFunctions = []FuncNew{
 
 	{
 		functionId: STARCOUNT,
-		class:      plan.Function_AGG,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
