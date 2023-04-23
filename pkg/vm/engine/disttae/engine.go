@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -333,14 +335,17 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(&id)
-
 	txn := &Transaction{
-		op:       op,
-		proc:     proc,
-		engine:   e,
-		readOnly: true,
-		meta:     op.Txn(),
-		idGen:    e.idGen,
+		op:          op,
+		proc:        proc,
+		engine:      e,
+		readOnly:    true,
+		meta:        op.Txn(),
+		idGen:       e.idGen,
+		dnStores:    e.getDNServices(),
+		tableMap:    new(sync.Map),
+		databaseMap: new(sync.Map),
+		createMap:   new(sync.Map),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -349,13 +354,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId:       id,
-		dnStores:    e.getDNServices(),
-		fileMap:     make(map[string]uint64),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		segId: id,
+		cnBlockDeletesMap: &CnBlockDeletesMap{
+			mp: map[string][]int64{},
+		},
+		cnBlkId_Pos:                     map[string]Pos{},
+		blockId_raw_batch:               make(map[string]*batch.Batch),
+		blockId_dn_delete_metaLoc_batch: make(map[string][]*batch.Batch),
 	}
+	// TxnWorkSpace SegmentName
+	colexec.Srv.PutCnSegment(string(id[:]), colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
@@ -412,6 +420,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
+	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}
@@ -522,11 +531,28 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
 		txn.writes[i].bat.Clean(e.mp)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.cnBlockDeletesMap = nil
+	segmentnames := make([]string, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, string(txn.segId[:]))
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, blkId[:16])
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	txn.cnBlkId_Pos = nil
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))
