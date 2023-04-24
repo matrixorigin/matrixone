@@ -32,9 +32,6 @@ type keyT struct {
 func encodeKey(k *keyT) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(k)), 4)
 }
-func decodeKey(v []byte) *keyT {
-	return (*keyT)(unsafe.Pointer(&v[0]))
-}
 
 type TreeVisitor interface {
 	VisitTable(dbID, id uint64) error
