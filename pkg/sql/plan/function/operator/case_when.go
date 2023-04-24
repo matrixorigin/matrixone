@@ -192,10 +192,8 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						if flag[j] {
 							continue
 						}
-						if whencols[j] {
-							temp = append(temp, j)
-							flag[j] = true
-						}
+						temp = append(temp, j)
+						flag[j] = true
 					}
 					nulls.Add(rs.GetNulls(), temp...)
 				} else {
@@ -214,28 +212,24 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					var j uint64
 					temp := make([]uint64, 0, l)
 					for j = 0; j < uint64(l); j++ {
-						if whencols[0] {
-							if flag[j] {
-								continue
-							}
-							if nulls.Contains(thenv.GetNulls(), j) {
-								temp = append(temp, j)
-							} else {
-								rscols[j] = thencols[j]
-							}
-							flag[j] = true
+						if flag[j] {
+							continue
 						}
+						if nulls.Contains(thenv.GetNulls(), j) {
+							temp = append(temp, j)
+						} else {
+							rscols[j] = thencols[j]
+						}
+						flag[j] = true
 					}
 					nulls.Add(rs.GetNulls(), temp...)
 				} else {
 					for j := 0; j < l; j++ {
-						if whencols[0] {
-							if flag[j] {
-								continue
-							}
-							rscols[j] = thencols[j]
-							flag[j] = true
+						if flag[j] {
+							continue
 						}
+						rscols[j] = thencols[j]
+						flag[j] = true
 					}
 				}
 			}

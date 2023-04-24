@@ -16,11 +16,13 @@ package insert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -87,15 +89,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
 		for i := range insertBat.Attrs {
-			insertBat.SetVector(int32(i), bat.GetVector(int32(i)))
-			insertBat.Zs = bat.Zs
+			vec := vector.NewVec(*bat.Vecs[i].GetType())
+			if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+				return false, err
+			}
+			insertBat.SetVector(int32(i), vec)
 		}
-		//for j := range bat.Vecs {
-		//	insertBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		//}
-		//if _, err := insertBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		//	return false, err
-		//}
+		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
 			insertBatches := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
