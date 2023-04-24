@@ -371,7 +371,7 @@ func (tbl *txnTable) SoftDeleteSegment(id types.Uuid) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, &id)
 	return
 }
 
@@ -394,7 +394,7 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *o
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID)
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
 	if is1PC {
 		meta.Set1PC()
 	}
@@ -412,7 +412,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if meta != nil {
 		tbl.txnEntries.Append(meta)
 	}
@@ -485,7 +485,7 @@ func (tbl *txnTable) createBlock(
 	}
 	tbl.store.IncreateWriteCnt()
 	id := meta.AsCommonID()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	tbl.txnEntries.Append(meta)
 	return buildBlock(tbl, meta), err
 }
@@ -550,7 +550,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 		return ErrDuplicateNode
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	tbl.deleteNodes[nid] = newDeleteNode(node, tbl.txnEntries.Len())
 	tbl.txnEntries.Append(node)
 	return nil
