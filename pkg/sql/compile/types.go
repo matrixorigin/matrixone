@@ -40,9 +40,11 @@ const (
 	MinBlockNum = 200
 )
 
+type magicType int
+
 // type of scope
 const (
-	Merge = iota
+	Merge magicType = iota
 	Normal
 	Remote
 	Parallel
@@ -97,7 +99,7 @@ type Scope struct {
 	// 0 -  execution unit for reading data.
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
-	Magic int
+	Magic magicType
 
 	// IsEnd means the pipeline is join
 	IsJoin bool

@@ -171,7 +171,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 }
 
 // StartTxn starts a local transaction initiated by DN
-func (mgr *TxnManager) StartTxnWithNow(info []byte) (txn txnif.AsyncTxn, err error) {
+func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)

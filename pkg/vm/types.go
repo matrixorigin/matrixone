@@ -16,8 +16,10 @@ package vm
 
 import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
+type OpType int
+
 const (
-	Top = iota
+	Top OpType = iota
 	Limit
 	Order
 	Group
@@ -86,7 +88,7 @@ const (
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.
-	Op int
+	Op OpType
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
