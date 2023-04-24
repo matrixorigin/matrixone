@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -213,15 +214,20 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
 
-func (tbl *txnTable) TruncateMeta() {
-	if tbl.meta == nil {
-		return
-	}
-	for i := range tbl.meta.blocks {
-		tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
-	}
-	for i := range tbl.meta.modifedBlocks {
-		tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
+func (tbl *txnTable) reset(newId uint64) {
+	// set new id
+	tbl.tableId = newId
+	// reset parts
+	tbl.setPartsOnce = sync.Once{}
+	tbl._parts = nil
+	// reset meta
+	if tbl.meta != nil {
+		for i := range tbl.meta.blocks {
+			tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
+		}
+		for i := range tbl.meta.modifedBlocks {
+			tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
+		}
 	}
 }
 
