@@ -41,7 +41,6 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
-		ap.ctr.nullSels = make([]int32, 0)
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
@@ -72,13 +71,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		default:
 			if ctr.bat != nil {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
 				ctr.sels = nil
-				ctr.nullSels = nil
 			} else {
 				proc.SetInputBatch(nil)
 			}
@@ -117,12 +115,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
-	//if ctr.idx != nil {
-	//	return ctr.indexBuild()
-	//}
-
-	inBuckets := make([]uint8, hashmap.UnitLimit)
-
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -149,19 +141,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
-		if ap.IsRight {
-			copy(inBuckets, hashmap.OneUInt8s)
-			_, zvals = itr.Find(i, n, ctr.vecs, inBuckets)
-			for k := 0; k < n; k++ {
-				if inBuckets[k] == 0 {
-					continue
-				}
-				if zvals[k] == 0 {
-					ctr.nullSels = append(ctr.nullSels, int32(i+k))
-				}
-			}
-		}
-
 	}
 
 	return nil
