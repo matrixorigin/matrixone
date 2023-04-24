@@ -1387,17 +1387,15 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 
 func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
-	objectIndex := 0
 	for i := range infos {
+		//distribute objects and steps for prefetch
+		rds[readerIndex].steps = append(rds[readerIndex].steps, steps[i])
+		rds[readerIndex].infos = append(rds[readerIndex].infos, infos[i])
 		for j := range infos[i] {
 			//distribute block
 			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
 			readerIndex++
 			readerIndex = readerIndex % num
-			//distribute objects and steps for prefetch
-			rds[readerIndex].steps = append(rds[readerIndex].steps, steps[objectIndex])
-			rds[readerIndex].infos = append(rds[readerIndex].infos, infos[objectIndex])
-			objectIndex++
 		}
 	}
 	return rds
