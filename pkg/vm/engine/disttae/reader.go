@@ -94,7 +94,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		blockio.PrefetchInner(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		blockio.BlockPrefetch(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
 	}
