@@ -115,6 +115,41 @@ func Test_Operator_Unary_Plus(t *testing.T) {
 	}
 }
 
+func Test_Operator_Is(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+				testutil.NewFunctionTestConstInput(types.T_bool.ToType(),
+					[]bool{true}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+				testutil.NewFunctionTestConstInput(types.T_bool.ToType(),
+					[]bool{false}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
 func Test_Operator_Is_Not(t *testing.T) {
 	proc := testutil.NewProcess()
 	{

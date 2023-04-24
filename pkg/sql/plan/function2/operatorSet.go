@@ -530,6 +530,33 @@ func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, resu
 	return nil
 }
 
+func operatorOpIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !parameters[1].IsConst() || parameters[1].IsConstNull() {
+		return moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
+	}
+	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+	v2, _ := p2.GetValue(0)
+	if v2 {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if err := rs.Append(!null1 && v1, false); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if err := rs.Append(!null1 && !v1, false); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func operatorOpIsNot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !parameters[1].IsConst() || parameters[1].IsConstNull() {
 		return moerr.NewInternalError(proc.Ctx, "second parameter of IS NOT must be TRUE or FALSE")

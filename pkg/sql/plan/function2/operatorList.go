@@ -1096,6 +1096,25 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `is`
+	{
+		functionId: IS,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool, types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorOpIs,
+			},
+		},
+	},
+
 	// operator `is not`
 	{
 		functionId: ISNOT,
