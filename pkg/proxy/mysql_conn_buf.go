@@ -63,7 +63,7 @@ type MySQLConn struct {
 // newMySQLConn creates a new MySQLConn. reqC and respC are used for client
 // connection to handle events from client.
 func newMySQLConn(
-	name string, c net.Conn, sz int, reqC chan IEventReq, respC chan []byte,
+	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte,
 ) *MySQLConn {
 	return &MySQLConn{
 		Conn:   c,
@@ -85,14 +85,14 @@ type msgBuf struct {
 	// writeMu controls the mutex to lock when write a MySQL packet with net.Write().
 	writeMu sync.Mutex
 	// reqC is the channel of event request.
-	reqC chan IEventReq
+	reqC chan IEvent
 	// respC is the channel of event response.
 	respC chan []byte
 }
 
 // newMsgBuf creates a new message buffer.
 func newMsgBuf(
-	name string, src io.Reader, bufLen int, reqC chan IEventReq, respC chan []byte,
+	name string, src io.Reader, bufLen int, reqC chan IEvent, respC chan []byte,
 ) *msgBuf {
 	if bufLen < mysqlHeadLen {
 		bufLen = defaultBufLen
@@ -152,11 +152,14 @@ func (b *msgBuf) preRecv() (int, txnTag, error) {
 // consumeMsg consumes the MySQL packet in the buffer, handles it by event
 // mechanism. Returns true if the command is handled, means it does not need
 // to be sent through tunnel anymore; false otherwise.
-func (b *msgBuf) consumeMsg(msg []byte) bool {
+func (b *msgBuf) consumeMsg(msg []byte, dst io.Writer) bool {
 	if b.reqC == nil {
 		return false
 	}
-	e := makeEvent(msg)
+	req := eventReqPool.Get().(*eventReq)
+	defer eventReqPool.Put(req)
+	req.msg = msg
+	e, r := makeEvent(req)
 	if e == nil {
 		return false
 	}
@@ -164,7 +167,8 @@ func (b *msgBuf) consumeMsg(msg []byte) bool {
 	// We cannot write to b.src directly here. The response has
 	// to go to the server conn buf, and lock writeMu then
 	// write to client.
-	return true
+
+	return r
 }
 
 // sendTo sends the data in buffer to destination.
@@ -186,7 +190,8 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 	}
 
 	// Try to consume the message synchronously.
-	if b.consumeMsg(b.buf[readPos:writePos]) {
+	// FIXME: if the buffer is full, we may get a part of MySQL packet.
+	if b.consumeMsg(b.buf[readPos:writePos], dst) {
 		return len(b.buf[readPos:writePos]), nil
 	}
 
