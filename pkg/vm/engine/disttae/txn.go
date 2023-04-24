@@ -318,7 +318,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
-			txn.cnBlockDeletesMap.PutCnBlockDeletes(string(blkid[:]), []int64{int64(rowOffset)})
+			txn.deletedBlocks.addDeletedBlocks(string(blkid[:]), []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
