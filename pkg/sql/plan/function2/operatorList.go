@@ -1270,10 +1270,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint8](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint8]().operatorIn,
 			},
 			{
 				overloadId: 1,
@@ -1281,10 +1278,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint16](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint16]().operatorIn,
 			},
 			{
 				overloadId: 2,
@@ -1292,10 +1286,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint32](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint32]().operatorIn,
 			},
 			{
 				overloadId: 3,
@@ -1303,10 +1294,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint64](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint64]().operatorIn,
 			},
 			{
 				overloadId: 4,
@@ -1314,10 +1302,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int8](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int8]().operatorIn,
 			},
 			{
 				overloadId: 5,
@@ -1325,10 +1310,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int16](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int16]().operatorIn,
 			},
 			{
 				overloadId: 6,
@@ -1336,10 +1318,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int32](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int32]().operatorIn,
 			},
 			{
 				overloadId: 7,
@@ -1347,10 +1326,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int64](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int64]().operatorIn,
 			},
 			{
 				overloadId: 8,
@@ -1358,10 +1334,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[float32](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[float32]().operatorIn,
 			},
 			{
 				overloadId: 9,
@@ -1369,10 +1342,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[float64](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[float64]().operatorIn,
 			},
 			{
 				overloadId: 10,
@@ -1380,10 +1350,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Decimal64](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Decimal64]().operatorIn,
 			},
 			{
 				overloadId: 11,
@@ -1391,10 +1358,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Decimal128](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Decimal128]().operatorIn,
 			},
 			{
 				overloadId: 12,
@@ -1402,10 +1366,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 			{
 				overloadId: 13,
@@ -1413,10 +1374,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 			{
 				overloadId: 14,
@@ -1424,10 +1382,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Date](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Date]().operatorIn,
 			},
 			{
 				overloadId: 15,
@@ -1435,10 +1390,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Datetime](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Datetime]().operatorIn,
 			},
 			{
 				overloadId: 16,
@@ -1446,10 +1398,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[bool](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[bool]().operatorIn,
 			},
 			{
 				overloadId: 17,
@@ -1457,10 +1406,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Timestamp](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Timestamp]().operatorIn,
 			},
 			{
 				overloadId: 18,
@@ -1468,10 +1414,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 			{
 				overloadId: 19,
@@ -1479,10 +1422,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Uuid](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Uuid]().operatorIn,
 			},
 			{
 				overloadId: 20,
@@ -1490,10 +1430,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 			{
 				overloadId: 21,
@@ -1501,10 +1438,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Time](parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Time]().operatorIn,
 			},
 			{
 				overloadId: 22,
@@ -1512,10 +1446,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 			{
 				overloadId: 23,
@@ -1523,10 +1454,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorIn,
 			},
 		},
 	},
@@ -1545,10 +1473,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint8](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint8]().operatorNotIn,
 			},
 			{
 				overloadId: 1,
@@ -1556,10 +1481,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint16](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint16]().operatorNotIn,
 			},
 			{
 				overloadId: 2,
@@ -1567,10 +1489,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint32](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint32]().operatorNotIn,
 			},
 			{
 				overloadId: 3,
@@ -1578,10 +1497,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[uint64](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[uint64]().operatorNotIn,
 			},
 			{
 				overloadId: 4,
@@ -1589,10 +1505,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int8](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int8]().operatorNotIn,
 			},
 			{
 				overloadId: 5,
@@ -1600,10 +1513,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int16](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int16]().operatorNotIn,
 			},
 			{
 				overloadId: 6,
@@ -1611,10 +1521,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int32](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int32]().operatorNotIn,
 			},
 			{
 				overloadId: 7,
@@ -1622,10 +1529,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[int64](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[int64]().operatorNotIn,
 			},
 			{
 				overloadId: 8,
@@ -1633,10 +1537,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[float32](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[float32]().operatorNotIn,
 			},
 			{
 				overloadId: 9,
@@ -1644,10 +1545,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[float64](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[float64]().operatorNotIn,
 			},
 			{
 				overloadId: 10,
@@ -1655,10 +1553,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Decimal64](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Decimal64]().operatorNotIn,
 			},
 			{
 				overloadId: 11,
@@ -1666,10 +1561,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Decimal128](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Decimal128]().operatorNotIn,
 			},
 			{
 				overloadId: 12,
@@ -1677,10 +1569,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 			{
 				overloadId: 13,
@@ -1688,10 +1577,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 			{
 				overloadId: 14,
@@ -1699,10 +1585,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Date](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Date]().operatorNotIn,
 			},
 			{
 				overloadId: 15,
@@ -1710,10 +1593,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Datetime](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Datetime]().operatorNotIn,
 			},
 			{
 				overloadId: 16,
@@ -1721,10 +1601,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[bool](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[bool]().operatorNotIn,
 			},
 			{
 				overloadId: 17,
@@ -1732,10 +1609,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Timestamp](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Timestamp]().operatorNotIn,
 			},
 			{
 				overloadId: 18,
@@ -1743,10 +1617,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 			{
 				overloadId: 19,
@@ -1754,10 +1625,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Uuid](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Uuid]().operatorNotIn,
 			},
 			{
 				overloadId: 20,
@@ -1765,10 +1633,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 			{
 				overloadId: 21,
@@ -1776,10 +1641,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorFixedIn[types.Time](parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorFixedIn[types.Time]().operatorNotIn,
 			},
 			{
 				overloadId: 22,
@@ -1787,10 +1649,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 			{
 				overloadId: 23,
@@ -1798,10 +1657,7 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
-						parameters[1], result, proc, length)
-				},
+				NewOp: newOpOperatorStrIn().operatorNotIn,
 			},
 		},
 	},

@@ -25,6 +25,10 @@ type opBuiltInRand struct {
 	seed *rand.Rand
 }
 
+func newOpBuiltInRand() *opBuiltInRand {
+	return new(opBuiltInRand)
+}
+
 func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {

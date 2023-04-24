@@ -16,9 +16,7 @@ package function2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var supportedBuiltins = []FuncNew{
@@ -568,10 +566,7 @@ var supportedBuiltins = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
-				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					r := new(opBuiltInRand)
-					return r.builtInRand(parameters, result, proc, length)
-				},
+				NewOp: newOpBuiltInRand().builtInRand,
 			},
 
 			{

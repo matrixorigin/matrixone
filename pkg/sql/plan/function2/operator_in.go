@@ -27,18 +27,33 @@ type TGenericOfIn interface {
 }
 
 type opOperatorFixedIn[T TGenericOfIn] struct {
-	mp map[T]bool
+	ready bool
+	mp    map[T]bool
 }
 
 type opOperatorStrIn struct {
-	mp map[string]bool
+	ready bool
+	mp    map[string]bool
 }
 
-func newOpOperatorFixedIn[T TGenericOfIn](tuple *vector.Vector) *opOperatorFixedIn[T] {
+func newOpOperatorFixedIn[T TGenericOfIn]() *opOperatorFixedIn[T] {
 	op := new(opOperatorFixedIn[T])
+	op.ready = false
+	return op
+}
+
+func newOpOperatorStrIn() *opOperatorStrIn {
+	op := new(opOperatorStrIn)
+	op.ready = false
+	return op
+}
+
+func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
+	op.ready = true
+
 	if tuple.IsConstNull() {
 		op.mp = make(map[T]bool)
-		return op
+		return
 	}
 	p := vector.GenerateFunctionFixedTypeParameter[T](tuple)
 
@@ -46,7 +61,7 @@ func newOpOperatorFixedIn[T TGenericOfIn](tuple *vector.Vector) *opOperatorFixed
 		v, _ := p.GetValue(0)
 		op.mp = make(map[T]bool, 1)
 		op.mp[v] = true
-		return op
+		return
 	}
 
 	op.mp = make(map[T]bool)
@@ -56,14 +71,14 @@ func newOpOperatorFixedIn[T TGenericOfIn](tuple *vector.Vector) *opOperatorFixed
 			op.mp[v] = true
 		}
 	}
-	return nil
 }
 
-func newOpOperatorStrIn(tuple *vector.Vector) *opOperatorStrIn {
-	op := new(opOperatorStrIn)
+func (op *opOperatorStrIn) init(tuple *vector.Vector) {
+	op.ready = true
+
 	if tuple.IsConstNull() {
 		op.mp = make(map[string]bool)
-		return op
+		return
 	}
 	p := vector.GenerateFunctionStrParameter(tuple)
 
@@ -71,7 +86,7 @@ func newOpOperatorStrIn(tuple *vector.Vector) *opOperatorStrIn {
 		v, _ := p.GetStrValue(0)
 		op.mp = make(map[string]bool, 1)
 		op.mp[string(v)] = true
-		return op
+		return
 	}
 
 	op.mp = make(map[string]bool)
@@ -81,11 +96,14 @@ func newOpOperatorStrIn(tuple *vector.Vector) *opOperatorStrIn {
 			op.mp[string(v)] = true
 		}
 	}
-	return nil
 }
 
-func (op *opOperatorFixedIn[T]) operatorIn(parameter *vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	p := vector.GenerateFunctionFixedTypeParameter[T](parameter)
+func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !op.ready {
+		op.init(parameters[1])
+	}
+
+	p := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetValue(i)
@@ -103,8 +121,12 @@ func (op *opOperatorFixedIn[T]) operatorIn(parameter *vector.Vector, result vect
 	return nil
 }
 
-func (op *opOperatorFixedIn[T]) operatorNotIn(parameter *vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	p := vector.GenerateFunctionFixedTypeParameter[T](parameter)
+func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !op.ready {
+		op.init(parameters[0])
+	}
+
+	p := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetValue(i)
@@ -122,8 +144,12 @@ func (op *opOperatorFixedIn[T]) operatorNotIn(parameter *vector.Vector, result v
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorIn(parameter *vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	p := vector.GenerateFunctionStrParameter(parameter)
+func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !op.ready {
+		op.init(parameters[1])
+	}
+
+	p := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)
@@ -141,8 +167,12 @@ func (op *opOperatorStrIn) operatorIn(parameter *vector.Vector, result vector.Fu
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorNotIn(parameter *vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	p := vector.GenerateFunctionStrParameter(parameter)
+func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !op.ready {
+		op.init(parameters[1])
+	}
+
+	p := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)
