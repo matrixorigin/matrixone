@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD = 128
+	PREFETCH_THRESHOLD = 256
 	PREFETCH_ROUNDS    = 16
 )
 

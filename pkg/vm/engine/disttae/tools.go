@@ -1361,7 +1361,7 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 	steps := make([]int, len(infos))
 	currentBlocks := 0
 	for i := range infos {
-		steps[i] = (currentBlocks - PREFETCH_THRESHOLD) / PREFETCH_ROUNDS
+		steps[i] = (currentBlocks-PREFETCH_THRESHOLD)/dop - PREFETCH_ROUNDS
 		if steps[i] < 0 {
 			steps[i] = 0
 		}
