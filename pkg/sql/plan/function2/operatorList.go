@@ -1095,4 +1095,145 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
+
+	// operator `is not`
+	{
+		functionId: ISNOT,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool, types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorOpIsNot,
+			},
+		},
+	},
+
+	// operator `is null`
+	{
+		functionId: ISNULL,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorOpIsNull,
+			},
+		},
+	},
+
+	// operator `is not null`
+	{
+		functionId: ISNOTNULL,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorOpIsNotNull,
+			},
+		},
+	},
+
+	// operator `is false`
+	{
+		functionId: ISFALSE,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorIsFalse,
+			},
+		},
+	},
+
+	// operator `is not false`
+	{
+		functionId: ISNOTFALSE,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorIsNotFalse,
+			},
+		},
+	},
+
+	// operator `is true`
+	{
+		functionId: ISTRUE,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorIsTrue,
+			},
+		},
+	},
+
+	// operator `is not true`
+	{
+		functionId: ISNOTTRUE,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     IS_NULL_EXPRESSION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: operatorIsNotTrue,
+			},
+		},
+	},
 }

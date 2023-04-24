@@ -114,3 +114,156 @@ func Test_Operator_Unary_Plus(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+func Test_Operator_Is_Not(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, true, false, false, true}, nil),
+				testutil.NewFunctionTestConstInput(types.T_bool.ToType(),
+					[]bool{true}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false, true, true, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, true, false, false, true}, nil),
+				testutil.NewFunctionTestConstInput(types.T_bool.ToType(),
+					[]bool{false}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, false, false, true}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{false}, []bool{true}),
+				testutil.NewFunctionTestConstInput(types.T_bool.ToType(),
+					[]bool{false}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_True(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsTrue)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_Not_True(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, true}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsNotTrue)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_False(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsFalse)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_Not_False(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsNotFalse)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_Null(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, true}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNull)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Is_Not_Null(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false}, []bool{false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, true, false}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNotNull)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}

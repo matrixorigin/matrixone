@@ -98,6 +98,9 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
+		// TODO: IF all parameters here were constant. and this function can be folded.
+		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
+
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.NewOp); err != nil {

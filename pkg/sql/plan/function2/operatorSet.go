@@ -15,6 +15,7 @@
 package function2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -525,6 +526,130 @@ func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, resu
 			}
 		}
 
+	}
+	return nil
+}
+
+func operatorOpIsNot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !parameters[1].IsConst() || parameters[1].IsConstNull() {
+		return moerr.NewInternalError(proc.Ctx, "second parameter of IS NOT must be TRUE or FALSE")
+	}
+	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+	v2, _ := p2.GetValue(0)
+	if v2 {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if err := rs.Append(null1 || !v1, false); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if err := rs.Append(null1 || v1, false); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func operatorOpIsNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[bool](result)
+
+	if parameters[0].IsConst() {
+		val := parameters[0].IsConstNull()
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	null := parameters[0].GetNulls()
+	if !null.Any() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(false, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(null.Contains(i), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorOpIsNotNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[bool](result)
+
+	if parameters[0].IsConst() {
+		val := !parameters[0].IsConstNull()
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	null := parameters[0].GetNulls()
+	if !null.Any() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(true, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(!null.Contains(i), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorIsTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return funcIs(parameters, result, length, false, true)
+}
+
+func operatorIsFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return funcIs(parameters, result, length, false, false)
+}
+
+func operatorIsNotFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return funcIs(parameters, result, length, true, true)
+}
+
+func operatorIsNotTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return funcIs(parameters, result, length, true, false)
+}
+
+func funcIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, length int, nullValue bool, require bool) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		if null1 {
+			if err := rs.Append(nullValue, false); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v1 == require, false); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
