@@ -60,7 +60,7 @@ func (node *memoryNode) initIndexes(schema *catalog.Schema) {
 		if def.IsPhyAddr() {
 			continue
 		}
-		if def.IsPrimary() {
+		if def.IsRealPrimary() {
 			node.indexes[def.Idx] = indexwrapper.NewPkMutableIndex(def.Type)
 			node.pkIndex = node.indexes[def.Idx]
 		} else {
