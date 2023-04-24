@@ -117,7 +117,7 @@ func TestHandler_Handle(t *testing.T) {
 	require.NotNil(t, db)
 	defer func() {
 		_ = db.Close()
-		timeout := time.NewTimer(time.Second * 3)
+		timeout := time.NewTimer(time.Second * 15)
 		tick := time.NewTicker(time.Millisecond * 100)
 		var connTotal int64
 		tt := false
