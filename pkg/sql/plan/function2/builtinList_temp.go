@@ -3272,7 +3272,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			},
 			{
 				overloadId: 26,
-				args:       []types.T{types.T_blob, types.T_float64}
+				args:       []types.T{types.T_blob, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
