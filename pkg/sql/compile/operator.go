@@ -411,6 +411,18 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			TableDef:   t.TableDef,
 			ParentIdx:  t.ParentIdx,
 		}
+	case vm.Deletion:
+		t := sourceIns.Arg.(*deletion.Argument)
+		res.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			IBucket:      t.IBucket,
+			Nbucket:      t.Nbucket,
+			DeleteCtx:    t.DeleteCtx,
+			AffectedRows: t.AffectedRows,
+			Engine:       t.Engine,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -968,7 +980,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	for i, e := range cn.ProjectList {
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
-	// we need to store the
+
 	return &group.Argument{
 		Aggs:      aggs,
 		MultiAggs: multiaggs,
@@ -1012,15 +1024,107 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 	} else {
 		arg.FuncId = dispatch.SendToAnyLocalFunc
 	}
-
 	return arg
+}
+
+// ss[currentIdx] means it's local scope the dispatch rule should be like below:
+// dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
+// local deletion
+func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, uuids []uuid.UUID, c *Compile) {
+	arg := new(dispatch.Argument)
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
+	// rs is used to get batch from dispatch operator (include
+	// local batch)
+	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
+	rs[currentIdx].Magic = Remote
+	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
+	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
+	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
+	// use arg.RemoteRegs to know the uuid,
+	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
+	// So how to use this?
+	// the answer is below:
+	// when the remote Cn run the scope, if scope's RemoteReceivRegInfos
+	// is not empty, it will start to give a PrepareDoneNotifyMessage to
+	// tell the dispatcher it's prepared, and also to know,this messgae
+	// will carry the uuid and a clientSession. In dispatch instruction,
+	// first it will use the uuid to get the proc.DispatchNotifyCh from the Server.
+	// (remember the DispatchNotifyCh is in a process,not a global one,because we
+	// need to send the WrapCs (a struct,contains clientSession,uuid and So on) in the
+	// sepcified process).
+	// And then Dispatcher will use this clientSession to dispatch batches to remoteCN.
+	// When remoteCn get the batches, it should know send it to where by itself.
+	for i := 0; i < len(ss); i++ {
+		if i != currentIdx {
+			// just use this uuid in dispatch, we need to
+			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
+			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+				Uuid:     uuids[i],
+				NodeAddr: ss[i].NodeInfo.Addr,
+			})
+			// let remote scope knows it need to recieve bacth from
+			// remote CN, it will use this to send PrepareDoneNotifyMessage
+			// and then to recieve batches from remote CNs
+			rs[currentIdx].RemoteReceivRegInfos = append(rs[currentIdx].RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Uuid: uuids[currentIdx],
+				// I use i to tag, scope should send the batches (recieved from remote CNs)
+				// to process.MergeRecievers[i]
+				Idx:      i,
+				FromAddr: ss[i].NodeInfo.Addr,
+			})
+		}
+	}
+	if len(arg.RemoteRegs) == 0 {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	} else {
+		arg.FuncId = dispatch.SendToAllFunc
+	}
+	arg.LocalRegs = append(arg.LocalRegs, rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
+	ss[currentIdx].appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	// add merge to recieve all batches
+	rs[currentIdx].appendInstruction(vm.Instruction{
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
+	})
+	// // get cn plan Node for constructGroup
+	// cn := new(plan.Node)
+	// cn.ProjectList = []*plan.Expr{
+	// 	{
+	// 		Typ: &plan.Type{
+	// 			Id:    int32(types.T_Rowid),
+	// 			Width: types.T_Rowid.ToType().Width,
+	// 			Scale: types.T_Rowid.ToType().Scale,
+	// 		},
+	// 	},
+	// }
+	// // get n planNode for constructGroup, for now,
+	// // just support single table delete.
+	// n := new(plan.Node)
+	// n.GroupBy = []*plan.Expr{
+	// 	{
+	// 		Expr: &plan.Expr_Col{
+	// 			Col: &plan.ColRef{
+	// 				RelPos: 0,
+	// 				ColPos: 0,
+	// 			},
+	// 		},
+	// 	},
+	// }
+	// groupArg := constructGroup(rs[currentIdx].Proc.Ctx, n, cn, currentIdx, len(ss), false, rs[currentIdx].Proc)
+	// use group to do Bucket filter and RowId duplicate Filter
+	// rs[currentIdx].appendInstruction(vm.Instruction{
+	// 	Op:  vm.Group,
+	// 	Arg: groupArg,
+	// })
 }
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
 func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, *dispatch.Argument) {
 	arg := new(dispatch.Argument)
-
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)

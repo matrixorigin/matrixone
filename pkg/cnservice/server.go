@@ -300,11 +300,6 @@ func (s *service) initEngine(
 ) error {
 	switch s.cfg.Engine.Type {
 
-	case EngineTAE:
-		if err := initTAE(cancelMoServerCtx, pu, s.cfg); err != nil {
-			return err
-		}
-
 	case EngineDistributedTAE:
 		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
 			return err
