@@ -1012,11 +1012,12 @@ func (tbl *txnTable) updateLocalState(
 		return nil
 	}
 
-	// fake primary key, auto_incr, nevery dup.
-	if tbl.tableDef != nil &&
-		tbl.tableDef.Pkey != nil &&
-		tbl.tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return nil
+	// hide primary key, auto_incr, nevery dedup.
+	if tbl.tableDef != nil {
+		pk := tbl.tableDef.Cols[tbl.primaryIdx]
+		if pk.Hidden && pk.Typ.AutoIncr {
+			return nil
+		}
 	}
 
 	if tbl.localState == nil {
