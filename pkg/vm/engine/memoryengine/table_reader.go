@@ -205,6 +205,10 @@ func (t *TableReader) Close() error {
 	return nil
 }
 
+func (t *Table) GetEngineType() engine.EngineType {
+	return engine.Memory
+}
+
 func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
 	nodes := getDNServices(t.engine.cluster)

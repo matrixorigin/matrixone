@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,6 +55,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 				assert.Equal(t, types.TS{}, v)
 			}
 		},
+		client.WithEnableRefreshExpression(),
 	)
 }
 
@@ -93,6 +95,40 @@ func TestCallLockOpWithConflict(t *testing.T) {
 			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 			<-c
 		},
+		client.WithEnableRefreshExpression(),
+	)
+}
+
+func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
+	runLockOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{0, 1, 2}},
+		func(proc *process.Process, arg *Argument) {
+			require.NoError(t, Prepare(proc, arg))
+
+			arg.parker.Reset()
+			arg.parker.EncodeInt32(0)
+			conflictRow := arg.parker.Bytes()
+			_, err := proc.LockService.Lock(
+				proc.Ctx,
+				1,
+				[][]byte{conflictRow},
+				[]byte("txn01"),
+				lock.LockOptions{})
+			require.NoError(t, err)
+
+			c := make(chan struct{})
+			go func() {
+				defer close(c)
+				_, err = Call(0, proc, arg, false, false)
+				require.Error(t, err)
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+			}()
+			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 1, conflictRow, 1))
+			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
+			<-c
+		},
 	)
 }
 
@@ -100,7 +136,8 @@ func runLockOpTest(
 	t *testing.T,
 	tables []uint64,
 	values [][]int32,
-	fn func(*process.Process, *Argument)) {
+	fn func(*process.Process, *Argument),
+	opts ...client.TxnClientCreateOption) {
 	defer leaktest.AfterTest(t)()
 	lockservice.RunLockServicesForTest(
 		zap.DebugLevel,
@@ -113,7 +150,7 @@ func runLockOpTest(
 			s, err := rpc.NewSender(rpc.Config{}, runtime.ProcessLevelRuntime())
 			require.NoError(t, err)
 
-			c := client.NewTxnClient(s)
+			c := client.NewTxnClient(s, opts...)
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()

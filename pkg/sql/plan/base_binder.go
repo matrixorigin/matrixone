@@ -722,14 +722,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	if b.builder != nil {
-		return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		if err == nil {
+			return e, nil
+		}
+		if !strings.Contains(err.Error(), "not supported") {
+			return nil, err
+		}
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
 			return builtinExpr, nil
-		} else if !strings.Contains(err.Error(), "not supported") {
+		}
+		if !strings.Contains(err.Error(), "not supported") {
 			return nil, err
 		}
 	}
