@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -213,15 +214,20 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
 
-func (tbl *txnTable) TruncateMeta() {
-	if tbl.meta == nil {
-		return
-	}
-	for i := range tbl.meta.blocks {
-		tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
-	}
-	for i := range tbl.meta.modifedBlocks {
-		tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
+func (tbl *txnTable) reset(newId uint64) {
+	// set new id
+	tbl.tableId = newId
+	// reset parts
+	tbl.setPartsOnce = sync.Once{}
+	tbl._parts = nil
+	// reset meta
+	if tbl.meta != nil {
+		for i := range tbl.meta.blocks {
+			tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
+		}
+		for i := range tbl.meta.modifedBlocks {
+			tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
+		}
 	}
 }
 
@@ -568,29 +574,31 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
-	for id, deleteOffsets := range tbl.db.txn.cnBlockDeletesMap.mp {
+	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
 		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
 		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
 		// just do compaction for current txnTable
 		entry := tbl.db.txn.writes[pos.idx]
 		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
-			continue
+			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		delete(tbl.db.txn.cnBlockDeletesMap.mp, id)
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfo(id)
 		if len(deleteOffsets) == 0 {
-			continue
+			return true
 		}
 		mp[pos.idx] = append(mp[pos.idx], pos.offset)
 		// start compaction
 		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
-		location, err := blockio.EncodeLocationFromString(metaLoc)
-		if err != nil {
-			return err
+		location, e := blockio.EncodeLocationFromString(metaLoc)
+		if e != nil {
+			err = e
+			return false
 		}
-		s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-		if err != nil {
-			return err
+		s3BlockReader, e := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
+		if e != nil {
+			err = e
+			return false
 		}
 		if tbl.idxs == nil {
 			idxs := make([]uint16, 0, len(tbl.tableDef.Cols)-1)
@@ -599,20 +607,25 @@ func (tbl *txnTable) compaction() error {
 			}
 			tbl.idxs = idxs
 		}
-		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
-		if err != nil {
-			return err
+		bat, e := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
+		if e != nil {
+			err = e
+			return false
 		}
 		bat.SetZs(bat.GetVector(0).Length(), tbl.db.txn.proc.GetMPool())
 		bat.AntiShrink(deleteOffsets)
 		if bat.Length() == 0 {
-			continue
+			return true
 		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
 		// and make sure one block has as close as possible to 8192 rows
 		// if the batch is little we should not flush, improve this in next pr.
 		s3writer.WriteBlock(bat)
 		batchNums++
+		return true
+	})
+	if err != nil {
+		return err
 	}
 
 	if batchNums > 0 {
@@ -933,7 +946,7 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
-		deletes_map:     txn.cnBlockDeletesMap.mp,
+		deleteBlocks:    txn.deletedBlocks,
 	}
 	readers[0] = partReader
 
