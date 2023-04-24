@@ -36,8 +36,8 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "delete from nation where n_nationkey > 10"
 	// sql := "delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name"
 	// sql := "update nation set n_name ='a' where n_nationkey > 10"
-	sql := "update dept set deptno = 11 where deptno = 10"
-	// sql := "prepare stmt1 from update nation set n_name = ? where n_nationkey = ?"
+	// sql := "update dept set deptno = 11 where deptno = 10"
+	sql := "prepare stmt1 from update nation set n_name = ? where n_nationkey = ?"
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {

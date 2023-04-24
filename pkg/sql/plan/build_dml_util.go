@@ -15,12 +15,26 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+type dmlPlanCtx struct {
+	objRef          *ObjectRef
+	tableDef        *TableDef
+	beginIdx        int
+	sourceStep      int32
+	isMulti         bool
+	updateColLength int
+	rowIdPos        int
+	insertColPos    []int
+	updateColPosMap map[string]int
+}
 
 func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo) error {
 	return nil
@@ -38,85 +52,106 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, nil, sourceStep, true)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true)
 	return err
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(
-	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
-	beginIdx int, sourceStep int32, isMultiUpdate bool) error {
+func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx) error {
 	// build delete plans
-	lastNodeId, err := buildDeletePlans(ctx, builder, bindCtx, objRef, tableDef, beginIdx, sourceStep, isMultiUpdate)
+	lastNodeId, err := buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx)
 	if err != nil {
 		return err
 	}
 
-	// -> project -> sink
-	// append project
+	// -> project -> preinsert -> sink
 	lastNode := builder.qry.Nodes[lastNodeId]
 	var newCols []*ColDef
 	var projectProjection []*Expr
-	for i, col := range tableDef.Cols {
+	for _, col := range updatePlanCtx.tableDef.Cols {
 		if col.Hidden {
 			continue
 		}
+		newCols = append(newCols, col)
+	}
+	updatePlanCtx.tableDef.Cols = newCols
+
+	for _, idx := range updatePlanCtx.insertColPos {
+		name := ""
+		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
 		projectProjection = append(projectProjection, &plan.Expr{
-			Typ: lastNode.ProjectList[i].Typ,
+			Typ: lastNode.ProjectList[idx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					ColPos: int32(i),
-					Name:   col.Name,
+					ColPos: int32(idx),
+					Name:   name,
 				},
 			},
 		})
-		newCols = append(newCols, col)
 	}
-	tableDef.Cols = newCols
+	//append project node
 	projectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeId},
 		ProjectList: projectProjection,
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
-
+	//append preinsert node
+	lastNodeId = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
+	//append sink node
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	sourceStep = builder.appendStep(lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
 
-	// build insert plan with update expr.
+	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, updateExprs, sourceStep, false)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength, sourceStep, false)
 
 	return err
 }
 
 // buildDeletePlans  build preinsert plan.
 // sink_scan -> project -> predelete[build partition] -> join[unique key] ->  [u1]lock -> [u1]filter -> [u1]delete -> [o1]lock -> [o1]filter -> [o1]delete
-func buildDeletePlans(
-	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef,
-	beginIdx int, sourceStep int32, isMulti bool) (int32, error) {
+func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) (int32, error) {
 	var err error
-	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+	lastNode := builder.qry.Nodes[lastNodeId]
 
 	// append project Node to fetch the columns of this table
-	// we will opt it to only keep row_id/pk column in delete. but we need more columns in update
-	projectProjection := make([]*Expr, len(tableDef.Cols))
-	rowIdIdx := -1
-	for i, col := range tableDef.Cols {
+	// in front of this projectList are update cols
+	projectProjection := make([]*Expr, len(delCtx.tableDef.Cols)+delCtx.updateColLength)
+	for i, col := range delCtx.tableDef.Cols {
 		projectProjection[i] = &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: int32(beginIdx + i),
+					ColPos: int32(delCtx.beginIdx + i),
 					Name:   col.Name,
 				},
 			},
 		}
-		if col.Typ.Id == int32(types.T_Rowid) {
-			rowIdIdx = i
+	}
+	offset := len(delCtx.tableDef.Cols)
+	for i := 0; i < delCtx.updateColLength; i++ {
+		idx := delCtx.beginIdx + offset + i
+		if idx >= len(lastNode.ProjectList) {
+			fmt.Print("ddd")
+		}
+		name := ""
+		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projectProjection[offset+i] = &plan.Expr{
+			Typ: lastNode.ProjectList[idx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(idx),
+					Name:   name,
+				},
+			},
 		}
 	}
 	projectNode := &Node{
@@ -128,7 +163,7 @@ func buildDeletePlans(
 
 	//when update multi table. we append agg node:
 	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
-	if isMulti {
+	if delCtx.isMulti {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(lastNode.ProjectList))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
@@ -170,11 +205,11 @@ func buildDeletePlans(
 		// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
 		// we can not let null rows in batch go to insert Node
 		rowIdExpr := &plan.Expr{
-			Typ: aggNodeProjection[rowIdIdx].Typ,
+			Typ: aggNodeProjection[delCtx.rowIdPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: int32(rowIdIdx),
+					ColPos: int32(delCtx.rowIdPos),
 					Name:   catalog.Row_ID,
 				},
 			},
@@ -195,30 +230,30 @@ func buildDeletePlans(
 
 	isPartitionTable := false
 	partExprIdx := -1
-	if tableDef.Partition != nil {
+	if delCtx.tableDef.Partition != nil {
 		isPartitionTable = true
-		partExprIdx = len(tableDef.Cols)
-		lastNodeId = appendPreDeleteNode(builder, bindCtx, objRef, tableDef, lastNodeId)
+		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
+		lastNodeId = appendPreDeleteNode(builder, bindCtx, delCtx.objRef, delCtx.tableDef, lastNodeId)
 	}
 
-	hasUniqueKey := haveUniqueKey(tableDef)
+	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	if hasUniqueKey {
 		// append join node to get unique key table's row_id/pk for delete
-		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, objRef, tableDef, lastNodeId)
+		lastNodeId, err = appendJoinNodeForGetRowIdOfUniqueKey(builder, bindCtx, delCtx.objRef, delCtx.tableDef, lastNodeId, delCtx.updateColLength)
 		if err != nil {
 			return -1, err
 		}
 
 		// delete unique table
-		uniqueDeleteIdx := len(tableDef.Cols)
+		uniqueDeleteIdx := len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		if isPartitionTable {
 			uniqueDeleteIdx = uniqueDeleteIdx + 1
 		}
-		for _, indexdef := range tableDef.Indexes {
+		for _, indexdef := range delCtx.tableDef.Indexes {
 			if indexdef.Unique {
-				_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
+				_, idxTableDef := ctx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				idxObjRef := &ObjectRef{
-					SchemaName: objRef.SchemaName,
+					SchemaName: delCtx.objRef.SchemaName,
 					ObjName:    indexdef.IndexTableName,
 					Obj:        int64(idxTableDef.TblId),
 				}
@@ -235,16 +270,8 @@ func buildDeletePlans(
 	}
 
 	// delete origin table
-	deleteIdx := -1
-	for i, col := range tableDef.Cols {
-		if col.Name == catalog.Row_ID {
-			deleteIdx = i
-			break
-		}
-	}
-
 	// getNode information about delete table
-	delNodeInfo := makeDeleteNodeInfo(ctx, objRef, tableDef, deleteIdx, partExprIdx, true)
+	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true)
 	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 	if err != nil {
 		return -1, err
@@ -269,7 +296,7 @@ query_plan[不join其他表] -> preinsert[可能会增加列] -> sink
 	[o]sink_scan->join（insert数据和原始表旧数据join） -> filter(判断count(*)==0) 和快照数据join，检查是否有冲突
 */
 func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, updateExprs map[int]*Expr,
+	objRef *ObjectRef, tableDef *TableDef, updateColLength int,
 	sourceStep int32, addAffectedRows bool) error {
 
 	// append hidden column to tableDef
@@ -285,37 +312,36 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 	hasUniqueKey := haveUniqueKey(tableDef)
 
-	// make plan : sink_scan -> [project(if update)] -> lock -> join(check fk) -> filter -> insert -> sink/project
+	// make plan : sink_scan -> lock -> join(check fk) -> filter -> insert -> sink/project
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-		lastNode := builder.qry.Nodes[lastNodeId]
 
-		if len(updateExprs) > 0 {
-			projectProjection := make([]*Expr, len(lastNode.ProjectList))
-			for i, col := range lastNode.ProjectList {
-				if updateExpr, ok := updateExprs[i]; ok {
-					projectProjection[i] = updateExpr
-				} else {
-					projectProjection[i] = &plan.Expr{
-						Typ: col.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: 0,
-								ColPos: int32(i),
-								Name:   col.GetCol().Name,
-							},
-						},
-					}
-				}
-			}
-			lastNodeId = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_PROJECT,
-				Children:    []int32{lastNodeId},
-				ProjectList: projectProjection,
-			}, bindCtx)
+		// if len(updateExprs) > 0 {
+		// 	projectProjection := make([]*Expr, len(lastNode.ProjectList))
+		// 	for i, col := range lastNode.ProjectList {
+		// 		if updateExpr, ok := updateExprs[i]; ok {
+		// 			projectProjection[i] = updateExpr
+		// 		} else {
+		// 			projectProjection[i] = &plan.Expr{
+		// 				Typ: col.Typ,
+		// 				Expr: &plan.Expr_Col{
+		// 					Col: &plan.ColRef{
+		// 						RelPos: 0,
+		// 						ColPos: int32(i),
+		// 						Name:   col.GetCol().Name,
+		// 					},
+		// 				},
+		// 			}
+		// 		}
+		// 	}
+		// 	lastNodeId = builder.appendNode(&plan.Node{
+		// 		NodeType:    plan.Node_PROJECT,
+		// 		Children:    []int32{lastNodeId},
+		// 		ProjectList: projectProjection,
+		// 	}, bindCtx)
 
-			lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, true)
-		}
+		// 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, true)
+		// }
 
 		// todo: append lock
 
@@ -325,7 +351,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			if err != nil {
 				return err
 			}
-			lastNode = builder.qry.Nodes[lastNodeId]
+			lastNode := builder.qry.Nodes[lastNodeId]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
 
 			//get filter exprs
@@ -431,7 +457,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 					}
 
 					// make insert plans(for unique key table)
-					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, nil, newSourceStep, false)
+					err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false)
 					if err != nil {
 						return err
 					}
@@ -450,10 +476,8 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 }
 
 // makeOneDeletePlan
-// predelete[build partition] -> lock -> filter -> delete
+// lock -> filter -> delete
 func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, delNodeInfo *deleteNodeInfo) (int32, error) {
-	// todo: append predelete node to build partition id
-
 	// todo: append lock & filter
 
 	// append delete node
@@ -592,6 +616,15 @@ func getPkPos(tableDef *TableDef) int {
 	}
 	for i, col := range tableDef.Cols {
 		if col.Name == pkName {
+			return i
+		}
+	}
+	return -1
+}
+
+func getRowIdPos(tableDef *TableDef) int {
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
 			return i
 		}
 	}
@@ -851,7 +884,7 @@ func appendPreInsertUkNode(builder *QueryBuilder, bindCtx *BindContext, tableDef
 	return sourceStep, nil
 }
 
-func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
+func appendJoinNodeForGetRowIdOfUniqueKey(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32, updateColLength int) (int32, error) {
 	lastNodeId := baseNodeId
 	typMap := make(map[string]*plan.Type)
 	posMap := make(map[string]int)
