@@ -308,7 +308,6 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-
 func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
 	// Generate prefetch task
 	for i := range infos {
