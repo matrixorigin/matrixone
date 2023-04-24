@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -208,6 +209,194 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 			}
 		} else {
 			match, err := op.regMap.regularMatchForLikeOp(v2, string(v1))
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(match, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+
+	// optimize rule for some special case.
+	if parameters[1].IsConst() {
+		expr, null := p2.GetStrValue(0)
+		if null {
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		expr = []byte(strings.ToLower(string(expr)))
+
+		n := len(expr)
+		// opt rule #1: if expr is empty string, only empty string like empty string.
+		if n == 0 {
+			for i := uint64(0); i < uint64(length); i++ {
+				v1, null1 := p1.GetStrValue(i)
+				v1 = []byte(strings.ToLower(string(v1)))
+				if err := rs.Append(len(v1) == 0, null1); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// opt rule #2.1: anything matches %
+		if n == 1 && expr[0] == '%' {
+			for i := uint64(0); i < uint64(length); i++ {
+				_, null1 := p1.GetStrValue(i)
+				if err := rs.Append(true, null1); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// opt rule #2.2: single char matches _
+		// XXX in UTF8 world, should we do single RUNE matches _?
+		if n == 1 && expr[0] == '_' {
+			for i := uint64(0); i < uint64(length); i++ {
+				v1, null1 := p1.GetStrValue(i)
+				v1 = []byte(strings.ToLower(string(v1)))
+				if err := rs.Append(len(v1) == 1, null1); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// opt rule #2.3: single char, no wild card, so it is a simple compare eq.
+		if n == 1 && expr[0] != '_' && expr[0] != '%' {
+			for i := uint64(0); i < uint64(length); i++ {
+				v1, null1 := p1.GetStrValue(i)
+				v1 = []byte(strings.ToLower(string(v1)))
+				if err := rs.Append(len(v1) == 1 && v1[0] == expr[0], null1); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		// opt rule #3: [_%]somethingInBetween[_%]
+		if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
+			c0, c1 := expr[0], expr[n-1]
+			if n > 2 && expr[n-2] == DefaultEscapeChar {
+				c1 = DefaultEscapeChar
+			}
+			switch {
+			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
+				// Rule 4.1: no wild card, so it is a simple compare eq.
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(len(v1) == n && bytes.Equal(expr, v1), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c0 == '_' && !(c1 == '%' || c1 == '_'):
+				// Rule 4.2: _foobarzoo,
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(len(v1) == n && bytes.Equal(expr[1:], v1[1:]), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c0 == '%' && !(c1 == '%' || c1 == '_'):
+				// Rule 4.3, %foobarzoo, it turns into a suffix match.
+				suffix := function2Util.RemoveEscapeChar(expr[1:], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(bytes.HasSuffix(v1, suffix), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c1 == '_' && !(c0 == '%' || c0 == '_'):
+				// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
+				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(len(v1) == n && bytes.Equal(prefix, v1[:n-1]), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c1 == '%' && !(c0 == '%' || c0 == '_'):
+				// Rule 4.5 foobarzoo%, prefix match
+				prefix := function2Util.RemoveEscapeChar(expr[:n-1], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(bytes.HasPrefix(v1, prefix), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c0 == '%' && c1 == '%':
+				// Rule 4.6 %foobarzoo%, now it is contains
+				substr := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(bytes.Contains(v1, substr), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c0 == '%' && c1 == '_':
+				// Rule 4.7 %foobarzoo_,
+				suffix := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(len(v1) > 0 && bytes.HasSuffix(v1[:len(v1)-1], suffix), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+
+			case c0 == '_' && c1 == '%':
+				// Rule 4.8 _foobarzoo%
+				prefix := function2Util.RemoveEscapeChar(expr[1:n-1], DefaultEscapeChar)
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					v1 = []byte(strings.ToLower(string(v1)))
+					if err := rs.Append(len(v1) > 0 && bytes.HasPrefix(v1[1:], prefix), null1); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+		} else {
+			match, err := op.regMap.regularMatchForLikeOp([]byte(strings.ToLower(string(v2))), strings.ToLower(string(v1)))
 			if err != nil {
 				return err
 			}
