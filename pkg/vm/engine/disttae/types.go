@@ -172,7 +172,7 @@ func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
 	delete(b.offsets, blockID)
 }
 
-func (b *deletedBlocks) Iter(fn func(string, []int64) bool) {
+func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
 	b.RLock()
 	defer b.RUnlock()
 	for id, offsets := range b.offsets {
