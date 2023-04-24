@@ -831,7 +831,13 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return false, err
+		}
+		defer executor.Free()
+
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
