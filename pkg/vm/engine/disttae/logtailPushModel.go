@@ -43,6 +43,9 @@ const (
 	// we assume that client has lost connect to server and will start a reconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
 
+	// once we reconnect dn failed. we will retry after time retryReconnect.
+	retryReconnect = 20 * time.Millisecond
+
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
 
@@ -311,19 +314,23 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				r.close()
 			}
 			logutil.Infof("start to reconnect to dn log tail service")
-			dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-			if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
-				logutil.Error("rebuild the cn log tail client failed.")
-				reconnectErr <- err
+			for {
+				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
+					logutil.Error("rebuild the cn log tail client failed.")
+					time.Sleep(retryReconnect)
+					continue
+				}
+
+				// once we reconnect succeed, should clean partition here.
+				e.cleanMemoryTable()
+
+				go func() {
+					err := client.firstTimeConnectToLogTailServer(context.TODO())
+					reconnectErr <- err
+				}()
+				break
 			}
-
-			// once we reconnect succeed, should clean partition here.
-			e.cleanMemoryTable()
-
-			go func() {
-				err := client.firstTimeConnectToLogTailServer(context.TODO())
-				reconnectErr <- err
-			}()
 		}
 	}()
 }
