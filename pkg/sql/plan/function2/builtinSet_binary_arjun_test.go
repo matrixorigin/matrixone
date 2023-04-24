@@ -1209,3 +1209,171 @@ func TestTrim(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// JSON EXTRACT
+
+func initJsonExtractTestCase() []tcTemp {
+
+	var (
+		kases = []struct {
+			index        int
+			json         string
+			path         string
+			want         string
+			pathNullList []bool
+		}{
+			{
+				index: 0,
+				json:  `{"a":1,"b":2,"c":3}`,
+				path:  `$.a`,
+				want:  `1`,
+			},
+			{
+				index: 1,
+				json:  `{"a":1,"b":2,"c":3}`,
+				path:  `$.b`,
+				want:  `2`,
+			},
+			{
+				index: 2,
+				json:  `{"a":{"q":[1,2,3]}}`,
+				path:  `$.a.q[1]`,
+				want:  `2`,
+			},
+			{
+				index: 3,
+				json:  `[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`,
+				path:  `$[1].a`,
+				want:  `4`,
+			},
+			{
+				index: 4,
+				json:  `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+				path:  `$.a.q[1]`,
+				want:  `{"a":2}`,
+			},
+			{
+				index: 5,
+				json:  `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+				path:  `$.a.q`,
+				want:  `[{"a":1},{"a":2},{"a":3}]`,
+			},
+			{
+				index: 6,
+				json:  `[1,2,3]`,
+				path:  "$[*]",
+				want:  "[1,2,3]",
+			},
+			{
+				index: 7,
+				json:  `{"a":[1,2,3,{"b":4}]}`,
+				path:  "$.a[3].b",
+				want:  "4",
+			},
+			{
+				index: 8,
+				json:  `{"a":[1,2,3,{"b":4}]}`,
+				path:  "$.a[3].c",
+				want:  "null",
+			},
+			{
+				index: 9,
+				json:  `{"a":[1,2,3,{"b":4}],"c":5}`,
+				path:  "$.*",
+				want:  `[[1,2,3,{"b":4}],5]`,
+			},
+			{
+				index: 10,
+				json:  `{"a":[1,2,3,{"a":4}]}`,
+				path:  "$**.a",
+				want:  `[[1,2,3,{"a":4}],4]`,
+			},
+			{
+				index: 11,
+				json:  `{"a":[1,2,3,{"a":4}]}`,
+				path:  "$.a[*].a",
+				want:  `4`,
+			},
+			{
+				index:        12,
+				json:         `{"a":[1,2,3,{"a":4}]}`,
+				pathNullList: []bool{true},
+				want:         "null",
+			},
+		}
+	)
+
+	var testInputs []tcTemp
+	for _, c := range kases {
+
+		want := make([]string, 1)
+		if c.want != "null" {
+			bj, _ := types.ParseStringToByteJson(c.want)
+			dt, _ := bj.Marshal()
+			want[0] = string(dt)
+		}
+
+		testInputs = append(testInputs, tcTemp{
+
+			info: "test json_extract " + fmt.Sprint(c.index),
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{c.json}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{c.path}, c.pathNullList),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, want, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestJsonExtract(t *testing.T) {
+	testCases := initJsonExtractTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// SPLIT PART
+
+func initSplitPart() []tcTemp {
+
+	//TODO: Need to validate testcases: https://github.com/m-schen/matrixone/blob/3b58fe39a4c233739a8d3b9cd4fcd562fa2a1568/pkg/sql/plan/function/builtin/multi/split_part_test.go#L50
+	// I have skipped the scalar testcases. Please add if it is relevant.
+	return []tcTemp{
+		{
+			info: "test split_part",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c"}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_uint32.ToType(), []uint32{1}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a"}, []bool{}),
+		},
+		{
+			info: "test split_part Error",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c"}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_uint32.ToType(), []uint32{0}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), true, []string{"a"}, []bool{}),
+		},
+	}
+
+}
+
+func TestSplitPart(t *testing.T) {
+	testCases := initSplitPart()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SplitPart)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
