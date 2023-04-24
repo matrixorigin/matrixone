@@ -1255,4 +1255,554 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
+
+	// operator `in`
+	{
+		functionId: IN,
+		class:      plan.Function_STRICT,
+		layout:     IN_PREDICATE,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint8](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint16, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint16](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint32](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint64](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_int8, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int8](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int16, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int16](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_int32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int32](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int64](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_float32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[float32](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_float64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[float64](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Decimal64](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal128, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Decimal128](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_varchar, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_char, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_date, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Date](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_datetime, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Datetime](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 16,
+				args:       []types.T{types.T_bool, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[bool](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 17,
+				args:       []types.T{types.T_timestamp, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Timestamp](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 18,
+				args:       []types.T{types.T_blob, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 19,
+				args:       []types.T{types.T_uuid, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Uuid](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 20,
+				args:       []types.T{types.T_text, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 21,
+				args:       []types.T{types.T_time, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Time](parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 22,
+				args:       []types.T{types.T_binary, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 23,
+				args:       []types.T{types.T_varbinary, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorIn(
+						parameters[1], result, proc, length)
+				},
+			},
+		},
+	},
+
+	// operator `not in`
+	{
+		functionId: NOT_IN,
+		class:      plan.Function_STRICT,
+		layout:     IN_PREDICATE,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint8](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint16, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint16](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint32](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[uint64](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_int8, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int8](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int16, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int16](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_int32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int32](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[int64](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_float32, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[float32](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_float64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[float64](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal64, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Decimal64](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal128, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Decimal128](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_varchar, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_char, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_date, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Date](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_datetime, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Datetime](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 16,
+				args:       []types.T{types.T_bool, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[bool](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 17,
+				args:       []types.T{types.T_timestamp, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Timestamp](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 18,
+				args:       []types.T{types.T_blob, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 19,
+				args:       []types.T{types.T_uuid, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Uuid](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 20,
+				args:       []types.T{types.T_text, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 21,
+				args:       []types.T{types.T_time, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorFixedIn[types.Time](parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 22,
+				args:       []types.T{types.T_binary, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+			{
+				overloadId: 23,
+				args:       []types.T{types.T_varbinary, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return newOpOperatorStrIn(parameters[0]).operatorNotIn(
+						parameters[1], result, proc, length)
+				},
+			},
+		},
+	},
 }
