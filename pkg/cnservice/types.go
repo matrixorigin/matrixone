@@ -63,7 +63,6 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineTAE                  EngineType = "tae"
 	EngineDistributedTAE       EngineType = "distributed-tae"
 	EngineMemory               EngineType = "memory"
 	EngineNonDistributedMemory EngineType = "non-distributed-memory"
