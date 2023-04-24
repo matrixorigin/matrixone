@@ -15,12 +15,15 @@
 package function2
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"math"
@@ -849,5 +852,812 @@ func Serial(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 }
 
 func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	return nil
+}
+
+func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	formats := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		d, null1 := dates.GetValue(i)
+		f, null2 := formats.GetStrValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			str, err := datetimeFormat(proc.Ctx, d, string(f))
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(str), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// datetimeFormat: format the datetime value according to the format string.
+func datetimeFormat(ctx context.Context, datetime types.Datetime, format string) (string, error) {
+	var buf bytes.Buffer
+	inPatternMatch := false
+	for _, b := range format {
+		if inPatternMatch {
+			if err := makeDateFormat(ctx, datetime, b, &buf); err != nil {
+				return "", err
+			}
+			inPatternMatch = false
+			continue
+		}
+
+		// It's not in pattern match now.
+		if b == '%' {
+			inPatternMatch = true
+		} else {
+			buf.WriteRune(b)
+		}
+	}
+	return buf.String(), nil
+}
+
+// makeDateFormat: Get the format string corresponding to the date according to a single format character
+func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) error {
+	switch b {
+	case 'b':
+		m := t.Month()
+		if m == 0 || m > 12 {
+			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+		}
+		buf.WriteString(MonthNames[m-1][:3])
+	case 'M':
+		m := t.Month()
+		if m == 0 || m > 12 {
+			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+		}
+		buf.WriteString(MonthNames[m-1])
+	case 'm':
+		buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	case 'c':
+		buf.WriteString(strconv.FormatInt(int64(t.Month()), 10))
+	case 'D':
+		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
+		buf.WriteString(AbbrDayOfMonth(int(t.Day())))
+	case 'd':
+		buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+	case 'e':
+		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
+	case 'f':
+		fmt.Fprintf(buf, "%06d", t.MicroSec())
+	case 'j':
+		fmt.Fprintf(buf, "%03d", t.DayOfYear())
+	case 'H':
+		buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
+	case 'k':
+		buf.WriteString(strconv.FormatInt(int64(t.Hour()), 10))
+	case 'h', 'I':
+		tt := t.Hour()
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			buf.WriteString(FormatIntByWidth(int(tt%12), 2))
+		}
+	case 'i':
+		buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
+	case 'l':
+		tt := t.Hour()
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			buf.WriteString(strconv.FormatInt(int64(tt%12), 10))
+		}
+	case 'p':
+		hour := t.Hour()
+		if hour/12%2 == 0 {
+			buf.WriteString("AM")
+		} else {
+			buf.WriteString("PM")
+		}
+	case 'r':
+		h := t.Hour()
+		h %= 24
+		switch {
+		case h == 0:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", 12, t.Minute(), t.Sec())
+		case h == 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", 12, t.Minute(), t.Sec())
+		case h < 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", h, t.Minute(), t.Sec())
+		default:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", h-12, t.Minute(), t.Sec())
+		}
+	case 'S', 's':
+		buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
+	case 'T':
+		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
+	case 'U':
+		w := t.Week(0)
+		buf.WriteString(FormatIntByWidth(w, 2))
+	case 'u':
+		w := t.Week(1)
+		buf.WriteString(FormatIntByWidth(w, 2))
+	case 'V':
+		w := t.Week(2)
+		buf.WriteString(FormatIntByWidth(w, 2))
+	case 'v':
+		_, w := t.YearWeek(3)
+		buf.WriteString(FormatIntByWidth(w, 2))
+	case 'a':
+		weekday := t.DayOfWeek()
+		buf.WriteString(AbbrevWeekdayName[weekday])
+	case 'W':
+		buf.WriteString(t.DayOfWeek().String())
+	case 'w':
+		buf.WriteString(strconv.FormatInt(int64(t.DayOfWeek()), 10))
+	case 'X':
+		year, _ := t.YearWeek(2)
+		if year < 0 {
+			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
+		} else {
+			buf.WriteString(FormatIntByWidth(year, 4))
+		}
+	case 'x':
+		year, _ := t.YearWeek(3)
+		if year < 0 {
+			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
+		} else {
+			buf.WriteString(FormatIntByWidth(year, 4))
+		}
+	case 'Y':
+		buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	case 'y':
+		str := FormatIntByWidth(int(t.Year()), 4)
+		buf.WriteString(str[2:])
+	default:
+		buf.WriteRune(b)
+	}
+	return nil
+}
+
+// FormatIntByWidth: Formatintwidthn is used to format ints with width parameter n. Insufficient numbers are filled with 0.
+func FormatIntByWidth(num, n int) string {
+	numStr := strconv.FormatInt(int64(num), 10)
+	if len(numStr) >= n {
+		return numStr
+	}
+	padBytes := make([]byte, n-len(numStr))
+	for i := range padBytes {
+		padBytes[i] = '0'
+	}
+	return string(padBytes) + numStr
+}
+
+// AbbrDayOfMonth: Get the abbreviation of month of day
+func AbbrDayOfMonth(day int) string {
+	var str string
+	switch day {
+	case 1, 21, 31:
+		str = "st"
+	case 2, 22:
+		str = "nd"
+	case 3, 23:
+		str = "rd"
+	default:
+		str = "th"
+	}
+	return str
+}
+
+func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	if success {
+		return dt.ToDate(), nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+}
+
+func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	t, success := start.AddInterval(-diff, types.IntervalType(unit))
+	if success {
+		return t, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+}
+
+func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	if success {
+		return dt, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+}
+
+func doDateStringSub(startStr string, diff int64, unit int64) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	start, err := types.ParseDatetime(startStr, 6)
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	if success {
+		return dt, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+}
+
+func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit int64) (types.Timestamp, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	if success {
+		return dt.ToTimestamp(loc), nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+}
+
+func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Date](result)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+
+	starts := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := starts.GetValue(i)
+		v2, null2 := diffs.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.Append(v1, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := doDateSub(v1, v2, unit)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+
+	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := starts.GetValue(i)
+		v2, null2 := diffs.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.Append(v1, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := doDatetimeSub(v1, v2, unit)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+
+	var d types.Datetime
+	starts := vector.GenerateFunctionStrParameter(ivecs[0])
+	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := starts.GetStrValue(i)
+		v2, null2 := diffs.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := doDateStringSub(string(v1), v2, unit)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+
+	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := starts.GetValue(i)
+		v2, null2 := diffs.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.Append(v1, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, unit)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+type number interface {
+	constraints.Unsigned | constraints.Signed | constraints.Float
+}
+
+func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+
+	nums := make([]uint64, length)
+
+	for j := 1; j < len(ivecs); j++ {
+
+		for i := uint64(0); i < uint64(length); i++ {
+
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+
+			if (nums[i] != 0) || (null1 || null2) {
+				continue
+			}
+
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[uint64](result)
+
+	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionStrParameter(ivecs[i])
+	}
+
+	nums := make([]uint64, length)
+
+	for j := 1; j < len(ivecs); j++ {
+
+		for i := uint64(0); i < uint64(length); i++ {
+
+			v1, null1 := fs[0].GetStrValue(i)
+			v2, null2 := fs[j].GetStrValue(i)
+
+			if (nums[i] != 0) || (null1 || null2) {
+				continue
+			}
+
+			if string(v1) == string(v2) {
+				nums[i] = uint64(j)
+			}
+
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	vs2 := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := vs1.GetStrValue(i)
+		v2, null2 := vs2.GetStrValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := format.GetNumberFormat(string(v1), string(v2), "en_US")
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	vs2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	vs3 := vector.GenerateFunctionStrParameter(ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := vs1.GetStrValue(i)
+		v2, null2 := vs2.GetStrValue(i)
+		v3, null3 := vs3.GetStrValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			val, err := format.GetNumberFormat(string(v1), string(v2), string(v3))
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(val), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+const (
+	max_unix_timestamp_int = 32536771199
+)
+
+func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	var d types.Datetime
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+
+	var d types.Datetime
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v)), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func splitDecimalToIntAndFrac(f float64) (int64, int64) {
+	intPart := int64(f)
+	nano := (f - float64(intPart)) * math.Pow10(9)
+	fracPart := int64(nano)
+	return intPart, fracPart
+}
+
+func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+
+	var d types.Datetime
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			x, y := splitDecimalToIntAndFrac(v)
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
+	f := string(formatMask)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v)
+			formatStr, err := datetimeFormat(proc.Ctx, r, f)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
+	f := string(formatMask)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v))
+			formatStr, err := datetimeFormat(proc.Ctx, r, f)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
+	f := string(formatMask)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+
+		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			x, y := splitDecimalToIntAndFrac(v)
+			r := types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y)
+			formatStr, err := datetimeFormat(proc.Ctx, r, f)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Slice from left to right, starting from 0
+func getSliceFromLeft(s string, offset int64) string {
+	sourceRune := []rune(s)
+	elemsize := int64(len(sourceRune))
+	if offset > elemsize {
+		return ""
+	}
+	substrRune := sourceRune[offset:]
+	return string(substrRune)
+}
+
+// Cut slices from right to left, starting from 1
+func getSliceFromRight(s string, offset int64) string {
+	sourceRune := []rune(s)
+	elemsize := int64(len(sourceRune))
+	if offset > elemsize {
+		return ""
+	}
+	substrRune := sourceRune[elemsize-offset:]
+	return string(substrRune)
+}
+
+func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r string
+			start := int64(s)
+			if start > 0 {
+				r = getSliceFromLeft(string(v), start-1)
+			} else if start < 0 {
+				r = getSliceFromRight(string(v), -start)
+			} else {
+				r = ""
+			}
+			if err = rs.AppendBytes([]byte(r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Cut the slice with length from left to right, starting from 0
+func getSliceFromLeftWithLength(s string, offset int64, length int64) string {
+	if offset < 0 {
+		return ""
+	}
+	return getSliceOffsetLen(s, offset, length)
+}
+
+func getSliceOffsetLen(s string, offset int64, length int64) string {
+	sourceRune := []rune(s)
+	elemsize := int64(len(sourceRune))
+	if offset < 0 {
+		offset += elemsize
+		if offset < 0 {
+			return ""
+		}
+	}
+	if offset >= elemsize {
+		return ""
+	}
+
+	if length <= 0 {
+		return ""
+	} else {
+		end := offset + length
+		if end > elemsize {
+			end = elemsize
+		}
+		substrRune := sourceRune[offset:end]
+		return string(substrRune)
+	}
+}
+
+// From right to left, cut the slice with length from 1
+func getSliceFromRightWithLength(s string, offset int64, length int64) string {
+	return getSliceOffsetLen(s, -offset, length)
+}
+
+func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[T1](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[T2](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r string
+			start := int64(s)
+			lt := int64(l)
+			if start > 0 {
+				r = getSliceFromLeftWithLength(string(v), start-1, lt)
+			} else if start < 0 {
+				r = getSliceFromRightWithLength(string(v), -start, lt)
+			} else {
+				r = ""
+			}
+			if err = rs.AppendBytes([]byte(r), false); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
