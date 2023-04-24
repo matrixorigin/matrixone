@@ -275,7 +275,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 					return nil, err
 				}
 				// get length constant value
-				lengthValue, err := castConstAsInt64(proc.Ctx, lengthVector, 0)
+				lengthValue, err := castCons4tAsInt64(proc.Ctx, lengthVector, 0)
 				if err != nil {
 					return nil, err
 				}
