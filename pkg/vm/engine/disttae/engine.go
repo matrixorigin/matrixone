@@ -355,8 +355,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 		},
 		segId: id,
-		cnBlockDeletesMap: &CnBlockDeletesMap{
-			mp: map[string][]int64{},
+		deletedBlocks: &deletedBlocks{
+			offsets: map[string][]int64{},
 		},
 		cnBlkId_Pos:                     map[string]Pos{},
 		blockId_raw_batch:               make(map[string]*batch.Batch),
@@ -541,7 +541,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
-	txn.cnBlockDeletesMap = nil
+	txn.deletedBlocks = nil
 	segmentnames := make([]string, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, string(txn.segId[:]))
 	for blkId := range txn.cnBlkId_Pos {
