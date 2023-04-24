@@ -372,8 +372,6 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
-
-	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatibility_mode_temp_db"
 )
 
 type objectType int
@@ -710,6 +708,14 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 	}
+	sysDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+		"mysql":              0,
+		"mo_task":            0,
+	}
 	sysWantedTables = map[string]int8{
 		"mo_user":                     0,
 		"mo_account":                  0,
@@ -842,9 +848,11 @@ var (
 			);`,
 		`create table mo_mysql_compatibility_mode(
 				configuration_id int auto_increment,
+				account_id int,
 				account_name varchar(300),
-				dat_name     varchar(5000),
-				configuration  json,
+				dat_name     varchar(5000) default NULL,
+				variable_name  varchar(300),
+				variable_value varchar(5000),
 				primary key(configuration_id)
 			);`,
 		`create table mo_pubs(
@@ -897,9 +905,17 @@ var (
 	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
+		account_id,
 		account_name,
 		dat_name,
-		configuration) values ("%s","%s",%s);`
+		variable_name,
+		variable_value) values (%d, "%s", "%s", "%s", "%s");`
+
+	initMoMysqlCompatbilityModeWithoutDataBaseFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
+		account_id,
+		account_name,
+		variable_name,
+		variable_value) values (%d, "%s", "%s", "%s");`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1258,17 +1274,11 @@ const (
 	// delete a tuple from mo_mysql_compatibility_mode when drop a database
 	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
-
 	getDbName = `select datname from mo_catalog.mo_database where datname = "%s";`
 
-	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+	getSystemVariableValueWithDatabase = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
-	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
-
-	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s";`
-
-	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
+	getSystemVariableVlaue = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where variable_name = "%s";`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1322,44 +1332,12 @@ func getSqlForPubInfoForSub(ctx context.Context, pubName string, check bool) (st
 	return fmt.Sprintf(getPubInfoForSubFormat, pubName), nil
 }
 
-func getSqlForGetConfiguationByDbName(ctx context.Context, path string, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getConfiguationByDbName, path, dbName), nil
-}
-
-func getSqlForGetAccountNameFromCompatbility(ctx context.Context, accountName string) (string, error) {
-	err := inputNameIsInvalid(ctx, accountName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getAccountNameFromCompatbility, accountName), nil
-}
-
 func getSqlForGetDbName(ctx context.Context, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(getDbName, dbName), nil
-}
-
-func getSqlForUpdateConfigurationByAccountName(ctx context.Context, update_config, accountName string) (string, error) {
-	err := inputNameIsInvalid(ctx, accountName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateConfigurationByAccountName, update_config, accountName), nil
-}
-
-func getSqlForUpdateConfigurationByDbNameAndAccountName(ctx context.Context, update_config, accountName, datname string) (string, error) {
-	err := inputNameIsInvalid(ctx, accountName, datname)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateConfigurationByDbNameAndAccountName, update_config, accountName, datname), nil
 }
 
 func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
@@ -1698,12 +1676,12 @@ func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
 	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
 }
 
-func getSqlForDeleteMysqlCompatbilityModeForAccount(ctx context.Context, account_name string) (string, error) {
-	err := inputNameIsInvalid(ctx, account_name)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name), nil
+func getSqlForGetSystemVariableValueWithDatabase(dtname, varibale_name string) string {
+	return fmt.Sprintf(getSystemVariableValueWithDatabase, dtname, varibale_name)
+}
+
+func getSqlForgetSystemVariableVlaue(variable_name string) string {
+	return fmt.Sprintf(getSystemVariableVlaue, variable_name)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -3494,16 +3472,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		if err != nil {
 			goto handleFailed
 		}
-	}
-
-	//step4: delete data of mo_mysql_comaptbility_mode table
-	sql, err = getSqlForDeleteMysqlCompatbilityModeForAccount(ctx, da.Name)
-	if err != nil {
-		goto handleFailed
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -6531,12 +6499,15 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
-	//step6: add new entries to the mo_compatibility_mode
-	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, moMysqlCompatbilityModeDefaultDb, configuration)
-	addSqlIntoSet(initMoMysqlCompatbilityMode)
+	//setp6: add new entries to the mo_mysql_compatibility_mode
+	for _, variable := range gSysVarsDefs {
+		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVaribaleValue(variable.Default))
+			addSqlIntoSet(initMoMysqlCompatibilityMode)
+		}
+	}
 
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatbility_mode
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -6773,14 +6744,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		goto handleFailed
 	}
 
-	//step2.Add new entries to the mo_mysql_compatibility_mode when create a new account
-	// configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-	// sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
-	// err = bh.Exec(ctx, sql)
-	// if err != nil {
-	// 	goto handleFailed
-	// }
-
 	newUserId = dumpID + 1
 
 	newTenant = &TenantInfo{
@@ -6883,10 +6846,13 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
-	//step6: add new entries to the mo_mysql_compatibility_mode
-	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
-	addSqlIntoSet(initMoMysqlCompatbilityMode)
+	//setp6: add new entries to the mo_mysql_compatibility_mode
+	for _, variable := range gSysVarsDefs {
+		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVaribaleValue(variable.Default))
+			addSqlIntoSet(initMoMysqlCompatibilityMode)
+		}
+	}
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
@@ -7463,199 +7429,31 @@ handleFailed:
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
-	var err error
-	var sql string
-	var erArray []ExecResult
-	var accountName string
-
-	datname := ad.DbName
-	update_config := "'" + ad.UpdateConfig + "'"
-
-	accountName = ses.GetTenantInfo().GetTenant()
-	//verify the update_config
-	if !isInvalidConfigInput(update_config) {
-		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin")
-	if err != nil {
-		goto handleFailed
-	}
-
-	//step1:check database exists or not
-	sql, err = getSqlForGetDbName(ctx, datname)
-	if err != nil {
-		goto handleFailed
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		goto handleFailed
-	}
-
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "there is no database %s", datname)
-		goto handleFailed
-	}
-
-	//step2: update the mo_mysql_compatibility_mode of that database
-	sql, err = getSqlForUpdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname)
-	if err != nil {
-		goto handleFailed
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-
-	//step3: update the session verison
-	err = bh.Exec(ctx, "begin")
-	if err != nil {
-		goto handleFailed
-	}
-
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			goto handleFailed
-		}
-	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-	return err
-
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
-	return err
+	//to do
+	return nil
 }
 
 func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
-	var err error
-	var sql string
-	var erArray []ExecResult
-	var dbName string
-
-	accountName := stmt.AccountName
-	update_config := "'" + stmt.UpdateConfig + "'"
-
-	//verify the update_config
-	if !isInvalidConfigInput(update_config) {
-		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin")
-	if err != nil {
-		goto handleFailed
-	}
-
-	//step 1: check account exists or not
-	sql, err = getSqlForGetAccountNameFromCompatbility(ctx, accountName)
-	if err != nil {
-		goto handleFailed
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		goto handleFailed
-	}
-
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "Permission change %s's config denied", accountName)
-		goto handleFailed
-	}
-
-	//step2: update the config table
-	sql, err = getSqlForUpdateConfigurationByAccountName(ctx, update_config, accountName)
-	if err != nil {
-		goto handleFailed
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-
-	//step3: update the session verison
-	err = bh.Exec(ctx, "begin")
-	if err != nil {
-		goto handleFailed
-	}
-
-	dbName = ses.GetDatabaseName()
-	if len(dbName) != 0 {
-		if _, ok := bannedCatalogDatabases[dbName]; ok {
-			err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
-			if err != nil {
-				goto handleFailed
-			}
-		} else {
-			err = changeVersion(ctx, ses, dbName)
-			if err != nil {
-				goto handleFailed
-			}
-		}
-	} else {
-		err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
-		if err != nil {
-			goto handleFailed
-		}
-	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-	return err
-
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
-	return err
-
+	//to do
+	return nil
 }
 
 func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
+	var account_id uint32
 	var accountName string
 	var datname string
-	var configuration string
+	variable_name := "version_compatibility"
+	variable_value := "0.7"
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
+		datname = string(createDatabaseStmt.Name)
+		//if create sys database, do nothing
+		if _, ok := sysDatabases[datname]; ok {
+			return nil
+		}
+
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
@@ -7667,10 +7465,10 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		//step 1: get account_name and database_name
 		if ses.GetTenantInfo() != nil {
 			accountName = ses.GetTenantInfo().GetTenant()
+			account_id = ses.GetTenantInfo().GetTenantID()
 		} else {
 			goto handleFailed
 		}
-		datname = string(createDatabaseStmt.Name)
 
 		//step 2: check database name
 		if _, ok := bannedCatalogDatabases[datname]; ok {
@@ -7678,8 +7476,7 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		}
 
 		//step 3: insert the record
-		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
-		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, configuration)
+		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, account_id, accountName, datname, variable_name, variable_value)
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -7709,6 +7506,10 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
 		datname = string(deleteDatabaseStmt.Name)
+		//if delete sys database, do nothing
+		if _, ok := sysDatabases[datname]; ok {
+			return nil
+		}
 		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
 
 		bh := ses.GetBackgroundExec(ctx)
@@ -7725,14 +7526,11 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	var erArray []ExecResult
 	var sql string
 	defaultConfig := "0.7"
-	path := "$.version_compatibility"
+	variable_name := "version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	sql, err = getSqlForGetConfiguationByDbName(ctx, path, dbName)
-	if err != nil {
-		return defaultConfig, err
-	}
+	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variable_name)
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
