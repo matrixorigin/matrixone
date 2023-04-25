@@ -331,7 +331,51 @@ type emptyReader struct {
 type BlockMeta struct {
 	Rows    int64
 	Info    catalog.BlockInfo
-	Zonemap [][64]byte
+	Zonemap []Zonemap
+}
+
+func (a *BlockMeta) MarshalBinary() ([]byte, error) {
+	return a.Marshal()
+}
+
+func (a *BlockMeta) UnmarshalBinary(data []byte) error {
+	return a.Unmarshal(data)
+}
+
+type Zonemap [64]byte
+
+func (z *Zonemap) ProtoSize() int {
+	return 64
+}
+
+func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, z[:])
+	return n, nil
+}
+
+func (z *Zonemap) MarshalTo(data []byte) (int, error) {
+	size := z.ProtoSize()
+	return z.MarshalToSizedBuffer(data[:size])
+}
+
+func (z *Zonemap) Marshal() ([]byte, error) {
+	data := make([]byte, z.ProtoSize())
+	n, err := z.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (z *Zonemap) Unmarshal(data []byte) error {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(z[:], data)
+	return nil
 }
 
 type ModifyBlockMeta struct {

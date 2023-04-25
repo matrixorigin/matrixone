@@ -18,7 +18,15 @@ import (
 	"fmt"
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestIntToUint(t *testing.T) {
+	require.Equal(t, int32(1), Uint32ToInt32(Int32ToUint32(1)))
+	require.Equal(t, int32(0), Uint32ToInt32(Int32ToUint32(0)))
+	require.Equal(t, int32(-1), Uint32ToInt32(Int32ToUint32(-1)))
+}
 
 func TestEncodeInt8(t *testing.T) {
 	nums := []int8{math.MinInt8, math.MaxInt8, 0}
