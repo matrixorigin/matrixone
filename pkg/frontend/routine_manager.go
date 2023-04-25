@@ -109,6 +109,32 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 
 }
 
+func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]*KillRecord {
+
+	tempKillQueue := make(map[int64]*KillRecord)
+
+	ar.killQueueMu.RLock()
+	defer ar.killQueueMu.RUnlock()
+
+	for account, record := range ar.killIdQueue {
+		tempKillQueue[account] = record
+	}
+	return tempKillQueue
+}
+
+func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uint64 {
+
+	tempRoutineMap := make(map[int64]map[*Routine]uint64)
+
+	ar.accountRoutineMu.RLock()
+	defer ar.accountRoutineMu.RUnlock()
+
+	for account, rountine := range ar.accountId2Routine {
+		tempRoutineMap[account] = rountine
+	}
+	return tempRoutineMap
+}
+
 func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
 	return rm.aicm
 }
@@ -465,21 +491,8 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	var tempKillQueue map[int64]*KillRecord
 	var accountId2RoutineMap map[int64]map[*Routine]uint64
 
-	//deepcopy killqueue
-	ar.killQueueMu.RLock()
-	tempKillQueue, err := deepCopyKillQueue(ar.killIdQueue)
-	if err != nil {
-		return
-	}
-	ar.killQueueMu.RUnlock()
-
-	//deepcopy routinemap
-	ar.accountRoutineMu.RLock()
-	accountId2RoutineMap, err = deepCopyRoutineMap(ar.accountId2Routine)
-	if err != nil {
-		return
-	}
-	ar.accountRoutineMu.RUnlock()
+	tempKillQueue = ar.deepCopyKillQueue()
+	accountId2RoutineMap = ar.deepCopyRoutineMap()
 
 	for account, killRecord := range tempKillQueue {
 		if rtMap, ok := accountId2RoutineMap[account]; ok {

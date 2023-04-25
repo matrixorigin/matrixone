@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
 	"os"
 	"runtime"
@@ -484,37 +483,3 @@ func getAccountId(ctx context.Context) uint32 {
 //	}
 //	return accountId, userId, roleId
 //}
-
-// deepCopyKillQueue performs a deep copy of the given map kilqueue.
-func deepCopyKillQueue(m map[int64]*KillRecord) (map[int64]*KillRecord, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	dec := gob.NewDecoder(&buf)
-	err := enc.Encode(m)
-	if err != nil {
-		return nil, err
-	}
-	var copy map[int64]*KillRecord
-	err = dec.Decode(&copy)
-	if err != nil {
-		return nil, err
-	}
-	return copy, nil
-}
-
-// deepCopyRoutineMap performs a deep copy of the given map routineMap.
-func deepCopyRoutineMap(m map[int64]map[*Routine]uint64) (map[int64]map[*Routine]uint64, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	dec := gob.NewDecoder(&buf)
-	err := enc.Encode(m)
-	if err != nil {
-		return nil, err
-	}
-	var copy map[int64]map[*Routine]uint64
-	err = dec.Decode(&copy)
-	if err != nil {
-		return nil, err
-	}
-	return copy, nil
-}
