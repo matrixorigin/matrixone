@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -136,9 +134,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	offset := len(delCtx.tableDef.Cols)
 	for i := 0; i < delCtx.updateColLength; i++ {
 		idx := delCtx.beginIdx + offset + i
-		if idx >= len(lastNode.ProjectList) {
-			fmt.Print("ddd")
-		}
 		name := ""
 		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
 			name = col.Col.Name
@@ -165,9 +160,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
 	if delCtx.isMulti {
 		lastNode := builder.qry.Nodes[lastNodeId]
-		groupByExprs := make([]*Expr, len(lastNode.ProjectList))
+		groupByExprs := make([]*Expr, len(delCtx.tableDef.Cols))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
-		for i, e := range lastNode.ProjectList {
+		for i := 0; i < len(delCtx.tableDef.Cols); i++ {
+			e := lastNode.ProjectList[i]
 			name := ""
 			if col, ok := e.Expr.(*plan.Expr_Col); ok {
 				name = col.Col.Name
@@ -193,10 +189,47 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				},
 			}
 		}
+		offset := len(delCtx.tableDef.Cols)
+		aggList := make([]*Expr, delCtx.updateColLength)
+		for i := 0; i < delCtx.updateColLength; i++ {
+			pos := offset + i
+			e := lastNode.ProjectList[pos]
+			name := ""
+			if col, ok := e.Expr.(*plan.Expr_Col); ok {
+				name = col.Col.Name
+			}
+			baseExpr := &plan.Expr{
+				Typ: e.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(pos),
+						Name:   name,
+					},
+				},
+			}
+			aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{baseExpr})
+			if err != nil {
+				return -1, err
+			}
+			aggList[i] = aggExpr
+			aggNodeProjection[pos] = &plan.Expr{
+				Typ: e.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -2,
+						ColPos: int32(pos),
+						Name:   name,
+					},
+				},
+			}
+		}
+
 		aggNode := &Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{lastNodeId},
 			GroupBy:     groupByExprs,
+			AggList:     aggList,
 			ProjectList: aggNodeProjection,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)

@@ -16,7 +16,6 @@ package preinsertunique
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -69,9 +68,6 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	colCount := len(uniqueColumnPos)
 
-	if inputBat.Vecs == nil {
-		fmt.Print("ddd")
-	}
 	if colCount == 1 {
 		pos := uniqueColumnPos[0]
 		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)

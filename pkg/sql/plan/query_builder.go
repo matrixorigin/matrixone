@@ -67,7 +67,6 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapID]
 		} else {
-			// panic("dd")
 			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapID, colMap)
 		}
 

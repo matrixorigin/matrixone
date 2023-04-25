@@ -5105,10 +5105,24 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
+
+					var scanTyp PrivilegeType
+					switch q.StmtType {
+					case plan.Query_UPDATE:
+						scanTyp = PrivilegeTypeUpdate
+						clusterTableOperation = clusterTableModify
+					case plan.Query_DELETE:
+						scanTyp = PrivilegeTypeDelete
+						clusterTableOperation = clusterTableModify
+					default:
+						scanTyp = PrivilegeTypeSelect
+						clusterTableOperation = clusterTableSelect
+					}
+
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   t,
+							typ:                   scanTyp,
 							databaseName:          node.ObjRef.GetSchemaName(),
 							tableName:             node.ObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
@@ -5116,7 +5130,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 						})
 					}
 				}
-			} else if node.NodeType == plan.Node_INSERT { //insert select
+			} else if node.NodeType == plan.Node_INSERT {
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef := node.InsertCtx.Ref
 					//do not check the privilege of the index table

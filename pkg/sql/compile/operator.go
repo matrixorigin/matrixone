@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -545,106 +544,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
-		Engine:    eg,
-	}, nil
-}
-
-func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	oldCtx := n.UpdateCtx
-	updateCtx := &update.UpdateCtx{
-		Source:       make([]engine.Relation, len(oldCtx.Ref)),
-		Idxs:         make([][]int32, len(oldCtx.Idx)),
-		TableDefs:    oldCtx.TableDefs,
-		Ref:          oldCtx.Ref,
-		UpdateCol:    make([]map[string]int32, len(oldCtx.UpdateCol)),
-		UniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
-
-		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    oldCtx.IdxIdx,
-
-		OnRestrictIdx: oldCtx.OnRestrictIdx,
-
-		OnCascadeIdx:          make([][]int32, len(oldCtx.OnCascadeIdx)),
-		OnCascadeSource:       make([]engine.Relation, len(oldCtx.OnCascadeRef)),
-		OnCascadeUniqueSource: make([][]engine.Relation, len(oldCtx.OnCascadeRef)),
-		OnCascadeRef:          oldCtx.OnCascadeRef,
-		OnCascadeTableDef:     oldCtx.OnCascadeDef,
-		OnCascadeUpdateCol:    make([]map[string]int32, len(oldCtx.OnCascadeUpdateCol)),
-
-		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetRef:          oldCtx.OnSetRef,
-		OnSetTableDef:     oldCtx.OnSetDef,
-		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
-
-		ParentIdx: make([]map[string]int32, len(oldCtx.ParentIdx)),
-	}
-
-	for i, idxMap := range oldCtx.UpdateCol {
-		updateCtx.UpdateCol[i] = idxMap.Map
-	}
-	for i, list := range oldCtx.Idx {
-		updateCtx.Idxs[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.Idxs[i][j] = int32(id)
-		}
-	}
-	for i, list := range oldCtx.OnSetIdx {
-		updateCtx.OnSetIdx[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.OnSetIdx[i][j] = int32(id)
-		}
-	}
-	for i, list := range oldCtx.OnCascadeIdx {
-		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.OnCascadeIdx[i][j] = int32(id)
-		}
-	}
-	for i, ref := range oldCtx.Ref {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.TableDefs[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.Source[i] = rel
-		updateCtx.UniqueSource[i] = uniqueRels
-	}
-	for i, ref := range oldCtx.IdxRef {
-		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.IdxSource[i] = rel
-	}
-	for i, ref := range oldCtx.OnCascadeRef {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnCascadeDef[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.OnCascadeSource[i] = rel
-		updateCtx.OnCascadeUniqueSource[i] = uniqueRels
-	}
-	for i, ref := range oldCtx.OnSetRef {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.OnSetSource[i] = rel
-		updateCtx.OnSetUniqueSource[i] = uniqueRels
-	}
-	for i, idxMap := range oldCtx.OnCascadeUpdateCol {
-		updateCtx.OnCascadeUpdateCol[i] = idxMap.Map
-	}
-	for i, idxMap := range oldCtx.OnSetUpdateCol {
-		updateCtx.OnSetUpdateCol[i] = idxMap.Map
-	}
-	for i, idxMap := range oldCtx.ParentIdx {
-		updateCtx.ParentIdx[i] = idxMap.Map
-	}
-
-	return &update.Argument{
-		UpdateCtx: updateCtx,
 		Engine:    eg,
 	}, nil
 }

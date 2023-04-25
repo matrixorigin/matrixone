@@ -18,12 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -471,91 +472,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		// rs = c.newMergeScope(ss)
-		// updateScopesLastFlag([]*Scope{rs})
-		// rs.Magic = Deletion
-		// c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		// scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 	Op:  vm.Deletion,
-		// 	Arg: scp,
-		// })
 		return ss[0], nil
 	case plan.Query_INSERT:
 		return ss[0], nil
-		// insertNode := qry.Nodes[qry.Steps[0]]
-		// insertNode.NotCacheable = true
-
-		// preArg, err := constructPreInsert(insertNode, c.e, c.proc)
-		// if err != nil {
-		// 	return nil, err
-		// }
-
-		// arg, err := constructInsert(insertNode, c.e, c.proc)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-
-		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
-		// 	// use distributed-insert
-		// 	arg.IsRemote = true
-		// 	for _, scope := range ss {
-		// 		scope.Instructions = append(scope.Instructions, vm.Instruction{
-		// 			Op:  vm.PreInsert,
-		// 			Arg: preArg,
-		// 		})
-		// 	}
-
-		// 	rs = c.newInsertMergeScope(arg, ss)
-		// 	rs.Magic = MergeInsert
-		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 		Op: vm.MergeBlock,
-		// 		Arg: &mergeblock.Argument{
-		// 			Tbl:         arg.InsertCtx.Rels[0],
-		// 			Unique_tbls: arg.InsertCtx.Rels[1:],
-		// 		},
-		// 	})
-		// } else {
-		// 	rs = c.newMergeScope(ss)
-		// 	rs.Magic = Insert
-		// 	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-		// 		onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
-		// 		if err != nil {
-		// 			return nil, err
-		// 		}
-		// 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 			Op:  vm.OnDuplicateKey,
-		// 			Arg: onDuplicateKeyArg,
-		// 		})
-		// 	}
-		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 		Op:  vm.PreInsert,
-		// 		Arg: preArg,
-		// 	})
-		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 		Op:  vm.Insert,
-		// 		Arg: arg,
-		// 	})
-		// }
 	case plan.Query_UPDATE:
 		return ss[0], nil
-		// scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// rs = c.newMergeScope(ss)
-		// updateScopesLastFlag([]*Scope{rs})
-		// rs.Magic = Update
-		// c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		// rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 	Op:  vm.Update,
-		// 	Arg: scp,
-		// })
 	default:
 		rs = c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})
@@ -820,8 +741,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
-	case plan.Node_UPDATE:
-		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
