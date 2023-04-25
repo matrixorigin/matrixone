@@ -142,7 +142,8 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 }
 
 func (c *Compile) setAffectedRows(n uint64) {
-	c.affectRows = n
+	atomic.CompareAndSwapUint64(&c.affectRows, c.affectRows, n)
+	// c.affectRows = n
 }
 
 func (c *Compile) GetAffectedRows() uint64 {
