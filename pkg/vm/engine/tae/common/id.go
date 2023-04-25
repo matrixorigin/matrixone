@@ -28,14 +28,14 @@ import (
 // segment id, and the block id for one block by ID.AsBlockID, which made
 // the resource management easier.
 type ID struct {
+	// Internal db id
+	DbID uint64
 	// Internal table id
 	TableID uint64
 	// Internal segment id
 	SegmentID types.Uuid
 	// Internal block id
 	BlockID types.Blockid
-	// Internal column part id
-	PartID uint32
 }
 
 const (
@@ -62,18 +62,21 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("<%d-%s-%s:%d>", id.TableID, id.SegmentID.ToString(), id.BlockID.ShortString(), id.PartID)
+	return fmt.Sprintf("<%d-%d-%s-%s>", id.DbID, id.TableID, id.SegmentID.ToString(), id.BlockID.ShortString())
 }
 
+func (id *ID) DBString() string {
+	return fmt.Sprintf("DB<%d>", id.DbID)
+}
 func (id *ID) TableString() string {
-	return fmt.Sprintf("TBL<%d>", id.TableID)
+	return fmt.Sprintf("TBL<%d-%d>", id.DbID, id.TableID)
 }
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("SEG<%d-%s>", id.TableID, id.SegmentID.ToString())
+	return fmt.Sprintf("SEG<%d-%d-%s>", id.DbID, id.TableID, id.SegmentID.ToString())
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("BLK<%d-%s>", id.TableID, id.BlockID.String())
+	return fmt.Sprintf("BLK<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.String())
 }
 
 func IDArraryString(ids []ID) string {
