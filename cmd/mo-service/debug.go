@@ -28,6 +28,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/felixge/fgprof"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -288,6 +289,9 @@ func init() {
 
 	// global performance counter
 	http.Handle("/debug/perfcounter", globalCounterSet)
+
+	// fgprof
+	http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 
 }
 
