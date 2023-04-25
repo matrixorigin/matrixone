@@ -647,7 +647,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
-	blk, err := seg.GetBlockEntryByID(cmd.ID.BlockID)
+	blk, err := seg.GetBlockEntryByID(&cmd.ID.BlockID)
 	un := cmd.mvccNode
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
@@ -726,7 +726,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	blk, _ := seg.GetBlockEntryByID(blkid)
+	blk, _ := seg.GetBlockEntryByID(&blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
@@ -782,7 +782,7 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid uint64, segid types.Uuid, 
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	blk, err := seg.GetBlockEntryByID(blkid)
+	blk, err := seg.GetBlockEntryByID(&blkid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)

@@ -32,9 +32,9 @@ func TestTree(t *testing.T) {
 	blk1 := objectio.NewBlockid(&seg1, 1, 0)
 	blk2 := objectio.NewBlockid(&seg1, 2, 0)
 	tree.AddSegment(1, 2, &seg2)
-	tree.AddBlock(4, 5, &blk0)
-	tree.AddBlock(4, 5, &blk1)
-	tree.AddBlock(4, 5, &blk2)
+	tree.AddBlock(4, 5, blk0)
+	tree.AddBlock(4, 5, blk1)
+	tree.AddBlock(4, 5, blk2)
 	t.Log(tree.String())
 	assert.Equal(t, 2, tree.TableCount())
 

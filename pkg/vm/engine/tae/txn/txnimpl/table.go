@@ -140,7 +140,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -407,7 +407,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
 		return
 	}
-	meta, err := seg.DropBlockEntry(id.BlockID, tbl.store.txn)
+	meta, err := seg.DropBlockEntry(&id.BlockID, tbl.store.txn)
 	if err != nil {
 		return
 	}
@@ -433,7 +433,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 			tbl.entry.GetDB().ID,
 			id.TableID,
 			id.SegmentID,
-			id.BlockID)
+			&id.BlockID)
 	}
 	return
 }
@@ -443,7 +443,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		return
 	}
@@ -702,7 +702,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID, id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		return
 	}
@@ -763,7 +763,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -776,7 +776,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -795,7 +795,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
-		id.BlockID)
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}

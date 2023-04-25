@@ -37,13 +37,13 @@ func NewSegmentid() Segmentid {
 	return types.Uuid(uuid.Must(uuid.NewUUID()))
 }
 
-func NewBlockid(segid *Segmentid, fnum, blknum uint16) Blockid {
+func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 	var id Blockid
 	size := SegmentIdSize
 	copy(id[:size], segid[:])
 	copy(id[size:size+2], types.EncodeUint16(&fnum))
 	copy(id[size+2:size+4], types.EncodeUint16(&blknum))
-	return id
+	return &id
 }
 
 func NewRowid(blkid *Blockid, offset uint32) types.Rowid {

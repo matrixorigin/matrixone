@@ -123,7 +123,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	sid := w.name.SegmentId()
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
-	objectMeta.BlockHeader().SetBlockID(&blockId)
+	objectMeta.BlockHeader().SetBlockID(blockId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
 	for i, colMeta := range w.colmeta {

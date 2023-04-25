@@ -127,15 +127,15 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 	return 0
 }
 
-func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {
+func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
 // XXX API like this, why do we need the error?   Isn't blk is nil enough?
-func (entry *SegmentEntry) GetBlockEntryByIDLocked(id types.Blockid) (blk *BlockEntry, err error) {
-	node := entry.entries[id]
+func (entry *SegmentEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *BlockEntry, err error) {
+	node := entry.entries[*id]
 	if node == nil {
 		err = moerr.GetOkExpectedEOB()
 		return
@@ -295,7 +295,7 @@ func (entry *SegmentEntry) CreateBlock(
 	opts *objectio.CreateBlockOpt) (created *BlockEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id types.Blockid
+	var id *objectio.Blockid
 	if opts != nil && opts.Id != nil {
 		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
@@ -308,7 +308,7 @@ func (entry *SegmentEntry) CreateBlock(
 	if entry.nextObjectIdx == math.MaxUint16 {
 		panic("bad logic: full object offset")
 	}
-	if _, ok := entry.entries[id]; ok {
+	if _, ok := entry.entries[*id]; ok {
 		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))
 	}
 	if opts != nil && opts.Loc != nil {
@@ -320,7 +320,7 @@ func (entry *SegmentEntry) CreateBlock(
 	return
 }
 
-func (entry *SegmentEntry) DropBlockEntry(id types.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
+func (entry *SegmentEntry) DropBlockEntry(id *objectio.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
 	blk, err := entry.GetBlockEntryByID(id)
 	if err != nil {
 		return

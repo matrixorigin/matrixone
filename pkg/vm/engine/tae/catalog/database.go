@@ -267,7 +267,7 @@ func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) 
 	if err != nil {
 		return
 	}
-	blk, err = seg.GetBlockEntryByID(id.BlockID)
+	blk, err = seg.GetBlockEntryByID(&id.BlockID)
 	return
 }
 

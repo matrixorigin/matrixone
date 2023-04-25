@@ -42,7 +42,7 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
 	segMeta, _ := tableMeta.GetSegmentByID(id.SegmentID)
-	blkMeta, _ := segMeta.GetBlockEntryByID(id.BlockID)
+	blkMeta, _ := segMeta.GetBlockEntryByID(&id.BlockID)
 	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()

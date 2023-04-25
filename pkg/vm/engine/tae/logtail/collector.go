@@ -384,7 +384,7 @@ func (d *dirtyCollector) tryCompactTree(
 				bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
 				if blk, err = seg.GetBlockEntryByID(bid); err != nil {
 					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtySeg.Shrink(&bid)
+						dirtySeg.Shrink(bid)
 						err = nil
 						continue
 					}
@@ -396,7 +396,7 @@ func (d *dirtyCollector) tryCompactTree(
 					if blk.HasPersistedData() {
 						blk.GetBlockData().TryUpgrade()
 					}
-					dirtySeg.Shrink(&bid)
+					dirtySeg.Shrink(bid)
 					continue
 				}
 				if err = interceptor.OnBlock(blk); err != nil {
