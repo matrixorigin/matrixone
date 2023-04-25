@@ -16,6 +16,7 @@ package function2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -262,5 +263,45 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_BuiltIn_Serial(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	input1 := []bool{true, false}
+	input2 := []int8{10, 1}
+
+	tc := tcTemp{
+		info: "test serial(a, b, c)",
+		inputs: []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_bool.ToType(),
+				input1, nil),
+			testutil.NewFunctionTestInput(types.T_int8.ToType(),
+				input2, nil),
+		},
+		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
+	}
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerial)
+	tcc.Run()
+
+	vec := tcc.GetResultVectorDirectly()
+	p1 := vector.GenerateFunctionStrParameter(vec)
+	{
+		v, null := p1.GetStrValue(0)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, input1[0], tuple[0])
+		require.Equal(t, input2[0], tuple[1])
+	}
+	{
+		v, null := p1.GetStrValue(1)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, input1[1], tuple[0])
+		require.Equal(t, input2[1], tuple[1])
 	}
 }

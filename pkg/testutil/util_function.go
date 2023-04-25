@@ -127,6 +127,10 @@ func NewFunctionTestCase(
 	return f
 }
 
+func (fc *FunctionTestCase) GetResultVectorDirectly() *vector.Vector {
+	return fc.result.GetResultVector()
+}
+
 // Run will run the function case and do the correctness check for result.
 func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
