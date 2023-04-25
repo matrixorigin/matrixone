@@ -3295,4 +3295,37 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: SUBSTRING_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch, // TODO:
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: SubStrIndex[float64],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: SubStrIndex[uint64],
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				NewOp: SubStrIndex[int64],
+			},
+		},
+	},
 }
