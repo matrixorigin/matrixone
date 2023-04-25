@@ -69,7 +69,7 @@ func handleFlush() handleFunc {
 			if err != nil {
 				return nil, err
 			}
-			payload, err := types.Encode(db.FlushTable{
+			payload, err := types.Encode(&db.FlushTable{
 				DatabaseID: uint64(dbId),
 				TableID:    tableId,
 				AccessInfo: db.AccessInfo{

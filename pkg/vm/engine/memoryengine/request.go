@@ -15,9 +15,8 @@
 package memoryengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	"encoding"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,15 +26,25 @@ import (
 )
 
 func DoTxnRequest[
-	Resp Response,
-	Req Request,
+	Resp any, PResp interface {
+		// anonymous constraint
+		encoding.BinaryUnmarshaler
+		// make Resp convertible to its pointer type
+		*Resp
+	},
+	Req any, PReq interface {
+		// anonymous constraint
+		encoding.BinaryMarshaler
+		// make Req convertible to its pointer type
+		*Req
+	},
 ](
 	ctx context.Context,
 	txnOperator client.TxnOperator,
 	isRead bool,
 	shardsFunc shardsFunc,
 	op uint32,
-	req Req,
+	preq PReq,
 ) (
 	resps []Resp,
 	err error,
@@ -53,8 +62,9 @@ func DoTxnRequest[
 	if provider, ok := txnOperator.(OperationHandlerProvider); ok {
 		for _, shard := range shards {
 			handler, meta := provider.GetOperationHandler(shard)
-			resp, e := handle(ctx, handler, meta, shard, op, req)
-			resps = append(resps, resp.(Resp))
+			var presp PResp = new(Resp)
+			e := handle(ctx, handler, meta, shard, op, preq, presp)
+			resps = append(resps, *presp)
 			if e != nil {
 				err = e
 			}
@@ -64,14 +74,14 @@ func DoTxnRequest[
 
 	requests := make([]txn.TxnRequest, 0, len(shards))
 	for _, shard := range shards {
-		buf := new(bytes.Buffer)
-		if err := gob.NewEncoder(buf).Encode(req); err != nil {
+		buf, err := preq.MarshalBinary()
+		if err != nil {
 			panic(err)
 		}
 		requests = append(requests, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  op,
-				Payload: buf.Bytes(),
+				Payload: buf,
 				Target:  shard,
 			},
 			Options: &txn.TxnRequestOptions{
@@ -107,11 +117,12 @@ func DoTxnRequest[
 	}
 
 	for _, res := range result.Responses {
-		var resp Resp
-		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
+		var presp PResp = new(Resp)
+		err = presp.UnmarshalBinary(res.CNOpResponse.Payload)
+		if err != nil {
 			return
 		}
-		resps = append(resps, resp)
+		resps = append(resps, *presp)
 	}
 
 	return
