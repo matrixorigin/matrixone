@@ -39,7 +39,10 @@ func Prepare(proc *process.Process, arg any) error {
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
-	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
 	return err
 }
 

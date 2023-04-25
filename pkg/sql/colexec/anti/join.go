@@ -40,8 +40,9 @@ func Prepare(proc *process.Process, arg any) (err error) {
 		return err
 	}
 
-	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
-
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
 	return err
 }
 

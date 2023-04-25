@@ -33,7 +33,10 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
 	return err
 }
 

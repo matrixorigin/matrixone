@@ -48,7 +48,9 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
 	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
 
-	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
 	return err
 }
 
