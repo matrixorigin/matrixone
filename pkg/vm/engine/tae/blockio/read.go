@@ -105,8 +105,8 @@ func BlockReadInner(
 	if err != nil {
 		return nil, err
 	}
-	if !info.DeltaLoc.IsEmpty() {
-		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
+	if !info.DeltaLocation().IsEmpty() {
+		deleteBatch, err := readBlockDelete(ctx, info.DeltaLocation(), fs)
 		if err != nil {
 			return nil, err
 		}
@@ -174,8 +174,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
 	deleteRows := make([]int64, 0)
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	id := info.MetaLoc.ID()
-	reader, err := NewObjectReader(fs, info.MetaLoc)
+	id := info.MetaLocation().ID()
+	reader, err := NewObjectReader(fs, info.MetaLocation())
 	if err != nil {
 		return nil, deleteRows, err
 	}
@@ -188,7 +188,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			types.T_Rowid.ToType(),
 			prefix,
 			0,
-			info.MetaLoc.Rows(),
+			info.MetaLocation().Rows(),
 			m,
 		)
 		if err != nil {
@@ -334,15 +334,15 @@ func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*p
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
-		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLoc)
+		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLocation())
 		if err != nil {
 			return err
 		}
 		for _, info := range infos[i] {
-			pref.AddBlock(idxes, []uint16{info.MetaLoc.ID()})
-			if !info.DeltaLoc.IsEmpty() {
+			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
+			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLoc.ID()}, service, info.DeltaLoc)
+				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}

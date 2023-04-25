@@ -33,6 +33,10 @@ import (
 // service name: [CN|DN|LOG|HAKEEPER]
 // command: command in supportedCmds
 // command parameter: the parameter of the command
+//
+// TODO(fagongzi): refactor the internal communication implementation to use ctlservice to
+// send and receive ctl requests and responses, using service id as the target. This supports
+// mo_ctl to control any node in the mo cluster
 func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	service := serviceType(strings.ToUpper(vector.MustStrCol(vs[0])[0]))
 	command := strings.ToUpper(vector.MustStrCol(vs[1])[0])

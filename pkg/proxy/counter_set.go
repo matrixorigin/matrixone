@@ -38,6 +38,8 @@ func (e *counterLogExporter) Export() []zap.Field {
 	var fields []zap.Field
 	fields = append(fields, zap.Int64("accepted connections",
 		e.counter.connAccepted.Load()))
+	fields = append(fields, zap.Int64("total connections",
+		e.counter.connAccepted.Load()))
 	fields = append(fields, zap.Int64("client disconnect",
 		e.counter.clientDisconnect.Load()))
 	fields = append(fields, zap.Int64("server disconnect",
@@ -58,6 +60,7 @@ func (e *counterLogExporter) Export() []zap.Field {
 // counterSet contains all items that need to be tracked in proxy.
 type counterSet struct {
 	connAccepted             stats.Counter
+	connTotal                stats.Counter
 	clientDisconnect         stats.Counter
 	serverDisconnect         stats.Counter
 	connRefused              stats.Counter

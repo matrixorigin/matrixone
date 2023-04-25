@@ -233,3 +233,53 @@ message MetadataCkp {
     Batch      bat = 3;
 };
 
+
+
+// For AlterTable
+
+enum AlterKind {
+    Invalid = 0;
+    AddColumn = 1;
+    DropColumn = 2;
+    RenameTable = 3;
+    UpdateComment = 4;
+    UpdateConstraint = 5;
+}
+
+
+message AlterTableConstraint {
+    bytes constraints = 1;
+}
+
+message AlterTableComment {
+    string comment = 1;
+}
+
+message AlterTableRenameTable {
+    string old_name = 1;
+    string new_name = 2;
+}
+
+message AlterTableAddColumn {
+    plan.ColDef column = 1;
+    int32 insert_position = 2; // if the position can be found in the schema, the column will be added to the last
+}
+
+message AlterTableDropColumn {
+    uint32 logical_idx = 1;
+    uint32 sequence_num = 2; // used to double check
+}
+
+message AlterTableReq {
+    uint64 table_id = 1;
+    uint64 db_id = 2;
+    AlterKind kind = 3;
+
+    oneof operation {
+        AlterTableAddColumn add_column = 4;
+        AlterTableDropColumn drop_column = 5;
+        AlterTableRenameTable rename_table = 6;
+        AlterTableComment update_comment = 7;
+        AlterTableConstraint update_cstr = 8;
+    }
+}

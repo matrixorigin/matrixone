@@ -15,11 +15,12 @@
 package handle
 
 import (
+	"context"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -33,7 +34,7 @@ type Relation interface {
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() any
-	UpdateConstraint([]byte) error
+	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeSegmentIt() SegmentIt
 	MakeSegmentItOnSnap() SegmentIt
 	MakeBlockIt() BlockIt

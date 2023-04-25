@@ -153,7 +153,9 @@ func (s *serverConn) ExecStmt(stmt string, resp chan<- []byte) error {
 			return err
 		}
 		bs := packetToBytes(res)
-		sendResp(bs, resp)
+		if resp != nil {
+			sendResp(bs, resp)
+		}
 		if isEOFPacket(bs) || isOKPacket(bs) || isErrPacket(bs) {
 			break
 		}

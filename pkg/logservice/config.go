@@ -178,6 +178,14 @@ type Config struct {
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
+
+	Ctl struct {
+		// ListenAddress ctl service listen address for receiving ctl requests
+		ListenAddress string `toml:"listen-address"`
+		// ServiceAddress service address for communication, if this address is not set, use
+		// ListenAddress as the communication address.
+		ServiceAddress string `toml:"service-address"`
+	} `toml:"ctl"`
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

@@ -19,9 +19,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,13 +40,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -156,6 +165,14 @@ func (c *Compile) run(s *Scope) error {
 	case Merge:
 		defer c.fillAnalyzeInfo()
 		return s.MergeRun(c)
+	case MergeDelete:
+		defer c.fillAnalyzeInfo()
+		err := s.MergeRun(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		return nil
 	case MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
@@ -468,22 +485,74 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	return steps, err
 }
 
+// for now, cn-write-s3 delete just support
+func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
+	if len(delCtx.IdxIdx) > 0 || len(delCtx.IdxSource) > 0 {
+		return false
+	}
+
+	if len(delCtx.OnRestrictIdx) > 0 {
+		return false
+	}
+
+	if len(delCtx.OnCascadeIdx) > 0 || len(delCtx.OnCascadeSource) > 0 {
+		return false
+	}
+
+	if len(delCtx.OnSetIdx) > 0 || len(delCtx.OnSetSource) > 0 {
+		return false
+	}
+
+	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
+		return false
+	}
+
+	if len(delCtx.OnSetTableDef) > 0 || len(delCtx.OnSetUpdateCol) > 0 {
+		return false
+	}
+
+	if len(delCtx.DelSource) > 1 {
+		return false
+	}
+	return true
+}
+
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
-		updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Deletion
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		deleteNode := qry.Nodes[qry.Steps[0]]
+		deleteNode.NotCacheable = true
+		nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
+		// 1.Estiminate the cost of delete rows, if we need to delete too much rows,
+		// just use distributed deletion (write s3 delete just think about delete
+		// single table)
+		arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
+			rs = c.newDeleteMergeScope(arg, ss)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeDelete,
+				Arg: &mergedelete.Argument{
+					DelSource: arg.DeleteCtx.DelSource[0],
+				},
+			})
+			rs.Magic = MergeDelete
+		} else {
+			rs = c.newMergeScope(ss)
+			updateScopesLastFlag([]*Scope{rs})
+			rs.Magic = Deletion
+			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if err != nil {
+				return nil, err
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: arg,
+			})
+		}
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
@@ -1520,6 +1589,51 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 	return c.newMergeScope(ss2)
 }
 
+// DeleteMergeScope need to assure this:
+// one block can be only deleted by one and the same
+// CN, so we need to transfer the rows from the
+// the same block to one and the same CN to perform
+// the deletion operators.
+func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
+	//Todo: implemet delete merge
+	ss2 := make([]*Scope, 0, len(ss))
+	// ends := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			// ends = append(ends, s)
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+
+	rs := make([]*Scope, 0, len(ss2))
+	uuids := make([]uuid.UUID, 0, len(ss2))
+	for i := 0; i < len(ss2); i++ {
+		rs = append(rs, new(Scope))
+		uuids = append(uuids, uuid.New())
+	}
+
+	// for every scope, it should dispatch its
+	// batch to other cn
+	for i := 0; i < len(ss2); i++ {
+		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
+	}
+	delete := &vm.Instruction{
+		Op:  vm.Deletion,
+		Arg: arg,
+	}
+	for i := range rs {
+		// use distributed delete
+		arg.RemoteDelete = true
+		// maybe just copy only once?
+		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		arg.IBucket = uint32(i)
+		arg.Nbucket = uint32(len(rs))
+		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil, 0))
+	}
+	return c.newMergeScope(rs)
+}
+
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{
 		PreScopes: ss,
@@ -1924,10 +2038,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expectedLen := len(ranges)
 	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	// If ranges == 0, it's temporary table ?
-	// XXX the code is too confused. should be removed once we remove the memory-engine.
-	if len(ranges) == 0 {
-		logutil.Errorf("rel.Ranges return 0, rel is %v", rel)
+	// If ranges == 0, dont know what type of table is this
+	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			if isPartitionTable {
@@ -1944,53 +2056,29 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 				}
 			}
-
 		}
 		return nodes, nil
 	}
 
+	engineType := rel.GetEngineType()
 	if isPartitionTable {
 		rel = nil
 	}
-
-	// In fact, the first element of Ranges is always a memory table.
-	if engine.IsMemtable(ranges[0]) {
-		if c.info.Typ == plan2.ExecTypeTP {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: 1,
-			})
-		} else {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-		ranges = ranges[1:]
+	// for multi cn in luanch mode, put all payloads in current CN
+	// maybe delete this in the future
+	if isLaunchMode(c.cnList) {
+		return putBlocksInCurrentCN(c, ranges, rel, n), nil
 	}
-
-	// 1. If the length of cn list is 1, query is small or just one cn now.
-	// 2. If the length of ranges is 0 now, the table has only memory table blocks.
-	// Both these queries only needs to be executed on the current cn.
-	if len(ranges) == 0 {
-		return nodes, nil
+	// disttae engine , hash s3 objects to fixed CN
+	if engineType == engine.Disttae {
+		return hashBlocksToFixedCN(c, ranges, rel, n), nil
 	}
-	if len(c.cnList) == 1 {
-		if len(nodes) == 0 {
-			nodes = append(nodes, engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
-			})
-		}
-		nodes[0].Data = append(nodes[0].Data, ranges...)
-		return nodes, nil
-	}
+	// maybe temp table on memengine , just put payloads in average
+	return putBlocksInAverage(c, ranges, rel, n), nil
+}
 
-	// determines which blocks should be read by each cn node.
+func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
@@ -2034,7 +2122,71 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 	}
-	return nodes, nil
+	return nodes
+}
+
+func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	//add memory table block
+	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
+	ranges = ranges[1:]
+	// only memory table block
+	if len(ranges) == 0 {
+		return nodes
+	}
+	//only one cn
+	if len(c.cnList) == 1 {
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes
+	}
+	//add the rest of CNs in list
+	for i := range c.cnList {
+		if c.cnList[i].Addr != c.addr {
+			nodes = append(nodes, engine.Node{
+				Rel:  rel,
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+			})
+		}
+	}
+	// sort by addr to get fixed order of CN list
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+	//to maxify locality, put blocks in the same s3 object in the same CN
+	lenCN := len(c.cnList)
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := disttae.BlockInfoUnmarshal(ranges[i])
+		objName := unmarshalledBlockInfo.MetaLocation().Name()
+		index := plan2.SimpleHashToRange(objName, lenCN)
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+	//remove empty node from nodes
+	var newNodes engine.Nodes
+	for i := range nodes {
+		if len(nodes[i].Data) > 0 {
+			newNodes = append(newNodes, nodes[i])
+		}
+	}
+	return newNodes
+}
+
+func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+	})
+	nodes[0].Data = append(nodes[0].Data, ranges...)
+	return nodes
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
@@ -2084,6 +2236,15 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 		last := len(s.Instructions) - 1
 		s.Instructions[last].IsLast = true
 	}
+}
+
+func isLaunchMode(cnlist engine.Nodes) bool {
+	for i := range cnlist {
+		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {

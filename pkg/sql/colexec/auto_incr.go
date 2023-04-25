@@ -766,12 +766,10 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			}
 
 			// Rename the old cache.
-			renameAutoIncrCache(delName, newName+d.Attr.Name, proc)
+			renameAutoIncrCache(newName+d.Attr.Name, delName, proc)
 
 			// In cache implementation no update needed.
-			currentNum = currentNum - 1
-
-			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum-1, 1, proc.Mp())
+			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
