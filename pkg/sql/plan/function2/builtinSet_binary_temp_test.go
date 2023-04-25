@@ -908,3 +908,431 @@ func TestFromUnixTime(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func initSubStrTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "2",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{5},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"efghijklmn"},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_blob,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_blob.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{7},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{"ghijklmn"},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_text,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{11},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false,
+				[]string{"klmn"},
+				[]bool{false}),
+		},
+
+		{
+			info: "2",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{16},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{6},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"efghij"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{6},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-8},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{6},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-9},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-4},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{4},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"klmn"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-14},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{14},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"abcdefghijklmn"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-14},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{10},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"abcdefghij"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abcdefghijklmn"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-12},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"cd"},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestSubStr(t *testing.T) {
+	testCases := initSubStrTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.info {
+		case "2":
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, SubStringWith2Args[uint64])
+		case "3":
+			fcTC = testutil.NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, SubStringWith3Args[int64, int64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initSubStrIndexTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"www"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"www.mysql"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{3},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"www.mysql.com"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-3},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"www.mysql.com"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-2},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"mysql.com"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"www.mysql.com"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"com"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"xyz"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abc"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{223372036854775808},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"xyz"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aaa.bbb.ccc.ddd.eee"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{9223372036854775807},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"aaa.bbb.ccc.ddd.eee"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aaa.bbb.ccc.ddd.eee"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-9223372036854775808},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"aaa.bbb.ccc.ddd.eee"},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aaa.bbb.ccc.ddd.eee"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"."},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{int64(922337203685477580)},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"aaa.bbb.ccc.ddd.eee"},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestSubStrIndex(t *testing.T) {
+	testCases := initSubStrIndexTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, SubStrIndex[int64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
