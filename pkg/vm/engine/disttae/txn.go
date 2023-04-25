@@ -36,14 +36,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (txn *Transaction) getTableMeta(
+func (txn *Transaction) getBlockMetas(
 	ctx context.Context,
 	databaseId uint64,
 	tableId uint64,
 	needUpdated bool,
 	columnLength int,
 	prefetch bool,
-) (*tableMeta, error) {
+) ([][]BlockMeta, error) {
+
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	name := genMetaTableName(tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
@@ -72,11 +73,7 @@ func (txn *Transaction) getTableMeta(
 			}
 		}
 	}
-	return &tableMeta{
-		tableName: name,
-		blocks:    blocks,
-		defs:      catalog.MoTableMetaDefs,
-	}, nil
+	return blocks, nil
 }
 
 // detecting whether a transaction is a read-only transaction
