@@ -1324,19 +1324,26 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 		if execResultArrayHasData(rsset) {
 			for i := range rsset {
-				varibale_name, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+				variable_name, err := rsset[i].GetString(sysTenantCtx, 0, 0)
 				if err != nil {
 					return err
 				}
-				varibale_value, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+				variable_value, err := rsset[i].GetString(sysTenantCtx, 0, 0)
 				if err != nil {
 					return err
 				}
 
-				err = ses.SetGlobalVar(varibale_name, varibale_value)
-				if err != nil {
-					return err
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.SetGlobalVar(variable_name, val)
+					if err != nil {
+						return err
+					}
 				}
+
 			}
 		} else {
 			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
@@ -1363,18 +1370,24 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 		if execResultArrayHasData(rsset) {
 			for i := range rsset {
-				varibale_name, err := rsset[i].GetString(tenantCtx, 0, 0)
+				variable_name, err := rsset[i].GetString(tenantCtx, 0, 0)
 				if err != nil {
 					return err
 				}
-				varibale_value, err := rsset[i].GetString(tenantCtx, 0, 0)
+				variable_value, err := rsset[i].GetString(tenantCtx, 0, 0)
 				if err != nil {
 					return err
 				}
 
-				err = ses.SetGlobalVar(varibale_name, varibale_value)
-				if err != nil {
-					return err
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.SetGlobalVar(variable_name, val)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		} else {

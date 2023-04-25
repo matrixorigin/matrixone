@@ -1676,8 +1676,8 @@ func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
 	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
 }
 
-func getSqlForGetSystemVariableValueWithDatabase(dtname, varibale_name string) string {
-	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, varibale_name)
+func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) string {
+	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, variable_name)
 }
 
 func getSystemVariablesWithAccount(account_id uint64) string {
@@ -6502,7 +6502,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVaribaleValue(variable.Default))
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default))
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}
@@ -6849,7 +6849,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVaribaleValue(variable.Default))
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default))
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}
