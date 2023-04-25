@@ -1,0 +1,276 @@
+/*
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package memoryengine;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "plan.proto";
+
+option (gogoproto.sizer_all)                = false;
+option (gogoproto.protosizer_all)           = true;
+option (gogoproto.goproto_enum_prefix_all)  = false;
+option (gogoproto.goproto_unrecognized_all) = false;
+option (gogoproto.goproto_unkeyed_all)      = false;
+option (gogoproto.goproto_sizecache_all)    = false;
+
+message AccessInfo {
+    option (gogoproto.typedecl) = false;
+    uint32 AccountID            = 1;
+    uint32 UserID               = 2;
+    uint32 RoleID               = 3;
+}
+
+message OpenDatabaseReq {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+    string Name                 = 2;
+}
+
+message OpenDatabaseResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+    string name                 = 2;
+}
+
+message CreateDatabaseReq {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+    AccessInfo access_info      = 2 [(gogoproto.nullable) = false];
+    string name                 = 3;
+}
+
+message CreateDatabaseResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetDatabasesReq {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+}
+
+message GetDatabasesResp {
+    option (gogoproto.typedecl) = false;
+    repeated string Names       = 1;
+}
+
+message DeleteDatabaseReq {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+    string Name                 = 2;
+}
+
+message DeleteDatabaseResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message OpenRelationReq {
+    option (gogoproto.typedecl) = false;
+    uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
+    string DatabaseName         = 2;
+    string Name                 = 3;
+}
+
+message OpenRelationResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+    uint32 type                 = 2 [(gogoproto.casttype) = "RelationType"];
+    string DatabaseName         = 3;
+    string RelationName         = 4;
+}
+
+message CreateRelationReq {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+    uint64 DatabaseID           = 2 [(gogoproto.casttype) = "ID"];
+    string database_name        = 3;
+    string name                 = 4;
+    uint32 type                 = 5 [(gogoproto.casttype) = "RelationType"];
+    repeated bytes Defs         = 6
+        [(gogoproto.customtype) =
+             "github.com/matrixorigin/matrixone/pkg/vm/engine.TableDefPB"];
+}
+
+message CreateRelationResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetRelationsReq {
+    option (gogoproto.typedecl) = false;
+    uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetRelationsResp {
+    option (gogoproto.typedecl) = false;
+    repeated string Names       = 1;
+}
+
+message DeleteRelationReq {
+    option (gogoproto.typedecl) = false;
+    uint64 DatabaseID           = 1 [(gogoproto.casttype) = "ID"];
+    string DatabaseName         = 2;
+    string Name                 = 3;
+}
+
+message DeleteRelationResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetTableDefsReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetTableDefsResp {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Defs         = 1
+        [(gogoproto.customtype) =
+             "github.com/matrixorigin/matrixone/pkg/vm/engine.TableDefPB"];
+}
+
+message WriteResp {
+    option (gogoproto.typedecl) = false;
+}
+
+message NewTableIterReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+    plan.Expr Expr              = 2;
+}
+
+message NewTableIterResp {
+    option (gogoproto.typedecl) = false;
+    uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message ReadReq {
+    option (gogoproto.typedecl) = false;
+    uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
+    repeated string ColNames    = 2;
+}
+
+message DeleteResp {
+    option (gogoproto.typedecl) = false;
+}
+
+message GetPrimaryKeysReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetPrimaryKeysResp {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Attrs        = 1
+        [(gogoproto.customtype) =
+             "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
+}
+
+message CloseTableIterReq {
+    option (gogoproto.typedecl) = false;
+    uint64 IterID               = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message CloseTableIterResp {
+    option (gogoproto.typedecl) = false;
+}
+
+message GetHiddenKeysReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetHiddenKeysResp {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Attrs        = 1
+        [(gogoproto.customtype) =
+             "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
+}
+
+message TableStatsReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message TableStatsResp {
+    option (gogoproto.typedecl) = false;
+    int64 Rows                  = 1 [(gogoproto.casttype) = "int"];
+}
+
+message GetTableColumnsReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message GetTableColumnsResp {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Attrs        = 1
+        [(gogoproto.customtype) =
+             "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
+}
+
+message TruncateRelationReq {
+    option (gogoproto.typedecl) = false;
+    uint64 NewTableID           = 1 [(gogoproto.casttype) = "ID"];
+    uint64 OldTableID           = 2 [(gogoproto.casttype) = "ID"];
+    uint64 DatabaseID           = 3 [(gogoproto.casttype) = "ID"];
+    string DatabaseName         = 4;
+    string Name                 = 5;
+}
+
+message TruncateRelationResp {
+    option (gogoproto.typedecl) = false;
+    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
+}
+
+message AddTableDefReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+    string DatabaseName         = 2;
+    string TableName            = 3;
+    bytes Def                   = 4 [
+        (gogoproto.nullable) = false,
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/vm/engine.TableDefPB"
+    ];
+}
+
+message AddTableDefResp {
+    option (gogoproto.typedecl) = false;
+}
+
+message DelTableDefReq {
+    option (gogoproto.typedecl) = false;
+    uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
+    string DatabaseName         = 2;
+    string TableName            = 3;
+    bytes Def                   = 4 [
+        (gogoproto.nullable) = false,
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/vm/engine.TableDefPB"
+    ];
+}
+
+message DelTableDefResp {
+    option (gogoproto.typedecl) = false;
+}
+
+message UpdateResp {
+    option (gogoproto.typedecl) = false;
+}

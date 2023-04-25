@@ -15,12 +15,11 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,12 +35,11 @@ func testCachingFileService(
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	buf := new(bytes.Buffer)
-	err := gob.NewEncoder(buf).Encode(map[int]int{
-		42: 42,
-	})
+	m := api.Int64Map{
+		M: map[int64]int64{42: 42},
+	}
+	data, err := m.Marshal()
 	assert.Nil(t, err)
-	data := buf.Bytes()
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -66,8 +64,8 @@ func testCachingFileService(
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						var m map[int]int
-						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
+						var m api.Int64Map
+						if err := m.Unmarshal(bs); err != nil {
 							return nil, 0, err
 						}
 						return m, 1, nil
@@ -82,10 +80,10 @@ func testCachingFileService(
 	vec.NoCache = true
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok := vec.Entries[0].Object.(map[int]int)
+	m, ok := vec.Entries[0].Object.(api.Int64Map)
 	assert.True(t, ok)
-	assert.Equal(t, 1, len(m))
-	assert.Equal(t, 42, m[42])
+	assert.Equal(t, 1, len(m.M))
+	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
@@ -94,10 +92,10 @@ func testCachingFileService(
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok = vec.Entries[0].Object.(map[int]int)
+	m, ok = vec.Entries[0].Object.(api.Int64Map)
 	assert.True(t, ok)
-	assert.Equal(t, 1, len(m))
-	assert.Equal(t, 42, m[42])
+	assert.Equal(t, 1, len(m.M))
+	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
@@ -106,10 +104,10 @@ func testCachingFileService(
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok = vec.Entries[0].Object.(map[int]int)
+	m, ok = vec.Entries[0].Object.(api.Int64Map)
 	assert.True(t, ok)
-	assert.Equal(t, 1, len(m))
-	assert.Equal(t, 42, m[42])
+	assert.Equal(t, 1, len(m.M))
+	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Hit.Load())

@@ -25,7 +25,7 @@ func logReq[
 	msg string,
 	req Req,
 	meta txn.TxnMeta,
-	resp *Resp,
+	resp Resp,
 	err *error,
 ) (
 	deferFunc func(),
