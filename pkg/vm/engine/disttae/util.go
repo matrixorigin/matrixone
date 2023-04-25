@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -54,12 +55,12 @@ func fetchZonemapAndRowsFromBlockInfo(
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLoc)
+	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLocation())
 	if err != nil {
 		return nil, 0, err
 	}
 
-	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLoc.ID(), m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLocation().ID(), m)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -69,7 +70,7 @@ func fetchZonemapAndRowsFromBlockInfo(
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, blockInfo.MetaLoc.Rows(), nil
+	return zonemapList, blockInfo.MetaLocation().Rows(), nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
@@ -771,4 +772,16 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
+}
+
+/*
+	RowId:
+
+| segmentId | blockId | offsetId |
+
+	18 bytes   2 bytes   4 bytes
+*/
+// SegmentId = Uuid + fileId
+func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
+	return objectio.NewRowid(blkid, offset)
 }

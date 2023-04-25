@@ -399,7 +399,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(-1)
-			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
+			e.catalog.AddColumnCnt(-1 * len(table.GetLastestSchema().ColDefs))
 		}
 	}()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
@@ -435,7 +435,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)
-			e.catalog.AddColumnCnt(len(table.schema.ColDefs))
+			e.catalog.AddColumnCnt(len(table.GetLastestSchema().ColDefs))
 		}
 	}()
 	fullName := table.GetFullName()

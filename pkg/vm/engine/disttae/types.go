@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,7 @@ import (
 const (
 	INSERT = iota
 	DELETE
+	COMPACTION_CN
 	UPDATE
 )
 
@@ -52,6 +54,7 @@ const (
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
+	INIT_ROWID_OFFSET             = math.MaxUint32
 )
 
 var GcCycle = 10 * time.Second
@@ -105,9 +108,7 @@ type Transaction struct {
 	// local timestamp for workspace operations
 	meta txn.TxnMeta
 	op   client.TxnOperator
-	// fileMaps used to store the mapping relationship between s3 filenames
-	// and blockId
-	fileMap map[string]uint64
+
 	// writes cache stores any writes done by txn
 	writes []Entry
 	// txn workspace size
@@ -127,6 +128,62 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
+
+	deletedBlocks *deletedBlocks
+	// blkId -> Pos
+	cnBlkId_Pos                     map[string]Pos
+	blockId_raw_batch               map[string]*batch.Batch
+	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
+}
+
+type Pos struct {
+	idx    int
+	offset int64
+}
+
+// FIXME: The map inside this one will be accessed concurrently, using
+// a mutex, not sure if there will be performance issues
+type deletedBlocks struct {
+	sync.RWMutex
+
+	// used to store cn block's deleted rows
+	// blockId => deletedOffsets
+	offsets map[string][]int64
+}
+
+func (b *deletedBlocks) addDeletedBlocks(blockID string, offsets []int64) {
+	b.Lock()
+	defer b.Unlock()
+	b.offsets[blockID] = append(b.offsets[blockID], offsets...)
+}
+
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
+	b.RLock()
+	defer b.RUnlock()
+	res := b.offsets[blockID]
+	offsets := make([]int64, len(res))
+	copy(offsets, res)
+	return offsets
+}
+
+func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
+	b.Lock()
+	defer b.Unlock()
+	delete(b.offsets, blockID)
+}
+
+func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
+	b.RLock()
+	defer b.RUnlock()
+	for id, offsets := range b.offsets {
+		if !fn(id, offsets) {
+			return
+		}
+	}
+}
+
+func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
+	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
 // Entry represents a delete/insert
@@ -182,9 +239,9 @@ type txnTable struct {
 	db        *txnDatabase
 	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs     []engine.TableDef
-	tableDef *plan.TableDef
-
+	defs         []engine.TableDef
+	tableDef     *plan.TableDef
+	idxs         []uint16
 	setPartsOnce sync.Once
 	_parts       []*PartitionState
 
@@ -237,7 +294,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []BlockMeta
+	blks       []catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp

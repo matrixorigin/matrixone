@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -47,18 +48,26 @@ const (
 	CmdMethod_Inspect CmdMethod = 7
 	// Label sets the CN label.
 	CmdMethod_Label CmdMethod = 8
+	// SyncCommit when we turn on Push, some BVT tests use multiple Sessions in multi-CN scenarios. To
+	// ensure data visibility, we need to synchronize CommitTS between multiple CNs so that the whole
+	// cluster can see the latest writes from other CNs.
+	CmdMethod_SyncCommit CmdMethod = 9
+	// GetCommit get latest commit timestamp of cn.
+	CmdMethod_GetCommit CmdMethod = 10
 )
 
 var CmdMethod_name = map[int32]string{
-	0: "Ping",
-	1: "Flush",
-	2: "Task",
-	3: "Checkpoint",
-	4: "UseSnapshot",
-	5: "GetSnapshot",
-	6: "ForceGC",
-	7: "Inspect",
-	8: "Label",
+	0:  "Ping",
+	1:  "Flush",
+	2:  "Task",
+	3:  "Checkpoint",
+	4:  "UseSnapshot",
+	5:  "GetSnapshot",
+	6:  "ForceGC",
+	7:  "Inspect",
+	8:  "Label",
+	9:  "SyncCommit",
+	10: "GetCommit",
 }
 
 var CmdMethod_value = map[string]int32{
@@ -71,6 +80,8 @@ var CmdMethod_value = map[string]int32{
 	"ForceGC":     6,
 	"Inspect":     7,
 	"Label":       8,
+	"SyncCommit":  9,
+	"GetCommit":   10,
 }
 
 func (x CmdMethod) String() string {
@@ -257,41 +268,405 @@ func (m *DNStringResponse) GetReturnStr() string {
 	return ""
 }
 
+// Request is used to send a request for a ctl service related operation to another
+// ctl service.
+type Request struct {
+	// RequestID request id
+	RequestID            uint64            `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
+	CMDMethod            CmdMethod         `protobuf:"varint,2,opt,name=CMDMethod,proto3,enum=ctl.CmdMethod" json:"CMDMethod,omitempty"`
+	SycnCommit           SyncCommitRequest `protobuf:"bytes,3,opt,name=SycnCommit,proto3" json:"SycnCommit"`
+	GetCommit            SyncCommitRequest `protobuf:"bytes,4,opt,name=GetCommit,proto3" json:"GetCommit"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
+}
+
+func (m *Request) Reset()         { *m = Request{} }
+func (m *Request) String() string { return proto.CompactTextString(m) }
+func (*Request) ProtoMessage()    {}
+func (*Request) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{3}
+}
+func (m *Request) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Request) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Request.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Request) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Request.Merge(m, src)
+}
+func (m *Request) XXX_Size() int {
+	return m.Size()
+}
+func (m *Request) XXX_DiscardUnknown() {
+	xxx_messageInfo_Request.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Request proto.InternalMessageInfo
+
+func (m *Request) GetRequestID() uint64 {
+	if m != nil {
+		return m.RequestID
+	}
+	return 0
+}
+
+func (m *Request) GetCMDMethod() CmdMethod {
+	if m != nil {
+		return m.CMDMethod
+	}
+	return CmdMethod_Ping
+}
+
+func (m *Request) GetSycnCommit() SyncCommitRequest {
+	if m != nil {
+		return m.SycnCommit
+	}
+	return SyncCommitRequest{}
+}
+
+func (m *Request) GetGetCommit() SyncCommitRequest {
+	if m != nil {
+		return m.GetCommit
+	}
+	return SyncCommitRequest{}
+}
+
+// Response ctl response
+type Response struct {
+	// RequestID corresponding request id
+	RequestID uint64    `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
+	CMDMethod CmdMethod `protobuf:"varint,2,opt,name=CMDMethod,proto3,enum=ctl.CmdMethod" json:"CMDMethod,omitempty"`
+	// Error we use this field to send moerr from service to another service. Set
+	// with moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
+	Error                []byte             `protobuf:"bytes,3,opt,name=Error,proto3" json:"Error,omitempty"`
+	SycnCommit           SyncCommitResponse `protobuf:"bytes,4,opt,name=SycnCommit,proto3" json:"SycnCommit"`
+	GetCommit            GetCommitResponse  `protobuf:"bytes,5,opt,name=GetCommit,proto3" json:"GetCommit"`
+	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
+	XXX_unrecognized     []byte             `json:"-"`
+	XXX_sizecache        int32              `json:"-"`
+}
+
+func (m *Response) Reset()         { *m = Response{} }
+func (m *Response) String() string { return proto.CompactTextString(m) }
+func (*Response) ProtoMessage()    {}
+func (*Response) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{4}
+}
+func (m *Response) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Response) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Response.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Response) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Response.Merge(m, src)
+}
+func (m *Response) XXX_Size() int {
+	return m.Size()
+}
+func (m *Response) XXX_DiscardUnknown() {
+	xxx_messageInfo_Response.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Response proto.InternalMessageInfo
+
+func (m *Response) GetRequestID() uint64 {
+	if m != nil {
+		return m.RequestID
+	}
+	return 0
+}
+
+func (m *Response) GetCMDMethod() CmdMethod {
+	if m != nil {
+		return m.CMDMethod
+	}
+	return CmdMethod_Ping
+}
+
+func (m *Response) GetError() []byte {
+	if m != nil {
+		return m.Error
+	}
+	return nil
+}
+
+func (m *Response) GetSycnCommit() SyncCommitResponse {
+	if m != nil {
+		return m.SycnCommit
+	}
+	return SyncCommitResponse{}
+}
+
+func (m *Response) GetGetCommit() GetCommitResponse {
+	if m != nil {
+		return m.GetCommit
+	}
+	return GetCommitResponse{}
+}
+
+// SyncCommitRequest sync commit timestamp request
+type SyncCommitRequest struct {
+	// LatestCommitTS update latest commit ts.
+	LatestCommitTS       timestamp.Timestamp `protobuf:"bytes,1,opt,name=LatestCommitTS,proto3" json:"LatestCommitTS"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
+}
+
+func (m *SyncCommitRequest) Reset()         { *m = SyncCommitRequest{} }
+func (m *SyncCommitRequest) String() string { return proto.CompactTextString(m) }
+func (*SyncCommitRequest) ProtoMessage()    {}
+func (*SyncCommitRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{5}
+}
+func (m *SyncCommitRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SyncCommitRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SyncCommitRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SyncCommitRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SyncCommitRequest.Merge(m, src)
+}
+func (m *SyncCommitRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *SyncCommitRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_SyncCommitRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SyncCommitRequest proto.InternalMessageInfo
+
+func (m *SyncCommitRequest) GetLatestCommitTS() timestamp.Timestamp {
+	if m != nil {
+		return m.LatestCommitTS
+	}
+	return timestamp.Timestamp{}
+}
+
+// SyncCommitResponse sync commit timestamp response
+type SyncCommitResponse struct {
+	// CurrentCommitTS current commit timestamp after sync
+	CurrentCommitTS      timestamp.Timestamp `protobuf:"bytes,1,opt,name=CurrentCommitTS,proto3" json:"CurrentCommitTS"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
+}
+
+func (m *SyncCommitResponse) Reset()         { *m = SyncCommitResponse{} }
+func (m *SyncCommitResponse) String() string { return proto.CompactTextString(m) }
+func (*SyncCommitResponse) ProtoMessage()    {}
+func (*SyncCommitResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{6}
+}
+func (m *SyncCommitResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SyncCommitResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SyncCommitResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SyncCommitResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SyncCommitResponse.Merge(m, src)
+}
+func (m *SyncCommitResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *SyncCommitResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_SyncCommitResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SyncCommitResponse proto.InternalMessageInfo
+
+func (m *SyncCommitResponse) GetCurrentCommitTS() timestamp.Timestamp {
+	if m != nil {
+		return m.CurrentCommitTS
+	}
+	return timestamp.Timestamp{}
+}
+
+// GetCommitRequest get commit timestamp request
+type GetCommitRequest struct {
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetCommitRequest) Reset()         { *m = GetCommitRequest{} }
+func (m *GetCommitRequest) String() string { return proto.CompactTextString(m) }
+func (*GetCommitRequest) ProtoMessage()    {}
+func (*GetCommitRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{7}
+}
+func (m *GetCommitRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetCommitRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetCommitRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetCommitRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetCommitRequest.Merge(m, src)
+}
+func (m *GetCommitRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetCommitRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetCommitRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetCommitRequest proto.InternalMessageInfo
+
+// GetCommitResponse get commit timestamp response
+type GetCommitResponse struct {
+	// CurrentCommitTS current commit timestamp after sync
+	CurrentCommitTS      timestamp.Timestamp `protobuf:"bytes,1,opt,name=CurrentCommitTS,proto3" json:"CurrentCommitTS"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
+}
+
+func (m *GetCommitResponse) Reset()         { *m = GetCommitResponse{} }
+func (m *GetCommitResponse) String() string { return proto.CompactTextString(m) }
+func (*GetCommitResponse) ProtoMessage()    {}
+func (*GetCommitResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_0646114e50303026, []int{8}
+}
+func (m *GetCommitResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetCommitResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetCommitResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetCommitResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetCommitResponse.Merge(m, src)
+}
+func (m *GetCommitResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetCommitResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetCommitResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetCommitResponse proto.InternalMessageInfo
+
+func (m *GetCommitResponse) GetCurrentCommitTS() timestamp.Timestamp {
+	if m != nil {
+		return m.CurrentCommitTS
+	}
+	return timestamp.Timestamp{}
+}
+
 func init() {
 	proto.RegisterEnum("ctl.CmdMethod", CmdMethod_name, CmdMethod_value)
 	proto.RegisterType((*DNPingRequest)(nil), "ctl.DNPingRequest")
 	proto.RegisterType((*DNPingResponse)(nil), "ctl.DNPingResponse")
 	proto.RegisterType((*DNStringResponse)(nil), "ctl.DNStringResponse")
+	proto.RegisterType((*Request)(nil), "ctl.Request")
+	proto.RegisterType((*Response)(nil), "ctl.Response")
+	proto.RegisterType((*SyncCommitRequest)(nil), "ctl.SyncCommitRequest")
+	proto.RegisterType((*SyncCommitResponse)(nil), "ctl.SyncCommitResponse")
+	proto.RegisterType((*GetCommitRequest)(nil), "ctl.GetCommitRequest")
+	proto.RegisterType((*GetCommitResponse)(nil), "ctl.GetCommitResponse")
 }
 
 func init() { proto.RegisterFile("ctl.proto", fileDescriptor_0646114e50303026) }
 
 var fileDescriptor_0646114e50303026 = []byte{
-	// 376 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x5c, 0x91, 0xcd, 0x6e, 0x13, 0x31,
-	0x10, 0x80, 0x71, 0x93, 0x34, 0xdd, 0xa9, 0x08, 0x96, 0x4f, 0x2b, 0x84, 0x56, 0x55, 0x0e, 0xa8,
-	0x42, 0xb4, 0x8b, 0xc4, 0x1d, 0x09, 0xb2, 0x6a, 0x15, 0x09, 0x2a, 0x94, 0xc0, 0x85, 0x9b, 0xd7,
-	0x3b, 0xec, 0x5a, 0xd9, 0xd8, 0xc6, 0x9e, 0x45, 0x5c, 0x79, 0x1d, 0x9e, 0x84, 0x63, 0x1f, 0x01,
-	0xf2, 0x24, 0x68, 0x4d, 0x37, 0x8d, 0x7a, 0xf3, 0xf7, 0xcd, 0x8f, 0x67, 0x34, 0x90, 0x28, 0x6a,
-	0x2f, 0x9d, 0xb7, 0x64, 0xc5, 0x48, 0x51, 0xfb, 0xf4, 0xa2, 0xd6, 0xd4, 0x74, 0xe5, 0xa5, 0xb2,
-	0xdb, 0xbc, 0xb6, 0xb5, 0xcd, 0x63, 0xac, 0xec, 0xbe, 0x46, 0x8a, 0x10, 0x5f, 0xff, 0x6b, 0xe6,
-	0x17, 0xf0, 0xb8, 0xb8, 0xf9, 0xa8, 0x4d, 0xbd, 0xc2, 0x6f, 0x1d, 0x06, 0x12, 0xcf, 0x20, 0x71,
-	0xd2, 0xcb, 0x2d, 0x12, 0xfa, 0x94, 0x9d, 0xb1, 0xf3, 0x64, 0x75, 0x2f, 0xe6, 0xbf, 0x18, 0xcc,
-	0x86, 0xfc, 0xe0, 0xac, 0x09, 0x28, 0x52, 0x98, 0x06, 0xb2, 0x1e, 0x97, 0xc5, 0x5d, 0xfa, 0x80,
-	0xe2, 0x39, 0xcc, 0x02, 0xfa, 0xef, 0x5a, 0xe1, 0xdb, 0xaa, 0xf2, 0x18, 0x42, 0x7a, 0x14, 0x13,
-	0x1e, 0xd8, 0xd8, 0xa1, 0x91, 0xbe, 0x5a, 0x16, 0xe9, 0xe8, 0x8c, 0x9d, 0x8f, 0x57, 0x03, 0xf6,
-	0xc3, 0x78, 0x74, 0xad, 0x56, 0x72, 0x59, 0xa4, 0xe3, 0x18, 0xbb, 0x17, 0x22, 0x03, 0x68, 0x6d,
-	0xbd, 0xbe, 0x2b, 0x9d, 0xc4, 0xf0, 0x81, 0x99, 0xbf, 0x02, 0x5e, 0xdc, 0xac, 0xc9, 0x1f, 0x4e,
-	0x1b, 0x3b, 0x52, 0xe7, 0xcd, 0x9a, 0xf6, 0xeb, 0xed, 0xc5, 0x8b, 0x9f, 0x0c, 0x92, 0xc5, 0xb6,
-	0xfa, 0x80, 0xd4, 0xd8, 0x4a, 0x9c, 0xc0, 0xb8, 0xdf, 0x94, 0x3f, 0x12, 0x09, 0x4c, 0xae, 0xda,
-	0x2e, 0x34, 0x9c, 0xf5, 0xf2, 0x93, 0x0c, 0x1b, 0x7e, 0x24, 0x66, 0x00, 0x8b, 0x06, 0xd5, 0xc6,
-	0x59, 0x6d, 0x88, 0x8f, 0xc4, 0x13, 0x38, 0xfd, 0x1c, 0x70, 0x6d, 0xa4, 0x0b, 0x8d, 0x25, 0x3e,
-	0xee, 0xc5, 0x35, 0xd2, 0x5e, 0x4c, 0xc4, 0x29, 0x4c, 0xaf, 0xac, 0x57, 0x78, 0xbd, 0xe0, 0xc7,
-	0x3d, 0x2c, 0x4d, 0x70, 0xa8, 0x88, 0x4f, 0xfb, 0x0f, 0xde, 0xcb, 0x12, 0x5b, 0x7e, 0xf2, 0xee,
-	0xcd, 0xed, 0xdf, 0x8c, 0xfd, 0xde, 0x65, 0xec, 0x76, 0x97, 0xb1, 0x3f, 0xbb, 0x8c, 0x7d, 0x79,
-	0x79, 0x70, 0xd2, 0xad, 0x24, 0xaf, 0x7f, 0x58, 0xaf, 0x6b, 0x6d, 0x06, 0x30, 0x98, 0xbb, 0x4d,
-	0x9d, 0xbb, 0x32, 0x57, 0xd4, 0x96, 0xc7, 0xf1, 0xb0, 0xaf, 0xff, 0x05, 0x00, 0x00, 0xff, 0xff,
-	0xd5, 0x70, 0x19, 0x41, 0x19, 0x02, 0x00, 0x00,
+	// 595 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x94, 0x41, 0x6f, 0xd3, 0x3e,
+	0x18, 0xc6, 0xe7, 0x2d, 0x5d, 0x97, 0xb7, 0xff, 0x65, 0x9e, 0x35, 0xfd, 0xa9, 0x26, 0x54, 0xa6,
+	0x1c, 0xd0, 0x84, 0xb6, 0x16, 0x8d, 0x1b, 0x02, 0x24, 0x96, 0xb0, 0xa9, 0xd2, 0x36, 0xa1, 0x64,
+	0x08, 0xb1, 0x5b, 0x9a, 0x9a, 0x24, 0x6a, 0x12, 0x07, 0xdb, 0x41, 0xec, 0xdb, 0x70, 0xe6, 0x93,
+	0xec, 0xc6, 0x3e, 0x01, 0x82, 0x5e, 0xf8, 0x1a, 0x28, 0x4e, 0xda, 0x84, 0xf6, 0x00, 0x48, 0xbb,
+	0xf9, 0x7d, 0xfc, 0xbc, 0x6f, 0x9e, 0x9f, 0xad, 0x18, 0x74, 0x5f, 0xc6, 0xfd, 0x8c, 0x33, 0xc9,
+	0xc8, 0x9a, 0x2f, 0xe3, 0xdd, 0xc3, 0x20, 0x92, 0x61, 0x3e, 0xea, 0xfb, 0x2c, 0x19, 0x04, 0x2c,
+	0x60, 0x03, 0xb5, 0x37, 0xca, 0xdf, 0xab, 0x4a, 0x15, 0x6a, 0x55, 0xf6, 0xec, 0x6e, 0xc9, 0x28,
+	0xa1, 0x42, 0x7a, 0x49, 0x56, 0x0a, 0xe6, 0x21, 0x6c, 0xda, 0x17, 0xaf, 0xa3, 0x34, 0x70, 0xe8,
+	0x87, 0x9c, 0x0a, 0x49, 0xee, 0x83, 0x9e, 0x79, 0xdc, 0x4b, 0xa8, 0xa4, 0xbc, 0x8b, 0xf6, 0xd0,
+	0xbe, 0xee, 0xd4, 0x82, 0xf9, 0x05, 0x81, 0x31, 0xf3, 0x8b, 0x8c, 0xa5, 0x82, 0x92, 0x2e, 0xb4,
+	0x85, 0x64, 0x9c, 0x0e, 0xed, 0xca, 0x3e, 0x2b, 0xc9, 0x43, 0x30, 0x04, 0xe5, 0x1f, 0x23, 0x9f,
+	0xbe, 0x1c, 0x8f, 0x39, 0x15, 0xa2, 0xbb, 0xaa, 0x0c, 0x0b, 0xaa, 0x9a, 0x10, 0x7a, 0x7c, 0x3c,
+	0xb4, 0xbb, 0x6b, 0x7b, 0x68, 0x5f, 0x73, 0x66, 0x65, 0x11, 0x86, 0xd3, 0x2c, 0x8e, 0x7c, 0x6f,
+	0x68, 0x77, 0x35, 0xb5, 0x57, 0x0b, 0xa4, 0x07, 0x10, 0xb3, 0xc0, 0xad, 0x5a, 0x5b, 0x6a, 0xbb,
+	0xa1, 0x98, 0x8f, 0x01, 0xdb, 0x17, 0xae, 0xe4, 0xcd, 0xb4, 0x6a, 0xa2, 0xcc, 0x79, 0xea, 0xca,
+	0x39, 0xde, 0x5c, 0x30, 0xbf, 0x22, 0x68, 0x37, 0x0e, 0xa2, 0x5a, 0x56, 0x64, 0x9a, 0x53, 0x0b,
+	0xe4, 0x00, 0x74, 0xeb, 0xdc, 0x3e, 0xa7, 0x32, 0x64, 0x63, 0x85, 0x65, 0x1c, 0x19, 0xfd, 0xe2,
+	0x6e, 0xac, 0x64, 0x5c, 0xaa, 0x4e, 0x6d, 0x20, 0xcf, 0x00, 0xdc, 0x6b, 0x3f, 0xb5, 0x58, 0x92,
+	0x44, 0x52, 0x41, 0x76, 0x8e, 0xfe, 0x57, 0x76, 0xf7, 0x3a, 0xf5, 0x4b, 0xb9, 0x9a, 0x7d, 0xac,
+	0xdd, 0x7c, 0x7b, 0xb0, 0xe2, 0x34, 0xfc, 0xe4, 0x29, 0xe8, 0xa7, 0x54, 0x56, 0xcd, 0xda, 0x5f,
+	0x34, 0xd7, 0x76, 0xf3, 0x27, 0x82, 0x8d, 0x26, 0xfc, 0x9d, 0x21, 0xed, 0x40, 0xeb, 0x15, 0xe7,
+	0x8c, 0x2b, 0x9a, 0xff, 0x9c, 0xb2, 0x20, 0xcf, 0x7f, 0x03, 0x2d, 0xb3, 0xde, 0x5b, 0xca, 0x5a,
+	0xc6, 0xf9, 0x13, 0x69, 0xab, 0x41, 0x3a, 0x57, 0x17, 0x9a, 0x1b, 0xa4, 0x6f, 0x61, 0x7b, 0xe9,
+	0x3c, 0xc8, 0x31, 0x18, 0x67, 0x9e, 0xa4, 0xa2, 0x32, 0x5d, 0xba, 0x0a, 0xbb, 0x73, 0xb4, 0xd3,
+	0xaf, 0x7f, 0x84, 0xcb, 0xd9, 0xaa, 0x9a, 0xb9, 0xd0, 0x61, 0x5e, 0x01, 0x59, 0x0e, 0x4f, 0x6c,
+	0xd8, 0xb2, 0x72, 0xce, 0x69, 0xfa, 0x2f, 0xa3, 0x17, 0x5b, 0x4c, 0x02, 0xb8, 0x81, 0xa6, 0x32,
+	0x9b, 0xef, 0x60, 0x7b, 0x09, 0xf7, 0x6e, 0x3e, 0xf7, 0xe8, 0x33, 0x02, 0x7d, 0x7e, 0x9b, 0x64,
+	0x03, 0xb4, 0xe2, 0x4f, 0xc6, 0x2b, 0x44, 0x87, 0xd6, 0x49, 0x9c, 0x8b, 0x10, 0xa3, 0x42, 0xbc,
+	0xf4, 0xc4, 0x04, 0xaf, 0x12, 0x03, 0xc0, 0x0a, 0xa9, 0x3f, 0xc9, 0x58, 0x94, 0x4a, 0xbc, 0x46,
+	0xb6, 0xa0, 0xf3, 0x46, 0x50, 0x37, 0xf5, 0x32, 0x11, 0x32, 0x89, 0xb5, 0x42, 0x38, 0xa5, 0x72,
+	0x2e, 0xb4, 0x48, 0x07, 0xda, 0x27, 0x8c, 0xfb, 0xf4, 0xd4, 0xc2, 0xeb, 0x45, 0x31, 0x4c, 0x45,
+	0x46, 0x7d, 0x89, 0xdb, 0xc5, 0x07, 0xce, 0xbc, 0x11, 0x8d, 0xf1, 0x46, 0x31, 0xb6, 0x3e, 0x4e,
+	0xac, 0x93, 0xcd, 0xc6, 0x9d, 0x63, 0x38, 0x7e, 0x71, 0xfb, 0xa3, 0x87, 0x6e, 0xa6, 0x3d, 0x74,
+	0x3b, 0xed, 0xa1, 0xef, 0xd3, 0x1e, 0xba, 0x3a, 0x68, 0x3c, 0x71, 0x89, 0x27, 0x79, 0xf4, 0x89,
+	0xf1, 0x28, 0x88, 0xd2, 0x59, 0x91, 0xd2, 0x41, 0x36, 0x09, 0x06, 0xd9, 0x68, 0xe0, 0xcb, 0x78,
+	0xb4, 0xae, 0xde, 0xb5, 0x27, 0xbf, 0x02, 0x00, 0x00, 0xff, 0xff, 0x91, 0x8e, 0xeb, 0x7e, 0x29,
+	0x05, 0x00, 0x00,
 }
 
 func (m *DNPingRequest) Marshal() (dAtA []byte, err error) {
@@ -418,6 +793,265 @@ func (m *DNStringResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *Request) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Request) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.GetCommit.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	{
+		size, err := m.SycnCommit.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x1a
+	if m.CMDMethod != 0 {
+		i = encodeVarintCtl(dAtA, i, uint64(m.CMDMethod))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.RequestID != 0 {
+		i = encodeVarintCtl(dAtA, i, uint64(m.RequestID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *Response) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Response) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.GetCommit.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x2a
+	{
+		size, err := m.SycnCommit.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	if len(m.Error) > 0 {
+		i -= len(m.Error)
+		copy(dAtA[i:], m.Error)
+		i = encodeVarintCtl(dAtA, i, uint64(len(m.Error)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.CMDMethod != 0 {
+		i = encodeVarintCtl(dAtA, i, uint64(m.CMDMethod))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.RequestID != 0 {
+		i = encodeVarintCtl(dAtA, i, uint64(m.RequestID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SyncCommitRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SyncCommitRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SyncCommitRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.LatestCommitTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
+func (m *SyncCommitResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SyncCommitResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SyncCommitResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.CurrentCommitTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
+func (m *GetCommitRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetCommitRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetCommitRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetCommitResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetCommitResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetCommitResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.CurrentCommitTS.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintCtl(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintCtl(dAtA []byte, offset int, v uint64) int {
 	offset -= sovCtl(v)
 	base := offset
@@ -484,6 +1118,108 @@ func (m *DNStringResponse) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovCtl(uint64(l))
 	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *Request) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RequestID != 0 {
+		n += 1 + sovCtl(uint64(m.RequestID))
+	}
+	if m.CMDMethod != 0 {
+		n += 1 + sovCtl(uint64(m.CMDMethod))
+	}
+	l = m.SycnCommit.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	l = m.GetCommit.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *Response) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RequestID != 0 {
+		n += 1 + sovCtl(uint64(m.RequestID))
+	}
+	if m.CMDMethod != 0 {
+		n += 1 + sovCtl(uint64(m.CMDMethod))
+	}
+	l = len(m.Error)
+	if l > 0 {
+		n += 1 + l + sovCtl(uint64(l))
+	}
+	l = m.SycnCommit.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	l = m.GetCommit.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *SyncCommitRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.LatestCommitTS.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *SyncCommitResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.CurrentCommitTS.Size()
+	n += 1 + l + sovCtl(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetCommitRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetCommitResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.CurrentCommitTS.Size()
+	n += 1 + l + sovCtl(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -811,6 +1547,653 @@ func (m *DNStringResponse) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.ReturnStr = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Request) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Request: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Request: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RequestID", wireType)
+			}
+			m.RequestID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RequestID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CMDMethod", wireType)
+			}
+			m.CMDMethod = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.CMDMethod |= CmdMethod(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SycnCommit", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.SycnCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetCommit", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Response) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Response: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Response: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RequestID", wireType)
+			}
+			m.RequestID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RequestID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CMDMethod", wireType)
+			}
+			m.CMDMethod = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.CMDMethod |= CmdMethod(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Error", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Error = append(m.Error[:0], dAtA[iNdEx:postIndex]...)
+			if m.Error == nil {
+				m.Error = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SycnCommit", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.SycnCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetCommit", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SyncCommitRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SyncCommitRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SyncCommitRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LatestCommitTS", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.LatestCommitTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SyncCommitResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SyncCommitResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SyncCommitResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CurrentCommitTS", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CurrentCommitTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetCommitRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetCommitRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetCommitRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipCtl(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetCommitResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowCtl
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetCommitResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetCommitResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CurrentCommitTS", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowCtl
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthCtl
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthCtl
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CurrentCommitTS.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

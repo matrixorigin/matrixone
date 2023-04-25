@@ -51,7 +51,7 @@ func bool2i8(v bool) int8 {
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return isSysTable(blk.table.entry.GetSchema().Name)
+	return isSysTable(blk.table.entry.GetLastestSchema().Name)
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -126,7 +126,7 @@ func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.Ta
 func (blk *txnSysBlock) columnRows() int {
 	rows := 0
 	fn := func(table *catalog.TableEntry) error {
-		rows += len(table.GetSchema().ColDefs)
+		rows += len(table.GetLastestSchema().ColDefs)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {
@@ -152,10 +152,10 @@ func (blk *txnSysBlock) Rows() int {
 	}
 }
 
-func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Vector) {
-	schema := table.GetSchema()
+func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
+	schema := node.BaseNode.Schema
 	tableID := table.GetID()
-	for i, colDef := range table.GetSchema().ColDefs {
+	for i, colDef := range schema.ColDefs {
 		switch attr {
 		case pkgcatalog.SystemColAttr_UniqName:
 			colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)), false)
@@ -176,7 +176,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_RelID:
 			colData.Append(tableID, false)
 		case pkgcatalog.SystemColAttr_RelName:
-			colData.Append([]byte(table.GetSchema().Name), false)
+			colData.Append([]byte(schema.Name), false)
 		case pkgcatalog.SystemColAttr_ConstraintType:
 			if colDef.Primary {
 				colData.Append([]byte(pkgcatalog.SystemColPKConstraint), false)
@@ -196,12 +196,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_IsHidden:
 			colData.Append(bool2i8(colDef.Hidden), false)
 		case pkgcatalog.SystemColAttr_IsUnsigned:
-			v := int8(0)
-			switch colDef.Type.Oid {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-				v = int8(1)
-			}
-			colData.Append(v, false)
+			colData.Append(bool2i8(colDef.Type.IsUInt()), false)
 		case pkgcatalog.SystemColAttr_IsAutoIncrement:
 			colData.Append(bool2i8(colDef.AutoIncrement), false)
 		case pkgcatalog.SystemColAttr_Comment:
@@ -217,11 +212,14 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		}
 	}
 }
-func (blk *txnSysBlock) getColumnTableVec(colIdx int) (colData containers.Vector, err error) {
+func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData = containers.MakeVector(col.Type)
 	tableFn := func(table *catalog.TableEntry) error {
-		FillColumnRow(table, col.Name, colData)
+		table.RLock()
+		node := table.GetVisibleNode(blk.Txn)
+		table.RUnlock()
+		FillColumnRow(table, node, col.Name, colData)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {
@@ -234,14 +232,15 @@ func (blk *txnSysBlock) getColumnTableVec(colIdx int) (colData containers.Vector
 	return
 }
 func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
+	ts := blk.Txn.GetStartTS()
 	view = model.NewColumnView(colIdx)
-	colData, err := blk.getColumnTableVec(colIdx)
+	colData, err := blk.getColumnTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
 }
 
-func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector, ts types.TS) {
-	schema := table.GetSchema()
+func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
+	schema := node.BaseNode.Schema
 	switch attr {
 	case pkgcatalog.SystemRelAttr_ID:
 		colData.Append(table.GetID(), false)
@@ -252,17 +251,17 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 	case pkgcatalog.SystemRelAttr_DBID:
 		colData.Append(table.GetDB().GetID(), false)
 	case pkgcatalog.SystemRelAttr_Comment:
-		colData.Append([]byte(table.GetSchema().Comment), false)
+		colData.Append([]byte(schema.Comment), false)
 	case pkgcatalog.SystemRelAttr_Partitioned:
-		colData.Append(table.GetSchema().Partitioned, false)
+		colData.Append(schema.Partitioned, false)
 	case pkgcatalog.SystemRelAttr_Partition:
-		colData.Append([]byte(table.GetSchema().Partition), false)
+		colData.Append([]byte(schema.Partition), false)
 	case pkgcatalog.SystemRelAttr_Persistence:
 		colData.Append([]byte(pkgcatalog.SystemPersistRel), false)
 	case pkgcatalog.SystemRelAttr_Kind:
-		colData.Append([]byte(table.GetSchema().Relkind), false)
+		colData.Append([]byte(schema.Relkind), false)
 	case pkgcatalog.SystemRelAttr_CreateSQL:
-		colData.Append([]byte(table.GetSchema().Createsql), false)
+		colData.Append([]byte(schema.Createsql), false)
 	case pkgcatalog.SystemRelAttr_ViewDef:
 		colData.Append([]byte(schema.View), false)
 	case pkgcatalog.SystemRelAttr_Owner:
@@ -274,11 +273,9 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID, false)
 	case pkgcatalog.SystemRelAttr_Constraint:
-		if node != nil {
-			colData.Append([]byte(node.BaseNode.SchemaConstraints), false)
-		} else {
-			colData.Append([]byte(""), false)
-		}
+		colData.Append(schema.Constraint, false)
+	case pkgcatalog.SystemRelAttr_Version:
+		colData.Append(schema.Version, false)
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -289,9 +286,9 @@ func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData contain
 	colData = containers.MakeVector(colDef.Type)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
-		node := table.GetVisibleNodeByTS(ts)
+		node := table.GetVisibleNode(blk.Txn)
 		table.RUnlock()
-		FillTableRow(table, node, colDef.Name, colData, ts)
+		FillTableRow(table, node, colDef.Name, colData)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {
@@ -311,7 +308,7 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 	return
 }
 
-func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode], attr string, colData containers.Vector, _ types.TS) {
+func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode], attr string, colData containers.Vector) {
 	switch attr {
 	case pkgcatalog.SystemDBAttr_ID:
 		colData.Append(db.GetID(), false)
@@ -339,7 +336,7 @@ func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, er
 	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
 	colData = containers.MakeVector(colDef.Type)
 	fn := func(db *catalog.DBEntry) error {
-		FillDBRow(db, nil, colDef.Name, colData, blk.Txn.GetStartTS())
+		FillDBRow(db, nil, colDef.Name, colData)
 		return nil
 	}
 	if err = blk.processDB(fn, false); err != nil {
@@ -406,7 +403,7 @@ func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockV
 	case pkgcatalog.MO_COLUMNS_ID:
 		for _, attr := range attrs {
 			colIdx := blk.entry.GetSchema().GetColIdx(attr)
-			vec, err := blk.getColumnTableVec(colIdx)
+			vec, err := blk.getColumnTableVec(ts, colIdx)
 			view.SetData(colIdx, vec)
 			if err != nil {
 				return view, err

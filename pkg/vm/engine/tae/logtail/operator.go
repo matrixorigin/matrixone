@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -75,7 +76,7 @@ func (c *BoundTableOperator) processTableData() (err error) {
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtySeg := range dirty.Segs {
-		if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
+		if seg, err = tbl.GetSegmentByID(*dirtySeg.ID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				err = nil
 				continue
@@ -86,7 +87,8 @@ func (c *BoundTableOperator) processTableData() (err error) {
 			return err
 		}
 		for id := range dirtySeg.Blks {
-			if blk, err = seg.GetBlockEntryByID(id); err != nil {
+			bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
+			if blk, err = seg.GetBlockEntryByID(bid); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					err = nil
 					continue
