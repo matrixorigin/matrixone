@@ -223,27 +223,20 @@ type databaseKey struct {
 	name      string
 }
 
-// block list information of table
-type tableMeta struct {
-	tableName     string
-	blocks        [][]BlockMeta
-	modifedBlocks [][]ModifyBlockMeta
-	defs          []engine.TableDef
-}
-
 // txnTable represents an opened table in a transaction
 type txnTable struct {
 	tableId   uint64
 	tableName string
 	dnList    []int
 	db        *txnDatabase
-	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs         []engine.TableDef
-	tableDef     *plan.TableDef
-	idxs         []uint16
-	setPartsOnce sync.Once
-	_parts       []*PartitionState
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	idxs           []uint16
+	setPartsOnce   sync.Once
+	_parts         []*PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
+	blockMetas     [][]BlockMeta
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
