@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -990,41 +989,41 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 }
 */
 
-func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
-	txn := tbl.db.txn
-	parts := tbl.getParts()
-	bats := make([]*batch.Batch, len(parts))
-	for i := range bats {
-		bats[i] = batch.New(true, bat.Attrs)
-		for j := range bats[i].Vecs {
-			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		}
-	}
-	vec := bat.GetVector(0)
-	vs := vector.MustFixedCol[types.Rowid](vec)
-	for i, v := range vs {
-		for j, part := range parts {
-			var blks []BlockMeta
+// func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
+// 	txn := tbl.db.txn
+// 	parts := tbl.getParts()
+// 	bats := make([]*batch.Batch, len(parts))
+// 	for i := range bats {
+// 		bats[i] = batch.New(true, bat.Attrs)
+// 		for j := range bats[i].Vecs {
+// 			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+// 		}
+// 	}
+// 	vec := bat.GetVector(0)
+// 	vs := vector.MustFixedCol[types.Rowid](vec)
+// 	for i, v := range vs {
+// 		for j, part := range parts {
+// 			var blks []BlockMeta
 
-			if tbl.meta != nil {
-				blks = tbl.meta.blocks[j]
-			}
-			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
-				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
-					for _, bat := range bats {
-						bat.Clean(txn.proc.Mp())
-					}
-					return nil, err
-				}
-				break
-			}
-		}
-	}
-	for i := range bats {
-		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
-	}
-	return bats, nil
-}
+// 			if tbl.meta != nil {
+// 				blks = tbl.meta.blocks[j]
+// 			}
+// 			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
+// 				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
+// 					for _, bat := range bats {
+// 						bat.Clean(txn.proc.Mp())
+// 					}
+// 					return nil, err
+// 				}
+// 				break
+// 			}
+// 		}
+// 	}
+// 	for i := range bats {
+// 		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
+// 	}
+// 	return bats, nil
+// }
 
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
@@ -1168,22 +1167,22 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inPartition(v types.Rowid, part *PartitionState,
-	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.RowExists(v, types.TimestampToTS(ts)) {
-		return true
-	}
-	if len(blocks) == 0 {
-		return false
-	}
-	blkId := v.GetBlockid()
-	for _, blk := range blocks {
-		if blk.Info.BlockID == blkId {
-			return true
-		}
-	}
-	return false
-}
+// func inPartition(v types.Rowid, part *PartitionState,
+// 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+// 	if part.RowExists(v, types.TimestampToTS(ts)) {
+// 		return true
+// 	}
+// 	if len(blocks) == 0 {
+// 		return false
+// 	}
+// 	blkId := v.GetBlockid()
+// 	for _, blk := range blocks {
+// 		if blk.Info.BlockID == blkId {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {

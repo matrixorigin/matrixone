@@ -68,7 +68,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 		hc:     hc,
 		mc:     mc,
 		re:     re,
-		ru:     newRouter(mc, re, true),
+		ru:     newRouter(mc, re, false),
 		closeFn: func() {
 			mc.Close()
 			st.Stop()
@@ -91,11 +91,7 @@ func TestHandler_Handle(t *testing.T) {
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
 	addr := "127.0.0.1:48090"
-	cn1 := &CNServer{
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
 	stopFn := startTestCNServer(t, ctx, addr)
@@ -121,11 +117,30 @@ func TestHandler_Handle(t *testing.T) {
 	require.NotNil(t, db)
 	defer func() {
 		_ = db.Close()
+		timeout := time.NewTimer(time.Second * 3)
+		tick := time.NewTicker(time.Millisecond * 100)
+		var connTotal int64
+		tt := false
+		for {
+			select {
+			case <-tick.C:
+				connTotal = s.counterSet.connTotal.Load()
+			case <-timeout.C:
+				tt = true
+			}
+			if connTotal == 0 || tt {
+				break
+			}
+		}
+		tick.Stop()
+		timeout.Stop()
+		require.Equal(t, int64(0), connTotal)
 	}()
 	_, err = db.Exec("anystmt")
 	require.NoError(t, err)
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {
@@ -142,11 +157,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8020"}
 	hc := &mockHAKeeperClient{}
 	addr := "127.0.0.1:48091"
-	cn1 := &CNServer{
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
 	stopFn := startTestCNServer(t, ctx, addr)
@@ -219,9 +230,10 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
-func TestHandler_HandleEvent(t *testing.T) {
+func TestHandler_HandleEventKillQuery(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -234,11 +246,7 @@ func TestHandler_HandleEvent(t *testing.T) {
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
 	addr := "127.0.0.1:48190"
-	cn1 := &CNServer{
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
 	stopFn := startTestCNServer(t, ctx, addr)
@@ -277,14 +285,68 @@ func TestHandler_HandleEvent(t *testing.T) {
 		_ = db2.Close()
 	}()
 
-	var err1 error
-	for i := 0; i < 5; i++ {
-		_, err1 = db2.Exec(fmt.Sprintf("kill query %d", connID))
-		if err1 == nil {
-			break
-		}
-	}
-	require.NoError(t, err1)
+	_, err = db2.Exec("kill query 9999")
+	require.Error(t, err)
+
+	_, err = db2.Exec(fmt.Sprintf("kill query %d", connID))
+	require.NoError(t, err)
 
 	require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
+}
+
+func TestHandler_HandleEventSetVar(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	cfg := Config{
+		ListenAddress:     "127.0.0.1:40020",
+		RebalanceDisabled: true,
+	}
+	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
+	hc := &mockHAKeeperClient{}
+	addr := "127.0.0.1:48190"
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
+	// start backend server.
+	stopFn := startTestCNServer(t, ctx, addr)
+	defer func() {
+		require.NoError(t, stopFn())
+	}()
+
+	// start proxy.
+	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
+		WithHAKeeperClient(hc))
+	defer func() {
+		err := s.Close()
+		require.NoError(t, err)
+	}()
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	err = s.Start()
+	require.NoError(t, err)
+
+	db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/db1", cfg.ListenAddress))
+	// connect to server.
+	require.NoError(t, err)
+	require.NotNil(t, db1)
+	defer func() {
+		_ = db1.Close()
+	}()
+	_, err = db1.Exec("set session cn_label='acc1'")
+	require.NoError(t, err)
+
+	res, err := db1.Query("show session variables")
+	require.NoError(t, err)
+	defer res.Close()
+	var varName, varValue string
+	for res.Next() {
+		err := res.Scan(&varName, &varValue)
+		require.NoError(t, err)
+		require.Equal(t, "cn_label", varName)
+		require.Equal(t, "acc1", varValue)
+	}
+
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 }

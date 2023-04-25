@@ -187,10 +187,10 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 
 	if ok {
-		oldId = v.(*txnTable).tableId
-		v.(*txnTable).tableId = newId
-		parts := db.txn.engine.getPartitions(db.databaseId, newId).Snapshot()
-		v.(*txnTable)._parts = parts
+		txnTable := v.(*txnTable)
+		oldId = txnTable.tableId
+		txnTable.reset(newId)
+
 	} else {
 		item := &cache.TableItem{
 			Name:       name,

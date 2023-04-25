@@ -114,6 +114,9 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 }
 
 func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) error {
+	if bat == nil {
+		return nil
+	}
 	vec := bat.Vecs[0]
 	shards, err := t.engine.shardPolicy.Vector(
 		ctx,
