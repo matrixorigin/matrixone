@@ -1088,10 +1088,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
 			logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
-			err = ses.InitGlobalSystemVariables()
-			if err != nil {
-				return err
-			}
+			ses.InitGlobalSystemVariables()
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
 		}
@@ -1109,10 +1106,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
 				logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
-				err = ses.InitGlobalSystemVariables()
-				if err != nil {
-					return err
-				}
+				ses.InitGlobalSystemVariables()
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}

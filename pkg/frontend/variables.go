@@ -989,7 +989,7 @@ func (gsv *GlobalSystemVariables) SetGlobalSysVar(ctx context.Context, name stri
 }
 
 func init() {
-	//InitGlobalSystemVariables(GSysVariables)
+	InitGlobalSystemVariables(GSysVariables)
 }
 
 // definitions of system variables
