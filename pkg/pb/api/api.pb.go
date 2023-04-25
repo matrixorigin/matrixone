@@ -459,7 +459,8 @@ func (m *SyncLogTailResp) GetCommands() []*Entry {
 	return nil
 }
 
-// How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
+// How to parse and handle PrecommiWriteCmd , pls ref to
+// tae/rpc/handle.go/HandlePreCommit function
 type PrecommitWriteCmd struct {
 	EntryList            []*Entry `protobuf:"bytes,1,rep,name=entry_list,json=entryList,proto3" json:"entry_list,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -515,7 +516,7 @@ type Entry struct {
 	DatabaseName string          `protobuf:"bytes,5,opt,name=database_name,json=databaseName,proto3" json:"database_name,omitempty"`
 	FileName     string          `protobuf:"bytes,6,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
 	Bat          *Batch          `protobuf:"bytes,7,opt,name=bat,proto3" json:"bat,omitempty"`
-	//whether DN do the PK uniqueness check against txn's workspace or not.
+	// whether DN do the PK uniqueness check against txn's workspace or not.
 	PkCheckByDn          int32    `protobuf:"varint,8,opt,name=pk_check_by_dn,json=pkCheckByDn,proto3" json:"pk_check_by_dn,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -614,11 +615,11 @@ func (m *Entry) GetPkCheckByDn() int32 {
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 type Checkpoint struct {
-	//min_ts DN is the lower bounds of the checkpoint
-	// CN maybe don't care about it.
+	// min_ts DN is the lower bounds of the checkpoint
+	//  CN maybe don't care about it.
 	MinTs *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
-	//max_ts is the upper bounds of the checkpoint.
-	// CN maybe don't care about it.
+	// max_ts is the upper bounds of the checkpoint.
+	//  CN maybe don't care about it.
 	MaxTs                *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
 	Bat                  *Batch               `protobuf:"bytes,3,opt,name=bat,proto3" json:"bat,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
@@ -681,8 +682,9 @@ func (m *Checkpoint) GetBat() *Batch {
 }
 
 // catalog checkpoint:
-// one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
-// knowing more about system tables, pls ref to pkg/vm/engine/tae/catalog/model.go
+// one Batch represents a table, such as : mo_databases, mo_tables,
+// mo_columns,... etc. knowing more about system tables, pls ref to
+// pkg/vm/engine/tae/catalog/model.go
 type CatalogCkp struct {
 	MinTs                *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
 	MaxTs                *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
@@ -747,14 +749,15 @@ func (m *CatalogCkp) GetBat() *Batch {
 }
 
 // metadata checkpoint:
-// Batch is a batch of block metadata for a table,
-// one row of Batch represents a block meta data.
-// TODO::
-// knowing more about block meta data , pls ref to ...
+//
+//	Batch is a batch of block metadata for a table,
+//	one row of Batch represents a block meta data.
+//	TODO::
+//	knowing more about block meta data , pls ref to ...
 type MetadataCkp struct {
 	MinTs *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
 	MaxTs *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
-	//block meta data for a table;
+	// block meta data for a table;
 	Bat                  *Batch   `protobuf:"bytes,3,opt,name=bat,proto3" json:"bat,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
