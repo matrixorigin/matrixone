@@ -80,6 +80,13 @@ type StorageTxnOperator struct {
 
 var _ client.TxnOperator = new(StorageTxnOperator)
 
+func (_ *StorageTxnOperator) AddWorkspace(_ client.Workspace) {
+}
+
+func (_ *StorageTxnOperator) GetWorkspace() client.Workspace {
+	return nil
+}
+
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 	panic("unimplemented")
 }
