@@ -36,10 +36,6 @@ type ID struct {
 	BlockID types.Blockid
 	// Internal column part id
 	PartID uint32
-	// Column index for the column part above
-	Idx uint16
-	// Iter is used for MVCC
-	Iter uint8
 }
 
 const (
@@ -66,18 +62,18 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("<%d:%d-%s-%s:%d-%d>", id.Idx, id.TableID, id.SegmentID.ToString(), id.BlockID.ShortString(), id.PartID, id.Iter)
+	return fmt.Sprintf("<%d-%s-%s:%d>", id.TableID, id.SegmentID.ToString(), id.BlockID.ShortString(), id.PartID)
 }
 
 func (id *ID) TableString() string {
-	return fmt.Sprintf("TBL<%d:%d>", id.Idx, id.TableID)
+	return fmt.Sprintf("TBL<%d>", id.TableID)
 }
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("SEG<%d:%d-%s>", id.Idx, id.TableID, id.SegmentID.ToString())
+	return fmt.Sprintf("SEG<%d-%s>", id.TableID, id.SegmentID.ToString())
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("BLK<%d:%d-%s>", id.Idx, id.TableID, id.BlockID.String())
+	return fmt.Sprintf("BLK<%d-%s>", id.TableID, id.BlockID.String())
 }
 
 func IDArraryString(ids []ID) string {
