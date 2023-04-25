@@ -46,7 +46,8 @@ func Prepare(proc *process.Process, arg any) (err error) {
 			return err
 		}
 	}
-	return nil
+	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -176,7 +177,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err
 	}
-
+	if ctr.joinBat1 == nil {
+		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+	}
+	if ctr.joinBat2 == nil {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	}
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
@@ -197,16 +203,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				if ap.Cond != nil {
-					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+						1, ctr.cfs1); err != nil {
+						return err
+					}
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+						1, ctr.cfs2); err != nil {
+						return err
+					}
+					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 					if err != nil {
 						return err
 					}
 					bs := vector.MustFixedCol[bool](vec)
 					if !bs[0] {
-						vec.Free(proc.Mp())
 						continue
 					}
-					vec.Free(proc.Mp())
 				}
 				ctr.matched[sel] = 1
 			}

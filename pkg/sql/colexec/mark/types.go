@@ -66,7 +66,17 @@ type container struct {
 	inBuckets []uint8
 
 	// store the all batch from the build table
-	bat *batch.Batch
+	bat     *batch.Batch
+	joinBat *batch.Batch
+	expr    colexec.ExpressionExecutor
+	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat1 *batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat2 *batch.Batch
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
+
 	// records the eval result of the batch from the probe table
 	evecs []evalVector
 	// vecs is same as the evecs.vec's union, we need this because
@@ -150,6 +160,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanEvalVectors()
 		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
+		ctr.cleanExprExecutor()
+		arg.ctr = nil
+	}
+}
+
+func (ctr *container) cleanExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
 	}
 }
 
@@ -157,6 +175,18 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.joinBat != nil {
+		ctr.joinBat.Clean(mp)
+		ctr.joinBat = nil
+	}
+	if ctr.joinBat1 != nil {
+		ctr.joinBat1.Clean(mp)
+		ctr.joinBat1 = nil
+	}
+	if ctr.joinBat2 != nil {
+		ctr.joinBat2.Clean(mp)
+		ctr.joinBat2 = nil
 	}
 }
 

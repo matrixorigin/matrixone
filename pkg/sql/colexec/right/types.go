@@ -44,6 +44,14 @@ type container struct {
 
 	bat *batch.Batch
 
+	expr colexec.ExpressionExecutor
+
+	joinBat1 *batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat2 *batch.Batch
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
+
 	evecs []evalVector
 	vecs  []*vector.Vector
 
@@ -73,6 +81,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.cleanExprExecutor()
+	}
+}
+
+func (ctr *container) cleanExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
 	}
 }
 
@@ -80,6 +95,14 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.joinBat1 != nil {
+		ctr.joinBat1.Clean(mp)
+		ctr.joinBat1 = nil
+	}
+	if ctr.joinBat2 != nil {
+		ctr.joinBat2.Clean(mp)
+		ctr.joinBat2 = nil
 	}
 }
 
