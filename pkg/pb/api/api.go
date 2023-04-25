@@ -85,3 +85,27 @@ func NewRemoveColumnReq(did, tid uint64, idx, seqnum uint32) *AlterTableReq {
 		},
 	}
 }
+
+func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *SyncLogTailReq) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *SyncLogTailResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *SyncLogTailResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *PrecommitWriteCmd) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *PrecommitWriteCmd) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
