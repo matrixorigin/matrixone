@@ -330,7 +330,7 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		source.Da = a.da
 	}
 
-	return types.Encode(source)
+	return source.Marshal()
 }
 
 func getUnaryAggStrVs(strUnaryAgg any) []string {
@@ -347,7 +347,7 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	copyData := make([]byte, len(data))
 	copy(copyData, data)
 	decoded := new(EncodeAgg)
-	if err := types.Decode(copyData, decoded); err != nil {
+	if err := decoded.Unmarshal(copyData); err != nil {
 		return err
 	}
 
