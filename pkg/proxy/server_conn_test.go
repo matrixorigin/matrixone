@@ -16,7 +16,9 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +44,9 @@ var testPacket = &frontend.Packet{
 func testMakeCNServer(
 	uuid string, addr string, connID uint32, hash LabelHash, reqLabel labelInfo,
 ) *CNServer {
+	if strings.Contains(addr, "sock") {
+		addr = "unix://" + addr
+	}
 	return &CNServer{
 		connID:   connID,
 		addr:     addr,
@@ -86,6 +91,7 @@ var baseConnID atomic.Uint32
 type testCNServer struct {
 	sync.Mutex
 	ctx      context.Context
+	scheme   string
 	addr     string
 	listener net.Listener
 	started  bool
@@ -101,9 +107,13 @@ type testHandler struct {
 
 func startTestCNServer(t *testing.T, ctx context.Context, addr string) func() error {
 	b := &testCNServer{
-		ctx:  ctx,
-		addr: addr,
-		quit: make(chan interface{}),
+		ctx:    ctx,
+		scheme: "tcp",
+		addr:   addr,
+		quit:   make(chan interface{}),
+	}
+	if strings.Contains(addr, "sock") {
+		b.scheme = "unix"
 	}
 	go func() {
 		err := b.Start()
@@ -127,7 +137,7 @@ func (s *testCNServer) waitCNServerReady() bool {
 			s.Lock()
 			started := s.started
 			s.Unlock()
-			conn, err := net.Dial("tcp", s.addr)
+			conn, err := net.Dial(s.scheme, s.addr)
 			if err == nil && started {
 				_ = conn.Close()
 				return true
@@ -141,7 +151,7 @@ func (s *testCNServer) waitCNServerReady() bool {
 
 func (s *testCNServer) Start() error {
 	var err error
-	s.listener, err = net.Listen("tcp", s.addr)
+	s.listener, err = net.Listen(s.scheme, s.addr)
 	if err != nil {
 		return err
 	}
@@ -290,7 +300,9 @@ func (s *testCNServer) Stop() error {
 func TestServerConn_Create(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
-	addr := "127.0.0.1:38009"
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	cn1.reqLabel = newLabelInfo("t1", map[string]string{
 		"k1": "v1",
@@ -316,7 +328,9 @@ func TestServerConn_Create(t *testing.T) {
 
 func TestServerConn_Connect(t *testing.T) {
 	defer leaktest.AfterTest(t)
-	addr := "127.0.0.1:38090"
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	cn1.reqLabel = newLabelInfo("t1", map[string]string{
 		"k1": "v1",
@@ -345,7 +359,9 @@ func TestFakeCNServer(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	addr := "127.0.0.1:38009"
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	stopFn := startTestCNServer(t, tp.ctx, addr)
 	defer func() {
 		require.NoError(t, stopFn())
@@ -365,7 +381,9 @@ func TestFakeCNServer(t *testing.T) {
 func TestServerConn_ExecStmt(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
-	addr := "127.0.0.1:38190"
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	cn1.reqLabel = newLabelInfo("t1", map[string]string{
 		"k1": "v1",
