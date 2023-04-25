@@ -484,7 +484,7 @@ func getAccountId(ctx context.Context) uint32 {
 //	return accountId, userId, roleId
 //}
 
-func getVaribaleValue(varDefault interface{}) string {
+func getVariableValue(varDefault interface{}) string {
 	switch varDefault.(type) {
 	case int64:
 		return fmt.Sprintf("%d", varDefault.(int64))
