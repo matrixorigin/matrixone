@@ -229,10 +229,13 @@ insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key
 -- @bvt:issue#7682
+select count(*) from t;
 insert into t select * from t;
+select count(*) from t;
 -- @bvt:issue
 # transaction test
 begin;
+select count(*) from t;
 -- @bvt:issue#7682
 insert into t select * from t;
 -- @bvt:issue

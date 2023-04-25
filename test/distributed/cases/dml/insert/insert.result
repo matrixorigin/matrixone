@@ -349,21 +349,29 @@ insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 count(*)
 200000
+select count(*) from t;
+count(*)
+200000
 insert into t select * from t;
-Duplicate entry '32769' for key 'a'
+Duplicate entry '1' for key 'a'
+select count(*) from t;
+count(*)
+200000
 begin;
+select count(*) from t;
+count(*)
+200000
 insert into t select * from t;
 select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '24577' for key 'a'
+Duplicate entry '1' for key 'a'
 select count(*) from t;
 count(*)
 200000
 insert into t select null;
 constraint violation: Column 'a' cannot be null
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 drop table t;
 create table t(a int,b int,primary key(a,b));
 create table temp(c int);
@@ -373,14 +381,14 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '3a1660013a166001' for key '__mo_cpkey_001a001b'
+Duplicate entry '3a15013a1501' for key '__mo_cpkey_col'
 begin;
 insert into t select * from t;
 select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '3a170300013a17030001' for key '__mo_cpkey_001a001b'
+Duplicate entry '3a15013a1501' for key '__mo_cpkey_col'
 select count(*) from t;
 count(*)
 200000
@@ -394,14 +402,14 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '106497' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '__mo_index_idx_col'
 begin;
 insert into t select * from t;
 select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '49153' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '__mo_index_idx_col'
 select count(*) from t;
 count(*)
 200000
@@ -469,11 +477,11 @@ create table t2(c1 int) cluster by c1;
 load data infile '$resources/load_data/integer.csv' into table t2;
 select * from t2;
 c1
-1
-2
 3
-4
 5
+1
+4
+2
 select mo_ctl('dn', 'flush', 'ssb.t2');
 mo_ctl(dn, flush, ssb.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
@@ -489,12 +497,12 @@ create table t2(c1 int,c2 int) cluster by (c1,c2);
 load data infile '$resources/load_data/integer2.csv' into table t2;
 select * from t2;
 c1    c2
-1    2
-1    3
-3    1
 3    5
+5    2
+1    3
 4    2
-4    5
+3    1
+1    2
 select mo_ctl('dn', 'flush', 'ssb.t2');
 mo_ctl(dn, flush, ssb.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
@@ -505,6 +513,6 @@ c1    c2
 3    1
 3    5
 4    2
-4    5
+5    2
 drop table t2;
 drop database ssb;
