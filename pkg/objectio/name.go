@@ -30,6 +30,7 @@ import (
 	 Size:	   16B         +   2B     +  42B
 */
 type ObjectName []byte
+type ObjectNameShort [ObjectNameShortLen]byte
 
 func BuildObjectName(segid Segmentid, num uint16) ObjectName {
 	var name [ObjectNameLen]byte
@@ -40,8 +41,20 @@ func BuildObjectName(segid Segmentid, num uint16) ObjectName {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
 
+func (s *ObjectNameShort) Segmentid() *Segmentid {
+	return (*Segmentid)(unsafe.Pointer(&s[0]))
+}
+
+func (s *ObjectNameShort) Num() uint16 {
+	return types.DecodeUint16(s[SegmentIdSize:])
+}
+
 func (o ObjectName) String() string {
 	return string(o[NameStringOff : NameStringOff+NameStringLen])
+}
+
+func (o ObjectName) Short() *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&o[0]))
 }
 
 func (o ObjectName) SegmentId() Segmentid {

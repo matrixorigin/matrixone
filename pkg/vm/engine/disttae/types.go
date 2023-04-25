@@ -129,7 +129,7 @@ type Transaction struct {
 	// use to cache created table
 	createMap *sync.Map
 
-	cnBlockDeletesMap *CnBlockDeletesMap
+	deletedBlocks *deletedBlocks
 	// blkId -> Pos
 	cnBlkId_Pos                     map[string]Pos
 	blockId_raw_batch               map[string]*batch.Batch
@@ -141,25 +141,49 @@ type Pos struct {
 	offset int64
 }
 
-type CnBlockDeletesMap struct {
+// FIXME: The map inside this one will be accessed concurrently, using
+// a mutex, not sure if there will be performance issues
+type deletedBlocks struct {
+	sync.RWMutex
+
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
-	mp map[string][]int64
+	offsets map[string][]int64
 }
 
-func (cn_deletes_mp *CnBlockDeletesMap) PutCnBlockDeletes(blockId string, offsets []int64) {
-	cn_deletes_mp.mp[blockId] = append(cn_deletes_mp.mp[blockId], offsets...)
+func (b *deletedBlocks) addDeletedBlocks(blockID string, offsets []int64) {
+	b.Lock()
+	defer b.Unlock()
+	b.offsets[blockID] = append(b.offsets[blockID], offsets...)
 }
 
-func (cn_deletes_mp *CnBlockDeletesMap) GetCnBlockDeletes(blockId string) []int64 {
-	res := cn_deletes_mp.mp[blockId]
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
+	b.RLock()
+	defer b.RUnlock()
+	res := b.offsets[blockID]
 	offsets := make([]int64, len(res))
 	copy(offsets, res)
 	return offsets
 }
 
+func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
+	b.Lock()
+	defer b.Unlock()
+	delete(b.offsets, blockID)
+}
+
+func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
+	b.RLock()
+	defer b.RUnlock()
+	for id, offsets := range b.offsets {
+		if !fn(id, offsets) {
+			return
+		}
+	}
+}
+
 func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
-	txn.cnBlockDeletesMap.PutCnBlockDeletes(blockId, offsets)
+	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
 // Entry represents a delete/insert
