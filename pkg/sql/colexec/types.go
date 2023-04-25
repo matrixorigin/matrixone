@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"reflect"
 	"sync"
 
 	"github.com/google/uuid"
@@ -67,4 +68,22 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[string]int32
+}
+
+type SenderOperator struct {
+	SendTo []*process.WaitRegister
+}
+
+// ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
+type ReceiverOperator struct {
+	proc *process.Process
+
+	// parameter for Merge-Type receiver.
+	// Merge-Type specifys the operator receive batch from all
+	// regs or single reg.
+	//
+	// Merge/MergeGroup/MergeLimit ... are Merge-Type
+	// while Join/Intersect/Minus ... are not
+	aliveMergeReceiver int
+	receiverListener   []reflect.SelectCase
 }
