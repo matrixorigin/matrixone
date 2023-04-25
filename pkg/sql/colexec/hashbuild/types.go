@@ -48,8 +48,6 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.StrHashMap
-
-	nullSels []int32
 }
 
 type Argument struct {
@@ -61,8 +59,6 @@ type Argument struct {
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
-
-	IsRight bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

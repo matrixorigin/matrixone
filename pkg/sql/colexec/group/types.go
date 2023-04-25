@@ -129,7 +129,9 @@ func (ctr *container) cleanMultiAggVecs() {
 
 func (ctr *container) cleanGroupVectors() {
 	for i := range ctr.groupVecs {
-		ctr.groupVecs[i].executor.Free()
+		if ctr.groupVecs[i].executor != nil {
+			ctr.groupVecs[i].executor.Free()
+		}
 		ctr.groupVecs[i].vec = nil
 	}
 }

@@ -94,11 +94,12 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn      net.Conn
-	tenant    Tenant
-	labelInfo labelInfo // need to set it explicitly
-	router    Router
-	tun       *tunnel
+	conn        net.Conn
+	tenant      Tenant
+	labelInfo   labelInfo // need to set it explicitly
+	router      Router
+	tun         *tunnel
+	setVarStmts []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -127,29 +128,48 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	sc, _, err := c.router.Connect(cn, nil, c.tun)
+	cn.salt = testSlat
+	sc, _, err := c.router.Connect(cn, testPacket, c.tun)
 	if err != nil {
 		return nil, err
 	}
+	// Set the label session variable.
+	if err := sc.ExecStmt(c.labelInfo.genSetVarStmt(), nil); err != nil {
+		return nil, err
+	}
+	// Set the use defined variables, including session variables and user variables.
+	for _, stmt := range c.setVarStmts {
+		if err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
 	return sc, nil
 }
-func (c *mockClientConn) HandleEvent(ctx context.Context, e IEventReq, resp chan<- []byte) error {
-	if e.eventType() != TypeKillQuery {
+func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
+	switch ev := e.(type) {
+	case *killQueryEvent:
+		cn, err := c.router.SelectByConnID(ev.connID)
+		if err != nil {
+			sendResp([]byte(err.Error()), resp)
+			return err
+		}
+		sendResp([]byte(cn.addr), resp)
+		return nil
+	case *setVarEvent:
+		c.setVarStmts = append(c.setVarStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
+		return nil
+	default:
 		sendResp([]byte("type not supported"), resp)
 		return moerr.NewInternalErrorNoCtx("type not supported")
 	}
-	ev := e.(*killQueryEvent)
-	cn, err := c.router.SelectByConnID(ev.connID)
-	if err != nil {
-		sendResp([]byte(err.Error()), resp)
-		return err
-	}
-	sendResp([]byte(cn.addr), resp)
-	return nil
 }
 func (c *mockClientConn) Close() error { return nil }
 
 func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNServer) func() {
+	if cn.salt == nil || len(cn.salt) != 20 {
+		cn.salt = testSlat
+	}
 	clientProxy, client := net.Pipe()
 	go func(ctx context.Context) {
 		b := make([]byte, 10)
@@ -163,7 +183,7 @@ func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNSer
 		}
 	}(tp.ctx)
 	tu := newTunnel(tp.ctx, tp.logger, tp.counterSet)
-	sc, _, err := tp.ru.Connect(cn, nil, tu)
+	sc, _, err := tp.ru.Connect(cn, testPacket, tu)
 	require.NoError(t, err)
 	cc := newMockClientConn(clientProxy, "t1", li, tp.ru, tu)
 	err = tu.run(cc, sc)

@@ -215,9 +215,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
-				global := db.BGCheckpointRunner.MaxGlobalCheckpoint()
-				if global != nil {
-					db.LogtailMgr.GCByTS(ctx, global.GetEnd())
+				ckp := db.BGCheckpointRunner.MaxCheckpoint()
+				if ckp != nil && ckp.IsCommitted() {
+					db.LogtailMgr.GCByTS(ctx, ckp.GetEnd())
 				}
 				return nil
 			},

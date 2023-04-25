@@ -95,6 +95,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 			return err
 		}
 	}
+	ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
 	return nil
 }
 
@@ -105,7 +106,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -214,7 +214,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
@@ -269,7 +268,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	for i := range ap.Exprs {
 		ctr.groupVecs[i].vec, err = ctr.groupVecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanGroupVectors()
 			return false, err
 		}
 		ctr.vecs[i] = ctr.groupVecs[i].vec

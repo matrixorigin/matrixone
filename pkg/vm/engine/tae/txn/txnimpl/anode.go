@@ -85,7 +85,7 @@ func (n *anode) Close() (err error) {
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.table.entry.GetSchema()
+	schema := n.table.GetLocalSchema()
 	if n.storage.mnode.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)

@@ -35,7 +35,7 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 // type ItBytesOp func(v []byte, isNull bool, row int) error
 
 type Vector interface {
-	GetType() types.Type
+	GetType() *types.Type
 
 	// Deep copy ops
 	Get(i int) any
@@ -60,8 +60,6 @@ type Vector interface {
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
-	ForeachShallow(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	Length() int
 	Allocated() int

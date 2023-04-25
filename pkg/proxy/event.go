@@ -15,8 +15,10 @@
 package proxy
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 )
 
 // eventType alias uint8, which indicates the type of event.
@@ -27,6 +29,8 @@ func (t eventType) String() string {
 	switch t {
 	case TypeKillQuery:
 		return "KillQuery"
+	case TypeSetVar:
+		return "SetVar"
 	}
 	return "Unknown"
 }
@@ -36,15 +40,51 @@ const (
 	TypeMin eventType = 0
 	// TypeKillQuery indicates the kill query statement.
 	TypeKillQuery eventType = 1
+	// TypeSetVar indicates the set variable statement.
+	TypeSetVar eventType = 2
+)
+
+var (
+	set              = "[sS][eE][tT]"
+	session          = "[sS][eE][sS][sS][iI][oO][nN]"
+	local            = "[lL][oO][cC][aA][lL]"
+	spaceAtLeastZero = "\\s*"
+	spaceAtLeastOne  = "\\s+"
+	varName          = "[a-zA-Z][a-zA-Z0-9_]*"
+	varValue         = "[0-9]+|'[\\s\\S]*'"
+	assign           = ":?="
+	at               = "@"
+	atAt             = "@@"
+	dot              = "\\."
 )
 
 // patterMap is a map eventType => pattern string
 var patternMap = map[eventType]string{
 	TypeKillQuery: `^([kK][iI][lL][lL])\s+([qQ][uU][eE][rR][yY])\s+(\d+)$`,
+	// TypeSetVar matches set session variable:
+	//   - set session key=value;
+	//   - set local key=value;
+	//   - set @@session.key=value;
+	//   - set @@local.key=value;
+	//   - set @@key=value;
+	//   - set key=value;
+	// and set user variable:
+	//   - set @key=value;
+	TypeSetVar: fmt.Sprintf(`^(%s)%s(%s%s%s|%s%s%s|%s%s%s%s|%s%s%s%s|%s%s|%s|%s%s)%s(%s)%s(%s)$`,
+		set, spaceAtLeastOne, // set
+		session, spaceAtLeastOne, varName, // session key
+		local, spaceAtLeastOne, varName, // local key
+		atAt, session, dot, varName, // @@session.key
+		atAt, local, dot, varName, // @@local.key
+		atAt, varName, // @@key
+		varName,     // key
+		at, varName, // @key
+		spaceAtLeastZero, assign, spaceAtLeastZero, // = or :=
+		varValue), // value
 }
 
-// IEventReq is the event request interface.
-type IEventReq interface {
+// IEvent is the event interface.
+type IEvent interface {
 	// eventType returns the type of the event.
 	eventType() eventType
 }
@@ -61,7 +101,7 @@ func (e *baseEvent) eventType() eventType {
 }
 
 // sendReq sends an event to event channel.
-func sendReq(e IEventReq, c chan<- IEventReq) {
+func sendReq(e IEvent, c chan<- IEvent) {
 	c <- e
 }
 
@@ -70,30 +110,52 @@ func sendResp(r []byte, c chan<- []byte) {
 	c <- r
 }
 
-// makeEvent parses a event from message bytes. If we got no
-// supported event, just return nil.
-func makeEvent(msg []byte) IEventReq {
-	if len(msg) < preRecvLen {
-		return nil
+// eventReq is used to make an event.
+type eventReq struct {
+	// msg is a MySQL packet bytes.
+	msg []byte
+}
+
+// eventReqPool is used to fetch event request from pool.
+var eventReqPool = sync.Pool{
+	New: func() interface{} {
+		return new(eventReq)
+	},
+}
+
+// makeEvent parses an event from message bytes. If we got no
+// supported event, just return nil. If the second return value
+// is true, means that the message has been consumed completely,
+// and do not need to send to dst anymore.
+func makeEvent(req *eventReq) (IEvent, bool) {
+	if req == nil || len(req.msg) < preRecvLen {
+		return nil, true
 	}
-	if msg[4] == byte(cmdQuery) {
-		stmt := getStatement(msg)
+	if req.msg[4] == byte(cmdQuery) {
+		stmt := getStatement(req.msg)
 		// Get the event type.
 		var typ eventType
+		var matched bool
 		for typ = range patternMap {
-			matched, err := regexp.MatchString(patternMap[typ], stmt)
-			if err == nil && matched {
+			matched, _ = regexp.MatchString(patternMap[typ], stmt)
+			if matched {
 				break
 			}
 		}
+		if !matched {
+			return nil, true
+		}
 		switch typ {
 		case TypeKillQuery:
-			return makeKillQueryEvent(stmt, regexp.MustCompile(patternMap[TypeKillQuery]))
+			return makeKillQueryEvent(stmt, regexp.MustCompile(patternMap[typ])), true
+		case TypeSetVar:
+			// This event should be sent to dst, so return false,
+			return makeSetVarEvent(stmt), false
 		default:
-			return nil
+			return nil, true
 		}
 	}
-	return nil
+	return nil, true
 }
 
 // killQueryEvent is the event that "kill query" statement is captured.
@@ -108,7 +170,7 @@ type killQueryEvent struct {
 }
 
 // makeKillQueryEvent creates a event with TypeKillQuery type.
-func makeKillQueryEvent(stmt string, reg *regexp.Regexp) IEventReq {
+func makeKillQueryEvent(stmt string, reg *regexp.Regexp) IEvent {
 	items := reg.FindStringSubmatch(stmt)
 	if len(items) != 4 {
 		return nil
@@ -127,6 +189,29 @@ func makeKillQueryEvent(stmt string, reg *regexp.Regexp) IEventReq {
 }
 
 // eventType implements the IEvent interface.
-func (ke *killQueryEvent) eventType() eventType {
+func (e *killQueryEvent) eventType() eventType {
 	return TypeKillQuery
+}
+
+// setVarEvent is the event that set session variable or set user variable.
+// We need to check if the execution of this statement is successful, and
+// then keep the variable and its value to clientConn.
+type setVarEvent struct {
+	baseEvent
+	// stmt is the statement that will be sent to server.
+	stmt string
+}
+
+// makeSetVarEvent creates an event with TypeSetVar type.
+func makeSetVarEvent(stmt string) IEvent {
+	e := &setVarEvent{
+		stmt: stmt,
+	}
+	e.typ = TypeSetVar
+	return e
+}
+
+// eventType implements the IEvent interface.
+func (e *setVarEvent) eventType() eventType {
+	return TypeSetVar
 }
