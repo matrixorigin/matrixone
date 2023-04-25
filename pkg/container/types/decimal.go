@@ -15,6 +15,7 @@
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/bits"
@@ -1821,4 +1822,80 @@ func (x Decimal128) Round(scale1, scale2 int32) Decimal128 {
 	x, _ = x.Scale(-k)
 	x, _ = x.Scale(k)
 	return x
+}
+
+// ProtoSize is used by gogoproto.
+func (x *Decimal64) ProtoSize() int {
+	return 8
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (x *Decimal64) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < x.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	binary.BigEndian.PutUint64(data[0:], uint64(*x))
+	return 8, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (x *Decimal64) MarshalTo(data []byte) (int, error) {
+	size := x.ProtoSize()
+	return x.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (x *Decimal64) Marshal() ([]byte, error) {
+	data := make([]byte, x.ProtoSize())
+	n, err := x.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (x *Decimal64) Unmarshal(data []byte) error {
+	*x = Decimal64(binary.BigEndian.Uint64(data))
+	return nil
+}
+
+// ProtoSize is used by gogoproto.
+func (x *Decimal128) ProtoSize() int {
+	return 8 + 8
+}
+
+func (x *Decimal128) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < x.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	binary.BigEndian.PutUint64(data[0:], x.B0_63)
+	binary.BigEndian.PutUint64(data[8:], x.B64_127)
+	return 16, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (x *Decimal128) MarshalTo(data []byte) (int, error) {
+	size := x.ProtoSize()
+	return x.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (x *Decimal128) Marshal() ([]byte, error) {
+	data := make([]byte, x.ProtoSize())
+	n, err := x.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (x *Decimal128) Unmarshal(data []byte) error {
+	if len(data) < x.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	x.B0_63 = binary.BigEndian.Uint64(data[0:])
+	x.B64_127 = binary.BigEndian.Uint64(data[8:])
+	return nil
 }

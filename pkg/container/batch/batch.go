@@ -132,9 +132,12 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
-	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
-	for i, info := range rbat.AggInfos {
-		bat.Aggs[i] = info.Agg
+	// initialize bat.Aggs only if necessary
+	if len(rbat.AggInfos) > 0 {
+		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+		for i, info := range rbat.AggInfos {
+			bat.Aggs[i] = info.Agg
+		}
 	}
 	return nil
 }
