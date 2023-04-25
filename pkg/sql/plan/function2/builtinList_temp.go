@@ -1962,103 +1962,6 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		},
 	},
 	{
-		functionId: BETWEEN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
-		layout:     BETWEEN_AND_EXPRESSION,
-		checkFn:    fixedTypeMatch, // TODO
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_uint8, types.T_uint8},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_uint16, types.T_uint16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_uint32, types.T_uint32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 4,
-				args:       []types.T{types.T_int16, types.T_int16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 5,
-				args:       []types.T{types.T_int32, types.T_int32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 6,
-				args:       []types.T{types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 7,
-				args:       []types.T{types.T_float32, types.T_float32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 8,
-				args:       []types.T{types.T_float64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 9,
-				args:       []types.T{types.T_decimal64, types.T_decimal64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-			{
-				overloadId: 10,
-				args:       []types.T{types.T_decimal128, types.T_decimal128},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				NewOp: nil,
-			},
-		},
-	},
-	{
 		functionId: BINARY,
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
@@ -2362,7 +2265,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: CHARSET,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2379,7 +2282,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: COALESCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn:    coalesceCheck,
 
 		Overloads: []overload{
 			{
@@ -2565,7 +2468,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: CONCAT_WS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn:    concatWsCheck,
 
 		Overloads: []overload{
 			{
@@ -2736,7 +2639,12 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: EXISTS,
 		class:      plan.Function_STRICT,
 		layout:     EXISTS_ANY_PREDICATE,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
 
 		Overloads: []overload{
 			{
@@ -2751,12 +2659,13 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: FIELD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn:    filedCheck,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2765,6 +2674,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 1,
 				volatile:   true,
+				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2773,6 +2683,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 2,
 				volatile:   true,
+				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2781,6 +2692,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 3,
 				volatile:   true,
+				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2789,6 +2701,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 4,
 				volatile:   true,
+				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2797,6 +2710,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 5,
 				volatile:   true,
+				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2805,6 +2719,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 6,
 				volatile:   true,
+				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2813,6 +2728,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 7,
 				volatile:   true,
+				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2821,6 +2737,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 8,
 				volatile:   true,
+				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2829,6 +2746,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 9,
 				volatile:   true,
+				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2837,6 +2755,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 			{
 				overloadId: 10,
 				volatile:   true,
+				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -2848,7 +2767,7 @@ var tempListForBinaryFunctions2 = []FuncNew{
 		functionId: FORMAT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
+		checkFn:    formatCheck,
 
 		Overloads: []overload{
 			{
@@ -2923,23 +2842,6 @@ var tempListForBinaryFunctions2 = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				NewOp: FromUnixTimeFloat64Format,
-			},
-		},
-	},
-	{
-		functionId: HASH,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
-				},
-				NewOp: nil,
 			},
 		},
 	},

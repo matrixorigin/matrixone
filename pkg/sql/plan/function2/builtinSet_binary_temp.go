@@ -540,6 +540,48 @@ type NormalType interface {
 		types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid
 }
 
+func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 0 {
+		minIndex := -1
+		minOid := types.T(0)
+		minCost := math.MaxInt
+		overloadRequire := make([]types.T, len(inputs))
+		for i, over := range overloads {
+			requireOid := over.retType(nil).Oid
+			for j := range overloadRequire {
+				overloadRequire[j] = requireOid
+			}
+
+			sta, cos := tryToMatch(inputs, overloadRequire)
+			if sta == matchFailed {
+				continue
+			} else if sta == matchDirectly {
+				return newCheckResultWithSuccess(i)
+			} else {
+				if cos < minCost {
+					minIndex = i
+					minCost = cos
+					minOid = requireOid
+				}
+			}
+		}
+		if minIndex == -1 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		castType := make([]types.Type, len(inputs))
+		for i := range castType {
+			if minOid == inputs[i].Oid {
+				castType[i] = inputs[i]
+			} else {
+				castType[i] = minOid.ToType()
+				setTargetScaleFromSource(&inputs[i], &castType[i])
+			}
+		}
+		return newCheckResultWithCast(minIndex, castType)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[T](result)
 	vecs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
@@ -595,6 +637,32 @@ func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 		}
 	}
 	return nil
+}
+
+func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
+	// all args should be string or can cast to string type.
+	if len(inputs) > 1 {
+		ret := make([]types.Type, len(inputs))
+		shouldConvert := false
+
+		for i, t := range inputs {
+			if t.Oid.IsMySQLString() {
+				ret[i] = t
+				continue
+			}
+			if can, _ := fixedImplicitTypeCast(t, types.T_varchar); can {
+				shouldConvert = true
+				ret[i] = types.T_varchar.ToType()
+			} else {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+		}
+		if shouldConvert {
+			return newCheckResultWithCast(0, ret)
+		}
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
 func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
@@ -1229,6 +1297,43 @@ type number interface {
 	constraints.Unsigned | constraints.Signed | constraints.Float
 }
 
+// XXX confused check rule.
+func filedCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 1 {
+		requiredType := make([]types.T, len(inputs))
+		doubleIndex := -1 // index of overload which require all `double` type as parameters.
+
+		for i, over := range overloads {
+			for _, t := range over.args {
+				for j := range requiredType {
+					if t == types.T_float64 {
+						doubleIndex = i
+					}
+					requiredType[j] = t
+				}
+				if sta, _ := tryToMatch(inputs, requiredType); sta == matchDirectly {
+					return newCheckResultWithSuccess(i)
+				}
+			}
+		}
+
+		// try to convert all arguments to be double.
+		if doubleIndex != -1 {
+			for i := range requiredType {
+				requiredType[i] = types.T_float64
+			}
+			if sta, _ := tryToMatch(inputs, requiredType); sta == matchByCast {
+				castTypes := make([]types.Type, len(inputs))
+				for j := range castTypes {
+					castTypes[j] = types.T_float64.ToType()
+				}
+				return newCheckResultWithCast(doubleIndex, castTypes)
+			}
+		}
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
 
@@ -1301,6 +1406,17 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	}
 
 	return nil
+}
+
+func formatCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 1 {
+		// if the first param's type is time type. return failed.
+		if inputs[0].Oid.IsDateRelate() {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		return fixedTypeMatch(overloads, inputs)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
