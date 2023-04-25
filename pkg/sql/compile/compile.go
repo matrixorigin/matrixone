@@ -162,8 +162,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.Run(c)
 	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
-		return s.MergeRun(c)
-		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
@@ -484,74 +482,74 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 }
 
 // for now, cn-write-s3 delete just support
-func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
-	if len(delCtx.IdxIdx) > 0 || len(delCtx.IdxSource) > 0 {
-		return false
-	}
+// func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
+// 	if len(delCtx.IdxIdx) > 0 || len(delCtx.IdxSource) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.OnRestrictIdx) > 0 {
-		return false
-	}
+// 	if len(delCtx.OnRestrictIdx) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.OnCascadeIdx) > 0 || len(delCtx.OnCascadeSource) > 0 {
-		return false
-	}
+// 	if len(delCtx.OnCascadeIdx) > 0 || len(delCtx.OnCascadeSource) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.OnSetIdx) > 0 || len(delCtx.OnSetSource) > 0 {
-		return false
-	}
+// 	if len(delCtx.OnSetIdx) > 0 || len(delCtx.OnSetSource) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
-		return false
-	}
+// 	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.OnSetTableDef) > 0 || len(delCtx.OnSetUpdateCol) > 0 {
-		return false
-	}
+// 	if len(delCtx.OnSetTableDef) > 0 || len(delCtx.OnSetUpdateCol) > 0 {
+// 		return false
+// 	}
 
-	if len(delCtx.DelSource) > 1 {
-		return false
-	}
-	return true
-}
+// 	if len(delCtx.DelSource) > 1 {
+// 		return false
+// 	}
+// 	return true
+// }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		return ss[0], nil
-		deleteNode := qry.Nodes[qry.Steps[0]]
-		deleteNode.NotCacheable = true
-		nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
-		// 1.Estiminate the cost of delete rows, if we need to delete too much rows,
-		// just use distributed deletion (write s3 delete just think about delete
-		// single table)
-		arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
-			rs = c.newDeleteMergeScope(arg, ss)
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeDelete,
-				Arg: &mergedelete.Argument{
-					DelSource: arg.DeleteCtx.DelSource[0],
-				},
-			})
-			rs.Magic = MergeDelete
-		} else {
-			rs = c.newMergeScope(ss)
-			updateScopesLastFlag([]*Scope{rs})
-			rs.Magic = Deletion
-			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			if err != nil {
-				return nil, err
-			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.Deletion,
-				Arg: arg,
-			})
-		}
+		// deleteNode := qry.Nodes[qry.Steps[0]]
+		// deleteNode.NotCacheable = true
+		// nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
+		// // 1.Estiminate the cost of delete rows, if we need to delete too much rows,
+		// // just use distributed deletion (write s3 delete just think about delete
+		// // single table)
+		// arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
+		// 	rs = c.newDeleteMergeScope(arg, ss)
+		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 		Op: vm.MergeDelete,
+		// 		Arg: &mergedelete.Argument{
+		// 			DelSource: arg.DeleteCtx.DelSource[0],
+		// 		},
+		// 	})
+		// 	rs.Magic = MergeDelete
+		// } else {
+		// 	rs = c.newMergeScope(ss)
+		// 	updateScopesLastFlag([]*Scope{rs})
+		// 	rs.Magic = Deletion
+		// 	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		// 	if err != nil {
+		// 		return nil, err
+		// 	}
+		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		// 		Op:  vm.Deletion,
+		// 		Arg: arg,
+		// 	})
+		// }
 	case plan.Query_INSERT:
 		return ss[0], nil
 	case plan.Query_UPDATE:

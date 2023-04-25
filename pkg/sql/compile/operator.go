@@ -420,7 +420,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			IBucket:      t.IBucket,
 			Nbucket:      t.Nbucket,
 			DeleteCtx:    t.DeleteCtx,
-			AffectedRows: t.AffectedRows,
 			Engine:       t.Engine,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,

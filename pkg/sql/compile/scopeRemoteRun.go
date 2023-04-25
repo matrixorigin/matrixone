@@ -600,34 +600,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
 		}
 	case *deletion.Argument:
-		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
-		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
-			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
-		}
-		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
-		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
-			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
-		}
-		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
-
-		}
 		in.Delete = &pipeline.Deletion{
 			Ts:           t.Ts,
-			AffectedRows: t.AffectedRows,
+			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			NBucket:      t.Nbucket,
 			// deleteCtx
-			CanTruncate:    t.DeleteCtx.CanTruncate,
-			DelRef:         t.DeleteCtx.DelRef,
-			IdxIdx:         t.DeleteCtx.IdxIdx,
-			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
-			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
-			OnSetRef:       t.DeleteCtx.OnSetRef,
-			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
-			OnSetUpdateCol: onSetUpdateCols,
-			OnSetIdx:       onSetIdxs,
+			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
+			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
+			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
+			Ref:                   t.DeleteCtx.Ref,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -934,31 +919,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
-		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
-		for i := 0; i < len(t.OnSetUpdateCol); i++ {
-			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
-		}
-		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
-		for i := 0; i < len(t.OnSetIdx); i++ {
-			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
-		}
 		v.Arg = &deletion.Argument{
 			Ts:           t.Ts,
-			AffectedRows: t.AffectedRows,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			Nbucket:      t.NBucket,
 			DeleteCtx: &deletion.DeleteCtx{
-				CanTruncate:    t.CanTruncate,
-				DelRef:         t.DelRef,
-				IdxIdx:         t.IdxIdx,
-				OnRestrictIdx:  t.OnRestrictIdx,
-				OnCascadeIdx:   t.OnCascadeIdx,
-				OnSetRef:       t.OnSetRef,
-				OnSetTableDef:  t.OnSetTableDef,
-				OnSetUpdateCol: onSetUpdateCols,
-				OnSetIdx:       onSetIdxs,
+				CanTruncate:           t.CanTruncate,
+				RowIdIdx:              int(t.RowIdIdx),
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
 			},
 		}
 	case vm.Insert:

@@ -95,6 +95,7 @@ func (txn *Transaction) WriteBatch(
 ) error {
 	txn.readOnly = false
 	bat.Cnt = 1
+	txn.Lock()
 	if typ == INSERT {
 		txn.genBlock()
 		len := bat.Length()
@@ -113,7 +114,6 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
-	txn.Lock()
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		bat:          bat,

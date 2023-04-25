@@ -66,12 +66,13 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		if p.RemoteDelete {
 			// ToDo: CNBlock Compaction
 			// blkId,delta_metaLoc,type
-			resBat := batch.New(true, []string{
+			resBat := batch.NewWithSize(4)
+			resBat.Attrs = []string{
 				catalog.BlockMeta_Delete_ID,
 				catalog.BlockMeta_DeltaLoc,
 				catalog.BlockMeta_Type,
 				catalog.BlockMeta_Deletes_Length,
-			})
+			}
 			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))

@@ -100,16 +100,14 @@ message Deletion{
   uint32 IBucket =4;
   uint32 NBucket = 5;
   // DeleteCtx
-  bool CanTruncate = 6;
-  repeated plan.ObjectRef DelRef = 7;
-  repeated int32 IdxIdx = 8;
-  repeated int32 OnRestrictIdx = 9;
-  repeated int32 OnCascadeIdx = 10;
-  repeated plan.ObjectRef OnSetRef = 11;
-  repeated plan.TableDef OnSetTableDef = 12;
-  repeated Map OnSetUpdateCol = 13;
-  repeated Array OnSetIdx = 14;
-  map<string,int32> SegmentMap = 15;
+
+  int32 row_id_idx                    = 6;
+  repeated uint64 partition_table_ids = 7;
+  int32 partition_index_in_batch      = 8;
+  plan.ObjectRef ref                  = 9;
+  bool add_affected_rows              = 10;
+  map<string,int32> SegmentMap        = 11;
+  bool can_truncate                   = 12;
 }
 
 message PreInsert {
@@ -305,7 +303,6 @@ message Instruction{
   OnDuplicateKey on_duplicate_key = 18;
   PreInsert pre_insert               = 19;
   PreInsertUnique pre_insert_unique  = 20;
-  Deletion delete = 18;
   repeated plan.OrderBySpec order_by = 21;
   repeated plan.Expr    project_list = 22;
   plan.Expr    filter = 23;
@@ -320,6 +317,7 @@ message Instruction{
   RightSemiJoin right_semi_join = 29;
   RightAntiJoin right_anti_join = 30;
 
+  Deletion delete = 31;
 }
 
 message AnalysisList {
