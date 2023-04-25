@@ -141,9 +141,10 @@ func newClientConn(
 	router Router,
 	tun *tunnel,
 ) (ClientConn, error) {
+	var originIP net.IP
 	host, _, err := net.SplitHostPort(conn.RemoteAddress())
-	if err != nil {
-		return nil, err
+	if err == nil {
+		originIP = net.ParseIP(host)
 	}
 	c := &clientConn{
 		ctx:        ctx,
@@ -154,7 +155,7 @@ func newClientConn(
 		moCluster:  mc,
 		router:     router,
 		tun:        tun,
-		originIP:   net.ParseIP(host),
+		originIP:   originIP,
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
