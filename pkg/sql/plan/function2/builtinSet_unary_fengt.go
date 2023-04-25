@@ -26,6 +26,10 @@ func sleepSeconds(proc *process.Process, sec float64) (uint8, error) {
 }
 
 func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "sleep only accept constant param.")
+	}
+
 	rs := vector.MustFunctionResult[uint8](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {

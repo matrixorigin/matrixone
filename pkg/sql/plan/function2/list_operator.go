@@ -1837,22 +1837,4 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
-
-	// operator `If X THEN Y ELSE Z`, `Iff(x, y, z)`
-	{
-		functionId: IFF,
-		class:      plan.Function_NONE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    iffCheck,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
-				NewOp: iffFn,
-			},
-		},
-	},
 }

@@ -31,7 +31,19 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedOperators {
 		allSupportedFunctions[fn.functionId] = fn
 	}
-	for _, fn := range supportedBuiltins {
+	for _, fn := range supportedStringBuiltIns {
+		allSupportedFunctions[fn.functionId] = fn
+	}
+	for _, fn := range supportedDateAndTimeBuiltIns {
+		allSupportedFunctions[fn.functionId] = fn
+	}
+	for _, fn := range supportedMathBuiltIns {
+		allSupportedFunctions[fn.functionId] = fn
+	}
+	for _, fn := range supportedControlBuiltIns {
+		allSupportedFunctions[fn.functionId] = fn
+	}
+	for _, fn := range supportedOthersBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggregateFunctions {

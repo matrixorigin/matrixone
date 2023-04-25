@@ -1193,11 +1193,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 
-	if function2.GetFunctionAppendHideArgByID(funcID) {
-		// Append a hidden parameter to the function. The default value is constant null
-		args = append(args, makePlan2NullConstExprWithType())
-	}
-
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function2.DeduceNotNullable(funcID, args)
