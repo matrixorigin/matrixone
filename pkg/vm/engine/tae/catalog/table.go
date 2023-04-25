@@ -187,9 +187,9 @@ func (entry *TableEntry) CreateSegment(
 	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id types.Uuid
+	var id *objectio.Segmentid
 	if opts != nil && opts.Id != nil {
-		id = *opts.Id
+		id = opts.Id
 	} else {
 		id = objectio.NewSegmentid()
 	}

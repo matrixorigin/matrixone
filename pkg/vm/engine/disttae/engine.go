@@ -334,7 +334,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	)
 
 	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(&id)
+	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -354,7 +354,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId: id,
+		segId: *id,
 		deletedBlocks: &deletedBlocks{
 			offsets: map[string][]int64{},
 		},

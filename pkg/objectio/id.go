@@ -33,8 +33,9 @@ type Segmentid = types.Uuid
 type Blockid = types.Blockid
 type Rowid = types.Rowid
 
-func NewSegmentid() Segmentid {
-	return types.Uuid(uuid.Must(uuid.NewUUID()))
+func NewSegmentid() *Segmentid {
+	id := types.Uuid(uuid.Must(uuid.NewUUID()))
+	return &id
 }
 
 func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {

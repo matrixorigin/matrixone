@@ -151,8 +151,8 @@ func (b *Blockid) Offsets() (uint16, uint16) {
 	return filen, blkn
 }
 
-func (b *Blockid) Segment() Uuid {
-	return DecodeUuid(b[:UuidSize])
+func (b *Blockid) Segment() *Uuid {
+	return (*Uuid)(unsafe.Pointer(&b[0]))
 }
 
 func (b *Blockid) Sequence() uint16 {
