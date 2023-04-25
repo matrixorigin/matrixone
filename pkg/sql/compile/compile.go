@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
@@ -1626,45 +1624,45 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 // CN, so we need to transfer the rows from the
 // the same block to one and the same CN to perform
 // the deletion operators.
-func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
-	//Todo: implemet delete merge
-	ss2 := make([]*Scope, 0, len(ss))
-	// ends := make([]*Scope, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			// ends = append(ends, s)
-			continue
-		}
-		ss2 = append(ss2, s)
-	}
-
-	rs := make([]*Scope, 0, len(ss2))
-	uuids := make([]uuid.UUID, 0, len(ss2))
-	for i := 0; i < len(ss2); i++ {
-		rs = append(rs, new(Scope))
-		uuids = append(uuids, uuid.New())
-	}
-
-	// for every scope, it should dispatch its
-	// batch to other cn
-	for i := 0; i < len(ss2); i++ {
-		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
-	}
-	delete := &vm.Instruction{
-		Op:  vm.Deletion,
-		Arg: arg,
-	}
-	for i := range rs {
-		// use distributed delete
-		arg.RemoteDelete = true
-		// maybe just copy only once?
-		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
-		arg.IBucket = uint32(i)
-		arg.Nbucket = uint32(len(rs))
-		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil, 0))
-	}
-	return c.newMergeScope(rs)
-}
+//func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
+//	//Todo: implemet delete merge
+//	ss2 := make([]*Scope, 0, len(ss))
+//	// ends := make([]*Scope, 0, len(ss))
+//	for _, s := range ss {
+//		if s.IsEnd {
+//			// ends = append(ends, s)
+//			continue
+//		}
+//		ss2 = append(ss2, s)
+//	}
+//
+//	rs := make([]*Scope, 0, len(ss2))
+//	uuids := make([]uuid.UUID, 0, len(ss2))
+//	for i := 0; i < len(ss2); i++ {
+//		rs = append(rs, new(Scope))
+//		uuids = append(uuids, uuid.New())
+//	}
+//
+//	// for every scope, it should dispatch its
+//	// batch to other cn
+//	for i := 0; i < len(ss2); i++ {
+//		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
+//	}
+//	delete := &vm.Instruction{
+//		Op:  vm.Deletion,
+//		Arg: arg,
+//	}
+//	for i := range rs {
+//		// use distributed delete
+//		arg.RemoteDelete = true
+//		// maybe just copy only once?
+//		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+//		arg.IBucket = uint32(i)
+//		arg.Nbucket = uint32(len(rs))
+//		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil, 0))
+//	}
+//	return c.newMergeScope(rs)
+//}
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{

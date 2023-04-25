@@ -130,17 +130,17 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 }
 
 // calculate the partition expression and append the result vector to batch
-func genPartitionExpr(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
-	// Check whether it is a partition table
-	if tableDef.Partition == nil {
-		return nil
-	} else {
-		partitionVec, err := colexec.EvalExpr(bat, proc, tableDef.Partition.PartitionExpression)
-		if err != nil {
-			return err
-		}
-		bat.Attrs = append(bat.Attrs, "__mo_partition_expr__")
-		bat.Vecs = append(bat.Vecs, partitionVec)
-	}
-	return nil
-}
+//func genPartitionExpr(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
+//	// Check whether it is a partition table
+//	if tableDef.Partition == nil {
+//		return nil
+//	} else {
+//		partitionVec, err := colexec.EvalExpr(bat, proc, tableDef.Partition.PartitionExpression)
+//		if err != nil {
+//			return err
+//		}
+//		bat.Attrs = append(bat.Attrs, "__mo_partition_expr__")
+//		bat.Vecs = append(bat.Vecs, partitionVec)
+//	}
+//	return nil
+//}
