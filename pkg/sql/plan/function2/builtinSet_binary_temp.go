@@ -28,6 +28,7 @@ import (
 	"golang.org/x/exp/constraints"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -1644,6 +1645,70 @@ func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.Fun
 			} else {
 				r = ""
 			}
+			if err = rs.AppendBytes([]byte(r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func subStrIndex(str, delim string, count int64) (string, error) {
+	// if the length of delim is 0, return empty string
+	if len(delim) == 0 {
+		return "", nil
+	}
+	// if the count is 0, return empty string
+	if count == 0 {
+		return "", nil
+	}
+
+	partions := strings.Split(str, delim)
+	start, end := int64(0), int64(len(partions))
+
+	if count > 0 {
+		//is count is positive, reset the end position
+		if count < end {
+			end = count
+		}
+	} else {
+		count = -count
+
+		// -count overflows max int64, return the whole string.
+		if count < 0 {
+			return str, nil
+		}
+
+		//if count is negative, reset the start postion
+		if count < end {
+			start = end - count
+		}
+	}
+	subPartions := partions[start:end]
+	return strings.Join(subPartions, delim), nil
+}
+
+func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	delims := vector.GenerateFunctionStrParameter(ivecs[1])
+	counts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		d, null2 := delims.GetStrValue(i)
+		c, null3 := counts.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			r, err := subStrIndex(string(v), string(d), int64(c))
+			if err != nil {
+				return err
+			}
+
 			if err = rs.AppendBytes([]byte(r), false); err != nil {
 				return err
 			}
