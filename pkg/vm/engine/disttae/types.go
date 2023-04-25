@@ -230,13 +230,15 @@ type txnTable struct {
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs           []engine.TableDef
-	tableDef       *plan.TableDef
-	idxs           []uint16
-	setPartsOnce   sync.Once
-	_parts         []*PartitionState
-	modifiedBlocks [][]ModifyBlockMeta
-	blockMetas     [][]BlockMeta
+	defs              []engine.TableDef
+	tableDef          *plan.TableDef
+	idxs              []uint16
+	setPartsOnce      sync.Once
+	_parts            []*PartitionState
+	_partsErr         error
+	modifiedBlocks    [][]ModifyBlockMeta
+	blockMetas        [][]BlockMeta
+	blockMetasUpdated bool
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -248,7 +250,6 @@ type txnTable struct {
 	createSql    string
 	constraint   []byte
 
-	updated bool
 	// use for skip rows
 	// snapshot for read
 	writes []Entry
