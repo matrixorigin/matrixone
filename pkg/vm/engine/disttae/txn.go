@@ -43,13 +43,15 @@ func (txn *Transaction) getBlockMetas(
 	needUpdated bool,
 	columnLength int,
 	prefetch bool,
-) ([][]BlockMeta, error) {
+	currentStates []*PartitionState,
+) ([]*PartitionState, [][]BlockMeta, error) {
 
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	name := genMetaTableName(tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
+	states := currentStates
 	if needUpdated {
-		states := txn.engine.getPartitions(databaseId, tableId).Snapshot()
+		states = txn.engine.getPartitions(databaseId, tableId).Snapshot()
 		for i := range txn.dnStores {
 			if i >= len(states) {
 				continue
@@ -69,11 +71,11 @@ func (txn *Transaction) getBlockMetas(
 			blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
 				txn.proc.GetMPool(), prefetch)
 			if err != nil {
-				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
+				return nil, nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
 			}
 		}
 	}
-	return blocks, nil
+	return states, blocks, nil
 }
 
 // detecting whether a transaction is a read-only transaction

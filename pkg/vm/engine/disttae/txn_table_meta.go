@@ -39,10 +39,11 @@ func (tbl *txnTable) updateMeta(ctx context.Context, expr *plan.Expr) error {
 			}
 		}
 		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-		metas, err := tbl.db.txn.getBlockMetas(ctx, tbl.db.databaseId, tbl.tableId, true, columnLength, false)
+		states, metas, err := tbl.db.txn.getBlockMetas(ctx, tbl.db.databaseId, tbl.tableId, true, columnLength, false, tbl._parts)
 		if err != nil {
 			return err
 		}
+		tbl._parts = states
 		tbl.blockMetas = metas
 		tbl.updated = true
 	}

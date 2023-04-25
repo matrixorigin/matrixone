@@ -124,11 +124,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		constraint:   item.Constraint,
 	}
 	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
-	metas, err := db.txn.getBlockMetas(ctx, db.databaseId, item.Id,
-		true, columnLength, true)
+	states, metas, err := db.txn.getBlockMetas(ctx, db.databaseId, item.Id,
+		true, columnLength, true, tbl._parts)
 	if err != nil {
 		return nil, err
 	}
+	tbl._parts = states
 	tbl.blockMetas = metas
 	tbl.updated = false
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
