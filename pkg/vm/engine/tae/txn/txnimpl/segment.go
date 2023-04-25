@@ -188,10 +188,10 @@ func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
 	return seg
 }
 
-func (seg *txnSegment) GetMeta() any      { return seg.entry }
-func (seg *txnSegment) String() string    { return seg.entry.String() }
-func (seg *txnSegment) GetID() types.Uuid { return seg.entry.ID }
-func (seg *txnSegment) getDBID() uint64   { return seg.entry.GetTable().GetDB().ID }
+func (seg *txnSegment) GetMeta() any            { return seg.entry }
+func (seg *txnSegment) String() string          { return seg.entry.String() }
+func (seg *txnSegment) GetID() *types.Segmentid { return &seg.entry.ID }
+func (seg *txnSegment) getDBID() uint64         { return seg.entry.GetTable().GetDB().ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
@@ -223,5 +223,5 @@ func (seg *txnSegment) GetBlock(id types.Blockid) (blk handle.Block, err error) 
 }
 
 func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.ID, is1PC)
+	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), &seg.entry.ID, is1PC)
 }

@@ -98,7 +98,7 @@ func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64, _ bool) 
 	return
 }
 func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64, types.Uuid, bool) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateBlock(uint64, uint64, *types.Segmentid, bool) (blk handle.Block, err error) {
 	return
 }
 func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {

@@ -64,7 +64,7 @@ func TestTransferPage(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		rowID, ok := memo2.Transfer(uint32(i))
 		assert.True(t, ok)
-		_, blockId, offset := DecodePhyAddrKey(rowID)
+		blockId, offset := DecodePhyAddrKey(&rowID)
 		assert.Equal(t, dest.BlockID, blockId)
 		assert.Equal(t, uint32(i), offset)
 	}

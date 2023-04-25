@@ -539,7 +539,7 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(dbId, tid uint64, sid *types.Segmentid, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return

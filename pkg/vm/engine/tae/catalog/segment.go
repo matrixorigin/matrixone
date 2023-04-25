@@ -362,10 +362,11 @@ func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
 }
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
-	return &common.ID{
-		TableID:   entry.GetTable().ID,
-		SegmentID: entry.ID,
+	id := &common.ID{
+		TableID: entry.GetTable().ID,
 	}
+	id.SetSegmentID(&entry.ID)
+	return id
 }
 
 func (entry *SegmentEntry) GetCatalog() *Catalog { return entry.table.db.catalog }

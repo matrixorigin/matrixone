@@ -654,7 +654,7 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 		panic(err)
 	}
 	sid := objectio.ToSegmentId(id)
-	segment, err := table.GetSegmentByID(*sid)
+	segment, err := table.GetSegmentByID(sid)
 	if err != nil {
 		panic(err)
 	}

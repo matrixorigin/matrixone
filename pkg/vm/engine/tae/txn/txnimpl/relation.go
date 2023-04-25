@@ -181,9 +181,9 @@ func (h *txnRelation) AddBlksWithMetaLoc(
 	)
 }
 
-func (h *txnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
+func (h *txnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
+	fp.SetSegmentID(id)
 	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
 }
 
@@ -195,9 +195,9 @@ func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id types.Uuid) (err error) {
+func (h *txnRelation) SoftDeleteSegment(id *types.Segmentid) (err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
+	fp.SetSegmentID(id)
 	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)
 }
 
@@ -278,7 +278,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
+			id.BlockID, row = model.DecodePhyAddrKey(&rid)
 			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 			return
 		}, nil)
@@ -286,11 +286,10 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 }
 
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
+		TableID: h.table.entry.ID,
+		BlockID: bid,
 	}
 	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, row, row, handle.DT_Normal)
 }
@@ -300,11 +299,10 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 }
 
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
+		TableID: h.table.entry.ID,
+		BlockID: bid,
 	}
 	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, uint16(col))
 }

@@ -372,7 +372,7 @@ func (d *dirtyCollector) tryCompactTree(
 				dirtyTable.Shrink(id)
 				continue
 			}
-			if seg, err = tbl.GetSegmentByID(*dirtySeg.ID); err != nil {
+			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
 					err = nil

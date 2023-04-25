@@ -101,12 +101,12 @@ var DefaultScopeSharder = func(scope *common.ID) int {
 	}
 	hasher := fnv.New64a()
 	hasher.Write(types.EncodeUint64(&scope.TableID))
-	hasher.Write(types.EncodeUuid(&scope.SegmentID))
+	hasher.Write(types.EncodeUuid(scope.SegmentID()))
 	return int(hasher.Sum64())
 }
 
 func IsSameScope(left, right *common.ID) bool {
-	return left.TableID == right.TableID && left.SegmentID == right.SegmentID
+	return left.TableID == right.TableID && left.SegmentID().Eq(*right.SegmentID())
 }
 
 type FnTask struct {
