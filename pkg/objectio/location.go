@@ -32,11 +32,12 @@ const (
 )
 
 const (
-	FileNumOff    = SegmentIdSize
-	FileNumLen    = 2
-	NameStringOff = FileNumOff + FileNumLen
-	NameStringLen = 42 //uuid[36]+_[1]+filename[5]
-	ObjectNameLen = NameStringOff + NameStringLen
+	FileNumOff         = SegmentIdSize
+	FileNumLen         = 2
+	NameStringOff      = FileNumOff + FileNumLen
+	NameStringLen      = 42 //uuid[36]+_[1]+filename[5]
+	ObjectNameLen      = NameStringOff + NameStringLen
+	ObjectNameShortLen = NameStringOff
 )
 
 /*

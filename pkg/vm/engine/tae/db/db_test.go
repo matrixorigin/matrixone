@@ -3390,7 +3390,9 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, e
 	return "", types.TS{}, nil
 }
 
-func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+	return nil
+}
 
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -4202,6 +4204,7 @@ func TestFlushTable(t *testing.T) {
 	table, err := db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	err = tae.FlushTable(
+		context.Background(),
 		0,
 		db.GetID(),
 		table.ID(),
@@ -4473,7 +4476,7 @@ func TestTransfer(t *testing.T) {
 	assert.NoError(t, err)
 
 	meta := rel1.GetMeta().(*catalog.TableEntry)
-	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+	err = tae.FlushTable(context.Background(), 0, meta.GetDB().ID, meta.ID,
 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
 	assert.NoError(t, err)
 
@@ -4597,7 +4600,7 @@ func TestTransfer3(t *testing.T) {
 	assert.NoError(t, err)
 
 	meta := rel1.GetMeta().(*catalog.TableEntry)
-	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+	err = tae.FlushTable(context.Background(), 0, meta.GetDB().ID, meta.ID,
 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
 	assert.NoError(t, err)
 

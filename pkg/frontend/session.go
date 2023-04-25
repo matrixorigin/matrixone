@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1027,19 +1026,6 @@ func (ses *Session) GetSql() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.sql
-}
-
-func (ses *Session) IsTaeEngine() bool {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	e, isEntire := ses.storage.(*engine.EntireEngine)
-	if isEntire {
-		_, ok := e.Engine.(moengine.TxnEngine)
-		return ok
-	} else {
-		_, ok := ses.storage.(moengine.TxnEngine)
-		return ok
-	}
 }
 
 func (ses *Session) IsEntireEngine() bool {
