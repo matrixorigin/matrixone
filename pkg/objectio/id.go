@@ -26,10 +26,10 @@ const (
 	SegmentIdSize = types.UuidSize
 )
 
-var emptySegmentId types.Uuid
+var emptySegmentId types.Segmentid
 var emptyBlockId types.Blockid
 
-type Segmentid = types.Uuid
+type Segmentid = types.Segmentid
 type Blockid = types.Blockid
 type Rowid = types.Rowid
 
@@ -47,12 +47,12 @@ func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 	return &id
 }
 
-func NewRowid(blkid *Blockid, offset uint32) types.Rowid {
+func NewRowid(blkid *Blockid, offset uint32) *types.Rowid {
 	var rowid types.Rowid
 	size := types.BlockidSize
 	copy(rowid[:size], blkid[:])
 	copy(rowid[size:size+4], types.EncodeUint32(&offset))
-	return rowid
+	return &rowid
 }
 
 func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {

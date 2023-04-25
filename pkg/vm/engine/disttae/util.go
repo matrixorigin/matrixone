@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -772,16 +771,4 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
-}
-
-/*
-	RowId:
-
-| segmentId | blockId | offsetId |
-
-	18 bytes   2 bytes   4 bytes
-*/
-// SegmentId = Uuid + fileId
-func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
-	return objectio.NewRowid(blkid, offset)
 }

@@ -136,6 +136,9 @@ type TS [TxnTsSize]byte
 // Rowid
 type Rowid [RowidSize]byte
 
+// Segmentid
+type Segmentid = Uuid
+
 // Blockid
 type Blockid [BlockidSize]byte
 
