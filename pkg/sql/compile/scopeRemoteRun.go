@@ -613,6 +613,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
+			IsEnd:                 t.DeleteCtx.IsEnd,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -932,6 +933,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
+				IsEnd:                 t.IsEnd,
 			},
 		}
 	case vm.Insert:

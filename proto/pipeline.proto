@@ -83,6 +83,7 @@ message Insert{
   // Align array index with the partition number
   repeated uint64 partition_table_ids = 6;
   int32 partition_idx = 7;
+  bool is_end         = 8;
 }
 
 message Array{
@@ -108,6 +109,7 @@ message Deletion{
   bool add_affected_rows              = 10;
   map<string,int32> SegmentMap        = 11;
   bool can_truncate                   = 12;
+  bool is_end                         = 13;
 }
 
 message PreInsert {

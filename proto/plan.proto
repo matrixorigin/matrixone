@@ -484,6 +484,7 @@ message InsertCtx {
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 5;
 	int32 partition_idx = 6;
+	bool is_end 		= 7;
 }
 
 message UpdateCtx {
@@ -709,6 +710,7 @@ message DeleteCtx {
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 6;
 	int32 partition_idx = 7;
+	bool is_end 		= 8;
 }
 
 message Query {

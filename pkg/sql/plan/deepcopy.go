@@ -89,6 +89,7 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		TableDef:          DeepCopyTableDef(ctx.TableDef),
 		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionIdx:      ctx.PartitionIdx,
+		IsEnd:             ctx.IsEnd,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	return newCtx
@@ -106,6 +107,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		IsClusterTable:    ctx.IsClusterTable,
 		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionIdx:      ctx.PartitionIdx,
+		IsEnd:             ctx.IsEnd,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	return newCtx

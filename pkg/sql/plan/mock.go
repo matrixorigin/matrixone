@@ -429,7 +429,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{
 				Name:        "fk1",                       // string
 				Cols:        []uint64{7},                 // []uint64
-				ForeignTbl:  272450,                      // uint64
+				ForeignTbl:  2,                           // uint64
 				ForeignCols: []uint64{1},                 // []uint64
 				OnDelete:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
 				OnUpdate:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction

@@ -292,7 +292,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 
 				// getNode information about delete table
-				delNodeInfo := makeDeleteNodeInfo(ctx, idxObjRef, idxTableDef, uniqueDeleteIdx, -1, false)
+				delNodeInfo := makeDeleteNodeInfo(ctx, idxObjRef, idxTableDef, uniqueDeleteIdx, -1, false, false)
 				lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 				if err != nil {
 					return -1, err
@@ -304,7 +304,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// delete origin table
 	// getNode information about delete table
-	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true)
+	isEnd := len(delCtx.insertColPos) == 0 // if it's not update plan, the delete node will be end of pipeline, we need free mem
+	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, isEnd)
 	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 	if err != nil {
 		return -1, err
@@ -315,19 +316,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 // makeInsertPlan  build insert plan for one table
 /**
-query_plan[不join其他表] -> preinsert[可能会增加列] -> sink
-	[o]sink_scan-> [project(update)] -> -> [preinsert(update)] -> lock(失败抛特定异常) -> join(用新值join父表) -> project  -> insert -> sink/project
-		[u1]sink_scan -> preinsert_uk -> sink
-			[u1]sink_scan -> lock -> insert
-			[u1]sink_scan -> group_by(by 隐藏表的pk，并count) -> filter(判断count(*)==1)  //检查写入的唯一性
-			[u1]sink_scan -> join（insert数据和原始表旧数据join） -> filter(判断count(*)==0) 和快照数据join，检查是否有冲突
-		[u2]sink_scan -> preinsert_uk -> sink
-			[u2]sink_scan -> lock -> insert
-			[u2]sink_scan -> group_by(by 隐藏表的pk，并count) -> filter(判断count(*)==1)  //检查写入的唯一性
-			[u2]sink_scan -> join（join u2） -> filter(判断count(*)==0) 和快照数据join，检查是否有冲突
-	[o]sink_scan->group_by(by 原始表的pk，并count) -> filter(判断count(*)==1)  //检查写入的唯一性
-	[o]sink_scan->join（insert数据和原始表旧数据join） -> filter(判断count(*)==0) 和快照数据join，检查是否有冲突
-*/
+ */
 func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, updateColLength int,
 	sourceStep int32, addAffectedRows bool) error {
@@ -348,33 +337,6 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	// make plan : sink_scan -> lock -> join(check fk) -> filter -> insert -> sink/project
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-
-		// if len(updateExprs) > 0 {
-		// 	projectProjection := make([]*Expr, len(lastNode.ProjectList))
-		// 	for i, col := range lastNode.ProjectList {
-		// 		if updateExpr, ok := updateExprs[i]; ok {
-		// 			projectProjection[i] = updateExpr
-		// 		} else {
-		// 			projectProjection[i] = &plan.Expr{
-		// 				Typ: col.Typ,
-		// 				Expr: &plan.Expr_Col{
-		// 					Col: &plan.ColRef{
-		// 						RelPos: 0,
-		// 						ColPos: int32(i),
-		// 						Name:   col.GetCol().Name,
-		// 					},
-		// 				},
-		// 			}
-		// 		}
-		// 	}
-		// 	lastNodeId = builder.appendNode(&plan.Node{
-		// 		NodeType:    plan.Node_PROJECT,
-		// 		Children:    []int32{lastNodeId},
-		// 		ProjectList: projectProjection,
-		// 	}, bindCtx)
-
-		// 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, true)
-		// }
 
 		// todo: append lock
 
@@ -462,6 +424,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				TableDef:          tableDef,
 				PartitionTableIds: paritionTableIds,
 				PartitionIdx:      int32(partitionIdx),
+				IsEnd:             !hasUniqueKey, // if is end of pipeline. we need free mem
 			},
 			ProjectList: insertProjection,
 		}
@@ -566,7 +529,8 @@ func haveUniqueKey(tableDef *TableDef) bool {
 }
 
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
-func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef, deleteIdx int, partitionIdx int, addAffectedRows bool) *deleteNodeInfo {
+func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
+	deleteIdx int, partitionIdx int, addAffectedRows bool, isEnd bool) *deleteNodeInfo {
 	delNodeInfo := &deleteNodeInfo{
 		objRef:          objRef,
 		tableDef:        tableDef,
@@ -574,6 +538,7 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 		partitionIdx:    partitionIdx,
 		addAffectedRows: addAffectedRows,
 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+		isEnd:           isEnd,
 	}
 
 	if tableDef.Partition != nil {
@@ -596,6 +561,7 @@ type deleteNodeInfo struct {
 	partTableIDs    []uint64 // Align array index with the partition number
 	partitionIdx    int      // The array index position of the partition expression column
 	addAffectedRows bool
+	isEnd           bool
 }
 
 // Calculate the offset index of partition expression, and the sub tableIds of the partition table

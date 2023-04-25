@@ -119,7 +119,12 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		}
 
 		// `insertBat` does not include partition expression columns
-		proc.SetInputBatch(insertBat)
+		if insertCtx.IsEnd {
+			proc.SetInputBatch(nil)
+			insertBat.Clean(proc.GetMPool())
+		} else {
+			proc.SetInputBatch(insertBat)
+		}
 	}
 
 	affectedRows := uint64(bat.Vecs[0].Length())

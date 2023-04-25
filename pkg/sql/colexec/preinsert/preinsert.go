@@ -100,6 +100,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	//}
 
 	proc.SetInputBatch(newBat)
+
 	return false, nil
 }
 

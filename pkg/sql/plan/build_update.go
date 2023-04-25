@@ -37,12 +37,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		return nil, err
 	}
 
-	// build update expr
-	// updateExprs, err := buildUpdateExpr(builder, tblInfo)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
 	if err != nil {
@@ -124,45 +118,6 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	}
 	return nil
 }
-
-// func buildUpdateExpr(builder *QueryBuilder, info *dmlTableInfo) ([]map[int]*Expr, error) {
-// 	updateExprs := make([]map[int]*Expr, len(info.tableDefs))
-// 	var err error
-// 	for idx, tableDef := range info.tableDefs {
-// 		binder := NewUpdateBinder(builder.GetContext(), nil, nil, tableDef.Cols)
-// 		updateCols := info.updateKeys[idx]
-// 		newExprs := make(map[int]*Expr)
-// 		var newExpr *Expr
-// 		for i, col := range tableDef.Cols {
-// 			if oldExpr, exists := updateCols[col.Name]; exists {
-// 				if _, ok := oldExpr.(*tree.DefaultVal); ok {
-// 					newExpr, err = getDefaultExpr(builder.GetContext(), col)
-// 					if err != nil {
-// 						return nil, err
-// 					}
-// 				} else {
-// 					newExpr, err = binder.BindExpr(oldExpr, 0, true)
-// 					if err != nil {
-// 						return nil, err
-// 					}
-// 				}
-// 				err = checkNotNull(builder.GetContext(), newExpr, tableDef, col)
-// 				if err != nil {
-// 					return nil, err
-// 				}
-// 				newExpr, err = forceCastExpr(builder.GetContext(), newExpr, col.Typ)
-// 				if err != nil {
-// 					return nil, err
-// 				}
-// 				newExprs[i] = newExpr
-// 			} else if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-// 				newExprs[i] = DeepCopyExpr(col.OnUpdate.Expr)
-// 			}
-// 		}
-// 		updateExprs[idx] = newExprs
-// 	}
-// 	return updateExprs, nil
-// }
 
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
 	fromTables := &tree.From{

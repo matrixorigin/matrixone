@@ -99,12 +99,13 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
 			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
 			proc.SetInputBatch(resBat)
-		} else {
-			// ToDo: need ouyuaning to make sure there are only one table
-			// in a deletion operator
-			// do compaction here
-			// p.DeleteCtx.DelSource[0].Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
+		// else {
+		// ToDo: need ouyuaning to make sure there are only one table
+		// in a deletion operator
+		// do compaction here
+		// p.DeleteCtx.DelSource[0].Delete(proc.Ctx, nil, catalog.Row_ID)
+		// }
 		return true, nil
 	}
 
@@ -164,7 +165,13 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
-	proc.SetInputBatch(newBat)
+
+	if delCtx.IsEnd {
+		proc.SetInputBatch(nil)
+		newBat.Clean(proc.GetMPool())
+	} else {
+		proc.SetInputBatch(newBat)
+	}
 
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)

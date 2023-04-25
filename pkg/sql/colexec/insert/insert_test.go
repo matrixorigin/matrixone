@@ -89,6 +89,8 @@ func TestInsertOperator(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
+			AddAffectedRows: true,
+			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 			// TableDef: &plan.TableDef{
 			// 	Cols: []*plan.ColDef{
 			// 		{Name: "int64_column", Typ: i64typ},
