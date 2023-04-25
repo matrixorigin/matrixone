@@ -54,7 +54,11 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	delCtx := p.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
-		delBatches := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		if err != nil {
+			return false, err
+		}
+
 		for i, delBatch := range delBatches {
 			tempRows := uint64(delBatch.Length())
 			if tempRows > 0 {

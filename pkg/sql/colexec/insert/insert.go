@@ -98,7 +98,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
-			insertBatches := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			if err != nil {
+				return false, err
+			}
 			for i, partitionBat := range insertBatches {
 				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
 				if err != nil {

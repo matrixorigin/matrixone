@@ -421,6 +421,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 		insertNode := &Node{
 			NodeType: plan.Node_INSERT,
 			Children: []int32{lastNodeId},
+			ObjRef:   objRef,
 			InsertCtx: &plan.InsertCtx{
 				Ref:               objRef,
 				AddAffectedRows:   addAffectedRows,
@@ -653,6 +654,7 @@ func appendPreDeleteNode(builder *QueryBuilder, bindCtx *BindContext, objRef *Ob
 
 	preDeleteNode := &Node{
 		NodeType:    plan.Node_PRE_DELETE,
+		ObjRef:      objRef,
 		Children:    []int32{lastNodeId},
 		ProjectList: projection,
 	}

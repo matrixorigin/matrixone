@@ -251,7 +251,7 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 
 // GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
 // Data from the same partition is placed in the same batch
-func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) []*batch.Batch {
+func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) ([]*batch.Batch, error) {
 	vecList := make([]*vector.Vector, partitionNum)
 	for i := 0; i < partitionNum; i++ {
 		retVec := vector.NewVec(types.T_Rowid.ToType())
@@ -263,7 +263,11 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
 			partition := vector.MustFixedCol[int32](bat.Vecs[pIdx])[i]
 			if partition == -1 {
-				panic("partiton number is -1, the partition number is incorrect")
+				for _, vecElem := range vecList {
+					vecElem.Free(proc.Mp())
+				}
+				//panic("partiton number is -1, the partition number is incorrect")
+				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 			} else {
 				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
 			}
@@ -278,12 +282,12 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 		retBatch.SetVector(0, vecList[i])
 		batches[i] = retBatch
 	}
-	return batches
+	return batches, nil
 }
 
 // GroupByPartitionForInsert: Group data based on partition and return batch array with the same length as the number of partitions.
 // Data from the same partition is placed in the same batch
-func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []string, pIdx int, partitionNum int) []*batch.Batch {
+func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []string, pIdx int, partitionNum int) ([]*batch.Batch, error) {
 	// create a batch array equal to the number of partitions
 	batches := make([]*batch.Batch, partitionNum)
 	for partIdx := 0; partIdx < partitionNum; partIdx++ {
@@ -302,7 +306,11 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 	for i, partition := range vector.MustFixedCol[int32](bat.Vecs[pIdx]) {
 		if !bat.Vecs[pIdx].GetNulls().Contains(uint64(i)) {
 			if partition == -1 {
-				panic("partiton number is -1, the partition number is incorrect")
+				for _, batchElem := range batches {
+					batchElem.Clean(proc.Mp())
+				}
+				//panic("partiton number is -1, the partition number is incorrect")
+				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 			} else {
 				//  `i` corresponds to the row number of the batch data,
 				//  `j` corresponds to the column number of the batch data
@@ -317,7 +325,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		length := batches[partIdx].GetVector(0).Length()
 		batches[partIdx].SetZs(length, proc.Mp())
 	}
-	return batches
+	return batches, nil
 }
 
 func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string, parentIdx map[string]int32) (*batch.Batch, *batch.Batch, error) {
