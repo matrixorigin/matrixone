@@ -576,7 +576,7 @@ func (tbl *txnTable) compaction() error {
 			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		tbl.db.txn.deletedBlocks.removeBlockDeletedInfo(id)
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfoLocked(id)
 		if len(deleteOffsets) == 0 {
 			return true
 		}
