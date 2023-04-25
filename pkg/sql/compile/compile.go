@@ -147,7 +147,9 @@ func (c *Compile) setAffectedRows(n uint64) {
 }
 
 func (c *Compile) GetAffectedRows() uint64 {
-	return c.affectRows
+	affectRows := atomic.LoadUint64(&c.affectRows)
+	return affectRows
+	// return c.affectRows
 }
 
 func (c *Compile) run(s *Scope) error {
