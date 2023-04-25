@@ -198,33 +198,61 @@ func getFunctionIdByNameWithoutErr(name string) (int32, bool) {
 	return fid, exist
 }
 
+// FuncNew stores all information about a function.
+// including the unique id that marks the function, the class which the function belongs to,
+// and all overloads of the function.
 type FuncNew struct {
+	// unique id of function.
 	functionId int
-	class      plan.Function_FuncFlag
-	Overloads  []overload
 
-	// found which overload can match.
+	// function type.
+	class plan.Function_FuncFlag
+
+	// All overloads of the function.
+	Overloads []overload
+
+	// checkFn was used to check whether the input type can match the requirement of the function.
+	// if matched, return the corresponding id of overload. If type conversion was required,
+	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
 
-	// layout used for `explain SQL`.
+	// layout was used for `explain SQL`.
 	layout FuncExplainLayout
 }
 
+// an overload of a function.
+// stores all information about execution logic.
 type overload struct {
 	overloadId int
-	args       []types.T
-	retType    func(parameters []types.Type) types.Type
-	NewOp      func(parameters []*vector.Vector,
+
+	// args records some type information about this overload.
+	// in most case, it records, in order, which parameter types the overload required.
+	// For example,
+	//		args can be `{int64, int64}` of one overload of the `pow` function.
+	//		this means the overload can accept {int64, int64} as its input.
+	// but it was not necessarily the type directly required by the overload.
+	// what it is depends on the logic of function's checkFn.
+	args []types.T
+
+	// return type of the overload.
+	// parameters are the params actually received when the overload is executed.
+	retType func(parameters []types.Type) types.Type
+
+	// the execution logic.
+	NewOp func(parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process, length int) error
 
-	// if agg, should set agg id
+	// in fact, the function framework does not directly run aggregate functions and window functions.
+	// we use two flags to mark whether function is one of them, and if so, we will record the special id of it.
+	// This id will be passed to the real execution framework of Agg function and window function.
 	isAgg     bool
 	isWin     bool
 	specialId int
+
 	// if true, overload cannot be folded
 	volatile bool
-	// if realTimeRelated, overload cannot be folded when prepare.
+	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
 }
 
