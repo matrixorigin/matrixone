@@ -33,6 +33,7 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
@@ -46,7 +47,9 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
 	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
-	return nil
+
+	ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	return err
 }
 
 // Note: before mark join, right table has been used in hashbuild operator to build JoinMap, which only contains those tuples without null
@@ -293,8 +296,22 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 	if ap.Cond != nil {
 		condState := condFalse
 		sels := mSels[vals[k]-1]
+		if ctr.joinBat1 == nil {
+			ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+		}
+		if ctr.joinBat2 == nil {
+			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+		}
 		for _, sel := range sels {
-			vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+			if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+				1, ctr.cfs1); err != nil {
+				return condUnkown, err
+			}
+			if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+				1, ctr.cfs2); err != nil {
+				return condUnkown, err
+			}
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 			if err != nil {
 				return condUnkown, err
 			}
@@ -304,10 +321,8 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 			bs := vector.MustFixedCol[bool](vec)
 			if bs[0] {
 				condState = condTrue
-				vec.Free(proc.Mp())
 				break
 			}
-			vec.Free(proc.Mp())
 		}
 		return condState, nil
 	} else {
@@ -319,7 +334,13 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if cond == nil {
 		return condTrue, nil
 	}
-	vec, err := colexec.JoinFilterEvalExpr(pbat, bat, idx, proc, cond)
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(pbat, proc.Mp())
+	}
+	if err := colexec.SetJoinBatchValues(ctr.joinBat, pbat, int64(idx), ctr.bat.Length(), ctr.cfs); err != nil {
+		return condUnkown, err
+	}
+	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 	defer vec.Free(proc.Mp())
 	if err != nil {
 		return condUnkown, err
