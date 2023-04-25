@@ -16,8 +16,10 @@ package blockio
 
 import (
 	"context"
+	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,20 +45,18 @@ func BlockRead(
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
-	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
+	mp *mpool.MPool, vp engine.VectorPool,
+	pkidxInColIdxs int, deleteRows []int64,
+	ufs []func(*vector.Vector, *vector.Vector, int64) error,
+	searchFunc func(*vector.Vector) int) (*batch.Batch, error) {
 
 	// read
-	columnBatch, err := BlockReadInner(
+	return BlockReadInner(
 		ctx, info, colIdxes, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
+		pkidxInColIdxs, deleteRows, ufs,
+		searchFunc,
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
-
-	return columnBatch, nil
 }
 
 func mergeDeleteRows(d1, d2 []int64) []int64 {
@@ -98,43 +97,35 @@ func BlockReadInner(
 	colTypes []types.Type,
 	ts types.TS,
 	fs fileservice.FileService,
-	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	var deleteRows []int64
-	columnBatch, deleteRows, err := readBlockData(ctx, colIdxes, colTypes, info, ts,
-		fs, mp)
-	if err != nil {
-		return nil, err
-	}
+	mp *mpool.MPool, vp engine.VectorPool,
+	pkidxInColIdxs int, deleteRows []int64,
+	ufs []func(*vector.Vector, *vector.Vector, int64) error,
+	searchFunc func(*vector.Vector) int) (*batch.Batch, error) {
 	if !info.DeltaLocation().IsEmpty() {
 		deleteBatch, err := readBlockDelete(ctx, info.DeltaLocation(), fs)
 		if err != nil {
 			return nil, err
 		}
-		deleteRows = mergeDeleteRows(deleteRows, recordDeletes(deleteBatch, ts))
+		if deleteBatch != nil {
+			for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
+				if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
+					continue
+				}
+				if vector.GetFixedAt[types.TS](deleteBatch.Vecs[1], i).Greater(ts) {
+					continue
+				}
+				rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
+				row := types.DecodeUint32(rowid[types.BlockidSize:])
+				deleteRows = append(deleteRows, int64(row))
+			}
+			sort.Slice(deleteRows, func(i, j int) bool { return deleteRows[i] < deleteRows[j] })
+		}
 		logutil.Infof(
 			"blockread %s read delete %d: base %s filter out %v\n",
 			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
-	rbat := batch.NewWithSize(len(columnBatch.Vecs))
-	for i, col := range columnBatch.Vecs {
-		typ := *col.GetType()
-		if vp == nil {
-			rbat.Vecs[i] = vector.NewVec(typ)
-		} else {
-			rbat.Vecs[i] = vp.GetVector(typ)
-		}
-		if err := vector.GetUnionFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
-			return nil, err
-		}
-		if col.GetType().Oid == types.T_Rowid {
-			// rowid need free
-			col.Free(mp)
-		}
-		if len(deleteRows) > 0 {
-			rbat.Vecs[i].Shrink(deleteRows, true)
-		}
-	}
-	return rbat, nil
+	return readBlockData(ctx, colIdxes, colTypes, info, ts,
+		fs, mp, vp, pkidxInColIdxs, searchFunc, deleteRows, ufs)
 }
 
 func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, []uint16) {
@@ -171,78 +162,118 @@ func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, 
 
 func readBlockData(ctx context.Context, colIndexes []uint16,
 	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
-	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
-	deleteRows := make([]int64, 0)
-	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
+	fs fileservice.FileService, m *mpool.MPool, vp engine.VectorPool,
+	pkidxInColIdxs int, searchFunc func(*vector.Vector) int,
+	deleteRows []int64, ufs []func(*vector.Vector, *vector.Vector, int64) error) (*batch.Batch, error) {
 	id := info.MetaLocation().ID()
+	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
 	reader, err := NewObjectReader(fs, info.MetaLocation())
 	if err != nil {
-		return nil, deleteRows, err
+		return nil, err
 	}
-	var rowIdVec *vector.Vector
-	var bat *batch.Batch
-	if ok {
-		// generate rowIdVec
-		prefix := info.BlockID[:]
-		rowIdVec, err = preparePhyAddrData(
-			types.T_Rowid.ToType(),
-			prefix,
-			0,
-			info.MetaLocation().Rows(),
-			m,
-		)
-		if err != nil {
-			return nil, deleteRows, err
-		}
-		defer func() {
-			if err != nil {
-				rowIdVec.Free(m)
-			}
-		}()
-	}
-
+	prefix := info.BlockID[:]
 	loadBlock := func(idxes []uint16) (*batch.Batch, error) {
 		if len(idxes) == 0 && ok {
-			// only read rowid column on non appendable block, return early
-			bat = batch.NewWithSize(0)
-			bat.Vecs = append(bat.Vecs, rowIdVec)
-			return nil, nil
+			var rowid types.Rowid
+
+			rbat := batch.NewWithSize(1)
+			rbat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			for j := uint32(0); j < uint32(info.MetaLocation().Rows()); j++ {
+				copy(rowid[:], prefix)
+				copy(rowid[types.BlockidSize:], types.EncodeUint32(&j))
+				if err := vector.AppendFixed(rbat.Vecs[0], rowid, false, m); err != nil {
+					rbat.Clean(m)
+					return nil, err
+				}
+			}
+			if len(deleteRows) > 0 {
+				rbat.Vecs[0].Shrink(deleteRows, true)
+			}
+			return rbat, nil
 		}
-		bats, err := reader.LoadColumns(ctx, idxes, id, nil)
+		bat, err := reader.LoadColumns(ctx, idxes, id, nil)
 		if err != nil {
 			return nil, err
 		}
-		entry := bats.Vecs
-		bat = batch.NewWithSize(0)
-		for _, typ := range colTypes {
-			if typ.Oid == types.T_Rowid {
-				bat.Vecs = append(bat.Vecs, rowIdVec)
-				continue
+		rbat := batch.NewWithSize(len(bat.Vecs))
+		for i, vec := range bat.Vecs {
+			if vp == nil {
+				rbat.Vecs[i] = vector.NewVec(*vec.GetType())
+			} else {
+				rbat.Vecs[i] = vp.GetVector(*vec.GetType())
 			}
-			bat.Vecs = append(bat.Vecs, entry[0])
-			entry = entry[1:]
 		}
-		return bats, nil
-	}
+		if searchFunc != nil {
+			vec := bat.GetVector(int32(pkidxInColIdxs))
+			sel := int64(searchFunc(vec))
+			if sel >= 0 && sel < int64(vec.Length()) {
+				i := sort.Search(len(deleteRows), func(i int) bool { return sel <= deleteRows[0] })
+				if i < len(deleteRows) && deleteRows[i] == sel {
+					return rbat, nil
+				}
+				for i, vec := range bat.Vecs {
+					if vec.GetType().Oid == types.T_Rowid {
+						if err := vector.AppendFixed(rbat.Vecs[i],
+							model.EncodePhyAddrKeyWithPrefix(prefix, uint32(sel)), false, m); err != nil {
+							rbat.Clean(m)
+							return nil, err
+						}
+					} else {
+						if err := ufs[i](rbat.Vecs[i], vec, sel); err != nil {
+							rbat.Clean(m)
+							return nil, err
+						}
+					}
+				}
+				rbat.SetZs(1, m)
+				return rbat, nil
+			}
+			return rbat, nil
+		}
+		for i, vec := range bat.Vecs {
+			typ := *vec.GetType()
+			if typ.Oid == types.T_Rowid {
+				var rowid types.Rowid
 
-	loadAppendBlock := func() error {
+				for j := uint32(0); j < uint32(bat.Vecs[0].Length()); j++ {
+					copy(rowid[:], prefix)
+					copy(rowid[types.BlockidSize:], types.EncodeUint32(&j))
+					if err := vector.AppendFixed(rbat.Vecs[i], rowid, false, m); err != nil {
+						rbat.Clean(m)
+						return nil, err
+					}
+				}
+			} else {
+				if err := vector.GetUnionFunction(typ, m)(rbat.Vecs[i], vec); err != nil {
+					rbat.Clean(m)
+					return nil, err
+				}
+			}
+			if len(deleteRows) > 0 {
+				rbat.Vecs[i].Shrink(deleteRows, true)
+			}
+		}
+		rbat.SetZs(rbat.Vecs[0].Length(), m)
+		return rbat, nil
+	}
+	loadAppendBlock := func() (*batch.Batch, error) {
 		// appendable block should be filtered by committs
 		meta, err := reader.reader.ReadMeta(ctx, m)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		block := meta.GetBlockMeta(0)
 		colCount := block.GetColumnCount()
 		idxes = append(idxes, colCount-2) // committs
 		idxes = append(idxes, colCount-1) // aborted
-		bats, err := loadBlock(idxes)
+		rbat, err := loadBlock(idxes)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		lenVecs := len(bats.Vecs)
+		lenVecs := len(rbat.Vecs)
 		t0 := time.Now()
-		commits := bats.Vecs[lenVecs-2]
-		abort := bats.Vecs[lenVecs-1]
+		commits := rbat.Vecs[lenVecs-2]
+		abort := rbat.Vecs[lenVecs-1]
 		for i := 0; i < commits.Length(); i++ {
 			if vector.GetFixedAt[bool](abort, i) || vector.GetFixedAt[types.TS](commits, i).Greater(ts) {
 				deleteRows = append(deleteRows, int64(i))
@@ -251,20 +282,20 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		logutil.Infof(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
-		return nil
+		for i := range rbat.Vecs {
+			if len(deleteRows) > 0 {
+				rbat.Vecs[i].Shrink(deleteRows, true)
+			}
+		}
+		m.PutSels(rbat.Zs)
+		rbat.SetZs(rbat.Vecs[0].Length(), m)
+		return rbat, nil
 	}
-
 	if info.EntryState {
-		err = loadAppendBlock()
+		return loadAppendBlock()
 	} else {
-		_, err = loadBlock(idxes)
+		return loadBlock(idxes)
 	}
-
-	if err != nil {
-		return nil, deleteRows, err
-	}
-
-	return bat, deleteRows, nil
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {

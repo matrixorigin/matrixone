@@ -308,10 +308,8 @@ type blockReader struct {
 	colNulls       []bool
 	pkidxInColIdxs int
 	pkName         string
-	// binary search info
-	init       bool
-	canCompute bool
-	searchFunc func(*vector.Vector) int
+	searchFunc     func(*vector.Vector) int
+	ufs            []func(*vector.Vector, *vector.Vector, int64) error
 }
 
 type blockMergeReader struct {

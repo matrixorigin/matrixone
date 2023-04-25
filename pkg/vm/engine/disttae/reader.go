@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -86,36 +87,27 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
+	if len(r.ufs) == 0 {
+		r.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(r.colTypes))
+		for i, typ := range r.colTypes {
+			r.ufs[i] = vector.GetUnionOneFunction(typ, mp)
+		}
+		if r.pkidxInColIdxs != -1 && r.expr != nil {
+			var canCompute bool
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
-	if err != nil {
-		return nil, err
-	}
-
-	// if it's not sorted, just return
-	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
-		return bat, nil
-	}
-
-	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
-	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	if !r.init {
-		r.init = true
-		r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, vec.GetType().Oid)
-	}
-	if r.canCompute && r.searchFunc != nil {
-		row := r.searchFunc(vec)
-		if row >= vec.Length() {
-			// can not find row.
-			bat.Shrink([]int64{})
-		} else if row > -1 {
-			// maybe find row.
-			bat.Shrink([]int64{int64(row)})
+			canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName,
+				r.colTypes[r.pkidxInColIdxs].Oid)
+			if !canCompute {
+				r.searchFunc = nil
+			}
 		}
 	}
-
-	logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
-	return bat, nil
+	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+		return blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts,
+			r.fs, mp, vp, -1, nil, nil, nil)
+	}
+	return blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts,
+		r.fs, mp, vp, r.pkidxInColIdxs, nil, r.ufs, r.searchFunc)
 }
 
 func (r *blockMergeReader) Close() error {
@@ -158,26 +150,13 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
-
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
-	if err != nil {
-		return nil, err
+	deleteRows := make([]int64, len(r.blks[0].deletes))
+	for _, row := range r.blks[0].deletes {
+		deleteRows = append(deleteRows, int64(row))
 	}
-	r.sels = r.sels[:0]
-	deletes := make([]int, len(r.blks[0].deletes))
-	copy(deletes, r.blks[0].deletes)
-	sort.Ints(deletes)
-	for i := 0; i < bat.Length(); i++ {
-		if len(deletes) > 0 && i == deletes[0] {
-			deletes = deletes[1:]
-			continue
-		}
-		r.sels = append(r.sels, int64(i))
-	}
-	bat.Shrink(r.sels)
-
-	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
-	return bat, nil
+	sort.Slice(deleteRows, func(i, j int) bool { return deleteRows[i] < deleteRows[j] })
+	return blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts,
+		r.fs, mp, vp, -1, deleteRows, nil, nil)
 }
 
 func NewMergeReader(readers []engine.Reader) *mergeReader {
