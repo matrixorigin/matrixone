@@ -1276,9 +1276,9 @@ const (
 
 	getDbName = `select datname from mo_catalog.mo_database where datname = "%s";`
 
-	getSystemVariableValueWithDatabase = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
+	getSystemVariableValueWithDatabaseFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
-	getSystemVariableVlaue = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where variable_name = "%s";`
+	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1677,11 +1677,11 @@ func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
 }
 
 func getSqlForGetSystemVariableValueWithDatabase(dtname, varibale_name string) string {
-	return fmt.Sprintf(getSystemVariableValueWithDatabase, dtname, varibale_name)
+	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, varibale_name)
 }
 
-func getSqlForgetSystemVariableVlaue(variable_name string) string {
-	return fmt.Sprintf(getSystemVariableVlaue, variable_name)
+func getSystemVariablesWithAccount(account_id uint64) string {
+	return fmt.Sprintf(getSystemVariablesWithAccountFromat, account_id)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -6507,7 +6507,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 		}
 	}
 
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatbility_mode
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
 		if err != nil {

@@ -1312,6 +1312,92 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	return GetPassWord(pwd)
 }
 
+func (ses *Session) InitGlobalSystemVariables() error {
+	var err error
+	var rsset []ExecResult
+	tenantInfo := ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			sysTenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := range rsset {
+				varibale_name, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+				if err != nil {
+					return err
+				}
+				varibale_value, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+				if err != nil {
+					return err
+				}
+
+				err = ses.SetGlobalVar(varibale_name, varibale_value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
+		}
+
+	} else {
+		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := range rsset {
+				varibale_name, err := rsset[i].GetString(tenantCtx, 0, 0)
+				if err != nil {
+					return err
+				}
+				varibale_value, err := rsset[i].GetString(tenantCtx, 0, 0)
+				if err != nil {
+					return err
+				}
+
+				err = ses.SetGlobalVar(varibale_name, varibale_value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			return moerr.NewInternalError(tenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", tenantInfo.GetTenant())
+		}
+	}
+	return err
+}
+
 func (ses *Session) GetPrivilege() *privilege {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
