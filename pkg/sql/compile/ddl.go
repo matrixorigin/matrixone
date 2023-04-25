@@ -1327,6 +1327,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				Comment:       col.GetComment(),
 				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
+				IsHidden:      col.Hidden,
 			},
 		}
 	}
