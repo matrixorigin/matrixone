@@ -2718,6 +2718,10 @@ func timeToDecimal64(
 			if err != nil {
 				return err
 			}
+			result, err = result.Scale(totype.Scale - fromType.Scale)
+			if err != nil {
+				return err
+			}
 			if err = to.Append(result, false); err != nil {
 				return err
 			}
@@ -2743,6 +2747,10 @@ func timeToDecimal128(
 			}
 		} else {
 			result, err := v.ToDecimal128(ctx, totype.Width, fromType.Scale)
+			if err != nil {
+				return err
+			}
+			result, err = result.Scale(totype.Scale - fromType.Scale)
 			if err != nil {
 				return err
 			}

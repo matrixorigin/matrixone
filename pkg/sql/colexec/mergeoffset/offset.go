@@ -63,6 +63,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			logutil.Errorf("pipeline closed unexpectedly")
 			return true, nil
 		}
@@ -77,6 +78,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		}
 
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 
@@ -98,7 +100,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			return false, nil
 		}
 		ap.ctr.seen += uint64(length)
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 	}
 }
 

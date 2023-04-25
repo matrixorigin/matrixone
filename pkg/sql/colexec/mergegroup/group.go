@@ -104,6 +104,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			logutil.Errorf("pipeline closed unexpectedly")
 			return true, nil
 		}
@@ -118,6 +119,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst
 		}
 
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 
@@ -184,7 +186,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 		ctr.bat = bat
 		return nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
@@ -202,7 +204,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -231,7 +233,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i

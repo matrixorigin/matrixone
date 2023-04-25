@@ -98,45 +98,39 @@ func TestConnManagerConnection(t *testing.T) {
 	cm := newConnManager()
 	require.NotNil(t, cm)
 
-	cn11 := &CNServer{
-		hash: "hash1",
-		reqLabel: newLabelInfo("t1", map[string]string{
+	cn11 := testMakeCNServer("cn11", "", 0, "hash1",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 		}),
-		uuid: "cn11",
-	}
-	cn12 := &CNServer{
-		hash: "hash1",
-		reqLabel: newLabelInfo("t1", map[string]string{
+	)
+	cn12 := testMakeCNServer("cn12", "", 0, "hash1",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 		}),
-		uuid: "cn12",
-	}
-	cn21 := &CNServer{
-		hash: "hash2",
-		reqLabel: newLabelInfo("t1", map[string]string{
+	)
+	cn21 := testMakeCNServer("cn21", "", 0, "hash2",
+		newLabelInfo("t1", map[string]string{
 			"k2": "v2",
 		}),
-		uuid: "cn21",
-	}
+	)
 
-	tu0 := newTunnel(context.TODO(), nil)
+	tu0 := newTunnel(context.TODO(), nil, nil)
 
-	tu11 := newTunnel(context.TODO(), nil)
+	tu11 := newTunnel(context.TODO(), nil, nil)
 	cm.connect(cn11, tu11)
 	require.Equal(t, 1, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))
 	require.Equal(t, 1, cm.getCNTunnels("hash1").count())
 	require.Equal(t, 0, cm.getCNTunnels("hash2").count())
 
-	tu12 := newTunnel(context.TODO(), nil)
+	tu12 := newTunnel(context.TODO(), nil, nil)
 	cm.connect(cn12, tu12)
 	require.Equal(t, 2, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))
 	require.Equal(t, 2, cm.getCNTunnels("hash1").count())
 	require.Equal(t, 0, cm.getCNTunnels("hash2").count())
 
-	tu21 := newTunnel(context.TODO(), nil)
+	tu21 := newTunnel(context.TODO(), nil, nil)
 	cm.connect(cn21, tu21)
 	require.Equal(t, 3, cm.count())
 	require.Equal(t, 2, len(cm.getLabelHashes()))
@@ -196,26 +190,22 @@ func TestConnManagerConnectionConcurrency(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		wg.Add(2)
 		go func(j int) {
-			cn11 := &CNServer{
-				hash: "hash1",
-				reqLabel: newLabelInfo("t1", map[string]string{
+			cn11 := testMakeCNServer(fmt.Sprintf("cn1-%d", j), "", 0, "hash1",
+				newLabelInfo("t1", map[string]string{
 					"k1": "v1",
 				}),
-				uuid: fmt.Sprintf("cn1-%d", j),
-			}
-			tu11 := newTunnel(context.TODO(), nil)
+			)
+			tu11 := newTunnel(context.TODO(), nil, nil)
 			cm.connect(cn11, tu11)
 			wg.Done()
 		}(i)
 		go func(j int) {
-			cn11 := &CNServer{
-				hash: "hash2",
-				reqLabel: newLabelInfo("t1", map[string]string{
+			cn11 := testMakeCNServer(fmt.Sprintf("cn2-%d", j), "", 0, "hash2",
+				newLabelInfo("t1", map[string]string{
 					"k2": "v2",
 				}),
-				uuid: fmt.Sprintf("cn2-%d", j),
-			}
-			tu11 := newTunnel(context.TODO(), nil)
+			)
+			tu11 := newTunnel(context.TODO(), nil, nil)
 			cm.connect(cn11, tu11)
 			wg.Done()
 		}(i)
@@ -232,15 +222,13 @@ func TestConnManagerLabelInfo(t *testing.T) {
 	cm := newConnManager()
 	require.NotNil(t, cm)
 
-	cn11 := &CNServer{
-		hash: "hash1",
-		reqLabel: newLabelInfo("t1", map[string]string{
+	cn11 := testMakeCNServer("cn11", "", 0, "hash1",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 		}),
-		uuid: "cn11",
-	}
+	)
 
-	tu11 := newTunnel(context.TODO(), nil)
+	tu11 := newTunnel(context.TODO(), nil, nil)
 	cm.connect(cn11, tu11)
 	require.Equal(t, 1, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))

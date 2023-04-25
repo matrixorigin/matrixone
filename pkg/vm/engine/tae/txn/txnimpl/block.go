@@ -15,8 +15,9 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -205,7 +206,7 @@ func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, err
 	if blk.isUncommitted {
 		attrIds := make([]int, len(attrs))
 		for i, attr := range attrs {
-			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
+			attrIds[i] = blk.table.GetLocalSchema().GetColIdx(attr)
 		}
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
@@ -228,7 +229,7 @@ func (blk *txnBlock) Prefetch(idxes []uint16) error {
 
 func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
+		attrId := blk.table.GetLocalSchema().GetColIdx(attr)
 		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr)

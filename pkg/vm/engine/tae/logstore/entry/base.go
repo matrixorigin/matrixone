@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -78,11 +79,11 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	if sn, err = common.WriteString(info.TxnId, w); err != nil {
+	if sn, err = objectio.WriteString(info.TxnId, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(info.Uncommits, w); err != nil {
+	if sn, err = objectio.WriteString(info.Uncommits, w); err != nil {
 		return
 	}
 	n += sn
@@ -153,11 +154,11 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	if info.TxnId, sn, err = common.ReadString(r); err != nil {
+	if info.TxnId, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if info.Uncommits, sn, err = common.ReadString(r); err != nil {
+	if info.Uncommits, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -52,9 +53,9 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 2)
 	bats := catalog.MockBatch(schema, 40000*2).Split(2)
 
-	_, err = writer.WriteBlock(bats[0])
+	_, err = writer.WriteBatch(containers.ToCNBatch(bats[0]))
 	assert.Nil(t, err)
-	_, err = writer.WriteBlock(bats[1])
+	_, err = writer.WriteBatch(containers.ToCNBatch(bats[1]))
 	assert.Nil(t, err)
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)

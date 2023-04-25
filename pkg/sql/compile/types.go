@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,9 +40,11 @@ const (
 	MinBlockNum = 200
 )
 
+type magicType int
+
 // type of scope
 const (
-	Merge = iota
+	Merge magicType = iota
 	Normal
 	Remote
 	Parallel
@@ -60,9 +63,11 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	MergeDelete
 	CreateSequence
 	DropSequence
 	AlterSequence
+	MagicDelete
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -94,7 +99,7 @@ type Scope struct {
 	// 0 -  execution unit for reading data.
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
-	Magic int
+	Magic magicType
 
 	// IsEnd means the pipeline is join
 	IsJoin bool
