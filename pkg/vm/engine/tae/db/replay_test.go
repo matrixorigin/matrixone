@@ -1247,11 +1247,11 @@ func TestReplay10(t *testing.T) {
 	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: &plan.Expr{},
 	})
-	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
+	schema.ColDefs[2].Default, _ = types.Encode(&plan.Default{
 		NullAbility: true,
 		Expr:        nil,
 	})
-	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: nil,
 	})
 
@@ -1268,7 +1268,7 @@ func TestReplay10(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
-	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema1 := rel.Schema().(*catalog.Schema)
 
 	d1 := &plan.Default{}
 	assert.NoError(t, types.Decode(schema1.ColDefs[1].Default, d1))

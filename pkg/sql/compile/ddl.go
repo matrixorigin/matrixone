@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 var (
@@ -737,7 +738,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
+		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
 		if err != nil {
 			return err
 		}
@@ -1073,7 +1074,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
 	} else {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
 	}
 	if err != nil {
 		return err
@@ -1326,6 +1327,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				Comment:       col.GetComment(),
 				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
+				IsHidden:      col.Hidden,
 			},
 		}
 	}

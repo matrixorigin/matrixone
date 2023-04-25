@@ -69,6 +69,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		ServiceAddress:     s.cfg.ServiceAddress,
 		SQLAddress:         s.cfg.SQLAddress,
 		LockServiceAddress: s.cfg.LockService.ServiceAddress,
+		CtlAddress:         s.cfg.Ctl.Address.ServiceAddress,
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 	}

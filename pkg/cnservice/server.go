@@ -150,12 +150,17 @@ func NewService(
 		opt(srv)
 	}
 
+	srv.initCtlService()
 	return srv, nil
 }
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
 	s.initSqlWriterFactory()
+
+	if err := s.ctlservice.Start(); err != nil {
+		return err
+	}
 
 	err := s.runMoServer()
 	if err != nil {
@@ -214,6 +219,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.lockService != nil {
 		if err := s.lockService.Close(); err != nil {
+			return err
+		}
+	}
+	if s.ctlservice != nil {
+		if err := s.ctlservice.Close(); err != nil {
 			return err
 		}
 	}
@@ -290,11 +300,6 @@ func (s *service) initEngine(
 	pu *config.ParameterUnit,
 ) error {
 	switch s.cfg.Engine.Type {
-
-	case EngineTAE:
-		if err := initTAE(cancelMoServerCtx, pu, s.cfg); err != nil {
-			return err
-		}
 
 	case EngineDistributedTAE:
 		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
@@ -464,6 +469,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableCNBasedConsistency {
 			opts = append(opts,
 				client.WithEnableCNBasedConsistency())
+		}
+		if s.cfg.Txn.EnableRefreshExpression {
+			opts = append(opts,
+				client.WithEnableRefreshExpression())
 		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(

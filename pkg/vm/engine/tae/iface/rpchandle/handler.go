@@ -59,35 +59,35 @@ type Handler interface {
 	HandleGetLogTail(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req apipb.SyncLogTailReq,
+		req *apipb.SyncLogTailReq,
 		resp *apipb.SyncLogTailResp,
 	) error
 
 	HandlePreCommitWrite(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req apipb.PrecommitWriteCmd,
+		req *apipb.PrecommitWriteCmd,
 		resp *apipb.SyncLogTailResp,
 	) error
 
 	HandleFlushTable(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req db.FlushTable,
+		req *db.FlushTable,
 		resp *apipb.SyncLogTailResp,
 	) error
 
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req db.Checkpoint,
+		req *db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
 	) error
 
 	HandleInspectDN(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req db.InspectDN,
+		req *db.InspectDN,
 		resp *db.InspectResp,
 	) error
 }

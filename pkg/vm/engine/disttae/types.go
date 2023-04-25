@@ -16,13 +16,16 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +40,7 @@ import (
 const (
 	INSERT = iota
 	DELETE
+	COMPACTION_CN
 	UPDATE
 )
 
@@ -50,7 +54,10 @@ const (
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
+	INIT_ROWID_OFFSET             = math.MaxUint32
 )
+
+var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
 
@@ -101,9 +108,7 @@ type Transaction struct {
 	// local timestamp for workspace operations
 	meta txn.TxnMeta
 	op   client.TxnOperator
-	// fileMaps used to store the mapping relationship between s3 filenames
-	// and blockId
-	fileMap map[string]uint64
+
 	// writes cache stores any writes done by txn
 	writes []Entry
 	// txn workspace size
@@ -123,6 +128,62 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
+
+	deletedBlocks *deletedBlocks
+	// blkId -> Pos
+	cnBlkId_Pos                     map[string]Pos
+	blockId_raw_batch               map[string]*batch.Batch
+	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
+}
+
+type Pos struct {
+	idx    int
+	offset int64
+}
+
+// FIXME: The map inside this one will be accessed concurrently, using
+// a mutex, not sure if there will be performance issues
+type deletedBlocks struct {
+	sync.RWMutex
+
+	// used to store cn block's deleted rows
+	// blockId => deletedOffsets
+	offsets map[string][]int64
+}
+
+func (b *deletedBlocks) addDeletedBlocks(blockID string, offsets []int64) {
+	b.Lock()
+	defer b.Unlock()
+	b.offsets[blockID] = append(b.offsets[blockID], offsets...)
+}
+
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
+	b.RLock()
+	defer b.RUnlock()
+	res := b.offsets[blockID]
+	offsets := make([]int64, len(res))
+	copy(offsets, res)
+	return offsets
+}
+
+func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
+	b.Lock()
+	defer b.Unlock()
+	delete(b.offsets, blockID)
+}
+
+func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
+	b.RLock()
+	defer b.RUnlock()
+	for id, offsets := range b.offsets {
+		if !fn(id, offsets) {
+			return
+		}
+	}
+}
+
+func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
+	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
 // Entry represents a delete/insert
@@ -162,27 +223,20 @@ type databaseKey struct {
 	name      string
 }
 
-// block list information of table
-type tableMeta struct {
-	tableName     string
-	blocks        [][]BlockMeta
-	modifedBlocks [][]ModifyBlockMeta
-	defs          []engine.TableDef
-}
-
 // txnTable represents an opened table in a transaction
 type txnTable struct {
 	tableId   uint64
 	tableName string
 	dnList    []int
 	db        *txnDatabase
-	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs     []engine.TableDef
-	tableDef *plan.TableDef
-
-	setPartsOnce sync.Once
-	_parts       []*PartitionState
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	idxs           []uint16
+	setPartsOnce   sync.Once
+	_parts         []*PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
+	blockMetas     [][]BlockMeta
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -233,7 +287,7 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []BlockMeta
+	blks       []catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp
@@ -247,6 +301,10 @@ type blockReader struct {
 	colNulls       []bool
 	pkidxInColIdxs int
 	pkName         string
+	// binary search info
+	init       bool
+	canCompute bool
+	searchFunc func(*vector.Vector) int
 }
 
 type blockMergeReader struct {
@@ -273,7 +331,51 @@ type emptyReader struct {
 type BlockMeta struct {
 	Rows    int64
 	Info    catalog.BlockInfo
-	Zonemap [][64]byte
+	Zonemap []Zonemap
+}
+
+func (a *BlockMeta) MarshalBinary() ([]byte, error) {
+	return a.Marshal()
+}
+
+func (a *BlockMeta) UnmarshalBinary(data []byte) error {
+	return a.Unmarshal(data)
+}
+
+type Zonemap [64]byte
+
+func (z *Zonemap) ProtoSize() int {
+	return 64
+}
+
+func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, z[:])
+	return n, nil
+}
+
+func (z *Zonemap) MarshalTo(data []byte) (int, error) {
+	size := z.ProtoSize()
+	return z.MarshalToSizedBuffer(data[:size])
+}
+
+func (z *Zonemap) Marshal() ([]byte, error) {
+	data := make([]byte, z.ProtoSize())
+	n, err := z.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (z *Zonemap) Unmarshal(data []byte) error {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(z[:], data)
+	return nil
 }
 
 type ModifyBlockMeta struct {

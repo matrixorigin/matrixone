@@ -61,6 +61,7 @@ func (s *store) heartbeat(ctx context.Context) {
 		TaskServiceCreated:   s.taskServiceCreated(),
 		LogtailServerAddress: s.cfg.LogtailServer.ServiceAddress,
 		LockServiceAddress:   s.cfg.LockService.ServiceAddress,
+		CtlAddress:           s.cfg.Ctl.Address.ServiceAddress,
 	}
 	cb, err := s.hakeeperClient.SendDNHeartbeat(ctx2, hb)
 	if err != nil {

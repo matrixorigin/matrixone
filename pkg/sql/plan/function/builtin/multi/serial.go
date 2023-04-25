@@ -216,7 +216,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		val = append(val, ps[i].GetBuf())
 	}
 
-	vec := vector.NewVec(vct)
+	vec := proc.GetVector(vct)
 	vector.AppendBytesList(vec, val, nil, proc.Mp())
 
 	for _, p := range ps {

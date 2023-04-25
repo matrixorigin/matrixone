@@ -786,7 +786,7 @@ var (
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
-				version bigint unsigned default 0,
+				version bigint unsigned auto_increment,
 				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(
@@ -829,7 +829,7 @@ var (
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
 				name     varchar(100),
-				creator  int unsigned,
+				owner  int unsigned,
 				args     text,
 				retType  varchar(20),
 				body     text,
@@ -909,7 +909,7 @@ var (
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
-			creator,
+			owner,
 			args,
 			retType,
 			body,

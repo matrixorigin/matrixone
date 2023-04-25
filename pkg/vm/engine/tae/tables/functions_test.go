@@ -24,19 +24,16 @@ import (
 func BenchmarkFunctions(b *testing.B) {
 	vec := containers.MockVector2(types.T_int64.ToType(), 10000, 0)
 	defer vec.Close()
-	vec2 := containers.MakeVector(vec.GetType())
+	vec2 := containers.MakeVector(*vec.GetType())
 	defer vec2.Close()
 	for i := 9999999; i < 9999999+1000; i++ {
 		vec2.Append(int64(i), false)
 	}
 
-	// op := containers.MakeForeachVectorOp(vec2.GetType().Oid, dedupNABlkFunctions, vec, nil, nil)
-	// containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op)
-
 	b.Run("old-dedup-int64", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec2.ForeachShallow(dedupNABlkClosure(vec, nil, nil, nil), nil)
+			vec2.Foreach(dedupNABlkClosure(vec, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-int64", func(b *testing.B) {
@@ -56,7 +53,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-d128", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec5.ForeachShallow(dedupNABlkClosure(vec4, nil, nil, nil), nil)
+			vec5.Foreach(dedupNABlkClosure(vec4, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-d128", func(b *testing.B) {
@@ -77,7 +74,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-chars", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec8.ForeachShallow(dedupNABlkClosure(vec7, nil, nil, nil), nil)
+			vec8.Foreach(dedupNABlkClosure(vec7, nil, nil, nil), nil)
 		}
 	})
 	b.Run("new-dedup-chars", func(b *testing.B) {
@@ -91,14 +88,12 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("old-dedup-achars", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec8.ForeachShallow(dedupABlkClosureFactory(nil)(vec7, nil, nil, nil), nil)
+			vec8.Foreach(dedupABlkClosureFactory(nil)(vec7, nil, nil, nil), nil)
 		}
 	})
 
-	// op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
-	// containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op)
 	b.Run("new-dedup-achars", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, types.TS{})
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, dedupAlkFunctions, vec7, nil, nil, nil, nil)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil)
