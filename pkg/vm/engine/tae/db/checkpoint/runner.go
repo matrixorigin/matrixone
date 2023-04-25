@@ -644,7 +644,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid, force bool) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -653,11 +653,12 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id 
 	if err != nil {
 		panic(err)
 	}
-	segment, err := table.GetSegmentByID(segmentID)
+	sid := objectio.ToSegmentId(id)
+	segment, err := table.GetSegmentByID(*sid)
 	if err != nil {
 		panic(err)
 	}
-	blk, err := segment.GetBlockEntryByID(id)
+	blk, err := segment.GetBlockEntryByID(*id)
 	if err != nil {
 		panic(err)
 	}
@@ -702,9 +703,10 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	}
 	logutil.Debugf(entry.String())
 	visitor := new(model.BaseTreeVisitor)
-	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
-		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
-			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
+	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
+		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
+			id := objectio.NewBlockid(segmentID, num, seq)
+			return r.tryCompactBlock(dbID, tableID, &id, force)
 		}
 	}(force)
 
