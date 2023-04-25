@@ -98,6 +98,7 @@ func newProxyHandler(
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
 	h.counterSet.connAccepted.Add(1)
+	h.counterSet.connTotal.Add(1)
 
 	// Create a new tunnel to manage client connection and server connection.
 	t := newTunnel(h.ctx, h.logger, h.counterSet)
@@ -163,9 +164,11 @@ func (h *handler) handle(c goetty.IOSession) error {
 
 	select {
 	case <-h.ctx.Done():
+		h.counterSet.connTotal.Add(-1)
 		return h.ctx.Err()
 	case err := <-t.errC:
 		h.counterSet.updateWithErr(err)
+		h.counterSet.connTotal.Add(-1)
 		h.logger.Error("proxy handle error", zap.Error(err))
 		return err
 	}

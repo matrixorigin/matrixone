@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 
@@ -25,17 +26,82 @@ import (
 )
 
 func TestMakeEvent(t *testing.T) {
-	e := makeEvent(nil)
+	e, r := makeEvent(nil)
 	require.Nil(t, e)
+	require.True(t, r)
 
-	e = makeEvent(makeSimplePacket("kill quer8y 12"))
-	require.Nil(t, e)
+	t.Run("kill query", func(t *testing.T) {
+		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill quer8y 12")})
+		require.Nil(t, e)
+		require.True(t, r)
 
-	e = makeEvent(makeSimplePacket("kill query 123"))
-	require.NotNil(t, e)
+		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill query 123")})
+		require.NotNil(t, e)
+		require.True(t, r)
 
-	e = makeEvent(makeSimplePacket("kiLL Query 12"))
-	require.NotNil(t, e)
+		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kiLL Query 12")})
+		require.NotNil(t, e)
+		require.True(t, r)
+
+		e, r = makeEvent(&eventReq{msg: makeSimplePacket("set ")})
+		require.Nil(t, e)
+		require.True(t, r)
+	})
+
+	t.Run("set var", func(t *testing.T) {
+		stmtsValid := []string{
+			"set session a=1",
+			"set session a='1'",
+			"set local a=1",
+			"set local a='1'",
+			"set @@session.a=1",
+			"set @@session.a='1'",
+			"set @@local.a=1",
+			"set @@local.a='1'",
+			"set @@a=1",
+			"set @@a='1'",
+			"set a=1",
+			"set a='1'",
+			// user variables.
+			"set @a=1",
+			"set @a='1'",
+			// session variables.
+			"set session a:=1",
+			"set session a:='1'",
+			"set local a:=1",
+			"set local a:='1'",
+			"set @@session.a:=1",
+			"set @@session.a:='1'",
+			"set @@local.a:=1",
+			"set @@local.a:='1'",
+			"set @@a:=1",
+			"set @@a:='1'",
+			"set a:=1",
+			"set a:='1'",
+			// user variables.
+			"set @a:=1",
+			"set @a:='1'",
+		}
+		stmtsInvalid := []string{
+			"set '1'",
+			"set _'1'",
+			"set _a'1'",
+			"set _a='1'",
+			"set @@@a:='1'",
+			"set @a@:='1'",
+			"set @a:='1",
+		}
+		for _, stmt := range stmtsValid {
+			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			require.NotNil(t, e)
+			require.False(t, r)
+		}
+		for _, stmt := range stmtsInvalid {
+			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			require.Nil(t, e)
+			require.True(t, r)
+		}
+	})
 }
 
 func TestKillQueryEvent(t *testing.T) {
@@ -44,23 +110,15 @@ func TestKillQueryEvent(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	addr1 := "127.0.0.1:38001"
-	cn1 := &CNServer{
-		connID: 10,
-		addr:   addr1,
-		uuid:   "uuid1",
-	}
+	addr1 := "127.0.0.1:38301"
+	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
 
-	addr2 := "127.0.0.1:38002"
-	cn2 := &CNServer{
-		connID: 20,
-		addr:   addr2,
-		uuid:   "uuid2",
-	}
+	addr2 := "127.0.0.1:38302"
+	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
 	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
 	defer func() {
 		require.NoError(t, stopFn2())
@@ -110,11 +168,13 @@ func TestKillQueryEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// tunnel1 is on cn1, connection ID is 10.
-	_, _, err = tp.ru.Connect(cn1, nil, tu1)
+	_, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
+	// get connection id from result.
+	connID := ret[6]
 
 	// tunnel2 is on cn2, connection ID is 20.
-	_, _, err = tp.ru.Connect(cn2, nil, tu2)
+	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
 
 	err = tu1.run(cc1, sc1)
@@ -180,7 +240,7 @@ func TestKillQueryEvent(t *testing.T) {
 	go func() {
 		<-sendEventCh
 		// client2 send kill query 10, which is on server1.
-		if _, err := client2.Write(makeSimplePacket("kill query 10")); err != nil {
+		if _, err := client2.Write(makeSimplePacket(fmt.Sprintf("kill query %d", connID))); err != nil {
 			errChan <- err
 			return
 		}
@@ -203,10 +263,166 @@ func TestKillQueryEvent(t *testing.T) {
 	}
 }
 
+func TestSetVarEvent(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+
+	addr1 := "127.0.0.1:38003"
+	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
+	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
+	defer func() {
+		require.NoError(t, stopFn1())
+	}()
+
+	addr2 := "127.0.0.1:38004"
+	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
+	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
+	defer func() {
+		require.NoError(t, stopFn2())
+	}()
+
+	tu1 := newTunnel(tp.ctx, tp.logger, nil)
+	defer func() { _ = tu1.Close() }()
+	tu2 := newTunnel(tp.ctx, tp.logger, nil)
+	defer func() { _ = tu2.Close() }()
+
+	// Client2 will send "kill query 10", which will route to the server which
+	// has connection ID 10. In this case, the connection is server1.
+	clientProxy1, _ := net.Pipe()
+	serverProxy1, _ := net.Pipe()
+
+	cc1 := newMockClientConn(clientProxy1, "t1", labelInfo{}, tp.ru, tu1)
+	require.NotNil(t, cc1)
+	sc1 := newMockServerConn(serverProxy1)
+	require.NotNil(t, sc1)
+
+	clientProxy2, client2 := net.Pipe()
+	serverProxy2, _ := net.Pipe()
+
+	cc2 := newMockClientConn(clientProxy2, "t1", labelInfo{}, tp.ru, tu2)
+	require.NotNil(t, cc2)
+	sc2 := newMockServerConn(serverProxy2)
+	require.NotNil(t, sc2)
+
+	res := make(chan []byte)
+	st := stopper.NewStopper("test-event", stopper.WithLogger(tp.logger.RawLogger()))
+	defer st.Stop()
+	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
+		for {
+			select {
+			case e := <-tu2.reqC:
+				_ = cc2.HandleEvent(ctx, e, tu2.respC)
+			case r := <-tu2.respC:
+				if len(r) > 0 {
+					res <- r
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+	require.NoError(t, err)
+
+	// tunnel1 is on cn1, connection ID is 10.
+	_, _, err = tp.ru.Connect(cn1, testPacket, tu1)
+	require.NoError(t, err)
+
+	// tunnel2 is on cn2, connection ID is 20.
+	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
+	require.NoError(t, err)
+
+	err = tu1.run(cc1, sc1)
+	require.NoError(t, err)
+	require.Nil(t, tu1.ctx.Err())
+
+	func() {
+		tu1.mu.Lock()
+		defer tu1.mu.Unlock()
+		require.True(t, tu1.mu.started)
+	}()
+
+	err = tu2.run(cc2, sc2)
+	require.NoError(t, err)
+	require.Nil(t, tu2.ctx.Err())
+
+	func() {
+		tu2.mu.Lock()
+		defer tu2.mu.Unlock()
+		require.True(t, tu2.mu.started)
+	}()
+
+	tu1.mu.Lock()
+	csp1 := tu1.mu.csp
+	scp1 := tu1.mu.scp
+	tu1.mu.Unlock()
+
+	tu2.mu.Lock()
+	csp2 := tu2.mu.csp
+	scp2 := tu2.mu.scp
+	tu2.mu.Unlock()
+
+	barrierStart1, barrierEnd1 := make(chan struct{}), make(chan struct{})
+	barrierStart2, barrierEnd2 := make(chan struct{}), make(chan struct{})
+	csp1.testHelper.beforeSend = func() {
+		<-barrierStart1
+		<-barrierEnd1
+	}
+	csp2.testHelper.beforeSend = func() {
+		<-barrierStart2
+		<-barrierEnd2
+	}
+
+	csp1.mu.Lock()
+	require.True(t, csp1.mu.started)
+	csp1.mu.Unlock()
+
+	scp1.mu.Lock()
+	require.True(t, scp1.mu.started)
+	scp1.mu.Unlock()
+
+	csp2.mu.Lock()
+	require.True(t, csp2.mu.started)
+	csp2.mu.Unlock()
+
+	scp2.mu.Lock()
+	require.True(t, scp2.mu.started)
+	scp2.mu.Unlock()
+
+	// Client2 writes some MySQL packets.
+	sendEventCh := make(chan struct{}, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		<-sendEventCh
+		if _, err := client2.Write(makeSimplePacket("set session cn_label='account=acc1'")); err != nil {
+			errChan <- err
+			return
+		}
+	}()
+
+	sendEventCh <- struct{}{}
+	barrierStart2 <- struct{}{}
+	barrierEnd2 <- struct{}{}
+
+	// wait for result
+	<-res
+	require.Equal(t, 1, len(cc2.(*mockClientConn).setVarStmts))
+
+	select {
+	case err = <-errChan:
+		t.Fatalf("require no error, but got %v", err)
+	default:
+	}
+}
+
 func TestEventType_String(t *testing.T) {
 	e1 := baseEvent{}
 	require.Equal(t, "Unknown", e1.eventType().String())
 
 	e2 := killQueryEvent{}
 	require.Equal(t, "KillQuery", e2.eventType().String())
+
+	e3 := setVarEvent{}
+	require.Equal(t, "SetVar", e3.eventType().String())
 }

@@ -52,45 +52,39 @@ func TestCollectTunnels(t *testing.T) {
 	defer st.Stop()
 	ha := LabelHash("hash1")
 
-	cn11 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr1 := "127.0.0.1:38041"
+	cn11 := testMakeCNServer("cn11", addr1, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn11",
-		addr: "127.0.0.1:38001",
-	}
+	)
 	hc.updateCN("cn11", cn11.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	cn12 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr2 := "127.0.0.1:38002"
+	cn12 := testMakeCNServer("cn12", addr2, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn12",
-		addr: "127.0.0.1:38002",
-	}
+	)
 	hc.updateCN("cn12", cn12.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	cn13 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr3 := "127.0.0.1:38003"
+	cn13 := testMakeCNServer("cn13", addr3, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn13",
-		addr: "127.0.0.1:38003",
-	}
+	)
 	hc.updateCN("cn13", cn13.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
@@ -161,14 +155,13 @@ func TestDoRebalance(t *testing.T) {
 	defer tp.closeFn()
 
 	// Construct backend CN servers.
-	cn11 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr1 := "127.0.0.1:38001"
+	cn11 := testMakeCNServer("cn11", addr1, 0, "",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn11",
-		addr: "127.0.0.1:38001",
-	}
+	)
 	li := labelInfo{
 		Tenant: "t1",
 	}
@@ -184,14 +177,13 @@ func TestDoRebalance(t *testing.T) {
 		require.NoError(t, stopFn11())
 	}()
 
-	cn12 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr2 := "127.0.0.1:38002"
+	cn12 := testMakeCNServer("cn12", addr2, 0, "",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn12",
-		addr: "127.0.0.1:38002",
-	}
+	)
 	cn12.hash, err = li.getHash()
 	require.NoError(t, err)
 	tp.hc.updateCN("cn12", cn12.addr, map[string]metadata.LabelList{

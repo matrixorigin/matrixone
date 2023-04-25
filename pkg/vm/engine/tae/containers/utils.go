@@ -36,6 +36,15 @@ func ToCNBatch(dnBat *Batch) *batch.Batch {
 	return cnBat
 }
 
+func ToDNBatch(cnBat *batch.Batch) *Batch {
+	dnBat := NewEmptyBatch()
+	for i, vec := range cnBat.Vecs {
+		v := ToDNVector(vec)
+		dnBat.AddVector(cnBat.Attrs[i], v)
+	}
+	return dnBat
+}
+
 func ToDNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)

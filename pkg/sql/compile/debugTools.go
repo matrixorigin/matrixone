@@ -155,8 +155,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	}
 
 	// convert magic to its string name
-	magicShow := func(magic int) string {
-		name, ok := debugMagicNames[magicType(magic)]
+	magicShow := func(magic magicType) string {
+		name, ok := debugMagicNames[magic]
 		if ok {
 			return name
 		}
@@ -231,7 +231,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		if ss[i].Proc != nil {
 			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(int(ss[i].Magic)), receiverStr)
+		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
 		for j, instruction := range ss[i].Instructions {
 			if j != 0 {
 				str += " -> "

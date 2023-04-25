@@ -52,6 +52,7 @@ func (view *BlockView) GetColumnData(i int) containers.Vector {
 	return view.Columns[i].GetData()
 }
 
+// FIXME: i should not be idx in schema
 func (view *BlockView) SetData(i int, data containers.Vector) {
 	col := view.Columns[i]
 	if col == nil {

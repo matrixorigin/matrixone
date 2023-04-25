@@ -780,7 +780,7 @@ var (
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
-				version bigint unsigned default 0,
+				version bigint unsigned auto_increment,
 				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(

@@ -93,7 +93,7 @@ const Size90M = 90 * 1024 * 1024
 
 type CheckpointClient interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
-	FlushTable(dbID, tableID uint64, ts types.TS) error
+	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 }
 
 func DecideTableScope(tableID uint64) Scope {
@@ -174,7 +174,7 @@ func HandleSyncLogTailReq(
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
 		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
-			_ = ckpClient.FlushTable(did, tid, end)
+			_ = ckpClient.FlushTable(context.Background(), did, tid, end)
 			// try again after flushing
 			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)

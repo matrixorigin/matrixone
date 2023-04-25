@@ -85,6 +85,33 @@ message Insert{
   int32 partition_idx = 7;
 }
 
+message Array{
+  repeated int32 array = 1;
+}
+
+message Map{
+  map<string, int32> mp = 1;
+}
+
+message Deletion{
+  uint64 Ts = 1;
+  uint64 AffectedRows = 2;
+  bool RemoteDelete = 3;
+  uint32 IBucket =4;
+  uint32 NBucket = 5;
+  // DeleteCtx
+  bool CanTruncate = 6;
+  repeated plan.ObjectRef DelRef = 7;
+  repeated int32 IdxIdx = 8;
+  repeated int32 OnRestrictIdx = 9;
+  repeated int32 OnCascadeIdx = 10;
+  repeated plan.ObjectRef OnSetRef = 11;
+  repeated plan.TableDef OnSetTableDef = 12;
+  repeated Map OnSetUpdateCol = 13;
+  repeated Array OnSetIdx = 14;
+  map<string,int32> SegmentMap = 15;
+}
+
 message PreInsert {
   string schema_name      = 1;
   plan.TableDef table_def = 2;
@@ -278,6 +305,7 @@ message Instruction{
   OnDuplicateKey on_duplicate_key = 18;
   PreInsert pre_insert               = 19;
   PreInsertUnique pre_insert_unique  = 20;
+  Deletion delete = 18;
   repeated plan.OrderBySpec order_by = 21;
   repeated plan.Expr    project_list = 22;
   plan.Expr    filter = 23;
