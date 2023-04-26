@@ -316,7 +316,18 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 // makeInsertPlan  build insert plan for one table
 /**
- */
+[o]sink_scan -> lock(retry when err) -> join(join fk) -> filter -> project  -> insert [-> sink]
+			[u1]sink_scan -> preinsert_uk -> sink
+				[u1]sink_scan -> lock -> insert
+				[u1]sink_scan -> group_by -> filter      // check pk by insert rows
+				[u1]sink_scan -> join（u1） -> filter      // check pk by rows in origin table
+			[u2]sink_scan -> preinsert_uk -> sink
+				[u2]sink_scan -> lock -> insert
+				[u2]sink_scan -> group_by -> filter      // check pk by insert rows
+				[u2]sink_scan -> join（u2） -> filter      // check pk by rows in origin table
+[o]sink_scan -> group_by -> filter      // check pk by insert rows
+[o]sink_scan -> join（o） -> filter      // check pk by rows in origin table
+*/
 func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, updateColLength int,
 	sourceStep int32, addAffectedRows bool) error {
@@ -334,7 +345,7 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 
 	hasUniqueKey := haveUniqueKey(tableDef)
 
-	// make plan : sink_scan -> lock -> join(check fk) -> filter -> insert -> sink/project
+	// make plan : sink_scan -> lock -> join(check fk) -> filter -> insert -> [sink]
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 
@@ -473,9 +484,9 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 }
 
 // makeOneDeletePlan
-// lock -> filter -> delete
+// lock -> delete
 func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, delNodeInfo *deleteNodeInfo) (int32, error) {
-	// todo: append lock & filter
+	// todo: append lock
 
 	// append delete node
 	deleteNode := &Node{
