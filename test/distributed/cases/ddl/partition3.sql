@@ -39,9 +39,17 @@ insert into t1 values
 (30, '1981-12-09', 7997),
 (31, '2001-11-17', 7998),
 (32, '2001-11-17', 7999);
+select * from `%!%p0%!%t1` order by col1;
+select * from `%!%p1%!%t1` order by col1;
+select * from `%!%p2%!%t1` order by col1;
+select * from `%!%p3%!%t1` order by col1;
 select * from t1 where col1 > 5 order by col3;
 delete from t1 where col1 > 20;
 select * from t1 order by col1;
+select * from `%!%p0%!%t1` order by col1;
+select * from `%!%p1%!%t1` order by col1;
+select * from `%!%p2%!%t1` order by col1;
+select * from `%!%p3%!%t1` order by col1;
 drop table t1;
 
 
@@ -99,9 +107,17 @@ insert into t2 values
 
 SELECT * from t2 WHERE col1 BETWEEN 0 and 25 order by col1;
 SELECT * from t2 WHERE col1 BETWEEN 26 and 30 order by col1;
+select * from `%!%p0%!%t2` order by col1;
+select * from `%!%p1%!%t2` order by col1;
+select * from `%!%p2%!%t2` order by col1;
+select * from `%!%p3%!%t2` order by col1;
 
 delete from t2 where col1 > 30;
 select * from t2 order by col1;
+select * from `%!%p0%!%t2` order by col1;
+select * from `%!%p1%!%t2` order by col1;
+select * from `%!%p2%!%t2` order by col1;
+select * from `%!%p3%!%t2` order by col1;
 drop table t2;
 
 drop table if exists t3;
@@ -163,7 +179,15 @@ insert into t3 values
 
 SELECT * from t3 WHERE id BETWEEN 0 and 9 order by id;
 SELECT * from t3 WHERE id BETWEEN 20 and 29 order by id;
+select * from `%!%p0%!%t3` order by id;
+select * from `%!%p1%!%t3` order by id;
+select * from `%!%p2%!%t3` order by id;
+select * from `%!%p3%!%t3` order by id;
 
 delete from t3 where id > 30;
 select * from t3 order by id;
+select * from `%!%p0%!%t3` order by id;
+select * from `%!%p1%!%t3` order by id;
+select * from `%!%p2%!%t3` order by id;
+select * from `%!%p3%!%t3` order by id;
 drop table t3;

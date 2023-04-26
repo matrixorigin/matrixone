@@ -1028,6 +1028,19 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	//Truncate Partition subtable if needed
+	for _, name := range tqry.PartitionTableNames {
+		var err error
+		if isTemp {
+			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+		} else {
+			_, err = dbSource.Truncate(c.ctx, name)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)

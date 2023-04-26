@@ -1041,9 +1041,10 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
-	ClusterTable cluster_table = 4;
-	uint64 table_id = 5;
-	repeated uint64 foreign_tbl = 6;
+	repeated string partition_table_names = 4;
+	ClusterTable cluster_table = 5;
+	uint64 table_id = 6;
+	repeated uint64 foreign_tbl = 7;
 }
 
 message ClusterTable{
