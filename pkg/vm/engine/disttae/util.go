@@ -101,23 +101,31 @@ func buildColumnsZMVectors(
 	def *plan.TableDef,
 	mp *mpool.MPool,
 ) (vecs []*vector.Vector, err error) {
+	toClean := false
 	vecs = make([]*vector.Vector, len(cols))
 	defer func() {
-		if err != nil {
-			for _, vec := range vecs {
+		if toClean {
+			for i, vec := range vecs {
 				if vec != nil {
 					vec.Free(mp)
+					vecs[i] = nil
 				} else {
 					break
 				}
 			}
+			vecs = vecs[:0]
 		}
 	}()
 	var vec *vector.Vector
 	for i, colIdx := range cols {
 		zm := meta.GetColumnMeta(uint32(blknum), uint16(colIdx)).ZoneMap()
 		// colType := types.T(def.Cols[colIdx].Typ.Id)
+		if !zm.IsInited() {
+			toClean = true
+			return
+		}
 		if vec, err = buildColumnZMVector(zm, mp); err != nil {
+			toClean = true
 			return
 		}
 		vecs[i] = vec
