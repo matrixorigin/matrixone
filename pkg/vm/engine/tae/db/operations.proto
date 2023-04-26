@@ -1,0 +1,73 @@
+/*
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package db;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all)                = false;
+option (gogoproto.protosizer_all)           = true;
+option (gogoproto.goproto_enum_prefix_all)  = false;
+option (gogoproto.goproto_unrecognized_all) = false;
+option (gogoproto.goproto_unkeyed_all)      = false;
+option (gogoproto.goproto_sizecache_all)    = false;
+
+message AccessInfo {
+    option (gogoproto.typedecl) = false;
+    uint32 AccountID            = 1;
+    uint32 UserID               = 2;
+    uint32 RoleID               = 3;
+}
+
+message CreateDatabaseReq {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+    string name                 = 2;
+    string CreateSql            = 3;
+    uint64 DatabaseId           = 4;
+}
+
+message FlushTable {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+    uint64 DatabaseID           = 2;
+    uint64 TableID              = 3;
+}
+
+message Checkpoint {
+    option (gogoproto.typedecl) = false;
+    int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
+}
+
+message InspectDN {
+    option (gogoproto.typedecl) = false;
+    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
+    string Operation            = 2;
+}
+
+message InspectResp {
+    option (gogoproto.typedecl) = false;
+    int32 Typ                   = 1 [(gogoproto.casttype) = "int"];
+    string Message              = 2;
+    bytes Payload               = 3;
+}
+
+message CatalogResp {
+    option (gogoproto.typedecl) = false;
+    string Item                 = 1;
+    repeated CatalogResp Sub    = 2;
+}

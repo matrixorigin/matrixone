@@ -286,7 +286,7 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		}
 		ret.Value = rel.Name
 	case catalog.SystemColAttr_Type:
-		data, err := types.Encode(a.Type)
+		data, err := types.Encode(&a.Type)
 		if err != nil {
 			return ret, err
 		}
