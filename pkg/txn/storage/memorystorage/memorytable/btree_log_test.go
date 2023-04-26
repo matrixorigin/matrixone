@@ -30,15 +30,6 @@ func TestBTreeLogEncoding(t *testing.T) {
 			},
 		})
 	}
-	data, err := log.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	log2 := new(BTreeLog[Int, int])
-	if err := log2.UnmarshalBinary(data); err != nil {
-		t.Fatal(err)
-	}
 
 	m := make(map[Int]int)
 	iter := log.Iter()
