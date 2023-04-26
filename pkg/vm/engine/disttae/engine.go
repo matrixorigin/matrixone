@@ -250,7 +250,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
