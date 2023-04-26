@@ -67,6 +67,10 @@ func (o objectMetaV1) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
 	return o.GetBlockMeta(blk).ColumnMeta(col)
 }
 
+func (o objectMetaV1) IsEmpty() bool {
+	return len(o) == 0
+}
+
 const (
 	blockCountLen = 4
 	blockOffset   = 4
@@ -205,6 +209,10 @@ func (bh BlockHeader) SetBlockID(id *Blockid) {
 	copy(bh[blockIDOff:blockIDOff+blockIDLen], id[:])
 }
 
+func (bh BlockHeader) ShortName() *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&bh[blockIDOff]))
+}
+
 func (bh BlockHeader) Sequence() uint16 {
 	return types.DecodeUint16(bh[rowsOff-sequenceLen : rowsOff])
 }
@@ -316,4 +324,11 @@ type Footer struct {
 
 func (f Footer) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&f)), FooterSize)
+}
+
+func IsSameObjectLocVsMeta(location Location, meta ObjectMeta) bool {
+	if len(location) == 0 || len(meta) == 0 {
+		return false
+	}
+	return location.ShortName().Equal(meta.BlockHeader().ShortName()[:])
 }

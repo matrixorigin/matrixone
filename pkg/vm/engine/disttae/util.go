@@ -75,6 +75,19 @@ func fetchZonemapAndRowsFromBlockInfo(
 	return zonemapList, blockInfo.MetaLocation().Rows(), nil
 }
 
+func loadObjectMeta(
+	ctx context.Context,
+	location objectio.Location,
+	fs fileservice.FileService,
+	m *mpool.MPool,
+) (meta objectio.ObjectMeta, err error) {
+	reader, err := blockio.NewObjectReader(fs, location)
+	if err != nil {
+		return
+	}
+	return reader.LoadObjectMeta(ctx, m)
+}
+
 func buildColumnZMVector(
 	zm objectio.ZoneMap,
 	mp *mpool.MPool,
