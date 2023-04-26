@@ -60,14 +60,14 @@ func TestMergeBlock(t *testing.T) {
 	argument1 := Argument{
 		Tbl:          &mockRelation{},
 		Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
-		AffectedRows: 0,
+		affectedRows: 0,
 		notFreeBatch: true,
 	}
 	proc.Reg.InputBatch = batch1
 	Prepare(proc, &argument1)
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.AffectedRows)
+	require.Equal(t, uint64(15), argument1.affectedRows)
 	// Check Tbl
 	{
 		result := argument1.Tbl.(*mockRelation).result

@@ -113,7 +113,11 @@ func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vecto
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
-		lenLeft = 1
+		if leftVec.IsConstNull() {
+			return vector.NewConstNull(types.T_bool.ToType(), 1, proc.Mp()), nil
+		} else {
+			lenLeft = 1
+		}
 	}
 	inMap := make(map[T]bool, lenRight)
 	for i := 0; i < lenRight; i++ {
@@ -140,7 +144,11 @@ func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
-		lenLeft = 1
+		if leftVec.IsConstNull() {
+			return vector.NewConstNull(types.T_bool.ToType(), 1, proc.Mp()), nil
+		} else {
+			lenLeft = 1
+		}
 	}
 	inMap := make(map[string]bool, lenRight)
 	for i := 0; i < lenRight; i++ {
@@ -166,7 +174,11 @@ func NotINGeneral[T compareT](ivecs []*vector.Vector, proc *process.Process) (*v
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
-		lenLeft = 1
+		if leftVec.IsConstNull() {
+			return vector.NewConstNull(types.T_bool.ToType(), 1, proc.Mp()), nil
+		} else {
+			lenLeft = 1
+		}
 	}
 	notInMap := make(map[T]bool, lenRight)
 	for i := 0; i < lenRight; i++ {
@@ -196,7 +208,11 @@ func NotINString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
-		lenLeft = 1
+		if leftVec.IsConstNull() {
+			return vector.NewConstNull(types.T_bool.ToType(), 1, proc.Mp()), nil
+		} else {
+			lenLeft = 1
+		}
 	}
 	inMap := make(map[string]bool, lenRight)
 	for i := 0; i < lenRight; i++ {
