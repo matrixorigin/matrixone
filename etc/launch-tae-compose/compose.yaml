@@ -30,6 +30,7 @@ services:
     ports:
       - "6001:6001"
       - "6002"
+      - "12345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -45,6 +46,7 @@ services:
     ports:
       - "7001:6001"
       - "6002"
+      - "22345:12345"
     profiles:
       - launch-tae-multi-CN-tae-DN
     environment:
