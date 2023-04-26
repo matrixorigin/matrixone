@@ -200,8 +200,8 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		// TODO need rewrite to deal with case is nil
 		result += "CASE"
 		// case when expression has two part(case when condition and else exression)
-		condSize := len(funcExpr.F.Args) / 2
-		for i := 0; i < condSize; i++ {
+		condSize := len(funcExpr.F.Args) - 1
+		for i := 0; i < condSize; i += 2 {
 			whenExpr := funcExpr.F.Args[i]
 			thenExpr := funcExpr.F.Args[i+1]
 			whenExprDesc, err := describeExpr(ctx, whenExpr, options)
