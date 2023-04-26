@@ -85,9 +85,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 			} else {
 				proc.SetInputBatch(nil)
 			}
-			for i := range ctr.evecs {
-				anal.Alloc(int64(ctr.evecs[i].vec.Size()))
-			}
 			ap.Free(proc, false)
 			return true, nil
 		}
