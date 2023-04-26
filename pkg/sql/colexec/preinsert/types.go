@@ -16,15 +16,12 @@ package preinsert
 
 import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type proc = process.Process
-type eng = engine.Engine
 
 type Argument struct {
-	Eg         eng
 	SchemaName string
 	TableDef   *pb.TableDef
 	ParentIdx  map[string]int32
