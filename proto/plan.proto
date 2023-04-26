@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -470,19 +470,21 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
+message OnDuplicateKeyCtx {
+	TableDef table_def					= 1;
+	repeated int32 on_duplicate_idx		= 2;
+	map<string, Expr> on_duplicate_expr	= 3;
+}
+
 message InsertCtx {
-	ObjectRef ref 					= 1;
-	TableDef table_def 				= 2;
-
-	repeated int32 on_duplicate_idx		= 3;
-	map<string, Expr> on_duplicate_expr	= 4;
-
-	repeated ObjectRef idx_ref 			= 5;
-	repeated int32 idx_idx 				= 6;
-
-	map<string, int32> parent_idx 	= 7;
-
-	ClusterTable cluster_table = 8;
+	ObjectRef ref			= 1;
+	bool add_affected_rows 	= 2;
+	bool is_cluster_table	= 3;
+	TableDef table_def		= 4;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 5;
+	int32 partition_idx = 6;
+	bool is_end 		= 7;
 }
 
 message UpdateCtx {
@@ -580,6 +582,13 @@ message Node {
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
+
+		//
+		ON_DUPLICATE_KEY = 58;
+		PRE_INSERT = 59;
+		PRE_DELETE = 60;
+		// the node which build insert batch for hidden table(unique key)
+		PRE_INSERT_UK = 61;
 	}
 
 	enum JoinType {
@@ -655,8 +664,33 @@ message Node {
 	InsertCtx insert_ctx = 30;
 
 	// used to connect two plans[steps]
-	int32 current_step = 31;
-	int32 source_step = 32;
+	int32 source_step = 31;
+
+	PreDeleteCtx pre_delete_ctx = 32;
+	PreInsertCtx pre_insert_ctx = 33;
+	// build unique key batch before insert into hidden table which keep the unique key
+	PreInsertUkCtx pre_insert_uk_ctx = 34;
+	OnDuplicateKeyCtx on_duplicate_key = 35;
+}
+
+message PreInsertUkCtx {
+	// index of columns(parts of unique key) in pre batch
+	repeated int32 columns 	= 1;
+	int32 pk_column 		= 2;
+	Type pk_type 			= 3;
+	Type uk_type			= 4;
+}
+
+message PreDeleteCtx {
+	//the indexes of row_id&pk column in the batch
+	repeated int32 idx = 1;
+}
+
+message PreInsertCtx {
+	ObjectRef ref 			= 1;
+	TableDef table_def 		= 2;
+	bool has_auto_col		= 3;
+	bool is_update			= 4;
 }
 
 message IdList {
@@ -668,24 +702,15 @@ message ColPosMap {
 }
 
 message DeleteCtx {
-	repeated ObjectRef ref 			= 1;
-	repeated IdList idx				= 2;
-
-	repeated ObjectRef idx_ref 		= 3;
-	repeated int32 idx_idx 			= 4;
-
-	repeated ObjectRef on_restrict_ref 	= 5;
-	repeated int32 on_restrict_idx 		= 6;
-
-	repeated ObjectRef on_cascade_ref 	= 7;
-	repeated int32 on_cascade_idx 		= 8;
-
-	repeated ObjectRef on_set_ref 			= 9;
-	repeated TableDef on_set_def 			= 10;
-	repeated IdList on_set_idx 				= 11;
-	repeated ColPosMap on_set_update_col 	= 12;
-
-	bool can_truncate = 13;
+	bool can_truncate 		= 1;
+	ObjectRef ref 			= 2;
+	int32 row_id_idx		= 3;
+	bool add_affected_rows 	= 4;
+	bool is_cluster_table	= 5;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 6;
+	int32 partition_idx = 7;
+	bool is_end 		= 8;
 }
 
 message Query {
@@ -1016,9 +1041,10 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
-	ClusterTable cluster_table = 4;
-	uint64 table_id = 5;
-	repeated uint64 foreign_tbl = 6;
+	repeated string partition_table_names = 4;
+	ClusterTable cluster_table = 5;
+	uint64 table_id = 6;
+	repeated uint64 foreign_tbl = 7;
 }
 
 message ClusterTable{

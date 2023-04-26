@@ -274,8 +274,8 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
-	parts := e.getPartitions(databaseId, tableId)
+func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
+	parts := e.getPartitions(tbl.db.databaseId, tbl.tableId)
 
 	for _, part := range parts {
 
