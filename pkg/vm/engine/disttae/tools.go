@@ -676,7 +676,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		payload, err := types.Encode(api.PrecommitWriteCmd{EntryList: mp[k]})
+		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err
 		}

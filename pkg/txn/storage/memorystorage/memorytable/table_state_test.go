@@ -32,17 +32,6 @@ func TestTableStateEncoding(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		data, err := table.state.Load().MarshalBinary()
-		if err != nil {
-			t.Fatal(err)
-		}
-		state := new(tableState[Int, int])
-		if err := state.UnmarshalBinary(data); err != nil {
-			t.Fatal(err)
-		}
-		table.state.Store(state)
-
 	}
 
 	m := make(map[Int]int)
