@@ -83,7 +83,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
-	return colexec.UpdateInsertBatch(arg.Eg, arg.Ctx, proc,
+	return colexec.UpdateInsertBatch(arg.Eg, proc.Ctx, proc,
 		arg.TableDef.Cols, bat, arg.TableDef.TblId, arg.SchemaName, arg.TableDef.Name)
 }
 

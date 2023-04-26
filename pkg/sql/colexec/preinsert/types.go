@@ -15,7 +15,6 @@
 package preinsert
 
 import (
-	"context"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,8 +24,6 @@ type proc = process.Process
 type eng = engine.Engine
 
 type Argument struct {
-	Ctx context.Context
-
 	Eg         eng
 	SchemaName string
 	TableDef   *pb.TableDef
