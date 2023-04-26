@@ -142,14 +142,12 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 }
 
 func (c *Compile) setAffectedRows(n uint64) {
-	atomic.CompareAndSwapUint64(&c.affectRows, c.affectRows, n)
-	// c.affectRows = n
+	c.affectRows.Store(n)
 }
 
 func (c *Compile) GetAffectedRows() uint64 {
-	affectRows := atomic.LoadUint64(&c.affectRows)
+	affectRows := c.affectRows.Load()
 	return affectRows
-	// return c.affectRows
 }
 
 func (c *Compile) run(s *Scope) error {
@@ -1968,35 +1966,41 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		analInfos: anals,
 		curr:      int(qry.Steps[0]),
 	}
+	for _, node := range c.anal.qry.Nodes {
+		if node.AnalyzeInfo == nil {
+			node.AnalyzeInfo = new(plan.AnalyzeInfo)
+		}
+	}
 	c.proc.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
-	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
-	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
+	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Put.Load())
+	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.List.Load())
+
+	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Head.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Get.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Delete.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.DeleteMulti.Load())
+
 	for i, anal := range c.anal.analInfos {
-		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
-			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
-		}
-		c.anal.qry.Nodes[i].AnalyzeInfo.InputRows = atomic.LoadInt64(&anal.InputRows)
-		c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows = atomic.LoadInt64(&anal.OutputRows)
-		c.anal.qry.Nodes[i].AnalyzeInfo.InputSize = atomic.LoadInt64(&anal.InputSize)
-		c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize = atomic.LoadInt64(&anal.OutputSize)
-		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
-		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
-		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
-		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount = atomic.LoadInt64(&anal.S3IOInputCount)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount = atomic.LoadInt64(&anal.S3IOOutputCount)
-		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
-		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
-		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
+
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
+
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize, atomic.LoadInt64(&anal.OutputSize))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed, atomic.LoadInt64(&anal.TimeConsumed))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize, atomic.LoadInt64(&anal.MemorySize))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed, atomic.LoadInt64(&anal.WaitTimeConsumed))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO, atomic.LoadInt64(&anal.DiskIO))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte, atomic.LoadInt64(&anal.S3IOByte))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount, atomic.LoadInt64(&anal.S3IOInputCount))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount, atomic.LoadInt64(&anal.S3IOOutputCount))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
 	}
 }
 

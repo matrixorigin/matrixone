@@ -64,6 +64,6 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	// }
 }
 
-func (arg *Argument) AffectedRows() uint64 {
-	return arg.affectedRows
+func (ap *Argument) AffectedRows() uint64 {
+	return ap.affectedRows
 }
