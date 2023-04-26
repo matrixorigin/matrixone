@@ -73,7 +73,7 @@ const (
 	Right
 	OnDuplicateKey
 	PreInsert
-
+	PreInsertUnique
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
@@ -121,4 +121,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 		return true
 	}
 	return false
+}
+
+type ModificationArgument interface {
+	AffectedRows() uint64
 }
