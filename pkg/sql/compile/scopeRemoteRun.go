@@ -592,7 +592,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
 			IsRemote:          t.IsRemote,
-			Affected:          t.Affected,
+			Affected:          t.AffectedRow,
 			Ref:               t.InsertCtx.Ref,
 			Attrs:             t.InsertCtx.Attrs,
 			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
@@ -939,8 +939,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
-			Affected: t.Affected,
-			IsRemote: t.IsRemote,
+			AffectedRow: t.Affected,
+			IsRemote:    t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,

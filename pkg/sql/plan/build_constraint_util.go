@@ -50,7 +50,6 @@ type dmlTableInfo struct {
 	isClusterTable []bool
 	haveConstraint bool
 	isMulti        bool
-	updateCol      []map[string]int32     // name=updated col.Name  value=col position in TableDef.Cols
 	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
 	oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	newColPosMap   []map[string]int       // insert/update values to their position in derived table

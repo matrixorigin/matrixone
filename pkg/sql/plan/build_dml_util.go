@@ -64,8 +64,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// -> project -> preinsert -> sink
 	lastNode := builder.qry.Nodes[lastNodeId]
-	var newCols []*ColDef
-	var projectProjection []*Expr
+	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	for _, col := range updatePlanCtx.tableDef.Cols {
 		if col.Hidden {
 			continue
@@ -74,12 +73,13 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	updatePlanCtx.tableDef.Cols = newCols
 
-	for _, idx := range updatePlanCtx.insertColPos {
+	projectProjection := make([]*Expr, len(updatePlanCtx.insertColPos))
+	for i, idx := range updatePlanCtx.insertColPos {
 		name := ""
 		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
 			name = col.Col.Name
 		}
-		projectProjection = append(projectProjection, &plan.Expr{
+		projectProjection[i] = &plan.Expr{
 			Typ: lastNode.ProjectList[idx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -87,7 +87,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					Name:   name,
 				},
 			},
-		})
+		}
 	}
 	//append project node
 	projectNode := &Node{
@@ -670,7 +670,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		name2pos[col.Name] = i
 	}
 	lastNodeId := baseNodeId
-	var projectList []*Expr
 
 	for _, fk := range tableDef.Fkeys {
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
@@ -682,7 +681,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			parentTypMap[col.Name] = col.Typ
 			parentId2name[col.ColId] = col.Name
 		}
-		projectList = getProjectionByLastNode(builder, lastNodeId)
+		projectList := getProjectionByLastNode(builder, lastNodeId)
 
 		// append table scan node
 		scanNodeProject := make([]*Expr, len(parentTableDef.Cols))

@@ -31,10 +31,10 @@ type container struct {
 }
 
 type Argument struct {
-	ctr      *container
-	Affected uint64
-	Engine   engine.Engine
-	IsRemote bool // mark if this insert is cn2s3 directly
+	ctr         *container
+	AffectedRow uint64
+	Engine      engine.Engine
+	IsRemote    bool // mark if this insert is cn2s3 directly
 	// s3Writers []*colexec.S3Writer
 	InsertCtx *InsertCtx
 }
@@ -65,5 +65,5 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func (arg *Argument) AffectedRows() uint64 {
-	return arg.Affected
+	return arg.AffectedRow
 }
