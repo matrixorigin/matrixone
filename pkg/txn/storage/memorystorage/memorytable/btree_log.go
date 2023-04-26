@@ -15,12 +15,6 @@
 package memorytable
 
 import (
-	"bytes"
-	"encoding"
-	"encoding/gob"
-	"errors"
-	"io"
-
 	"github.com/tidwall/btree"
 )
 
@@ -75,44 +69,4 @@ func (b *btreeLogIter[K, V]) Next() bool {
 
 func (b *btreeLogIter[K, V]) Read() (*logEntry[K, V], error) {
 	return b.iter.Item(), nil
-}
-
-var _ encoding.BinaryMarshaler = new(BTreeLog[Int, int])
-
-func (b *BTreeLog[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(b)
-	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
-	iter := b.log.Copy().Iter()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		if err := encoder.Encode(entry); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-var _ encoding.BinaryUnmarshaler = new(BTreeLog[Int, int])
-
-func (b *BTreeLog[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(b)
-	log := b.log
-	if log == nil {
-		log = btree.NewBTreeG(compareLogEntry[K, V])
-	}
-	decoder := gob.NewDecoder(bytes.NewReader(data))
-	for {
-		var entry *logEntry[K, V]
-		err := decoder.Decode(&entry)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return err
-		}
-		log.Set(entry)
-	}
-	b.log = log
-	return nil
 }
