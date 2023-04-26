@@ -105,7 +105,7 @@ func (t *Table) NewReader(
 		true,
 		theseShards(shards),
 		OpNewTableIter,
-		NewTableIterReq{
+		&NewTableIterReq{
 			TableID: t.id,
 			Expr:    expr,
 		},
@@ -162,7 +162,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 			true,
 			thisShard(t.iterInfos[0].Shard),
 			OpRead,
-			ReadReq{
+			&ReadReq{
 				IterID:   t.iterInfos[0].IterID,
 				ColNames: colNames,
 			},
@@ -196,7 +196,7 @@ func (t *TableReader) Close() error {
 			true,
 			thisShard(info.Shard),
 			OpCloseTableIter,
-			CloseTableIterReq{
+			&CloseTableIterReq{
 				IterID: info.IterID,
 			},
 		)

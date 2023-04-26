@@ -109,4 +109,13 @@ do
     goimports -w $PB_DIR/$dir/*pb.go
 done
 
+
+# Generate pb file for each package's own
+for fp in $(find pkg -name protogen.sh)
+do
+    cd $(dirname ${fp})
+    sh $(basename ${fp})
+    cd - > /dev/null
+done
+
 if [ -f protobuf/ ];then rm -rf protobuf/;fi

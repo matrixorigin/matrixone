@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -110,14 +112,17 @@ func TestKillQueryEvent(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	addr1 := "127.0.0.1:38301"
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
 
-	addr2 := "127.0.0.1:38302"
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
 	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
 	defer func() {
@@ -266,17 +271,20 @@ func TestKillQueryEvent(t *testing.T) {
 func TestSetVarEvent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	addr1 := "127.0.0.1:38003"
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
 
-	addr2 := "127.0.0.1:38004"
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
 	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
 	defer func() {

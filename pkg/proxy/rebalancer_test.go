@@ -16,6 +16,8 @@ package proxy
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -52,7 +54,9 @@ func TestCollectTunnels(t *testing.T) {
 	defer st.Stop()
 	ha := LabelHash("hash1")
 
-	addr1 := "127.0.0.1:38041"
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
 	cn11 := testMakeCNServer("cn11", addr1, 0, ha,
 		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
@@ -65,7 +69,8 @@ func TestCollectTunnels(t *testing.T) {
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	addr2 := "127.0.0.1:38002"
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
 	cn12 := testMakeCNServer("cn12", addr2, 0, ha,
 		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
@@ -78,7 +83,8 @@ func TestCollectTunnels(t *testing.T) {
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	addr3 := "127.0.0.1:38003"
+	addr3 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr3))
 	cn13 := testMakeCNServer("cn13", addr3, 0, ha,
 		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
@@ -154,8 +160,10 @@ func TestDoRebalance(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
+	temp := os.TempDir()
 	// Construct backend CN servers.
-	addr1 := "127.0.0.1:38001"
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
 	cn11 := testMakeCNServer("cn11", addr1, 0, "",
 		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
@@ -172,12 +180,13 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn11 := startTestCNServer(t, tp.ctx, cn11.addr)
+	stopFn11 := startTestCNServer(t, tp.ctx, addr1)
 	defer func() {
 		require.NoError(t, stopFn11())
 	}()
 
-	addr2 := "127.0.0.1:38002"
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
 	cn12 := testMakeCNServer("cn12", addr2, 0, "",
 		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
@@ -191,7 +200,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn12 := startTestCNServer(t, tp.ctx, cn12.addr)
+	stopFn12 := startTestCNServer(t, tp.ctx, addr2)
 	defer func() {
 		require.NoError(t, stopFn12())
 	}()

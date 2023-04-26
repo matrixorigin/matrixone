@@ -12,15 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package catalog
 
 import (
-	"encoding/gob"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	gob.Register(&catalog.BlockInfo{})
-	gob.Register(&BlockMeta{})
+func TestObjectLocationMarshalAndUnmarshal(t *testing.T) {
+	var loc ObjectLocation
+	for i := 0; i < len(loc); i++ {
+		loc[i] = byte(i)
+	}
+
+	data, err := loc.Marshal()
+	require.NoError(t, err)
+
+	var ret ObjectLocation
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, loc, ret)
 }
