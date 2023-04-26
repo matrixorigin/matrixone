@@ -73,7 +73,6 @@ type Engine struct {
 	fs         fileservice.FileService
 	cli        client.TxnClient
 	idGen      IDGenerator
-	txns       map[string]*Transaction
 	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
