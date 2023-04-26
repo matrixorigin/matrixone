@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,14 +49,14 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 	if !ok {
 		return plan2.DefaultStats(), nil
 	}
-	if tbl.meta == nil || !tbl.updated {
+	if len(tbl.blockMetas) == 0 || !tbl.updated {
 		err := tbl.updateMeta(ctx, expr)
 		if err != nil {
 			return plan2.DefaultStats(), err
 		}
 	}
-	if tbl.meta != nil {
-		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
+	if len(tbl.blockMetas) > 0 {
+		return CalcStats(ctx, &tbl.blockMetas, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil
@@ -108,8 +109,8 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		iter.Close()
 	}
 
-	if tbl.meta != nil {
-		for _, blks := range tbl.meta.blocks {
+	if len(tbl.blockMetas) > 0 {
+		for _, blks := range tbl.blockMetas {
 			for _, blk := range blks {
 				rows += blockRows(blk)
 			}
@@ -133,12 +134,12 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	//minimum --- maximum
 	tableVal := make([][2]any, dataLength)
 
-	if tbl.meta == nil {
+	if len(tbl.blockMetas) == 0 {
 		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
 	}
 
 	var init bool
-	for _, blks := range tbl.meta.blocks {
+	for _, blks := range tbl.blockMetas {
 		for _, blk := range blks {
 			blkVal, blkTypes, err := getZonemapDataFromMeta(columns, blk, tbl.getTableDef())
 			if err != nil {
@@ -213,16 +214,14 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
 
-func (tbl *txnTable) TruncateMeta() {
-	if tbl.meta == nil {
-		return
-	}
-	for i := range tbl.meta.blocks {
-		tbl.meta.blocks[i] = tbl.meta.blocks[i][:0]
-	}
-	for i := range tbl.meta.modifedBlocks {
-		tbl.meta.modifedBlocks[i] = tbl.meta.modifedBlocks[i][:0]
-	}
+func (tbl *txnTable) reset(newId uint64) {
+	tbl.tableId = newId
+	tbl.setPartsOnce = sync.Once{}
+	tbl._parts = nil
+	tbl.blockMetas = nil
+	tbl.modifiedBlocks = nil
+	tbl.updated = false
+	tbl.localState = NewPartitionState(true)
 }
 
 // return all unmodified blocks
@@ -253,15 +252,15 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[types.Blockid]uint8)
-	if tbl.meta == nil {
+	if len(tbl.blockMetas) == 0 {
 		return ranges, nil
 	}
-	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
+	tbl.modifiedBlocks = make([][]ModifyBlockMeta, len(tbl.blockMetas))
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
-		blocks := tbl.meta.blocks[i]
+		blocks := tbl.blockMetas[i]
 		blks := make([]BlockMeta, 0, len(blocks))
 		deletes := make(map[types.Blockid][]int)
 		if len(blocks) > 0 {
@@ -314,8 +313,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 				ranges = append(ranges, blockInfoMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
-			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
+		tbl.modifiedBlocks[i] = genModifedBlocks(ctx, deletes,
+			tbl.blockMetas[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
 	return ranges, nil
 }
@@ -568,29 +567,31 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
-	for id, deleteOffsets := range tbl.db.txn.cnBlockDeletesMap.mp {
+	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
 		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
 		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
 		// just do compaction for current txnTable
 		entry := tbl.db.txn.writes[pos.idx]
 		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
-			continue
+			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		delete(tbl.db.txn.cnBlockDeletesMap.mp, id)
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfo(id)
 		if len(deleteOffsets) == 0 {
-			continue
+			return true
 		}
 		mp[pos.idx] = append(mp[pos.idx], pos.offset)
 		// start compaction
 		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
-		location, err := blockio.EncodeLocationFromString(metaLoc)
-		if err != nil {
-			return err
+		location, e := blockio.EncodeLocationFromString(metaLoc)
+		if e != nil {
+			err = e
+			return false
 		}
-		s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-		if err != nil {
-			return err
+		s3BlockReader, e := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
+		if e != nil {
+			err = e
+			return false
 		}
 		if tbl.idxs == nil {
 			idxs := make([]uint16, 0, len(tbl.tableDef.Cols)-1)
@@ -599,20 +600,25 @@ func (tbl *txnTable) compaction() error {
 			}
 			tbl.idxs = idxs
 		}
-		bat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
-		if err != nil {
-			return err
+		bat, e := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.idxs, location.ID(), tbl.db.txn.proc.GetMPool())
+		if e != nil {
+			err = e
+			return false
 		}
 		bat.SetZs(bat.GetVector(0).Length(), tbl.db.txn.proc.GetMPool())
 		bat.AntiShrink(deleteOffsets)
 		if bat.Length() == 0 {
-			continue
+			return true
 		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
 		// and make sure one block has as close as possible to 8192 rows
 		// if the batch is little we should not flush, improve this in next pr.
 		s3writer.WriteBlock(bat)
 		batchNums++
+		return true
+	})
+	if err != nil {
+		return err
 	}
 
 	if batchNums > 0 {
@@ -767,8 +773,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	for _, i := range tbl.dnList {
 		var blks []ModifyBlockMeta
 
-		if tbl.meta != nil {
-			blks = tbl.meta.modifedBlocks[i]
+		if len(tbl.blockMetas) > 0 {
+			blks = tbl.modifiedBlocks[i]
 		}
 		rds0, err := tbl.newReader(
 			ctx,
@@ -856,8 +862,8 @@ func (tbl *txnTable) newReader(
 	}
 	// get append block deletes rowids
 	non_append_block := make(map[string]bool)
-	if tbl.meta != nil && len(tbl.meta.blocks) > 0 {
-		for _, blk := range tbl.meta.blocks[0] {
+	if len(tbl.blockMetas) > 0 {
+		for _, blk := range tbl.blockMetas[0] {
 			// append non_append_block
 			if !blk.Info.EntryState {
 				non_append_block[string(blk.Info.BlockID[:])] = true
@@ -913,7 +919,7 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
-		deletes_map:     txn.cnBlockDeletesMap.mp,
+		deleteBlocks:    txn.deletedBlocks,
 	}
 	readers[0] = partReader
 

@@ -50,7 +50,7 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-	deletes_map     map[string][]int64
+	deleteBlocks    *deletedBlocks
 }
 
 // BlockBatch is used to record the metaLoc info
@@ -175,7 +175,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 				rbat.Vecs = append(rbat.Vecs, vec)
 			}
-			deletes := p.deletes_map[string(blkid[:])]
+
+			deletes := p.deleteBlocks.getDeletedOffsetsByBlock(string(blkid[:]))
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}

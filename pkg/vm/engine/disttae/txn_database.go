@@ -124,12 +124,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		constraint:   item.Constraint,
 	}
 	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, item.Id,
+	metas, err := db.txn.getBlockMetas(ctx, db.databaseId, item.Id,
 		true, columnLength, true)
 	if err != nil {
 		return nil, err
 	}
-	tbl.meta = meta
+	tbl.blockMetas = metas
 	tbl.updated = false
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
@@ -187,13 +187,10 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 
 	if ok {
-		txn_table := v.(*txnTable)
-		oldId = txn_table.tableId
-		txn_table.tableId = newId
-		parts := db.txn.engine.getPartitions(db.databaseId, newId).Snapshot()
-		txn_table._parts = parts
-		// truncate meta
-		txn_table.TruncateMeta()
+		txnTable := v.(*txnTable)
+		oldId = txnTable.tableId
+		txnTable.reset(newId)
+
 	} else {
 		item := &cache.TableItem{
 			Name:       name,

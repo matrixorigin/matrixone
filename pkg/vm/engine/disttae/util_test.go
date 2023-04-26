@@ -17,8 +17,9 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +27,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -81,7 +82,7 @@ func makeZonemapForTest(typ types.T, min any, max any) [64]byte {
 
 func makeBlockMetaForTest() BlockMeta {
 	return BlockMeta{
-		Zonemap: [][64]byte{
+		Zonemap: []Zonemap{
 			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
 			makeZonemapForTest(types.T_int64, int64(20), int64(200)),
 			makeZonemapForTest(types.T_int64, int64(30), int64(300)),
@@ -131,7 +132,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	meta := BlockMeta{
 		Info: catalog.BlockInfo{},
-		Zonemap: [][64]byte{
+		Zonemap: []Zonemap{
 			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
 			makeZonemapForTest(types.T_blob, []byte("a"), []byte("h")),
 			// makeZonemapForTest(types.T_varchar, "a", "h"),

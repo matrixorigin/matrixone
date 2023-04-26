@@ -14,14 +14,6 @@
 
 package memorytable
 
-import (
-	"bytes"
-	"encoding"
-	"encoding/gob"
-	"errors"
-	"io"
-)
-
 type SliceLog[
 	K Ordered[K],
 	V any,
@@ -71,40 +63,4 @@ func (s *sliceLogIter[K, V]) Next() bool {
 
 func (s *sliceLogIter[K, V]) Read() (*logEntry[K, V], error) {
 	return (*s.log)[s.index], nil
-}
-
-var _ encoding.BinaryMarshaler = new(SliceLog[Int, int])
-
-func (s *SliceLog[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(s)
-	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
-	slice := *s
-	for _, entry := range slice {
-		if err := encoder.Encode(entry); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-var _ encoding.BinaryUnmarshaler = new(BTreeLog[Int, int])
-
-func (s *SliceLog[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(s)
-	decoder := gob.NewDecoder(bytes.NewReader(data))
-	var slice []*logEntry[K, V]
-	for {
-		var entry *logEntry[K, V]
-		err := decoder.Decode(&entry)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return err
-		}
-		slice = append(slice, entry)
-	}
-	*s = slice
-	return nil
 }

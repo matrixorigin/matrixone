@@ -68,7 +68,6 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
 		partitions: make(map[[2]uint64]Partitions),
 		packerPool: fileservice.NewPool(
@@ -355,8 +354,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 		},
 		segId: id,
-		cnBlockDeletesMap: &CnBlockDeletesMap{
-			mp: map[string][]int64{},
+		deletedBlocks: &deletedBlocks{
+			offsets: map[string][]int64{},
 		},
 		cnBlkId_Pos:                     map[string]Pos{},
 		blockId_raw_batch:               make(map[string]*batch.Batch),
@@ -498,15 +497,11 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 }
 
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
-	e.Lock()
-	defer e.Unlock()
-	e.txns[string(op.Txn().ID)] = txn
+	op.AddWorkspace(txn)
 }
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	e.RLock()
-	defer e.RUnlock()
-	return e.txns[string(op.Txn().ID)]
+	return op.GetWorkspace().(*Transaction)
 }
 
 func (e *Engine) delTransaction(txn *Transaction) {
@@ -521,7 +516,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
-	txn.cnBlockDeletesMap = nil
+	txn.deletedBlocks = nil
 	segmentnames := make([]string, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, string(txn.segId[:]))
 	for blkId := range txn.cnBlkId_Pos {
@@ -533,9 +528,6 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	}
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
-	e.Lock()
-	defer e.Unlock()
-	delete(e.txns, string(txn.meta.ID))
 }
 
 func (e *Engine) getDNServices() []DNStore {

@@ -78,7 +78,6 @@ type Engine struct {
 	fs         fileservice.FileService
 	cli        client.TxnClient
 	idGen      IDGenerator
-	txns       map[string]*Transaction
 	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
@@ -134,7 +133,7 @@ type Transaction struct {
 	// use to cache created table
 	createMap *sync.Map
 
-	cnBlockDeletesMap *CnBlockDeletesMap
+	deletedBlocks *deletedBlocks
 	// blkId -> Pos
 	cnBlkId_Pos                     map[string]Pos
 	blockId_raw_batch               map[string]*batch.Batch
@@ -146,25 +145,49 @@ type Pos struct {
 	offset int64
 }
 
-type CnBlockDeletesMap struct {
+// FIXME: The map inside this one will be accessed concurrently, using
+// a mutex, not sure if there will be performance issues
+type deletedBlocks struct {
+	sync.RWMutex
+
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
-	mp map[string][]int64
+	offsets map[string][]int64
 }
 
-func (cn_deletes_mp *CnBlockDeletesMap) PutCnBlockDeletes(blockId string, offsets []int64) {
-	cn_deletes_mp.mp[blockId] = append(cn_deletes_mp.mp[blockId], offsets...)
+func (b *deletedBlocks) addDeletedBlocks(blockID string, offsets []int64) {
+	b.Lock()
+	defer b.Unlock()
+	b.offsets[blockID] = append(b.offsets[blockID], offsets...)
 }
 
-func (cn_deletes_mp *CnBlockDeletesMap) GetCnBlockDeletes(blockId string) []int64 {
-	res := cn_deletes_mp.mp[blockId]
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
+	b.RLock()
+	defer b.RUnlock()
+	res := b.offsets[blockID]
 	offsets := make([]int64, len(res))
 	copy(offsets, res)
 	return offsets
 }
 
+func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
+	b.Lock()
+	defer b.Unlock()
+	delete(b.offsets, blockID)
+}
+
+func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
+	b.RLock()
+	defer b.RUnlock()
+	for id, offsets := range b.offsets {
+		if !fn(id, offsets) {
+			return
+		}
+	}
+}
+
 func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
-	txn.cnBlockDeletesMap.PutCnBlockDeletes(blockId, offsets)
+	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
 // Entry represents a delete/insert
@@ -204,27 +227,20 @@ type databaseKey struct {
 	name      string
 }
 
-// block list information of table
-type tableMeta struct {
-	tableName     string
-	blocks        [][]BlockMeta
-	modifedBlocks [][]ModifyBlockMeta
-	defs          []engine.TableDef
-}
-
 // txnTable represents an opened table in a transaction
 type txnTable struct {
 	tableId   uint64
 	tableName string
 	dnList    []int
 	db        *txnDatabase
-	meta      *tableMeta
 	//	insertExpr *plan.Expr
-	defs         []engine.TableDef
-	tableDef     *plan.TableDef
-	idxs         []uint16
-	setPartsOnce sync.Once
-	_parts       []*PartitionState
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	idxs           []uint16
+	setPartsOnce   sync.Once
+	_parts         []*PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
+	blockMetas     [][]BlockMeta
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -325,7 +341,51 @@ type emptyReader struct {
 type BlockMeta struct {
 	Rows    int64
 	Info    catalog.BlockInfo
-	Zonemap [][64]byte
+	Zonemap []Zonemap
+}
+
+func (a *BlockMeta) MarshalBinary() ([]byte, error) {
+	return a.Marshal()
+}
+
+func (a *BlockMeta) UnmarshalBinary(data []byte) error {
+	return a.Unmarshal(data)
+}
+
+type Zonemap [64]byte
+
+func (z *Zonemap) ProtoSize() int {
+	return 64
+}
+
+func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, z[:])
+	return n, nil
+}
+
+func (z *Zonemap) MarshalTo(data []byte) (int, error) {
+	size := z.ProtoSize()
+	return z.MarshalToSizedBuffer(data[:size])
+}
+
+func (z *Zonemap) Marshal() ([]byte, error) {
+	data := make([]byte, z.ProtoSize())
+	n, err := z.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (z *Zonemap) Unmarshal(data []byte) error {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(z[:], data)
+	return nil
 }
 
 type ModifyBlockMeta struct {
