@@ -20,6 +20,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,6 +31,10 @@ import (
 )
 
 const PACKET_LARGE_ERROR = "packet for query is too large"
+
+// MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single query.
+// Default packet size limit for MySQL is 16MB, but we set it to 15MB to be safe.
+const MAX_CHUNK_SIZE = 1024 * 1024 * 15
 
 var _ SqlWriter = (*BaseSqlWriter)(nil)
 
@@ -108,15 +113,34 @@ func generateInsertStatement(records [][]string, tbl *table.Table) (string, int,
 	return sb.String(), len(records), nil
 }
 
-func chunkRecords(records [][]string, chunkSize int) [][][]string {
+// chunkRecords splits records into chunks of size <= maxChunkSize
+func chunkRecords(records [][]string, maxChunkSize int) [][][]string {
 	var chunks [][][]string
-	for i := 0; i < len(records); i += chunkSize {
-		end := i + chunkSize
-		if end > len(records) {
-			end = len(records)
+	var chunk [][]string
+	chunkSize := 0
+
+	for _, record := range records {
+		recordSize := 0
+		for _, field := range record {
+			recordSize += len(field)
 		}
-		chunks = append(chunks, records[i:end])
+
+		// If adding the current record would exceed the maxChunkSize, create a new chunk
+		if chunkSize+recordSize > maxChunkSize {
+			chunks = append(chunks, chunk)
+			chunk = nil
+			chunkSize = 0
+		}
+
+		chunk = append(chunk, record)
+		chunkSize += recordSize
 	}
+
+	// Append the last chunk if it's not empty
+	if len(chunk) > 0 {
+		chunks = append(chunks, chunk)
+	}
+
 	return chunks
 }
 
@@ -130,16 +154,11 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	totalInserted := 0
 	var err error
 	for _, chunk := range chunks {
-
 		stmt, cnt, _ := generateInsertStatement(chunk, tbl)
 		_, err = db.Exec(stmt)
 		if err != nil {
-			if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-				_, err = bulkInsert(db, chunk, tbl, len(chunk)/2)
-			} else {
-				// simple retry
-				// _, err = db.Exec(stmt)
-			}
+			// _, err = db.Exec(stmt)
+			logutil.Info("sqlWriter db exec failed", zap.String("size", strconv.Itoa(len(chunk))), zap.Error(err))
 		}
 		if err != nil {
 			return totalInserted, err
@@ -165,18 +184,14 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	_, err = db.Exec(stmt)
 	if err != nil {
 		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-			if tbl.Table == "statement_info" {
-				cnt, err = bulkInsert(db, records, tbl, 1000)
-				if err != nil {
-					logutil.Error("sqlWriter db insert bulk retry failed", zap.String("address", sw.address), zap.Error(err))
-					return 0, err
-				}
-			} else {
-				logutil.Error("sqlWriter db insert packet too large", zap.String("table", tbl.Table), zap.String("address", sw.address), zap.Error(err))
+			bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+			if bulkErr != nil {
+				// logutil.Error("sqlWriter db insert bulk insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
 				return 0, err
 			}
+			return bulkCnt, bulkErr
 		} else {
-			logutil.Error("sqlWriter db insert failed", zap.String("address", sw.address), zap.Error(err))
+			// logutil.Error("sqlWriter db insert failed", zap.String("address", sw.address), zap.Error(err))
 			return 0, err
 			// if table not exist return, no need to retry
 			// todo: create table if not exist
@@ -195,7 +210,6 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 			//}
 			// _, err = db.Exec(stmt)
 		}
-		return cnt, nil
 	}
 	return cnt, nil
 }

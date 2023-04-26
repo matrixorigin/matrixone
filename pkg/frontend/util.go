@@ -392,7 +392,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 		logInfo(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
-		logError(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
@@ -409,7 +409,10 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 //	logutil.Debug(msg, fields...)
 //}
 
-func logError(info string, msg string, fields ...zap.Field) {
+func logError(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == sqlWriter.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
