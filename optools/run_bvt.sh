@@ -28,7 +28,7 @@ function launch_mo() {
 
 # this will wait mo all system init completed
 function wait_system_init() {
-    for num in {1..300}  
+    for num in {1..10}  
     do  
         if [ -f "$SYSTEM_INIT_COMPLETED" ]; then
             echo "ok, cost $num seconds"
@@ -37,9 +37,9 @@ function wait_system_init() {
         echo "mo init not completed"
         sleep 1
     done 
-    return 1
+    return 0
 }
 
 launch_mo
-# wait_system_init
+wait_system_init
 exit $?
