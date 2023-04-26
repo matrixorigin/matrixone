@@ -38,6 +38,11 @@ import (
 )
 
 const (
+	PREFETCH_THRESHOLD = 512
+	PREFETCH_ROUNDS    = 32
+)
+
+const (
 	INSERT = iota
 	DELETE
 	COMPACTION_CN
@@ -287,13 +292,19 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []catalog.BlockInfo
+	blks       []*catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp
 	tableDef   *plan.TableDef
 	primaryIdx int
 	expr       *plan.Expr
+
+	//used for prefetch
+	infos           [][]*catalog.BlockInfo
+	steps           []int
+	currentStep     int
+	prefetchColIdxs []uint16 //need to remove rowid
 
 	// cached meta data.
 	colIdxs        []uint16
