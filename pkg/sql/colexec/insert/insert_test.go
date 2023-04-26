@@ -41,10 +41,10 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 	return nil
 }
 
-var (
-	i64typ     = &plan.Type{Id: int32(types.T_int64)}
-	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
-)
+// var (
+// 	i64typ     = &plan.Type{Id: int32(types.T_int64)}
+// 	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
+// )
 
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -83,21 +83,23 @@ func TestInsertOperator(t *testing.T) {
 	argument1 := Argument{
 		Engine: eng,
 		InsertCtx: &InsertCtx{
-			Rels: []engine.Relation{&mockRelation{}},
+			Rel: &mockRelation{},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
-			TableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{
-					{Name: "int64_column", Typ: i64typ},
-					{Name: "scalar_int64", Typ: i64typ},
-					{Name: "varchar_column", Typ: varchartyp},
-					{Name: "scalar_varchar", Typ: varchartyp},
-					{Name: "int64_column", Typ: i64typ},
-				},
-			},
+			AddAffectedRows: true,
+			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
+			// TableDef: &plan.TableDef{
+			// 	Cols: []*plan.ColDef{
+			// 		{Name: "int64_column", Typ: i64typ},
+			// 		{Name: "scalar_int64", Typ: i64typ},
+			// 		{Name: "varchar_column", Typ: varchartyp},
+			// 		{Name: "scalar_varchar", Typ: varchartyp},
+			// 		{Name: "int64_column", Typ: i64typ},
+			// 	},
+			// },
 		},
 	}
 	proc.Reg.InputBatch = batch1
@@ -106,7 +108,7 @@ func TestInsertOperator(t *testing.T) {
 	_, err = Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
 
-	result := argument1.InsertCtx.Rels[0].(*mockRelation).result
+	result := argument1.InsertCtx.Rel.(*mockRelation).result
 	// check attr names
 	require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
 	// check vector

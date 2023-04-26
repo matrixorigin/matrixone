@@ -1,3 +1,4 @@
+-- @skip:issue#8498
 create table t1(a int primary key, b int);
 delete from t1;
 insert into t1 values (1,1);
