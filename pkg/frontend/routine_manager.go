@@ -51,7 +51,7 @@ type RoutineManager struct {
 type AccountRoutineManager struct {
 	ctx               context.Context
 	killQueueMu       sync.RWMutex
-	killIdQueue       map[int64]*KillRecord
+	killIdQueue       map[int64]KillRecord
 	accountRoutineMu  sync.RWMutex
 	accountId2Routine map[int64]map[*Routine]uint64
 }
@@ -61,8 +61,8 @@ type KillRecord struct {
 	version  uint64
 }
 
-func NewKillRecord(killtime time.Time, version uint64) *KillRecord {
-	return &KillRecord{
+func NewKillRecord(killtime time.Time, version uint64) KillRecord {
+	return KillRecord{
 		killTime: killtime,
 		version:  version,
 	}
@@ -109,9 +109,9 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 
 }
 
-func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]*KillRecord {
+func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
 
-	tempKillQueue := make(map[int64]*KillRecord)
+	tempKillQueue := make(map[int64]KillRecord)
 
 	ar.killQueueMu.RLock()
 	defer ar.killQueueMu.RUnlock()
@@ -517,7 +517,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
 		accountRoutineMu:  sync.RWMutex{},
-		killIdQueue:       make(map[int64]*KillRecord),
+		killIdQueue:       make(map[int64]KillRecord),
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
