@@ -128,7 +128,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 
 	affectedRows := uint64(bat.Vecs[0].Length())
-	atomic.AddUint64(&ap.AffectedRow, affectedRows)
+	atomic.AddUint64(&ap.affectedRows, affectedRows)
 	return false, nil
 }
 

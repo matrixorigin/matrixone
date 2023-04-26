@@ -397,10 +397,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			AffectedRow: t.AffectedRow,
-			Engine:      t.Engine,
-			IsRemote:    t.IsRemote,
-			InsertCtx:   t.InsertCtx,
+			Engine:    t.Engine,
+			IsRemote:  t.IsRemote,
+			InsertCtx: t.InsertCtx,
 		}
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
