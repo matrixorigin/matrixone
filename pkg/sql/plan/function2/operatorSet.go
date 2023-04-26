@@ -37,11 +37,12 @@ var (
 	}
 )
 
+// caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
 
 	needCast := false
-	if l >= 1 {
+	if l >= 2 {
 		// X should be bool or Int.
 		for i := 0; i < l-1; i += 2 {
 			if inputs[i].Oid != types.T_bool {
@@ -56,13 +57,13 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		// Y should be cast to a same type.
 		allYSame := true
 		t := inputs[1]
-		// XXX if all decimal but with different scales. should cast ?
+
 		if l%2 == 1 {
-			if inputs[l-1].Oid == t.Oid {
+			if inputs[l-1].Oid != t.Oid {
 				allYSame = false
 			}
 		}
-		if !allYSame {
+		if allYSame {
 			for i := 1; i < l; i += 2 {
 				if t.Oid != inputs[i].Oid {
 					allYSame = false

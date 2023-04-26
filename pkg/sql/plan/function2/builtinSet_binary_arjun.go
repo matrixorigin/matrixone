@@ -95,26 +95,38 @@ func isEqualSuffix(b1, b2 string) uint8 {
 
 // EXTRACT
 
-func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
 	rs := vector.MustFunctionResult[uint32](result)
 
-	//TODO: ignoring 4 switch cases: Original code.https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract.go#L76
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+	v1, null1 := p1.GetStrValue(0)
+	if null1 {
+		for i := uint64(0); i < uint64(length); i++ {
 			if err = rs.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			res, _ := extractFromDate(string(v1), v2)
-			if err = rs.Append(res, false); err != nil {
-				return err
+		}
+	} else {
+		v1str := string(v1)
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				res, _ := extractFromDate(v1str, v2)
+				if err = rs.Append(res, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -148,27 +160,39 @@ func extractFromDate(unit string, d types.Date) (uint32, error) {
 	return result, nil
 }
 
-func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	//TODO: ignoring 4 switch cases: Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract.go#L108
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+	v1, null1 := p1.GetStrValue(0)
+	if null1 {
+		for i := uint64(0); i < uint64(length); i++ {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			//TODO: you might want to check for all the places which forgot using function2Util.QuickBytesToSt & function2Util.QuickStrToBytes
-			res, _ := extractFromDatetime(function2Util.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-				return err
+		}
+	} else {
+		v1str := string(v1)
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				res, _ := extractFromDatetime(v1str, v2)
+				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -245,27 +269,39 @@ func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	return value, nil
 }
 
-func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	//TODO: ignoring 4 switch cases: Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract.go#L139
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+	v1, null1 := p1.GetStrValue(0)
+	if null1 {
+		for i := uint64(0); i < uint64(length); i++ {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			//TODO: No UT. Please validate
-			res, _ := extractFromTime(function2Util.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-				return err
+		}
+	} else {
+		v1str := string(v1)
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				res, _ := extractFromTime(v1str, v2)
+				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -319,27 +355,40 @@ func extractFromTime(unit string, t types.Time) (string, error) {
 	return value, nil
 }
 
-func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	//TODO: ignoring 4 switch cases: Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract.go#L170
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
+	v1, null1 := p1.GetStrValue(0)
+	if null1 {
+		for i := uint64(0); i < uint64(length); i++ {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			//TODO: No UT. Please validate
-			res, _ := extractFromVarchar(function2Util.QuickBytesToStr(v1), function2Util.QuickBytesToStr(v2), p2.GetType().Scale)
-			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-				return err
+		}
+	} else {
+		v1str := string(v1)
+		p2scale := p2.GetType().Scale
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetStrValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				res, _ := extractFromVarchar(v1str, function2Util.QuickBytesToStr(v2), p2scale)
+				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return nil
 }
 
