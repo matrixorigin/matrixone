@@ -41,5 +41,5 @@ function wait_system_init() {
 }
 
 launch_mo
-wait_system_init
+# wait_system_init
 exit $?
