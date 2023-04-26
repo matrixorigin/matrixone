@@ -73,7 +73,6 @@ type Engine struct {
 	fs         fileservice.FileService
 	cli        client.TxnClient
 	idGen      IDGenerator
-	txns       map[string]*Transaction
 	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
@@ -230,13 +229,15 @@ type txnTable struct {
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs           []engine.TableDef
-	tableDef       *plan.TableDef
-	idxs           []uint16
-	setPartsOnce   sync.Once
-	_parts         []*PartitionState
-	modifiedBlocks [][]ModifyBlockMeta
-	blockMetas     [][]BlockMeta
+	defs              []engine.TableDef
+	tableDef          *plan.TableDef
+	idxs              []uint16
+	setPartsOnce      sync.Once
+	_parts            []*PartitionState
+	_partsErr         error
+	modifiedBlocks    [][]ModifyBlockMeta
+	blockMetas        [][]BlockMeta
+	blockMetasUpdated bool
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -248,7 +249,6 @@ type txnTable struct {
 	createSql    string
 	constraint   []byte
 
-	updated bool
 	// use for skip rows
 	// snapshot for read
 	writes []Entry
@@ -331,7 +331,51 @@ type emptyReader struct {
 type BlockMeta struct {
 	Rows    int64
 	Info    catalog.BlockInfo
-	Zonemap [][64]byte
+	Zonemap []Zonemap
+}
+
+func (a *BlockMeta) MarshalBinary() ([]byte, error) {
+	return a.Marshal()
+}
+
+func (a *BlockMeta) UnmarshalBinary(data []byte) error {
+	return a.Unmarshal(data)
+}
+
+type Zonemap [64]byte
+
+func (z *Zonemap) ProtoSize() int {
+	return 64
+}
+
+func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, z[:])
+	return n, nil
+}
+
+func (z *Zonemap) MarshalTo(data []byte) (int, error) {
+	size := z.ProtoSize()
+	return z.MarshalToSizedBuffer(data[:size])
+}
+
+func (z *Zonemap) Marshal() ([]byte, error) {
+	data := make([]byte, z.ProtoSize())
+	n, err := z.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (z *Zonemap) Unmarshal(data []byte) error {
+	if len(data) < z.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(z[:], data)
+	return nil
 }
 
 type ModifyBlockMeta struct {

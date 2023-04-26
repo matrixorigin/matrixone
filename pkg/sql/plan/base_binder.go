@@ -796,7 +796,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	switch name {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in":
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}

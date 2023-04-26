@@ -1,0 +1,150 @@
+/*
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package agg;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all)                = false;
+option (gogoproto.protosizer_all)           = true;
+option (gogoproto.goproto_enum_prefix_all)  = false;
+option (gogoproto.goproto_unrecognized_all) = false;
+option (gogoproto.goproto_unkeyed_all)      = false;
+option (gogoproto.goproto_sizecache_all)    = false;
+
+message EncodeVariance {
+    option (gogoproto.typedecl) = false;
+    repeated double Sum         = 1;
+    repeated double Counts      = 2;
+}
+
+message EncodeDecimalV {
+    option (gogoproto.typedecl) = false;
+    repeated bytes sum          = 1 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128"
+    ];
+    repeated int64 Counts = 2;
+}
+
+message VariancePB {
+    option (gogoproto.typedecl) = true;
+    repeated double Sum         = 1;
+    repeated double Counts      = 2;
+}
+
+message VD64 {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Sum          = 1 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128",
+        (gogoproto.nullable) = false
+    ];
+    repeated int64 Counts = 2;
+    bytes Typ             = 3 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    int32 ScaleMul    = 4;
+    int32 ScaleDiv    = 5;
+    int32 ScaleMulDiv = 6;
+    int32 ScaleDivMul = 7;
+}
+
+message VD128 {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Sum          = 1 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128",
+        (gogoproto.nullable) = false
+    ];
+    repeated int64 Counts = 2;
+    bytes Typ             = 3 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    int32 ScaleMul    = 4;
+    int32 ScaleDiv    = 5;
+    int32 ScaleMulDiv = 6;
+    int32 ScaleDivMul = 7;
+}
+
+message EncodeAgg {
+    option (gogoproto.typedecl) = false;
+    int32 Op                    = 1 [(gogoproto.casttype) = "int"];
+    bytes Private               = 2;
+    repeated bool Es            = 3;
+    bytes Da                    = 4;
+    bytes InputTypes            = 5;
+    bytes OutputType            = 6;
+    bool IsCount                = 7;
+}
+
+message EncodeAggDistinctPB {
+    option (gogoproto.typedecl) = true;
+    int32 Op                    = 1 [(gogoproto.casttype) = "int"];
+    bytes Private               = 2;
+    repeated bool Es            = 3;
+    bytes Da                    = 4;
+    repeated bytes InputTypes   = 5 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    bytes OutputType = 6 [
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    bool IsCount = 7;
+}
+
+message Decimal64SlicePB {
+    option (gogoproto.typedecl) = true;
+    repeated bytes Slice        = 1 [
+        (gogoproto.nullable) = false,
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Decimal64"
+    ];
+}
+
+message Decimal128SlicePB {
+    option (gogoproto.typedecl) = true;
+    repeated bytes Slice        = 1 [
+        (gogoproto.nullable) = false,
+        (gogoproto.customtype) =
+            "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128"
+    ];
+}
+
+message Decimal64Median {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Vals         = 1 [
+        (gogoproto.nullable)   = false,
+        (gogoproto.customtype) = "decimal64Slice"
+    ];
+}
+
+message Decimal128Median {
+    option (gogoproto.typedecl) = false;
+    repeated bytes Vals         = 1 [
+        (gogoproto.nullable)   = false,
+        (gogoproto.customtype) = "decimal128Slice"
+    ];
+}

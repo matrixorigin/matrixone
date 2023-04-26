@@ -113,6 +113,11 @@ type TxnOperator interface {
 	// will be committed to dn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+
+	// AddWorkspace for the transaction
+	AddWorkspace(workspace Workspace)
+	// GetWorkspace from the transaction
+	GetWorkspace() Workspace
 }
 
 // DebugableTxnOperator debugable txn operator
@@ -153,4 +158,7 @@ type TimestampWaiter interface {
 	NotifyLatestCommitTS(timestamp.Timestamp)
 	// Close close the timestamp waiter
 	Close()
+}
+
+type Workspace interface {
 }
