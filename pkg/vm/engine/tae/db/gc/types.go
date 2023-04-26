@@ -43,21 +43,18 @@ const (
 	GCAttrObjectName = "name"
 	GCAttrBlockId    = "block_id"
 	GCAttrTableId    = "table_id"
-	GCAttrSegmentId  = "segment_id"
 	GCAttrDBId       = "db_id"
 )
 
 var (
 	BlockSchemaAttr = []string{
 		GCAttrBlockId,
-		GCAttrSegmentId,
 		GCAttrTableId,
 		GCAttrDBId,
 		GCAttrObjectName,
 	}
 	BlockSchemaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),
-		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, 5000, 0),

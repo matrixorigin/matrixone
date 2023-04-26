@@ -262,14 +262,12 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 			for name, obj := range table.object {
 				for _, block := range obj.table.blocks {
 					bats[CreateBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
-					bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Append(*block.SegmentID(), false)
 					bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
 					bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.DbID, false)
 					bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 				}
 				for _, block := range obj.table.delete {
 					bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
-					bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Append(*block.SegmentID(), false)
 					bats[DeleteBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
 					bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.DbID, false)
 					bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
