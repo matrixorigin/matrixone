@@ -420,6 +420,32 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	TO_DAYS: {
+		Id:     TO_DAYS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.ToDays,
+			},
+		},
+	},
+	TO_SECONDS: {
+		Id:     TO_SECONDS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.ToSeconds,
+			},
+		},
+	},
 	EMPTY: {
 		Id:     EMPTY,
 		Flag:   plan.Function_STRICT,
