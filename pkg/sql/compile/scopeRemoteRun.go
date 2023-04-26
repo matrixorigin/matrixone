@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -114,17 +117,6 @@ func CnServerMessageHandler(
 	return receiver.sendEndMessage()
 }
 
-func fillEngineForInsert(s *Scope, e engine.Engine) {
-	for i := range s.Instructions {
-		if s.Instructions[i].Op == vm.Insert {
-			s.Instructions[i].Arg.(*insert.Argument).Engine = e
-		}
-	}
-	for i := range s.PreScopes {
-		fillEngineForInsert(s.PreScopes[i], e)
-	}
-}
-
 // cnMessageHandle deal the received message at cn-server.
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
@@ -160,7 +152,6 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		fillEngineForInsert(s, c.e)
 		s = refactorScope(c, c.ctx, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
@@ -513,7 +504,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s := &Scope{
-		Magic:    int(p.GetPipelineType()),
+		Magic:    magicType(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
 		IsLoad:   p.IsLoad,
@@ -600,27 +591,46 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:     t.IsRemote,
-			Affected:     t.Affected,
-			Ref:          t.InsertCtx.Ref,
-			TableDef:     t.InsertCtx.TableDef,
-			ClusterTable: t.InsertCtx.ClusterTable,
-			ParentIdx:    t.InsertCtx.ParentIdx,
-			IdxIdx:       t.InsertCtx.IdxIdx,
+			IsRemote:          t.IsRemote,
+			Ref:               t.InsertCtx.Ref,
+			Attrs:             t.InsertCtx.Attrs,
+			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
+			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
+			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+		}
+	case *deletion.Argument:
+		in.Delete = &pipeline.Deletion{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows(),
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
+			// deleteCtx
+			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
+			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
+			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
+			Ref:                   t.DeleteCtx.Ref,
+			IsEnd:                 t.DeleteCtx.IsEnd,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:         t.SchemaName,
-			TableDef:           t.TableDef,
-			ParentIdxPreInsert: t.ParentIdx,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			HasAutoCol: t.HasAutoCol,
+			IsUpdate:   t.IsUpdate,
+			Attrs:      t.Attrs,
+		}
+	case *preinsertunique.Argument:
+		in.PreInsertUnique = &pipeline.PreInsertUnique{
+			PreInsertUkCtx: t.PreInsertCtx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -905,18 +915,36 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
-	switch opr.Op {
+	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	switch v.Op {
+	case vm.Deletion:
+		t := opr.GetDelete()
+		v.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			Nbucket:      t.NBucket,
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:           t.CanTruncate,
+				RowIdIdx:              int(t.RowIdIdx),
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
+				IsEnd:                 t.IsEnd,
+			},
+		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
-			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Ref:          t.Ref,
-				TableDef:     t.TableDef,
-				ParentIdx:    t.ParentIdx,
-				ClusterTable: t.ClusterTable,
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
+				Attrs:                 t.Attrs,
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIdx),
 			},
 		}
 	case vm.PreInsert:
@@ -924,13 +952,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
-			ParentIdx:  t.GetParentIdxPreInsert(),
+			Attrs:      t.GetAttrs(),
+			HasAutoCol: t.GetHasAutoCol(),
+			IsUpdate:   t.GetIsUpdate(),
+		}
+	case vm.PreInsertUnique:
+		t := opr.GetPreInsertUnique()
+		v.Arg = &preinsertunique.Argument{
+			PreInsertCtx: t.GetPreInsertUkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
@@ -1489,14 +1522,14 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeI
 	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
 	p := &pipeline.Pipeline{}
 	p.PipelineId = ctxId
-	p.PipelineType = Pushdown
+	p.PipelineType = pipeline.Pipeline_PipelineType(Pushdown)
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
 		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
-		Op: vm.Connector,
+		Op: int32(vm.Connector),
 		Connect: &pipeline.Connector{
 			ConnectorIndex: idx,
 			PipelineId:     ctx.id,

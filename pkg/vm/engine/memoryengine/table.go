@@ -54,7 +54,7 @@ func (t *Table) Rows(ctx context.Context) (int64, error) {
 		true,
 		t.engine.anyShard,
 		OpTableStats,
-		TableStatsReq{
+		&TableStatsReq{
 			TableID: t.id,
 		},
 	)
@@ -77,9 +77,9 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 		false,
 		t.engine.allShards,
 		OpAddTableDef,
-		AddTableDefReq{
+		&AddTableDefReq{
 			TableID:      t.id,
-			Def:          def,
+			Def:          def.ToPBVersion(),
 			DatabaseName: t.databaseName,
 			TableName:    t.tableName,
 		},
@@ -99,11 +99,11 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 		false,
 		t.engine.allShards,
 		OpDelTableDef,
-		DelTableDefReq{
+		&DelTableDefReq{
 			TableID:      t.id,
 			DatabaseName: t.databaseName,
 			TableName:    t.tableName,
-			Def:          def,
+			Def:          def.ToPBVersion(),
 		},
 	)
 	if err != nil {
@@ -114,6 +114,9 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 }
 
 func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) error {
+	if bat == nil {
+		return nil
+	}
 	vec := bat.Vecs[0]
 	shards, err := t.engine.shardPolicy.Vector(
 		ctx,
@@ -134,7 +137,7 @@ func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) er
 			false,
 			thisShard(shard.Shard),
 			OpDelete,
-			DeleteReq{
+			&DeleteReq{
 				TableID:      t.id,
 				DatabaseName: t.databaseName,
 				TableName:    t.tableName,
@@ -166,7 +169,7 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 		true,
 		t.engine.anyShard,
 		OpGetPrimaryKeys,
-		GetPrimaryKeysReq{
+		&GetPrimaryKeysReq{
 			TableID: t.id,
 		},
 	)
@@ -176,7 +179,13 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 
 	resp := resps[0]
 
-	return resp.Attrs, nil
+	// convert from []engine.Attribute  to []*engine.Attribute
+	attrs := make([]*engine.Attribute, 0, len(resp.Attrs))
+	for i := 0; i < len(resp.Attrs); i++ {
+		attrs = append(attrs, &resp.Attrs[i])
+	}
+
+	return attrs, nil
 }
 
 func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
@@ -187,7 +196,7 @@ func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 		true,
 		t.engine.anyShard,
 		OpGetTableColumns,
-		GetTableColumnsReq{
+		&GetTableColumnsReq{
 			TableID: t.id,
 		},
 	)
@@ -197,7 +206,13 @@ func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 
 	resp := resps[0]
 
-	return resp.Attrs, nil
+	// convert from []engine.Attribute  to []*engine.Attribute
+	attrs := make([]*engine.Attribute, 0, len(resp.Attrs))
+	for i := 0; i < len(resp.Attrs); i++ {
+		attrs = append(attrs, &resp.Attrs[i])
+	}
+
+	return attrs, nil
 }
 
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
@@ -208,7 +223,7 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		true,
 		t.engine.anyShard,
 		OpGetTableDefs,
-		GetTableDefsReq{
+		&GetTableDefsReq{
 			TableID: t.id,
 		},
 	)
@@ -218,7 +233,13 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resp := resps[0]
 
-	return resp.Defs, nil
+	// convert from PB version to interface version
+	defs := make([]engine.TableDef, 0, len(resp.Defs))
+	for i := 0; i < len(resp.Defs); i++ {
+		defs = append(defs, resp.Defs[i].FromPBVersion())
+	}
+
+	return defs, nil
 }
 
 //func (t *Table) Truncate(ctx context.Context) (uint64, error) {
@@ -229,7 +250,7 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 //		false,
 //		t.engine.allShards,
 //		OpTruncate,
-//		TruncateReq{
+//		&TruncateReq{
 //			TableID:      t.id,
 //			DatabaseName: t.databaseName,
 //			TableName:    t.tableName,
@@ -272,7 +293,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 			false,
 			thisShard(shard.Shard),
 			OpUpdate,
-			UpdateReq{
+			&UpdateReq{
 				TableID:      t.id,
 				DatabaseName: t.databaseName,
 				TableName:    t.tableName,
@@ -307,7 +328,7 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 			false,
 			thisShard(shard.Shard),
 			OpWrite,
-			WriteReq{
+			&WriteReq{
 				TableID:      t.id,
 				DatabaseName: t.databaseName,
 				TableName:    t.tableName,
@@ -322,14 +343,14 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	return nil
 }
 
-func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err error) {
+func (t *Table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	resps, err := DoTxnRequest[GetHiddenKeysResp](
 		ctx,
 		t.txnOperator,
 		true,
 		t.engine.anyShard,
 		OpGetHiddenKeys,
-		GetHiddenKeysReq{
+		&GetHiddenKeysReq{
 			TableID: t.id,
 		},
 	)
@@ -339,7 +360,13 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 
 	resp := resps[0]
 
-	return resp.Attrs, nil
+	// convert from []engine.Attribute  to []*engine.Attribute
+	attrs := make([]*engine.Attribute, 0, len(resp.Attrs))
+	for i := 0; i < len(resp.Attrs); i++ {
+		attrs = append(attrs, &resp.Attrs[i])
+	}
+
+	return attrs, nil
 }
 
 func (t *Table) GetTableID(ctx context.Context) uint64 {

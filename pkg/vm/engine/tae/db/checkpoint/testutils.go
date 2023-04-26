@@ -38,6 +38,7 @@ type TestRunner interface {
 
 	ExistPendingEntryToGC() bool
 	MaxGlobalCheckpoint() *CheckpointEntry
+	MaxCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
 	GetDirtyCollector() logtail.Collector
 }

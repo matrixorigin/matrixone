@@ -110,6 +110,20 @@ func (m *MockTableDef) EXPECT() *MockTableDefMockRecorder {
 	return m.recorder
 }
 
+// ToPBVersion mocks base method.
+func (m *MockTableDef) ToPBVersion() engine.TableDefPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.TableDefPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockTableDefMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockTableDef)(nil).ToPBVersion))
+}
+
 // tableDef mocks base method.
 func (m *MockTableDef) tableDef() {
 	m.ctrl.T.Helper()
@@ -143,6 +157,20 @@ func NewMockConstraint(ctrl *gomock.Controller) *MockConstraint {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockConstraint) EXPECT() *MockConstraintMockRecorder {
 	return m.recorder
+}
+
+// ToPBVersion mocks base method.
+func (m *MockConstraint) ToPBVersion() engine.ConstraintPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.ConstraintPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockConstraintMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockConstraint)(nil).ToPBVersion))
 }
 
 // constraint mocks base method.
@@ -220,6 +248,20 @@ func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 stri
 func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
+}
+
+// GetDBID mocks base method.
+func (m *MockRelation) GetDBID(arg0 context.Context) uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDBID", arg0)
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetDBID indicates an expected call of GetDBID.
+func (mr *MockRelationMockRecorder) GetDBID(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDBID", reflect.TypeOf((*MockRelation)(nil).GetDBID), arg0)
 }
 
 // GetEngineType mocks base method.
