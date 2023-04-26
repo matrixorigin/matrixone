@@ -15,12 +15,14 @@
 package rpc
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -90,6 +92,68 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 	}
 }
 
+type addCCmd struct {
+	ctx                *inspectContext
+	db, tbl, name, typ string
+	pos                int
+}
+
+func (c *addCCmd) fromCommand(cmd *cobra.Command) error {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	c.db, _ = cmd.Flags().GetString("db")
+	c.tbl, _ = cmd.Flags().GetString("table")
+	c.name, _ = cmd.Flags().GetString("name")
+	c.typ, _ = cmd.Flags().GetString("type")
+	c.pos, _ = cmd.Flags().GetInt("pos")
+
+	return nil
+}
+
+func runAddC(cmd *addCCmd) error {
+	txn, _ := cmd.ctx.db.StartTxn(nil)
+	db, _ := txn.GetDatabase(cmd.db)
+	tbl, _ := db.GetRelationByName(cmd.tbl)
+	typ, ok := types.Types[cmd.typ]
+	planTyp := types.NewProtoType(typ.ToType().Oid)
+	if !ok {
+		planTyp = types.NewProtoType(types.T_uint32)
+	}
+	err := tbl.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, cmd.name, planTyp, int32(cmd.pos)))
+	if err != nil {
+		return err
+	}
+	return txn.Commit()
+}
+
+type dropCCmd struct {
+	ctx     *inspectContext
+	db, tbl string
+	pos     int
+}
+
+func (c *dropCCmd) fromCommand(cmd *cobra.Command) error {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	c.db, _ = cmd.Flags().GetString("db")
+	c.tbl, _ = cmd.Flags().GetString("table")
+	c.pos, _ = cmd.Flags().GetInt("pos")
+
+	return nil
+}
+
+func runDropC(cmd *dropCCmd) error {
+	txn, _ := cmd.ctx.db.StartTxn(nil)
+	db, _ := txn.GetDatabase(cmd.db)
+	tbl, _ := db.GetRelationByName(cmd.tbl)
+	seqnum := tbl.Schema().(*catalog.Schema).ColDefs[cmd.pos].SeqNum
+	err := tbl.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, uint32(cmd.pos), uint32(seqnum)))
+	if err != nil {
+		return err
+	}
+	return txn.Commit()
+}
+
 func initCommand(ctx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
@@ -106,6 +170,39 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 			runCatalog(arg, cmd.OutOrStdout())
 		},
 	}
+	addCCmd := &cobra.Command{
+		Use:   "addc",
+		Short: "add column",
+		Run: func(cmd *cobra.Command, args []string) {
+			arg := &addCCmd{}
+			if err := arg.fromCommand(cmd); err != nil {
+				return
+			}
+			err := runAddC(arg)
+			if err != nil {
+				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
+			} else {
+				cmd.OutOrStdout().Write([]byte("add column success"))
+			}
+		},
+	}
+
+	dropCCmd := &cobra.Command{
+		Use:   "dropc",
+		Short: "add column",
+		Run: func(cmd *cobra.Command, args []string) {
+			arg := &dropCCmd{}
+			if err := arg.fromCommand(cmd); err != nil {
+				return
+			}
+			err := runDropC(arg)
+			if err != nil {
+				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
+			} else {
+				cmd.OutOrStdout().Write([]byte("drop column success"))
+			}
+		},
+	}
 
 	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
 
@@ -116,6 +213,19 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
 	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
 	rootCmd.AddCommand(catalogCmd)
+
+	addCCmd.Flags().StringP("db", "d", "", "database")
+	addCCmd.Flags().StringP("table", "b", "", "table")
+	addCCmd.Flags().StringP("name", "n", "", "column name")
+	addCCmd.Flags().StringP("type", "t", "", "type name")
+	addCCmd.Flags().IntP("pos", "p", -1, "column postion")
+	rootCmd.AddCommand(addCCmd)
+
+	dropCCmd.Flags().StringP("db", "d", "", "database")
+	dropCCmd.Flags().StringP("table", "b", "", "table")
+	dropCCmd.Flags().IntP("pos", "p", -1, "column postion")
+	rootCmd.AddCommand(dropCCmd)
+
 	return rootCmd
 }
 

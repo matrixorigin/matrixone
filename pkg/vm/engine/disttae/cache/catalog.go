@@ -22,9 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
 )
 
@@ -249,6 +251,9 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
+	for _, vec := range bat.Vecs {
+		logutil.Infof("yyyyy table %s", containers.ToDNVector(vec).PPString(3))
+	}
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
@@ -293,6 +298,9 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 	mp := make(map[tableItemKey]columns) // TableItem -> columns
 	key := new(TableItem)
+	for _, vec := range bat.Vecs {
+		logutil.Infof("yyyyy column %s", containers.ToDNVector(vec).PPString(3))
+	}
 	// get table key info
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
@@ -342,6 +350,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 			mp[tblKey] = append(mp[tblKey], col)
 		}
 	}
+	logutil.Infof("yyyy update %d columns", len(mp))
 	for k, cols := range mp {
 		sort.Sort(cols)
 		key.Name = k.Name

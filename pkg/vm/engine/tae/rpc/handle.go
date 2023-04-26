@@ -748,7 +748,7 @@ func (h *Handle) HandleWrite(
 		req.TableName, req.DatabaseId, req.DatabaseName,
 		txn.String(),
 	)
-	logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+	logutil.Infof("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
 	defer func() {
 		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
 	}()

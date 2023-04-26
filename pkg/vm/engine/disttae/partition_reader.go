@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -245,6 +246,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		if name == catalog.Row_ID {
 			appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
 		} else {
+			if p.typsMap[name].Oid == 0 {
+				return nil, moerr.NewInternalError(ctx, "yyyyy %v @ %v %v", name, p.typsMap, colNames)
+			}
 			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 		}
 	}
