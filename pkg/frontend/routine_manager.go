@@ -488,11 +488,8 @@ func (rm *RoutineManager) printDebug() {
 
 func (rm *RoutineManager) KillRoutineConnections() {
 	ar := rm.accountRoutine
-	var tempKillQueue map[int64]*KillRecord
-	var accountId2RoutineMap map[int64]map[*Routine]uint64
-
-	tempKillQueue = ar.deepCopyKillQueue()
-	accountId2RoutineMap = ar.deepCopyRoutineMap()
+	tempKillQueue := ar.deepCopyKillQueue()
+	accountId2RoutineMap := ar.deepCopyRoutineMap()
 
 	for account, killRecord := range tempKillQueue {
 		if rtMap, ok := accountId2RoutineMap[account]; ok {
