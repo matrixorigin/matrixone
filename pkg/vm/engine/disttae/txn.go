@@ -38,39 +38,34 @@ import (
 
 func (txn *Transaction) getBlockMetas(
 	ctx context.Context,
-	databaseId uint64,
-	tableId uint64,
-	needUpdated bool,
-	columnLength int,
+	tbl *txnTable,
 	prefetch bool,
 ) ([][]BlockMeta, error) {
-
 	blocks := make([][]BlockMeta, len(txn.dnStores))
-	name := genMetaTableName(tableId)
+	name := genMetaTableName(tbl.tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	if needUpdated {
-		states := txn.engine.getPartitions(databaseId, tableId).Snapshot()
-		for i := range txn.dnStores {
-			if i >= len(states) {
+	states := txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	for i := range txn.dnStores {
+		if i >= len(states) {
+			continue
+		}
+		var blockInfos []catalog.BlockInfo
+		state := states[i]
+		iter := state.Blocks.Iter()
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			if !entry.Visible(ts) {
 				continue
 			}
-			var blockInfos []catalog.BlockInfo
-			state := states[i]
-			iter := state.Blocks.Iter()
-			for ok := iter.First(); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if !entry.Visible(ts) {
-					continue
-				}
-				blockInfos = append(blockInfos, entry.BlockInfo)
-			}
-			iter.Release()
-			var err error
-			blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
-				txn.proc.GetMPool(), prefetch)
-			if err != nil {
-				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
-			}
+			blockInfos = append(blockInfos, entry.BlockInfo)
+		}
+		iter.Release()
+		var err error
+		columnLength := len(tbl.tableDef.Cols) - 1
+		blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
+			txn.proc.GetMPool(), prefetch)
+		if err != nil {
+			return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
 		}
 	}
 	return blocks, nil
