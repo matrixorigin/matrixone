@@ -16,6 +16,8 @@ package agg
 
 import (
 	"encoding"
+	"encoding/binary"
+	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -260,11 +262,94 @@ type EncodeAggDistinct[T any] struct {
 	Es      []bool
 	Da      []byte
 
-	InputType  []types.Type
+	InputTypes []types.Type
 	OutputType types.Type
 
 	IsCount bool
 	Srcs    [][]T
+}
+
+func (m *EncodeAggDistinct[T]) MarshalBinary() ([]byte, error) {
+	// ------------------------------
+	// | len | m.Srcs | len | aggPB |
+	// ------------------------------
+
+	// NOTE: if T was a struct, its private field wouldn't be marshaled
+	srcsData, err := json.Marshal(m.Srcs)
+	if err != nil {
+		return nil, err
+	}
+	srcsLen := len(srcsData)
+
+	aggPB := EncodeAggDistinctPB{
+		Op:         m.Op,
+		Private:    m.Private,
+		Es:         m.Es,
+		Da:         m.Da,
+		InputTypes: m.InputTypes,
+		OutputType: m.OutputType,
+		IsCount:    m.IsCount,
+	}
+	aggLen := aggPB.ProtoSize()
+
+	// total size for binary format
+	size := 4 + srcsLen + 4 + aggLen
+	data := make([]byte, size)
+
+	// set length for m.Srcs
+	index := 0
+	binary.BigEndian.PutUint32(data[index:index+4], uint32(srcsLen))
+	index += 4
+
+	// copy data for m.Srcs
+	n := copy(data[index:], srcsData)
+	if n != srcsLen {
+		panic("unexpected length for generics type")
+	}
+	index += n
+
+	// set length for aggPB
+	binary.BigEndian.PutUint32(data[index:index+4], uint32(aggLen))
+	index += 4
+
+	// marshal the other fields
+	_, err = aggPB.MarshalToSizedBuffer(data[index:])
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func (m *EncodeAggDistinct[T]) UnmarshalBinary(data []byte) error {
+	// m.Srcs
+	l := binary.BigEndian.Uint32(data[:4])
+	data = data[4:]
+
+	srcs := [][]T{}
+	if err := json.Unmarshal(data[:l], &srcs); err != nil {
+		return err
+	}
+	data = data[l:]
+	m.Srcs = srcs
+
+	// other fields
+	l = binary.BigEndian.Uint32(data[:4])
+	data = data[4:]
+
+	var aggPB EncodeAggDistinctPB
+	if err := aggPB.Unmarshal(data[:l]); err != nil {
+		return err
+	}
+	m.Op = aggPB.Op
+	m.Private = aggPB.Private
+	m.Es = aggPB.Es
+	m.Da = aggPB.Da
+	m.InputTypes = aggPB.InputTypes
+	m.OutputType = aggPB.OutputType
+	m.IsCount = aggPB.IsCount
+
+	return nil
 }
 
 type Compare interface {

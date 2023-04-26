@@ -12,15 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package agg
 
 import (
-	"encoding/gob"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	gob.Register(&catalog.BlockInfo{})
-	gob.Register(&BlockMeta{})
+func TestApproxCountDisticMarshalAndUnmarshal(t *testing.T) {
+	approx := NewApproxc[uint64]()
+	approx.Grows(5)
+	for i := 0; i < 5; i++ {
+		approx.Fill(int64(i), uint64(i), uint64(i), int64(i), true, false)
+	}
+
+	data, err := approx.MarshalBinary()
+	require.NoError(t, err)
+
+	ret := NewApproxc[uint64]()
+	err = ret.UnmarshalBinary(data)
+	require.NoError(t, err)
+
+	require.Equal(t, approx, ret)
 }
