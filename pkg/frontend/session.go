@@ -1323,12 +1323,12 @@ func (ses *Session) InitGlobalSystemVariables() error {
 			return err
 		}
 		if execResultArrayHasData(rsset) {
-			for i := range rsset {
-				variable_name, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(sysTenantCtx, uint64(i), 0)
 				if err != nil {
 					return err
 				}
-				variable_value, err := rsset[i].GetString(sysTenantCtx, 0, 0)
+				variable_value, err := rsset[0].GetString(sysTenantCtx, uint64(i), 1)
 				if err != nil {
 					return err
 				}
@@ -1338,17 +1338,15 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					if err != nil {
 						return err
 					}
-					err = ses.SetGlobalVar(variable_name, val)
+					err = ses.SetSessionVar(variable_name, val)
 					if err != nil {
 						return err
 					}
 				}
-
 			}
 		} else {
 			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
-
 	} else {
 		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
@@ -1369,12 +1367,12 @@ func (ses *Session) InitGlobalSystemVariables() error {
 			return err
 		}
 		if execResultArrayHasData(rsset) {
-			for i := range rsset {
-				variable_name, err := rsset[i].GetString(tenantCtx, 0, 0)
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(tenantCtx, uint64(i), 0)
 				if err != nil {
 					return err
 				}
-				variable_value, err := rsset[i].GetString(tenantCtx, 0, 0)
+				variable_value, err := rsset[0].GetString(tenantCtx, uint64(i), 1)
 				if err != nil {
 					return err
 				}
@@ -1384,7 +1382,7 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					if err != nil {
 						return err
 					}
-					err = ses.SetGlobalVar(variable_name, val)
+					err = ses.SetSessionVar(variable_name, val)
 					if err != nil {
 						return err
 					}

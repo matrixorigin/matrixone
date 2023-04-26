@@ -588,7 +588,8 @@ func (svet SystemVariableEnumType) Zero() interface{} {
 }
 
 func (svet SystemVariableEnumType) ConvertFromString(value string) (interface{}, error) {
-	if val, ok := svet.tagName2Id[value]; !ok {
+	lowerName := strings.ToLower(value)
+	if val, ok := svet.tagName2Id[lowerName]; !ok {
 		return nil, errorConvertFromStringToEnumFailed
 	} else {
 		return val, nil
