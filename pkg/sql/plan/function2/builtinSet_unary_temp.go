@@ -884,8 +884,9 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	for j := 0; j < len(sels); j++ {
 		sels[j] = int32(j)
 	}
-	toVec.Union(fromVec, sels, proc.GetMPool())
-	return nil
+
+	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	return err
 }
 
 func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

@@ -118,6 +118,9 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				finalTypes[i] = retType
 			}
 		}
+		if len(inputs)%2 == 1 {
+			finalTypes[len(finalTypes)-1] = retType
+		}
 		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)

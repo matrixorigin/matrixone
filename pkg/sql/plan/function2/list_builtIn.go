@@ -495,7 +495,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: JSON_EXTRACT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonExtractCheckFn,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -4139,12 +4139,16 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: VALUES,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
 				},
