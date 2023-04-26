@@ -110,12 +110,10 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 }
 
 func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
-
-	tempKillQueue := make(map[int64]KillRecord)
-
 	ar.killQueueMu.RLock()
 	defer ar.killQueueMu.RUnlock()
 
+	tempKillQueue := make(map[int64]KillRecord, len(ar.killIdQueue))
 	for account, record := range ar.killIdQueue {
 		tempKillQueue[account] = record
 	}
@@ -123,12 +121,10 @@ func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
 }
 
 func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uint64 {
-
-	tempRoutineMap := make(map[int64]map[*Routine]uint64)
-
 	ar.accountRoutineMu.RLock()
 	defer ar.accountRoutineMu.RUnlock()
 
+	tempRoutineMap := make(map[int64]map[*Routine]uint64, len(ar.accountId2Routine))
 	for account, rountine := range ar.accountId2Routine {
 		tempRoutineMap[account] = rountine
 	}
