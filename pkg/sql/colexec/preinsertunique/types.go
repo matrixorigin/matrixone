@@ -12,21 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorytable
+package preinsertunique
 
 import (
-	"encoding/gob"
-	"reflect"
-	"sync"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var gobRegistered sync.Map
-
-func gobRegister(v any) {
-	t := reflect.TypeOf(v)
-	if _, ok := gobRegistered.Load(t); ok {
-		return
-	}
-	gob.Register(v)
-	gobRegistered.Store(t, struct{}{})
+type Argument struct {
+	Ctx          context.Context
+	PreInsertCtx *plan.PreInsertUkCtx
 }
+
+func (arg *Argument) Free(*process.Process, bool) {}

@@ -76,6 +76,7 @@ const (
 	ARRAY_SIZE     // ARRAY_SIZE
 	ASCII          // ASCII
 	ASIN           // ASIN
+	ASSERT         // ASSERT
 	ATAN           // ATAN
 	ATAN2          // ATAN2
 	AVG            // AVG
@@ -540,6 +541,7 @@ var functionIdRegister = map[string]int32{
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
+	"assert":                         ASSERT,
 	"lastval":                        LASTVAL,
 }
 

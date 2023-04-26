@@ -1247,11 +1247,11 @@ func TestReplay10(t *testing.T) {
 	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: &plan.Expr{},
 	})
-	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
+	schema.ColDefs[2].Default, _ = types.Encode(&plan.Default{
 		NullAbility: true,
 		Expr:        nil,
 	})
-	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: nil,
 	})
 

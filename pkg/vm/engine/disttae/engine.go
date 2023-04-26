@@ -68,7 +68,6 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
 		partitions: make(map[[2]uint64]Partitions),
 		packerPool: fileservice.NewPool(
@@ -251,7 +250,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
@@ -518,15 +517,11 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 }
 
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
-	e.Lock()
-	defer e.Unlock()
-	e.txns[string(op.Txn().ID)] = txn
+	op.AddWorkspace(txn)
 }
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	e.RLock()
-	defer e.RUnlock()
-	return e.txns[string(op.Txn().ID)]
+	return op.GetWorkspace().(*Transaction)
 }
 
 func (e *Engine) delTransaction(txn *Transaction) {
@@ -553,9 +548,6 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	}
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
-	e.Lock()
-	defer e.Unlock()
-	delete(e.txns, string(txn.meta.ID))
 }
 
 func (e *Engine) getDNServices() []DNStore {
