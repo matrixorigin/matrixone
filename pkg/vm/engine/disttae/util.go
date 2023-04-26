@@ -46,6 +46,8 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
+// func
+
 func fetchZonemapAndRowsFromBlockInfo(
 	ctx context.Context,
 	idxs []uint16,
@@ -71,6 +73,56 @@ func fetchZonemapAndRowsFromBlockInfo(
 	}
 
 	return zonemapList, blockInfo.MetaLocation().Rows(), nil
+}
+
+func buildColumnZMVector(
+	zm objectio.ZoneMap,
+	mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	t := zm.GetType().ToType()
+	vec = vector.NewVec(t)
+	defer func() {
+		if err != nil {
+			vec.Free(mp)
+		}
+	}()
+	appendFn := vector.MakeAppendBytesFunc(vec)
+	if err = appendFn(zm.GetMinBuf(), false, mp); err != nil {
+		return
+	}
+	err = appendFn(zm.GetMaxBuf(), false, mp)
+	return
+}
+
+func buildColumnsZMVectors(
+	meta objectio.ObjectMeta,
+	blknum int,
+	cols []int,
+	def *plan.TableDef,
+	mp *mpool.MPool,
+) (vecs []*vector.Vector, err error) {
+	vecs = make([]*vector.Vector, len(cols))
+	defer func() {
+		if err != nil {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Free(mp)
+				} else {
+					break
+				}
+			}
+		}
+	}()
+	var vec *vector.Vector
+	for i, colIdx := range cols {
+		zm := meta.GetColumnMeta(uint32(blknum), uint16(colIdx)).ZoneMap()
+		// colType := types.T(def.Cols[colIdx].Typ.Id)
+		if vec, err = buildColumnZMVector(zm, mp); err != nil {
+			return
+		}
+		vecs[i] = vec
+	}
+	return
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
