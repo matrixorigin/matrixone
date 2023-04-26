@@ -1985,9 +1985,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
-
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
-
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize, atomic.LoadInt64(&anal.OutputSize))
@@ -2224,10 +2222,6 @@ func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *p
 	})
 	nodes[0].Data = append(nodes[0].Data, ranges...)
 	return nodes
-}
-
-func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
-	return anal.analInfos
 }
 
 func validScopeCount(ss []*Scope) int {

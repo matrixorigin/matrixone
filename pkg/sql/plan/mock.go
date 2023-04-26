@@ -110,6 +110,7 @@ type Schema struct {
 	fks       []*ForeignKeyDef
 	clusterby *ClusterByDef
 	outcnt    float64
+	tblId     int64
 }
 
 const SF float64 = 1
@@ -429,7 +430,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{
 				Name:        "fk1",                       // string
 				Cols:        []uint64{7},                 // []uint64
-				ForeignTbl:  2,                           // uint64
+				ForeignTbl:  88888,                       // uint64
 				ForeignCols: []uint64{1},                 // []uint64
 				OnDelete:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
 				OnUpdate:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
@@ -470,6 +471,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept"] = &Schema{
+		tblId: 88888,
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
@@ -580,6 +582,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	for db, schema := range schemas {
 		tableIdx := 0
 		for tableName, table := range schema {
+			tblId := table.tblId
+			if tblId == 0 {
+				tblId = int64(tableIdx)
+			}
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
 			for idx, col := range table.cols {
@@ -605,7 +611,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				Server:       0,
 				Db:           0,
 				Schema:       0,
-				Obj:          int64(tableIdx),
+				Obj:          tblId,
 				ServerName:   "",
 				DbName:       "",
 				SchemaName:   db,
@@ -615,7 +621,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			tableDef := &TableDef{
 				TableType: catalog.SystemOrdinaryRel,
-				TblId:     uint64(tableIdx),
+				TblId:     uint64(tblId),
 				Name:      tableName,
 				Cols:      colDefs,
 				Indexes:   make([]*IndexDef, len(table.idxs)),
