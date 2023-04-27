@@ -36,6 +36,8 @@ const PACKET_LARGE_ERROR = "packet for query is too large"
 // Default packet size limit for MySQL is 16MB, but we set it to 15MB to be safe.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 15
 
+//18331736
+
 var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // BaseSqlWriter SqlWriter is a writer that writes data to a SQL database.
@@ -63,19 +65,9 @@ func generateInsertStatement(records [][]string, tbl *table.Table) (string, int,
 	sb := strings.Builder{}
 	sb.WriteString("INSERT INTO")
 	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
-
-	// write columns
-	sb.WriteString("(")
-	for i, col := range tbl.Columns {
-		if i != 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString("`" + col.Name + "`")
-	}
-	sb.WriteString(") ")
+	sb.WriteString("VALUES ")
 
 	// write values
-	sb.WriteString("VALUES ")
 	for idx, row := range records {
 		if len(row) == 0 {
 			continue
@@ -113,60 +105,56 @@ func generateInsertStatement(records [][]string, tbl *table.Table) (string, int,
 	return sb.String(), len(records), nil
 }
 
-// chunkRecords splits records into chunks of size <= maxChunkSize
-func chunkRecords(records [][]string, maxChunkSize int) [][][]string {
-	var chunks [][][]string
-	var chunk [][]string
-	chunkSize := 0
-
-	for _, record := range records {
-		recordSize := 0
-		for _, field := range record {
-			recordSize += len(field)
-		}
-
-		// If adding the current record would exceed the maxChunkSize, create a new chunk
-		if chunkSize+recordSize > maxChunkSize {
-			chunks = append(chunks, chunk)
-			chunk = nil
-			chunkSize = 0
-		}
-
-		chunk = append(chunk, record)
-		chunkSize += recordSize
-	}
-
-	// Append the last chunk if it's not empty
-	if len(chunk) > 0 {
-		chunks = append(chunks, chunk)
-	}
-
-	return chunks
-}
-
 func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
-	chunkSize := maxLen
-	chunks := chunkRecords(records, chunkSize)
 
-	totalInserted := 0
-	var err error
-	for _, chunk := range chunks {
-		stmt, cnt, _ := generateInsertStatement(chunk, tbl)
-		_, err = db.Exec(stmt)
-		if err != nil {
-			// _, err = db.Exec(stmt)
-			logutil.Info("sqlWriter db exec failed", zap.String("size", strconv.Itoa(len(chunk))), zap.Error(err))
+	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` ", tbl.Database, tbl.Table)
+
+	sb := strings.Builder{}
+	sb.WriteString("VALUES ")
+	// write values
+	for idx, row := range records {
+		if len(row) == 0 {
+			continue
 		}
-		if err != nil {
-			return totalInserted, err
+		sb.WriteString("(")
+		for i, field := range row {
+			if i != 0 {
+				sb.WriteString(",")
+			}
+			if tbl.Columns[i].ColType == table.TJson {
+				var js interface{}
+				_ = json.Unmarshal([]byte(field), &js)
+				escapedJSON, _ := json.Marshal(js)
+				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
+			} else {
+				// escape single quote and backslash
+				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
+				// truncate string if it's too long caused by escape for varchar
+				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
+				} else {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+				}
+			}
 		}
-		totalInserted += cnt
+		if sb.Len() >= maxLen || idx == len(records)-1 {
+			sb.WriteString(");")
+			stmt := baseStr + sb.String()
+			_, err := db.Exec(stmt)
+			if err != nil {
+				logutil.Info("bulk insert failed", zap.String("table", tbl.Table), zap.String("len", strconv.Itoa(len(stmt))), zap.Error(err))
+				return 0, err
+			}
+			sb.Reset()
+			sb.WriteString("VALUES ")
+		} else {
+			sb.WriteString("),")
+		}
 	}
-
-	return totalInserted, err
+	return len(records), nil
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
@@ -180,38 +168,14 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
 		return 0, dbErr
 	}
-	stmt, cnt, _ := generateInsertStatement(records, tbl)
-	_, err = db.Exec(stmt)
-	if err != nil {
-		if strings.Contains(err.Error(), PACKET_LARGE_ERROR) {
-			bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
-			if bulkErr != nil {
-				// logutil.Error("sqlWriter db insert bulk insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
-				return 0, err
-			}
-			return bulkCnt, bulkErr
-		} else {
-			// logutil.Error("sqlWriter db insert failed", zap.String("address", sw.address), zap.Error(err))
-			return 0, err
-			// if table not exist return, no need to retry
-			// todo: create table if not exist
-			//if strings.Contains(err.Error(), "no such table") {
-			//	return 0, err
-			//}
-			// refresh connection if invalid connection
-			//if strings.Contains(err.Error(), "invalid connection") {
-			//	newDb, newDbErr := sw.initOrRefreshDBConn(true)
-			//	if newDbErr != nil {
-			//		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(newDbErr))
-			//		return 0, newDbErr
-			//	} else {
-			//		db = newDb
-			//	}
-			//}
-			// _, err = db.Exec(stmt)
-		}
+
+	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+	if bulkErr != nil {
+		logutil.Error("sqlWriter db insert bulk insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
+		return 0, err
 	}
-	return cnt, nil
+	return bulkCnt, bulkErr
+
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
@@ -246,7 +210,7 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=300s&writeTimeout=30m&timeout=3000s",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=300s&writeTimeout=30m&timeout=3000s&maxAllowedPacket=0",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
