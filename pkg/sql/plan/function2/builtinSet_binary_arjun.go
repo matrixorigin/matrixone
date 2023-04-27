@@ -461,21 +461,10 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
-			var res int64
-
 			str1 := function2Util.QuickBytesToStr(v1)
 			str2 := function2Util.QuickBytesToStr(v2)
 
-			s1GoOn, s2GoOn := len(str1) > 1, len(str2) > 1
-			//TODO Validate: Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/vectorize/instr/instr.go#L74
-			if s1GoOn && s2GoOn {
-				res = instr.Single(str1, str2)
-			} else if s1GoOn {
-				res = instr.Single(str1, str2)
-			} else {
-				res = instr.Single(str2, str1)
-			}
-
+			res := instr.Single(str1, str2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
