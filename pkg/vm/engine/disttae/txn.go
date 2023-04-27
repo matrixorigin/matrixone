@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (txn *Transaction) getBlockList(
+func (txn *Transaction) getBlockInfos(
 	ctx context.Context,
 	databaseId uint64,
 	tableId uint64,

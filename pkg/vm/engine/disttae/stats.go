@@ -49,7 +49,7 @@ func maybeUnique(zm objectio.ZoneMap, rows uint32) bool {
 }
 
 // get minval , maxval, datatype from zonemap
-func getInfoFromZoneMap(ctx context.Context, columns []int, blocks *[][]catalog.BlockInfo, blockNumTotal int, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.BlockInfo, blockNumTotal int, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 
 	lenCols := len(columns)
 	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
@@ -58,8 +58,8 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks *[][]catalog.
 	var objectMeta objectio.ObjectMeta
 	//first, get info needed from zonemap
 	var init bool
-	for i := range *blocks {
-		for _, blk := range (*blocks)[i] {
+	for i := range blocks {
+		for _, blk := range blocks[i] {
 			location := blk.MetaLocation()
 			if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
 				if objectMeta, err = loadObjectMeta(ctx, location, proc.FileService, proc.Mp()); err != nil {
@@ -102,14 +102,14 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks *[][]catalog.
 
 // calculate the stats for scan node.
 // we need to get the zonemap from cn, and eval the filters with zonemap
-func CalcStats(ctx context.Context, blocks *[][]catalog.BlockInfo, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string, s *plan2.StatsInfoMap) (stats *plan.Stats, err error) {
+func CalcStats(ctx context.Context, blocks [][]catalog.BlockInfo, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string, s *plan2.StatsInfoMap) (stats *plan.Stats, err error) {
 	var blockNumNeed, blockNumTotal int
 	var tableCnt, cost int64
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tableDef)
 	var meta objectio.ObjectMeta
-	for i := range *blocks {
-		for _, blk := range (*blocks)[i] {
+	for i := range blocks {
+		for _, blk := range blocks[i] {
 			location := blk.MetaLocation()
 			blockNumTotal++
 			tableCnt += int64(location.Rows())

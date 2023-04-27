@@ -44,7 +44,6 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-// func
 func loadObjectMeta(
 	ctx context.Context,
 	location objectio.Location,

@@ -239,8 +239,8 @@ type txnTable struct {
 	idxs              []uint16
 	_parts            []*PartitionState
 	modifiedBlocks    [][]ModifyBlockMeta
-	blockList         [][]catalog.BlockInfo
-	blockMetasUpdated bool
+	blockInfos        [][]catalog.BlockInfo
+	blockInfosUpdated bool
 	logtailUpdated    bool
 
 	primaryIdx   int // -1 means no primary key
