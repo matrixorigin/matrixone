@@ -1093,6 +1093,9 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 
 func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
 	if tbl._parts == nil {
+		if err := tbl.updateLogtail(ctx); err != nil {
+			return nil, err
+		}
 		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
 	}
 	return tbl._parts, nil
@@ -1102,19 +1105,8 @@ func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) erro
 	tbl.dnList = []int{0}
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.blockMetasUpdated {
-		if tbl.db.txn.engine.UsePushModelOrNot() {
-			if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-				return err
-			}
-			err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
-			if err != nil {
-				return err
-			}
-		} else {
-			if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-				tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-				return err
-			}
+		if err := tbl.updateLogtail(ctx); err != nil {
+			return err
 		}
 		metas, err := tbl.db.txn.getBlockMetas(ctx, tbl, false)
 		if err != nil {
@@ -1123,5 +1115,34 @@ func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) erro
 		tbl.blockMetas = metas
 		tbl.blockMetasUpdated = true
 	}
+	return nil
+}
+
+func (tbl *txnTable) updateLogtail(ctx context.Context) error {
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	if created {
+		return nil
+	}
+
+	if tbl.logtailUpdated {
+		return nil
+	}
+
+	if tbl.db.txn.engine.UsePushModelOrNot() {
+		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
+		if err != nil {
+			return err
+		}
+	} else {
+		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
+			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+	}
+
+	tbl.logtailUpdated = true
 	return nil
 }

@@ -241,6 +241,7 @@ type txnTable struct {
 	modifiedBlocks    [][]ModifyBlockMeta
 	blockMetas        [][]BlockMeta
 	blockMetasUpdated bool
+	logtailUpdated    bool
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
