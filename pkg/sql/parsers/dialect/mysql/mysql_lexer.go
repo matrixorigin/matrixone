@@ -66,8 +66,8 @@ func (l *Lexer) Parse(ctx context.Context) ([]tree.Statement, error) {
 	if yyParse(l) != 0 {
 		return nil, l.scanner.LastError
 	}
-	if len(l.stmts) != 1 {
-		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
+	if len(l.stmts) == 0 {
+		return nil, moerr.NewParseError(ctx, "Query was empty")
 	}
 	return l.stmts, nil
 }
