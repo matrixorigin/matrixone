@@ -416,15 +416,28 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		return nil, err
 	}
 	blkNum := 0
+	cost := float64(0.0)
 	for _, n := range qry.Nodes {
+		if n.Stats == nil {
+			continue
+		}
 		if n.NodeType == plan.Node_TABLE_SCAN {
-			if n.Stats != nil {
-				blkNum += int(n.Stats.BlockNum)
-			}
+			blkNum += int(n.Stats.BlockNum)
+		}
+		if n.NodeType == plan.Node_INSERT {
+			cost += n.Stats.GetCost()
 		}
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
+		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+			c.cnListStrategy()
+		} else {
+			c.cnList = engine.Nodes{engine.Node{
+				Addr: c.addr,
+				Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+			}
+		}
 		// insertNode := qry.Nodes[qry.Steps[0]]
 		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
@@ -550,7 +563,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		// 	})
 		// }
 	case plan.Query_INSERT:
+		//
 		return ss[0], nil
+
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
@@ -798,6 +813,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return ss, nil
 	case plan.Node_INSERT:
 		curr := c.anal.curr
+		n.NotCacheable = true
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -807,6 +823,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		currentFirstFlag := c.anal.isFirst
+		isRemote := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
+		insertArg.IsRemote = isRemote
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Insert,
@@ -815,6 +833,19 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg:     insertArg,
 			})
 		}
+
+		if isRemote {
+			rs := c.newMergeScope(ss)
+			rs.Magic = MergeInsert
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeBlock,
+				Arg: &mergeblock.Argument{
+					Tbl: insertArg.InsertCtx.Rel,
+				},
+			})
+			ss = []*Scope{rs}
+		}
+
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
@@ -1602,7 +1633,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-// func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+// func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope, insert ) *Scope {
 // 	ss2 := make([]*Scope, 0, len(ss))
 // 	for _, s := range ss {
 // 		if s.IsEnd {
