@@ -376,7 +376,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 		}
 		expr := function2Util.QuickBytesToStr(v)
-		match, parsedInput, err := op.regMap.regularSubstr(expr, regexpMask, 1, 1)
+		match, parsedInput, err := op.regMap.regularSubstr(regexpMask, expr, 1, 1)
 		if err != nil {
 			return err
 		}

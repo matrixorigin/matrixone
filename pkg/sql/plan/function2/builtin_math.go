@@ -266,7 +266,7 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			if err != nil {
 				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 			}
-			if err = rs.Append(tempV1/tempV2, false); err != nil {
+			if err = rs.Append(tempV2/tempV1, false); err != nil {
 				return err
 			}
 		}
