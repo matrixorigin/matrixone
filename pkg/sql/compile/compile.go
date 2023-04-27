@@ -141,6 +141,10 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	return nil
 }
 
+func (c *Compile) addAffectedRows(n uint64) {
+	c.affectRows.Add(n)
+}
+
 func (c *Compile) setAffectedRows(n uint64) {
 	c.affectRows.Store(n)
 }
@@ -166,9 +170,7 @@ func (c *Compile) run(s *Scope) error {
 			return err
 		}
 
-		oldRows := c.GetAffectedRows()
-		newRows := oldRows + s.affectedRows()
-		c.setAffectedRows(newRows)
+		c.addAffectedRows(s.affectedRows())
 		return nil
 	case MergeDelete:
 		defer c.fillAnalyzeInfo()
