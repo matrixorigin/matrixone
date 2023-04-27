@@ -28,38 +28,36 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	if arg.DeleteCtx.CanTruncate {
 		var err error
 		var affectRows int64
+		delCtx := arg.DeleteCtx
 
-		for i, rel := range arg.DeleteCtx.DelSource {
-			_, err = rel.Ranges(c.ctx, nil)
-			if err != nil {
-				return 0, err
-			}
-			affectRow, err := rel.Rows(s.Proc.Ctx)
-			if err != nil {
-				return 0, err
-			}
-			affectRows = affectRows + affectRow
+		_, err = delCtx.Source.Ranges(c.ctx, nil)
+		if err != nil {
+			return 0, err
+		}
+		affectRow, err := delCtx.Source.Rows(s.Proc.Ctx)
+		if err != nil {
+			return 0, err
+		}
+		affectRows = affectRows + affectRow
 
-			dbName := arg.DeleteCtx.DelRef[i].SchemaName
-			tblName := arg.DeleteCtx.DelRef[i].ObjName
-			oldId := uint64(arg.DeleteCtx.DelRef[i].Obj)
-			dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
-			if err != nil {
-				return 0, err
-			}
+		dbName := delCtx.Ref.SchemaName
+		tblName := delCtx.Ref.ObjName
+		oldId := uint64(delCtx.Ref.Obj)
+		dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+		if err != nil {
+			return 0, err
+		}
 
-			// truncate origin table
-			newId, err := dbSource.Truncate(c.ctx, tblName)
-			if err != nil {
-				return 0, err
-			}
+		// truncate origin table
+		newId, err := dbSource.Truncate(c.ctx, tblName)
+		if err != nil {
+			return 0, err
+		}
 
-			// truncate autoIncr table
-			err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
-			if err != nil {
-				return 0, err
-			}
-
+		// truncate autoIncr table
+		err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+		if err != nil {
+			return 0, err
 		}
 
 		return uint64(affectRows), nil
@@ -68,7 +66,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.AffectedRows, nil
+	return arg.AffectedRows(), nil
 }
 
 func (s *Scope) Insert(c *Compile) (uint64, error) {
@@ -77,7 +75,7 @@ func (s *Scope) Insert(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.Affected, nil
+	return arg.AffectedRows(), nil
 }
 
 func (s *Scope) Update(c *Compile) (uint64, error) {
@@ -86,5 +84,5 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
-	return arg.AffectedRows, nil
+	return arg.AffectedRows(), nil
 }

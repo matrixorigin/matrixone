@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -97,7 +96,9 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	for i := len(attrs); i < len(originBatch.Vecs); i++ {
 		attrs = append(attrs, "")
 	}
-	insertBatch := batch.New(true, attrs)
+	insertBatch := batch.NewWithSize(len(attrs))
+	insertBatch.Attrs = attrs
+
 	for i, v := range originBatch.Vecs {
 		newVec := vector.NewVec(*v.GetType())
 		insertBatch.SetVector(int32(i), newVec)
@@ -207,36 +208,36 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	}
 
 	// delete old data
-	if delRowIdVec.Length() > 0 {
-		deleteBatch := batch.New(true, []string{catalog.Row_ID})
-		deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
-		deleteBatch.SetVector(0, delRowIdVec)
+	// if delRowIdVec.Length() > 0 {
+	// 	deleteBatch := batch.New(true, []string{catalog.Row_ID})
+	// 	deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
+	// 	deleteBatch.SetVector(0, delRowIdVec)
 
-		// delete origin rows
-		err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
-		if err != nil {
-			deleteBatch.Clean(proc.Mp())
-			return nil, err
-		}
+	// 	// delete origin rows
+	// 	err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+	// 	if err != nil {
+	// 		deleteBatch.Clean(proc.Mp())
+	// 		return nil, err
+	// 	}
 
-		// delete unique table rows
-		if len(insertArg.IdxIdx) > 0 {
-			// when refactor finish, we use these code:
-			// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
-			// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-			// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
-			// deleteUniqueBatch.SetVector(1, delUniquePkVec)
-			deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
-			deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-			deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+	// 	// delete unique table rows
+	// 	if len(insertArg.IdxIdx) > 0 {
+	// 		// when refactor finish, we use these code:
+	// 		// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
+	// 		// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+	// 		// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+	// 		// deleteUniqueBatch.SetVector(1, delUniquePkVec)
+	// 		deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
+	// 		deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+	// 		deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
 
-			err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
-			if err != nil {
-				deleteUniqueBatch.Clean(proc.Mp())
-				return nil, err
-			}
-		}
-	}
+	// 		err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
+	// 		if err != nil {
+	// 			deleteUniqueBatch.Clean(proc.Mp())
+	// 			return nil, err
+	// 		}
+	// 	}
+	// }
 	return insertBatch, nil
 
 }
@@ -255,7 +256,8 @@ func resetColPos(e *plan.Expr, columnCount int) {
 }
 
 func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process, attrs []string) (*batch.Batch, error) {
-	newBatch := batch.New(true, attrs)
+	newBatch := batch.NewWithSize(len(attrs))
+	newBatch.Attrs = attrs
 	var uErr error
 	for i, v := range originBatch.Vecs {
 		newVec := vector.NewVec(*v.GetType())
@@ -276,7 +278,8 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 	// 	return nil, err
 	// }
 	var originVec *vector.Vector
-	newBatch := batch.New(true, attrs)
+	newBatch := batch.NewWithSize(len(attrs))
+	newBatch.Attrs = attrs
 	for i, attr := range newBatch.Attrs {
 		if expr, exists := updateExpr[attr]; exists && i < columnCount {
 			runExpr := plan2.DeepCopyExpr(expr)
