@@ -20,7 +20,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -145,7 +144,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 			stmt := baseStr + sb.String()
 			_, err := db.Exec(stmt)
 			if err != nil {
-				logutil.Info("bulk insert failed", zap.String("table", tbl.Table), zap.String("len", strconv.Itoa(len(stmt))), zap.Error(err))
+				// logutil.Info("bulk insert failed", zap.String("table", tbl.Table), zap.String("len", strconv.Itoa(len(stmt))), zap.Error(err))
 				return 0, err
 			}
 			sb.Reset()
@@ -165,13 +164,13 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	}
 	db, dbErr := sw.initOrRefreshDBConn(false)
 	if dbErr != nil {
-		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
+		// logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
 		return 0, dbErr
 	}
 
 	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if bulkErr != nil {
-		logutil.Error("sqlWriter db insert bulk insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
+		// logutil.Info("sqlWriter db insert bulk insert failed"+bulkErr.Error(), zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))))
 		return 0, err
 	}
 	return bulkCnt, bulkErr
