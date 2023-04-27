@@ -95,6 +95,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if err != nil {
 		return false, err
 	}
-	atomic.AddUint64(&p.affectedRows, affectedRows)
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }

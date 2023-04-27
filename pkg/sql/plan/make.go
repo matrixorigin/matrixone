@@ -323,19 +323,15 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
 
-func makeHiddenColTyp() *Type {
-	return &Type{
-		Id:    int32(types.T_varchar),
-		Width: types.MaxVarcharLen,
-	}
-}
-
 // used for Compound primary key column name && clusterby column name
 func MakeHiddenColDefByName(name string) *ColDef {
 	return &ColDef{
 		Name:   name,
 		Hidden: true,
-		Typ:    makeHiddenColTyp(),
+		Typ: &Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		},
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -357,14 +353,4 @@ func MakeRowIdColDef() *ColDef {
 			OriginString: "",
 		},
 	}
-}
-
-func isSameColumnType(t1 *Type, t2 *Type) bool {
-	if t1.Id != t2.Id {
-		return false
-	}
-	if t1.Width == t2.Width && t1.Scale == t2.Scale {
-		return true
-	}
-	return true
 }

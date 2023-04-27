@@ -35,7 +35,7 @@ type Argument struct {
 	Tbl engine.Relation
 	// 2. unique index tables
 	Unique_tbls  []engine.Relation
-	affectedRows uint64
+	AffectedRows uint64
 	// 3. used for ut_test, otherwise the batch will free,
 	// and we can't get the result to check
 	notFreeBatch bool
@@ -50,15 +50,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func (arg *Argument) GetMetaLocBat(name string) {
-	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{name}
+	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
 		0, 0))
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
-		bat := batch.NewWithSize(1)
-		bat.Attrs = []string{name}
+		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
 			0, 0))
@@ -77,7 +75,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				if err != nil {
 					return err
 				}
-				arg.affectedRows += uint64(location.Rows())
+				arg.AffectedRows += uint64(location.Rows())
 			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {
@@ -87,7 +85,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			if idx == 0 {
-				arg.affectedRows += uint64(bat.Length())
+				arg.AffectedRows += uint64(bat.Length())
 			}
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
 		}
@@ -96,8 +94,4 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
 	}
 	return nil
-}
-
-func (arg *Argument) AffectedRows() uint64 {
-	return arg.affectedRows
 }
