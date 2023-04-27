@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/cache"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -807,7 +808,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		var eng engine.Engine
 		proc := &process.Process{}
 		InitGlobalSystemVariables(GSysVariables)
-		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
+		ses := &Session{sc: cache.New(), planCache: newPlanCache(1), gSysVars: GSysVariables}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
