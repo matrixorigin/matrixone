@@ -48,7 +48,6 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		}
 		if end {
 			proc.SetInputBatch(nil)
-			ap.Free(proc, false)
 			return true, nil
 		}
 

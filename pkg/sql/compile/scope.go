@@ -260,6 +260,12 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		rds = newRds
 	}
 
+	if mcpu == 1 {
+		s.Magic = Normal
+		s.DataSource.R = rds[0] // rds's length is equal to mcpu so it is safe to do it
+		return s.Run(c)
+	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
