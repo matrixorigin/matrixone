@@ -74,6 +74,7 @@ func (l *Lexer) Parse(ctx context.Context) ([]tree.Statement, error) {
 
 func (l *Lexer) Reset(dialectType dialect.DialectType, sql string, lower int64) {
 	l.lower = lower
+	l.stmts = l.stmts[:0]
 	l.paramIndex = 0
 	l.scanner.Reset(sql)
 }
