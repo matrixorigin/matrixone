@@ -879,6 +879,7 @@ func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	fromVec := parameters[0]
 	toVec := result.GetResultVector()
+	toVec.Reset(*toVec.GetType())
 
 	sels := make([]int32, fromVec.Length())
 	for j := 0; j < len(sels); j++ {

@@ -776,7 +776,6 @@ func JsonExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 			continue
 		}
 
-		// TODO: Validate. I am avoid multiple path arguments. Original code: https://github.com/m-schen/matrixone/blob/3b58fe39a4c233739a8d3b9cd4fcd562fa2a1568/pkg/sql/plan/function/builtin/multi/json_extract.go#L51
 		// Path Bytes
 		pathBytes, pIsNull := p2.GetStrValue(i)
 		if pIsNull {
@@ -794,9 +793,11 @@ func JsonExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 		paths := make([]*bytejson.Path, 1)
 		paths[0] = &p
 		out, err := fn(jsonBytes, paths)
-
+		if err != nil {
+			return err
+		}
 		if out.IsNull() {
-			err := rs.AppendBytes(nil, true)
+			err = rs.AppendBytes(nil, true)
 			if err != nil {
 				return err
 			}

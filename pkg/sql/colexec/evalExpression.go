@@ -421,35 +421,42 @@ func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	return vec, nil
 }
 
-// SafeReuseAndDupBatch check vectors of bat.
-// if v dose not exists in source, dup it.
-// if exists and needn't dup, do nothing but remove it from source.
-func SafeReuseAndDupBatch(proc *process.Process, bat *batch.Batch, source *batch.Batch) (dupSize int, err error) {
-	alloc := 0
-	for i, rv := range bat.Vecs {
-		isSame := false
-		index := -1
-		for j, sv := range source.Vecs {
-			if rv == sv {
-				isSame = true
-				index = j
-				break
-			}
-		}
+// MinDup do dup work for vectors of batch as few time as possible.
+func MinDup(proc *process.Process, bat *batch.Batch) (dupSize int, err error) {
+	dupSize = 0
 
-		if !isSame {
-			newV, err := bat.Vecs[i].Dup(proc.Mp())
+	duped := make([]int, len(bat.Vecs))
+	for i := range duped {
+		duped[i] = -1
+	}
+
+	dupedVectors := make([]*vector.Vector, 0, len(bat.Vecs))
+	for i, oldVec := range bat.Vecs {
+		if duped[i] < 0 {
+			newVec, err := oldVec.Dup(proc.Mp())
 			if err != nil {
+				for j := range dupedVectors {
+					dupedVectors[j].Free(proc.Mp())
+				}
 				return 0, err
 			}
-			alloc += newV.Size()
-			bat.ReplaceVector(rv, newV)
-		} else {
-			bat.ReplaceVector(rv, source.Vecs[index])
-			source.ReplaceVector(source.Vecs[index], nil)
+			dupSize += newVec.Size()
+
+			dupedVectors = append(dupedVectors, newVec)
+			indexOfNewVec := len(dupedVectors) - 1
+			for j := range bat.Vecs {
+				if bat.Vecs[j] == oldVec {
+					duped[j] = indexOfNewVec
+				}
+			}
 		}
 	}
-	return alloc, nil
+
+	// use new vector to replace the old vector.
+	for i, index := range duped {
+		bat.Vecs[i] = dupedVectors[index]
+	}
+	return dupSize, nil
 }
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,

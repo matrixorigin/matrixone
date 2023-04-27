@@ -283,12 +283,13 @@ func (fr *FunctionResult[T]) GetType() types.Type {
 	return *fr.vec.GetType()
 }
 
-func (fr *FunctionResult[T]) SetFromParameter(fp FunctionParameterWrapper[T]) {
+func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T]) (err error) {
 	// clean the old memory
 	if fr.vec != fp.GetSourceVector() {
 		fr.Free()
 	}
-	fr.vec = fp.GetSourceVector()
+	fr.vec, err = fp.GetSourceVector().Dup(fr.mp)
+	return err
 }
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {

@@ -237,30 +237,3 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 		},
 	}}
 }
-
-func Test_SafeReuseAndDupBatch(t *testing.T) {
-	proc := testutil.NewProcess()
-	s1 := testutil.NewVector(10, types.T_int64.ToType(), proc.Mp(), true, nil)
-	s2 := testutil.NewVector(10, types.T_int64.ToType(), proc.Mp(), true, nil)
-
-	n1 := testutil.NewVector(10, types.T_int64.ToType(), proc.Mp(), true, nil)
-	n2 := testutil.NewVector(10, types.T_int64.ToType(), proc.Mp(), true, nil)
-
-	bat := &batch.Batch{Vecs: []*vector.Vector{n1, n2, s1, s1}}
-	source := &batch.Batch{Vecs: []*vector.Vector{s1, s2, s1, s2}}
-
-	allocate, err := SafeReuseAndDupBatch(
-		proc,
-		bat, source)
-	require.NoError(t, err)
-
-	{
-		require.Equal(t, (*vector.Vector)(nil), source.Vecs[0])
-		require.Equal(t, (*vector.Vector)(nil), source.Vecs[2])
-	}
-	{
-		require.Equal(t, bat.Vecs[2], s1)
-		require.Equal(t, bat.Vecs[3], s1)
-	}
-	require.Equal(t, n1.Size()+n2.Size(), allocate)
-}

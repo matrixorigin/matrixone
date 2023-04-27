@@ -465,8 +465,7 @@ func boolToOthers(ctx context.Context,
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_char, types.T_varchar, types.T_binary,
 		types.T_varbinary, types.T_blob, types.T_text:
 		// string type.
@@ -512,8 +511,7 @@ func int8ToOthers(ctx context.Context,
 		return numericToBool(source, rs, length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -574,8 +572,7 @@ func int16ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -636,8 +633,7 @@ func int32ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -698,8 +694,7 @@ func int64ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -760,8 +755,7 @@ func uint8ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -821,8 +815,7 @@ func uint16ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -882,8 +875,7 @@ func uint32ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -943,8 +935,7 @@ func uint64ToOthers(ctx context.Context,
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -1007,8 +998,7 @@ func float32ToOthers(ctx context.Context,
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
 			return floatToFixFloat(ctx, source, rs, length)
 		}
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
@@ -1071,8 +1061,7 @@ func float64ToOthers(ctx context.Context,
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
 			return floatToFixFloat(ctx, source, rs, length)
 		}
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return floatToDecimal64(source, rs, length)
@@ -1099,8 +1088,7 @@ func dateToOthers(proc *process.Process,
 		return dateToSigned(source, rs, length)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return dateToTime(source, rs, length)
@@ -1146,8 +1134,7 @@ func datetimeToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		v := source.GetSourceVector()
 		v.SetType(toType)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length)
@@ -1190,8 +1177,7 @@ func timestampToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		v := source.GetSourceVector()
 		v.SetType(toType)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1244,8 +1230,7 @@ func timeToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Time](result)
 		v := source.GetSourceVector()
 		v.SetType(toType)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1285,9 +1270,11 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
-			v := source.GetSourceVector()
+			if err := rs.DupFromParameter(source); err != nil {
+				return err
+			}
+			v := rs.GetResultVector()
 			v.SetType(toType)
-			rs.SetFromParameter(source)
 			return nil
 		}
 		return decimal64ToDecimal64(source, rs, length)
@@ -1330,9 +1317,11 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+			if err := rs.DupFromParameter(source); err != nil {
+				return err
+			}
 			v := source.GetSourceVector()
 			v.SetType(toType)
-			rs.SetFromParameter(source)
 			return nil
 		}
 		return decimal128ToDecimal128(source, rs, length)
@@ -1447,8 +1436,7 @@ func tsToOthers(ctx context.Context,
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_TS {
 		rs := vector.MustFunctionResult[types.TS](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
@@ -1458,8 +1446,7 @@ func rowidToOthers(ctx context.Context,
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_Rowid {
 		rs := vector.MustFunctionResult[types.Rowid](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from rowid to %s", toType))
 }
@@ -1469,8 +1456,7 @@ func blockidToOthers(ctx context.Context,
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	if toType.Oid == types.T_Blockid {
 		rs := vector.MustFunctionResult[types.Blockid](result)
-		rs.SetFromParameter(source)
-		return nil
+		return rs.DupFromParameter(source)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from blockid to %s", toType))
 }
