@@ -166,7 +166,9 @@ func (c *Compile) run(s *Scope) error {
 			return err
 		}
 
-		c.setAffectedRows(s.affectedRows())
+		oldRows := c.GetAffectedRows()
+		newRows := oldRows + s.affectedRows()
+		c.setAffectedRows(newRows)
 		return nil
 	case MergeDelete:
 		defer c.fillAnalyzeInfo()

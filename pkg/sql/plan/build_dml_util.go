@@ -501,6 +501,7 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId i
 			IsClusterTable:    delNodeInfo.IsClusterTable,
 			PartitionTableIds: delNodeInfo.partTableIDs,
 			PartitionIdx:      int32(delNodeInfo.partitionIdx),
+			IsEnd:             delNodeInfo.isEnd,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
