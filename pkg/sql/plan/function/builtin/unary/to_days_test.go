@@ -271,3 +271,59 @@ func TestToDaysWithScalar(t *testing.T) {
 		})
 	}
 }
+
+func TestDateTimeDiff(t *testing.T) {
+	tests := []struct {
+		intervalUnit string
+		t1           types.Datetime
+		t2           types.Datetime
+		expect       int64
+	}{
+		{
+			"MONTH",
+			types.DatetimeFromClock(2002, 5, 30, 0, 0, 0, 0),
+			types.DatetimeFromClock(2001, 1, 1, 0, 0, 0, 0),
+			-16,
+		},
+		{
+			"YEAR",
+			types.DatetimeFromClock(2002, 5, 1, 0, 0, 0, 0),
+			types.DatetimeFromClock(2001, 1, 1, 0, 0, 0, 0),
+			-1,
+		},
+		{
+			"MINUTE",
+			types.DatetimeFromClock(2003, 2, 1, 0, 0, 0, 0),
+			types.DatetimeFromClock(2003, 5, 1, 12, 5, 55, 0),
+			128885,
+		},
+		{
+			"MICROSECOND",
+			types.DatetimeFromClock(2002, 5, 30, 0, 0, 0, 0),
+			types.DatetimeFromClock(2002, 5, 30, 0, 13, 25, 0),
+			805000000,
+		},
+		{
+			"MICROSECOND",
+			types.DatetimeFromClock(2000, 1, 1, 0, 0, 0, 12345),
+			types.DatetimeFromClock(2000, 1, 1, 0, 0, 45, 32),
+			44987687,
+		},
+		{
+			"QUARTER",
+			types.DatetimeFromClock(2000, 1, 12, 0, 0, 0, 0),
+			types.DatetimeFromClock(2016, 1, 1, 0, 0, 0, 0),
+			63,
+		},
+		{
+			"QUARTER",
+			types.DatetimeFromClock(2016, 1, 1, 0, 0, 0, 0),
+			types.DatetimeFromClock(2000, 1, 12, 0, 0, 0, 0),
+			-63,
+		},
+	}
+
+	for _, test := range tests {
+		require.Equal(t, test.expect, DateTimeDiff(test.intervalUnit, test.t1, test.t2))
+	}
+}

@@ -29,15 +29,15 @@ const SecondsIn24Hours = 86400
 const ADZeroDays = 366
 
 const (
-	intervalYEAR        = "YEAR"
-	intervalQUARTER     = "QUARTER"
-	intervalMONTH       = "MONTH"
-	intervalWEEK        = "WEEK"
-	intervalDAY         = "DAY"
-	intervalHOUR        = "HOUR"
-	intervalMINUTE      = "MINUTE"
-	intervalSECOND      = "SECOND"
-	intervalMICROSECOND = "MICROSECOND"
+	intervalUnitYEAR      = "YEAR"
+	intervalUnitQUARTER   = "QUARTER"
+	intervalUnitMONTH     = "MONTH"
+	intervalUnitWEEK      = "WEEK"
+	intervalUnitDAY       = "DAY"
+	intervalUnitHOUR      = "HOUR"
+	intervalUnitMINUTE    = "MINUTE"
+	intervalUnitSECOND    = "SECOND"
+	intervalUnitMICSECOND = "MICROSECOND"
 )
 
 // ToDays: InMySQL: Given a date date, returns a day number (the number of days since year 0). Returns NULL if date is NULL.
@@ -80,19 +80,19 @@ func CalcToDays(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalDAY, types.ZeroDatetime, datetime) + ADZeroDays
+		res[idx] = DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetime) + ADZeroDays
 	}
 	return res, nil
 }
 
 // DateTimeDiff returns t2 - t1 where t1 and t2 are datetime expressions.
-// The unit for the result (an integer) is given by the unit argument.
-// The legal values for unit are "YEAR" "QUARTER" "MONTH" "DAY" "HOUR" "SECOND" and so on.
-func DateTimeDiff(intervalType string, t1, t2 types.Datetime) int64 {
+// The unit for the result is given by the unit argument.
+// The values for interval unit are "QUARTER","YEAR","MONTH", "DAY", "HOUR", "SECOND", "MICROSECOND"
+func DateTimeDiff(intervalUnit string, t1 types.Datetime, t2 types.Datetime) int64 {
 	seconds, microseconds, negative := calcDateTimeInterval(t2, t1, 1)
 	months := uint(0)
-	if intervalType == intervalYEAR || intervalType == intervalQUARTER ||
-		intervalType == intervalMONTH {
+	if intervalUnit == intervalUnitYEAR || intervalUnit == intervalUnitQUARTER ||
+		intervalUnit == intervalUnitMONTH {
 		var (
 			yearBegin, yearEnd, monthBegin, monthEnd, dayBegin, dayEnd uint
 			secondBegin, secondEnd, microsecondBegin, microsecondEnd   uint
@@ -152,32 +152,31 @@ func DateTimeDiff(intervalType string, t1, t2 types.Datetime) int64 {
 	if negative {
 		negV = -1
 	}
-	switch intervalType {
-	case intervalYEAR:
+	switch intervalUnit {
+	case intervalUnitYEAR:
 		return int64(months) / 12 * negV
-	case intervalQUARTER:
+	case intervalUnitQUARTER:
 		return int64(months) / 3 * negV
-	case intervalMONTH:
+	case intervalUnitMONTH:
 		return int64(months) * negV
-	case intervalWEEK:
+	case intervalUnitWEEK:
 		return int64(seconds) / SecondsIn24Hours / 7 * negV
-	case intervalDAY:
+	case intervalUnitDAY:
 		return int64(seconds) / SecondsIn24Hours * negV
-	case intervalHOUR:
+	case intervalUnitHOUR:
 		return int64(seconds) / 3600 * negV
-	case intervalMINUTE:
+	case intervalUnitMINUTE:
 		return int64(seconds) / 60 * negV
-	case intervalSECOND:
+	case intervalUnitSECOND:
 		return int64(seconds) * negV
-	case intervalMICROSECOND:
+	case intervalUnitMICSECOND:
 		return int64(seconds*1000000+microseconds) * negV
 	}
 	return 0
 }
 
 // calcDateTimeInterval: calculates time interval between two datetime values
-// sign can be +1 or -1,
-func calcDateTimeInterval(t1, t2 types.Datetime, sign int) (seconds, microseconds int, neg bool) {
+func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (seconds, microseconds int, neg bool) {
 	// Obtain the year, month, day, hour, minute, and second of the t2 datetime
 	year := int(t2.Year())
 	month := int(t2.Month())
@@ -209,7 +208,7 @@ func calcDateTimeInterval(t1, t2 types.Datetime, sign int) (seconds, microsecond
 }
 
 // calcDaynr calculates days since 0000-00-00.
-func calcDaysSinceZero(year, month, day int) int {
+func calcDaysSinceZero(year int, month int, day int) int {
 	if year == 0 && month == 0 {
 		return 0
 	}

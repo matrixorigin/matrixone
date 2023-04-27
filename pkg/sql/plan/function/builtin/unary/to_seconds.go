@@ -65,7 +65,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
+		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
 	}
 	return res, nil
 }
