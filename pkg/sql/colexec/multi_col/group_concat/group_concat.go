@@ -48,11 +48,19 @@ type GroupConcat struct {
 }
 
 type EncodeGroupConcat struct {
-	res_strData     []byte
-	inserts_strData []byte
-	arg             *Argument
-	ityp            []types.Type
-	groups          int
+	ResStrData     []byte
+	InsertsStrData []byte
+	Arg            *Argument
+	Ityp           []types.Type
+	Groups         int
+}
+
+func (m *EncodeGroupConcat) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *EncodeGroupConcat) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }
 
 func NewGroupConcat(arg *Argument, typs []types.Type) agg.Agg[any] {
@@ -65,11 +73,11 @@ func NewGroupConcat(arg *Argument, typs []types.Type) agg.Agg[any] {
 // We need to implements the interface of Agg
 func (gc *GroupConcat) MarshalBinary() (data []byte, err error) {
 	eg := &EncodeGroupConcat{
-		res_strData:     types.EncodeStringSlice(gc.res),
-		inserts_strData: types.EncodeStringSlice(gc.inserts),
-		arg:             gc.arg,
-		groups:          gc.groups,
-		ityp:            gc.ityp,
+		ResStrData:     types.EncodeStringSlice(gc.res),
+		InsertsStrData: types.EncodeStringSlice(gc.inserts),
+		Arg:            gc.arg,
+		Groups:         gc.groups,
+		Ityp:           gc.ityp,
 	}
 	return types.Encode(eg)
 }
@@ -79,21 +87,21 @@ func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
 	eg := &EncodeGroupConcat{}
 	types.Decode(data, eg)
 	m := mpool.MustNewZeroNoFixed()
-	da1, err := m.Alloc(len(eg.inserts_strData))
+	da1, err := m.Alloc(len(eg.InsertsStrData))
 	if err != nil {
 		return err
 	}
-	copy(da1, eg.inserts_strData)
+	copy(da1, eg.InsertsStrData)
 	gc.inserts = types.DecodeStringSlice(da1)
-	da2, err := m.Alloc(len(eg.res_strData))
+	da2, err := m.Alloc(len(eg.ResStrData))
 	if err != nil {
 		return err
 	}
-	copy(da2, eg.res_strData)
+	copy(da2, eg.ResStrData)
 	gc.res = types.DecodeStringSlice(da2)
-	gc.arg = eg.arg
-	gc.groups = eg.groups
-	gc.ityp = eg.ityp
+	gc.arg = eg.Arg
+	gc.groups = eg.Groups
+	gc.ityp = eg.Ityp
 	gc.maps = make([]*hashmap.StrHashMap, gc.groups)
 	for i := 0; i < gc.groups; i++ {
 		gc.maps[i], err = hashmap.NewStrMap(false, 0, 0, m)

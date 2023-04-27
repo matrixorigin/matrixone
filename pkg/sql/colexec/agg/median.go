@@ -15,6 +15,7 @@
 package agg
 
 import (
+	"encoding/json"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,6 +23,79 @@ import (
 
 type decimal64Slice []types.Decimal64
 type decimal128Slice []types.Decimal128
+
+func (s *decimal64Slice) ToPBVersion() *Decimal64SlicePB {
+	return &Decimal64SlicePB{
+		Slice: *s,
+	}
+}
+
+func (s *decimal64Slice) ProtoSize() int {
+	return s.ToPBVersion().ProtoSize()
+}
+
+func (s *decimal64Slice) MarshalToSizedBuffer(data []byte) (int, error) {
+	return s.ToPBVersion().MarshalToSizedBuffer(data)
+}
+
+func (s *decimal64Slice) MarshalTo(data []byte) (int, error) {
+	size := s.ProtoSize()
+	return s.MarshalToSizedBuffer(data[:size])
+}
+
+func (s *decimal64Slice) Marshal() ([]byte, error) {
+	data := make([]byte, s.ProtoSize())
+	n, err := s.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (s *decimal64Slice) Unmarshal(data []byte) error {
+	var m Decimal64SlicePB
+	if err := m.Unmarshal(data); err != nil {
+		return err
+	}
+	*s = m.Slice
+	return nil
+}
+
+func (s *decimal128Slice) ToPBVersion() *Decimal128SlicePB {
+	return &Decimal128SlicePB{
+		Slice: *s,
+	}
+}
+func (s *decimal128Slice) ProtoSize() int {
+	return s.ToPBVersion().ProtoSize()
+}
+
+func (s *decimal128Slice) MarshalToSizedBuffer(data []byte) (int, error) {
+	return s.ToPBVersion().MarshalToSizedBuffer(data)
+}
+
+func (s *decimal128Slice) MarshalTo(data []byte) (int, error) {
+	size := s.ProtoSize()
+	return s.MarshalToSizedBuffer(data[:size])
+}
+
+func (s *decimal128Slice) Marshal() ([]byte, error) {
+	data := make([]byte, s.ProtoSize())
+	n, err := s.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (s *decimal128Slice) Unmarshal(data []byte) error {
+	var m Decimal128SlicePB
+	if err := m.Unmarshal(data); err != nil {
+		return err
+	}
+	*s = m.Slice
+	return nil
+}
 
 func (s decimal64Slice) Len() int {
 	return len(s)
@@ -68,6 +142,7 @@ type Median[T Numeric] struct {
 type Decimal64Median struct {
 	Vals []decimal64Slice
 }
+
 type Decimal128Median struct {
 	Vals []decimal128Slice
 }
@@ -154,14 +229,11 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 }
 
 func (m *Median[T]) MarshalBinary() ([]byte, error) {
-	return types.Encode(&m.Vals)
+	return json.Marshal(m)
 }
 
 func (m *Median[T]) UnmarshalBinary(data []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	copyData := make([]byte, len(data))
-	copy(copyData, data)
-	return types.Decode(copyData, &m.Vals)
+	return json.Unmarshal(data, m)
 }
 
 func NewD64Median() *Decimal64Median {
@@ -239,13 +311,10 @@ func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, 
 }
 
 func (m *Decimal64Median) MarshalBinary() ([]byte, error) {
-	return types.Encode(&m.Vals)
+	return m.Marshal()
 }
 func (m *Decimal64Median) UnmarshalBinary(dt []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	cdt := make([]byte, len(dt))
-	copy(cdt, dt)
-	return types.Decode(cdt, &m.Vals)
+	return m.Unmarshal(dt)
 }
 
 func NewD128Median() *Decimal128Median {
@@ -320,14 +389,11 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 }
 
 func (m *Decimal128Median) MarshalBinary() ([]byte, error) {
-	return types.Encode(&m.Vals)
+	return m.Marshal()
 }
 
 func (m *Decimal128Median) UnmarshalBinary(dt []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	cdt := make([]byte, len(dt))
-	copy(cdt, dt)
-	return types.Decode(cdt, &m.Vals)
+	return m.Unmarshal(dt)
 }
 
 func merge[T Numeric | types.Decimal64 | types.Decimal128](s1, s2, rs []T, lt func(a, b T) bool) []T {

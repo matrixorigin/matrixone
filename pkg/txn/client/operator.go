@@ -163,6 +163,7 @@ type txnOperator struct {
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 	}
+	workspace Workspace
 }
 
 func newTxnOperator(
@@ -199,6 +200,14 @@ func newTxnOperatorWithSnapshot(
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
+}
+
+func (tc *txnOperator) AddWorkspace(workspace Workspace) {
+	tc.workspace = workspace
+}
+
+func (tc *txnOperator) GetWorkspace() Workspace {
+	return tc.workspace
 }
 
 func (tc *txnOperator) adjust() {

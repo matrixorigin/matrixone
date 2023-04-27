@@ -161,12 +161,14 @@ func (txn *activeTxn) close(
 	return nil
 }
 
-func (txn *activeTxn) abort(serviceID string, txnID []byte) {
+func (txn *activeTxn) abort(serviceID string, waitTxn pb.WaitTxn) {
 	txn.RLock()
 	defer txn.RUnlock()
 
+	logAbortDeadLock(serviceID, waitTxn, txn)
+
 	// txn already closed
-	if !bytes.Equal(txn.txnID, txnID) {
+	if !bytes.Equal(txn.txnID, waitTxn.TxnID) {
 		return
 	}
 
@@ -262,4 +264,10 @@ func (txn *activeTxn) toWaitTxn(serviceID string, locked bool) pb.WaitTxn {
 		v = serviceID
 	}
 	return pb.WaitTxn{TxnID: txn.txnID, CreatedOn: v}
+}
+
+func (txn *activeTxn) getID() []byte {
+	txn.RLock()
+	defer txn.RUnlock()
+	return txn.txnID
 }

@@ -386,7 +386,7 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Private:    pData,
 		Es:         a.es,
 		IsCount:    a.isCount,
-		InputType:  a.ityps,
+		InputTypes: a.ityps,
 		OutputType: a.otyp,
 		Srcs:       a.srcs,
 	}
@@ -420,7 +420,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 	// Recover data
 	a.op = decode.Op
-	a.ityps = decode.InputType
+	a.ityps = decode.InputTypes
 	a.otyp = decode.OutputType
 	a.es = decode.Es
 	data = make([]byte, len(decode.Da))

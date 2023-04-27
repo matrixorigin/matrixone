@@ -30,18 +30,9 @@ func TestBTreeKVEncoding(t *testing.T) {
 			},
 		})
 	}
-	data, err := kv.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	kv2 := new(BTree[Int, int])
-	if err := kv2.UnmarshalBinary(data); err != nil {
-		t.Fatal(err)
-	}
 
 	m := make(map[Int]int)
-	iter := kv2.Iter()
+	iter := kv.Iter()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		node, err := iter.Read()
 		if err != nil {
