@@ -123,6 +123,10 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 		}
 	}
 
+	if blockNumTotal == 0 {
+		return plan2.DefaultStats(), nil
+	}
+
 	stats := new(plan.Stats)
 	stats.BlockNum = int32(blockNumNeed)
 	stats.TableCnt = float64(tableCnt)
