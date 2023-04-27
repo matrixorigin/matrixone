@@ -32,11 +32,12 @@ const (
 )
 
 const (
-	FileNumOff    = SegmentIdSize
-	FileNumLen    = 2
-	NameStringOff = FileNumOff + FileNumLen
-	NameStringLen = 42 //uuid[36]+_[1]+filename[5]
-	ObjectNameLen = NameStringOff + NameStringLen
+	FileNumOff         = SegmentIdSize
+	FileNumLen         = 2
+	NameStringOff      = FileNumOff + FileNumLen
+	NameStringLen      = 42 //uuid[36]+_[1]+filename[5]
+	ObjectNameLen      = NameStringOff + NameStringLen
+	ObjectNameShortLen = NameStringOff
 )
 
 /*
@@ -71,7 +72,7 @@ func (l Location) ID() uint16 {
 }
 
 func (l Location) IsEmpty() bool {
-	return len(l) == 0
+	return len(l) < LocationLen || types.DecodeInt64(l[:ObjectNameLen]) == 0
 }
 
 func (l Location) String() string {

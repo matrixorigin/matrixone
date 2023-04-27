@@ -287,6 +287,14 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNull,
 			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
 		},
 	},
 
@@ -459,6 +467,14 @@ var operators = map[int]Functions{
 				Index: 20,
 				Args: []types.T{
 					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_Rowid,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNotNull,

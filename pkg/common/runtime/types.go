@@ -26,6 +26,8 @@ const (
 	ClusterService = "cluster-service"
 	// ClusterService cluster service
 	LockService = "lock-service"
+	// CtlService ctl service
+	CtlService = "ctl-service"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
 	// TxnMode runtime default txn mode

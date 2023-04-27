@@ -50,12 +50,16 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
-	defer func() { r.blks = r.blks[1:] }()
+	defer func() {
+		r.blks = r.blks[1:]
+		r.currentStep++
+	}()
 
-	info := &r.blks[0].Info
+	info := r.blks[0]
 
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {
+			r.prefetchColIdxs = make([]uint16, 0)
 			r.colIdxs = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
@@ -71,6 +75,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
 					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+					r.prefetchColIdxs = append(r.prefetchColIdxs, r.colIdxs[i])
 					if r.colIdxs[i] == uint16(r.primaryIdx) {
 						r.pkidxInColIdxs = i
 						r.pkName = column
@@ -87,13 +92,20 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		}
 	}
 
+	//prefetch some objects
+	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		blockio.BlockPrefetch(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		r.infos = r.infos[1:]
+		r.steps = r.steps[1:]
+	}
+
 	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 
 	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 

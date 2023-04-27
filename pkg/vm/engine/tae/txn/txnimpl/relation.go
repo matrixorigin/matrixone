@@ -15,10 +15,12 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -81,8 +83,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetSchema().Name) &&
-			entry.GetSchema().AcInfo.TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchema().Name) &&
+			entry.GetLastestSchema().AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
@@ -141,15 +143,17 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 
 func (h *txnRelation) Close() error { return nil }
 func (h *txnRelation) GetMeta() any { return h.table.entry }
-func (h *txnRelation) Schema() any  { return h.table.entry.GetSchema() }
+
+// Schema return schema in txnTable, not the lastest schema in TableEntry
+func (h *txnRelation) Schema() any { return h.table.GetLocalSchema() }
 
 func (h *txnRelation) Rows() int64 {
 	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.entry.GetSchema().Name == pkgcatalog.MO_DATABASE {
+		if h.table.GetLocalSchema().Name == pkgcatalog.MO_DATABASE {
 			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_TABLES {
+		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_TABLES {
 			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_COLUMNS {
+		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_COLUMNS {
 			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
 		}
 		panic("logic error")
@@ -227,7 +231,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 	if err != nil {
 		return
 	}
-	schema := h.table.entry.GetSchema()
+	schema := h.table.GetLocalSchema()
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -317,6 +321,6 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
 }
 
-func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
-	return h.table.UpdateConstraint(cstr)
+func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
+	return h.table.AlterTable(ctx, req)
 }

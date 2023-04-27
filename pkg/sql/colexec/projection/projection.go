@@ -76,8 +76,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			rbat.Vecs[i] = vec
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -66,7 +68,6 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
 		partitions: make(map[[2]uint64]Partitions),
 		packerPool: fileservice.NewPool(
@@ -249,7 +250,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
@@ -333,14 +334,17 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(&id)
-
 	txn := &Transaction{
-		op:       op,
-		proc:     proc,
-		engine:   e,
-		readOnly: true,
-		meta:     op.Txn(),
-		idGen:    e.idGen,
+		op:          op,
+		proc:        proc,
+		engine:      e,
+		readOnly:    true,
+		meta:        op.Txn(),
+		idGen:       e.idGen,
+		dnStores:    e.getDNServices(),
+		tableMap:    new(sync.Map),
+		databaseMap: new(sync.Map),
+		createMap:   new(sync.Map),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -349,13 +353,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId:       id,
-		dnStores:    e.getDNServices(),
-		fileMap:     make(map[string]uint64),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		segId: id,
+		deletedBlocks: &deletedBlocks{
+			offsets: map[string][]int64{},
+		},
+		cnBlkId_Pos:                     map[string]Pos{},
+		blockId_raw_batch:               make(map[string]*batch.Batch),
+		blockId_dn_delete_metaLoc_batch: make(map[string][]*batch.Batch),
 	}
+	// TxnWorkSpace SegmentName
+	colexec.Srv.PutCnSegment(string(id[:]), colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
@@ -412,6 +419,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
+	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}
@@ -456,12 +464,12 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]BlockMeta, len(ranges))
+	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = blockUnmarshal(ranges[i])
-		blks[i].Info.EntryState = false
+		blks[i] = BlockInfoUnmarshal(ranges[i])
+		blks[i].EntryState = false
 	}
-	if len(ranges) < num {
+	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:         e.fs,
@@ -470,7 +478,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []BlockMeta{blks[i]},
+				blks:       []*catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -478,58 +486,48 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		}
 		return rds, nil
 	}
-	step := len(ranges) / num
-	if step < 1 {
-		step = 1
-	}
+
+	infos, steps := groupBlocksToObjects(blks, num)
+	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
+	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         e.fs,
-				tableDef:   tblDef,
-				primaryIdx: -1,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         e.fs,
-				tableDef:   tblDef,
-				primaryIdx: -1,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
+		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }
 
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
-	e.Lock()
-	defer e.Unlock()
-	e.txns[string(op.Txn().ID)] = txn
+	op.AddWorkspace(txn)
 }
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	e.RLock()
-	defer e.RUnlock()
-	return e.txns[string(op.Txn().ID)]
+	return op.GetWorkspace().(*Transaction)
 }
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
 		txn.writes[i].bat.Clean(e.mp)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
-	e.Lock()
-	defer e.Unlock()
-	delete(e.txns, string(txn.meta.ID))
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.deletedBlocks = nil
+	segmentnames := make([]string, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, string(txn.segId[:]))
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, blkId[:16])
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	txn.cnBlkId_Pos = nil
 }
 
 func (e *Engine) getDNServices() []DNStore {

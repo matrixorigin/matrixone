@@ -77,7 +77,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -195,7 +194,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {

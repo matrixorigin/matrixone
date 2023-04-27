@@ -61,13 +61,17 @@ func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	return &id
 }
 
-func ToObjectName(blkID *Blockid) ObjectName {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
+func ToObjectNameShort(blkID *Blockid) *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&blkID[0]))
 }
 
 func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
 	return bytes.Equal(buf, *objID)
+}
+
+func ToSegmentId(blkID *Blockid) *Segmentid {
+	return (*Segmentid)(unsafe.Pointer(blkID))
 }
 
 func IsEmptySegid(id *Segmentid) bool {

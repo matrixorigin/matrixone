@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	// "time"
 
@@ -361,6 +362,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.db = db
 		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
+		tbl.TableNode.schema = un.BaseNode.Schema
 		tbl.Insert(un)
 		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
 		if err != nil {
@@ -371,6 +373,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	}
 	tblun := tbl.SearchNode(un)
 	if tblun == nil {
+		tbl.TableNode.schema = un.BaseNode.Schema
 		tbl.Insert(un) //TODO isvalid
 	}
 
@@ -385,6 +388,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema := NewEmptySchema(name)
 		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
 		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
+		schema.Version = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Get(i).(uint32)
 		schema.Partitioned = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
 		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
 		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
@@ -422,14 +426,15 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
-		// update constraint
+		// alter table
+		tbl.TableNode.schema = schema
 		un := &MVCCNode[*TableMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
 			TxnMVCCNode: txnNode,
 			BaseNode: &TableMVCCNode{
-				SchemaConstraints: string(schema.Constraint),
+				Schema: schema,
 			},
 		}
 		tbl.Insert(un)
@@ -437,8 +442,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		return
 	}
 	tbl = NewReplayTableEntry()
-	tbl.TableNode = &TableNode{}
-	tbl.schema = schema
+	tbl.TableNode = &TableNode{schema: schema}
 	tbl.db = db
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
@@ -449,7 +453,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		},
 		TxnMVCCNode: txnNode,
 		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
+			Schema: schema,
 		},
 	}
 	tbl.Insert(un)

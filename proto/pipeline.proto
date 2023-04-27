@@ -75,32 +75,60 @@ message Group {
 }
 
 message Insert{
-  uint64 affected   = 1;
-  bool IsRemote     = 2;
+  uint64 affected              = 1;
+  bool IsRemote                = 2;
+  bool add_affected_rows       = 3;
+  plan.ObjectRef ref           = 4;
+  repeated string attrs        = 5;
+  // Align array index with the partition number
+  repeated uint64 partition_table_ids = 6;
+  int32 partition_idx = 7;
+  bool is_end         = 8;
+}
 
-  // InsertCtx
-  repeated int32 on_duplicate_idx           = 3;
-  map<string, plan.Expr> on_duplicate_expr  = 4;
-  plan.ObjectRef ref              = 5;
-  plan.TableDef table_def         = 6;
-  map<string, int32> parent_idx   = 7;
-  plan.ClusterTable ClusterTable  = 8;
-	repeated int32 idx_idx 				  = 9;
+message Array{
+  repeated int32 array = 1;
+}
 
+message Map{
+  map<string, int32> mp = 1;
+}
+
+message Deletion{
+  uint64 Ts = 1;
+  uint64 AffectedRows = 2;
+  bool RemoteDelete = 3;
+  uint32 IBucket =4;
+  uint32 NBucket = 5;
+  // DeleteCtx
+
+  int32 row_id_idx                    = 6;
+  repeated uint64 partition_table_ids = 7;
+  int32 partition_index_in_batch      = 8;
+  plan.ObjectRef ref                  = 9;
+  bool add_affected_rows              = 10;
+  map<string,int32> SegmentMap        = 11;
+  bool can_truncate                   = 12;
+  bool is_end                         = 13;
 }
 
 message PreInsert {
-  string             schema_name = 1;
-  plan.TableDef      table_def = 2;
-  map<string, int32> parent_idx_pre_insert   = 3;
+  string schema_name      = 1;
+  plan.TableDef table_def = 2;
+  repeated int32 idx      = 3;
+  repeated string attrs   = 4;
+  bool has_auto_col       = 5;
+  bool is_update          = 6;
+}
+
+message PreInsertUnique {
+  plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
 }
 
 message OnDuplicateKey{
-  uint64 affected   = 1;
+  plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
 }
 
 message Join {
@@ -276,20 +304,22 @@ message Instruction{
   Insert insert = 17;
   OnDuplicateKey on_duplicate_key = 18;
   PreInsert pre_insert               = 19;
-  repeated plan.OrderBySpec order_by = 20;
-  repeated plan.Expr    project_list = 21;
-  plan.Expr    filter = 22;
-  uint64    limit = 23;
-  uint64    offset = 24;
+  PreInsertUnique pre_insert_unique  = 20;
+  repeated plan.OrderBySpec order_by = 21;
+  repeated plan.Expr    project_list = 22;
+  plan.Expr    filter = 23;
+  uint64    limit = 24;
+  uint64    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 25;
+  bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 26;
+  bool isLast = 27;
   
-  RightJoin right_join = 27;
-  RightSemiJoin right_semi_join = 28;
-  RightAntiJoin right_anti_join = 29;
+  RightJoin right_join = 28;
+  RightSemiJoin right_semi_join = 29;
+  RightAntiJoin right_anti_join = 30;
 
+  Deletion delete = 31;
 }
 
 message AnalysisList {

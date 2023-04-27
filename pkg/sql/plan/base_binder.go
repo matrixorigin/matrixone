@@ -722,14 +722,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	if b.builder != nil {
-		return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		if err == nil {
+			return e, nil
+		}
+		if !strings.Contains(err.Error(), "not supported") {
+			return nil, err
+		}
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
 			return builtinExpr, nil
-		} else if !strings.Contains(err.Error(), "not supported") {
+		}
+		if !strings.Contains(err.Error(), "not supported") {
 			return nil, err
 		}
 	}
@@ -789,7 +796,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	switch name {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in":
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}

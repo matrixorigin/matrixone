@@ -16,8 +16,10 @@ package vm
 
 import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
+type OpType int
+
 const (
-	Top = iota
+	Top OpType = iota
 	Limit
 	Order
 	Group
@@ -66,10 +68,12 @@ const (
 	// MergeBlock is used to recieve S3 block metLoc Info, and write
 	// them to S3
 	MergeBlock
+	// MergeDelete is used to recieve S3 Blcok Delete Info from remote Cn
+	MergeDelete
 	Right
 	OnDuplicateKey
 	PreInsert
-
+	PreInsertUnique
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
@@ -84,7 +88,7 @@ const (
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.
-	Op int
+	Op OpType
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
@@ -117,4 +121,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 		return true
 	}
 	return false
+}
+
+type ModificationArgument interface {
+	AffectedRows() uint64
 }

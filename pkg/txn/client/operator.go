@@ -84,6 +84,12 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+func WithTxnClose(client *txnClient) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.closeFunc = client.popTransaction
+	}
+}
+
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
@@ -146,6 +152,7 @@ type txnOperator struct {
 		disable1PCOpt          bool
 		coordinator            bool
 		lockService            lockservice.LockService
+		closeFunc              func(txn.TxnMeta)
 		updateLastCommitTSFunc func(timestamp.Timestamp)
 	}
 
@@ -156,6 +163,7 @@ type txnOperator struct {
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 	}
+	workspace Workspace
 }
 
 func newTxnOperator(
@@ -192,6 +200,14 @@ func newTxnOperatorWithSnapshot(
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
+}
+
+func (tc *txnOperator) AddWorkspace(workspace Workspace) {
+	tc.workspace = workspace
+}
+
+func (tc *txnOperator) GetWorkspace() Workspace {
+	return tc.workspace
 }
 
 func (tc *txnOperator) adjust() {
@@ -320,6 +336,9 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
+		if tc.option.closeFunc != nil {
+			tc.option.closeFunc(tc.mu.txn)
+		}
 		return nil
 	}
 
@@ -339,6 +358,9 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer func() {
 		tc.mu.closed = true
+		if tc.option.closeFunc != nil {
+			tc.option.closeFunc(tc.mu.txn)
+		}
 		tc.mu.Unlock()
 	}()
 
@@ -419,6 +441,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.mu.Lock()
 		defer func() {
 			tc.mu.closed = true
+			if tc.option.closeFunc != nil {
+				tc.option.closeFunc(tc.mu.txn)
+			}
 			if tc.option.updateLastCommitTSFunc != nil {
 				tc.option.updateLastCommitTSFunc(tc.mu.txn.CommitTS)
 			}

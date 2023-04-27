@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"regexp"
 	"time"
 
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -235,6 +235,11 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // constraint
 		if err := vector.AppendBytes(bat.Vecs[idx], tbl.constraint, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // schema_version
+		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -672,7 +677,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		payload, err := types.Encode(api.PrecommitWriteCmd{EntryList: mp[k]})
+		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err
 		}
@@ -985,41 +990,41 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 }
 */
 
-func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
-	txn := tbl.db.txn
-	parts := tbl.getParts()
-	bats := make([]*batch.Batch, len(parts))
-	for i := range bats {
-		bats[i] = batch.New(true, bat.Attrs)
-		for j := range bats[i].Vecs {
-			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		}
-	}
-	vec := bat.GetVector(0)
-	vs := vector.MustFixedCol[types.Rowid](vec)
-	for i, v := range vs {
-		for j, part := range parts {
-			var blks []BlockMeta
+// func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
+// 	txn := tbl.db.txn
+// 	parts := tbl.getParts()
+// 	bats := make([]*batch.Batch, len(parts))
+// 	for i := range bats {
+// 		bats[i] = batch.New(true, bat.Attrs)
+// 		for j := range bats[i].Vecs {
+// 			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+// 		}
+// 	}
+// 	vec := bat.GetVector(0)
+// 	vs := vector.MustFixedCol[types.Rowid](vec)
+// 	for i, v := range vs {
+// 		for j, part := range parts {
+// 			var blks []BlockMeta
 
-			if tbl.meta != nil {
-				blks = tbl.meta.blocks[j]
-			}
-			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
-				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
-					for _, bat := range bats {
-						bat.Clean(txn.proc.Mp())
-					}
-					return nil, err
-				}
-				break
-			}
-		}
-	}
-	for i := range bats {
-		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
-	}
-	return bats, nil
-}
+// 			if tbl.meta != nil {
+// 				blks = tbl.meta.blocks[j]
+// 			}
+// 			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
+// 				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
+// 					for _, bat := range bats {
+// 						bat.Clean(txn.proc.Mp())
+// 					}
+// 					return nil, err
+// 				}
+// 				break
+// 			}
+// 		}
+// 	}
+// 	for i := range bats {
+// 		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
+// 	}
+// 	return bats, nil
+// }
 
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
@@ -1163,22 +1168,22 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inPartition(v types.Rowid, part *PartitionState,
-	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.RowExists(v, types.TimestampToTS(ts)) {
-		return true
-	}
-	if len(blocks) == 0 {
-		return false
-	}
-	blkId := v.GetBlockid()
-	for _, blk := range blocks {
-		if blk.Info.BlockID == blkId {
-			return true
-		}
-	}
-	return false
-}
+// func inPartition(v types.Rowid, part *PartitionState,
+// 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+// 	if part.RowExists(v, types.TimestampToTS(ts)) {
+// 		return true
+// 	}
+// 	if len(blocks) == 0 {
+// 		return false
+// 	}
+// 	blkId := v.GetBlockid()
+// 	for _, blk := range blocks {
+// 		if blk.Info.BlockID == blkId {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
@@ -1336,4 +1341,62 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	default:
 		return false, nil
 	}
+}
+
+func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+	var infos [][]*catalog.BlockInfo
+	objMap := make(map[string]int, 0)
+	lenObjs := 0
+	for i := range blocks {
+		block := blocks[i]
+		objName := block.MetaLocation().Name().String()
+		if idx, ok := objMap[objName]; ok {
+			infos[idx] = append(infos[idx], block)
+		} else {
+			objMap[objName] = lenObjs
+			lenObjs++
+			infos = append(infos, []*catalog.BlockInfo{block})
+		}
+	}
+	steps := make([]int, len(infos))
+	currentBlocks := 0
+	for i := range infos {
+		steps[i] = (currentBlocks-PREFETCH_THRESHOLD)/dop - PREFETCH_ROUNDS
+		if steps[i] < 0 {
+			steps[i] = 0
+		}
+		currentBlocks += len(infos[i])
+	}
+	return infos, steps
+}
+
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+	rds := make([]*blockReader, num)
+	for i := 0; i < num; i++ {
+		rds[i] = &blockReader{
+			fs:         fs,
+			tableDef:   tblDef,
+			primaryIdx: primaryIdx,
+			expr:       expr,
+			ts:         ts,
+			ctx:        ctx,
+		}
+	}
+	return rds
+}
+
+func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+	readerIndex := 0
+	for i := range infos {
+		//distribute objects and steps for prefetch
+		rds[readerIndex].steps = append(rds[readerIndex].steps, steps[i])
+		rds[readerIndex].infos = append(rds[readerIndex].infos, infos[i])
+		for j := range infos[i] {
+			//distribute block
+			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
+			readerIndex++
+			readerIndex = readerIndex % num
+		}
+	}
+	return rds
 }

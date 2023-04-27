@@ -42,7 +42,6 @@ require (
 	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
-	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.opentelemetry.io/proto/otlp v0.19.0
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.21.0
@@ -127,7 +126,7 @@ require (
 	go.uber.org/multierr v1.8.0
 	golang.org/x/crypto v0.0.0-20220214200702-86341886e292 // indirect
 	golang.org/x/exp v0.0.0-20220414153411-bcd21879b8fd
-	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f // indirect
+	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

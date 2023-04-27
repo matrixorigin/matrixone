@@ -87,7 +87,7 @@ type ClientConn interface {
 	// If handshake is false, ignore the handshake phase.
 	BuildConnWithServer(handshake bool) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
-	HandleEvent(ctx context.Context, e IEventReq, resp chan<- []byte) error
+	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
 	// Close closes the client connection.
 	Close() error
 }
@@ -120,6 +120,9 @@ type clientConn struct {
 	tun *tunnel
 	// originIP is the original IP of client, which is used in whitelist.
 	originIP net.IP
+	// setVarStmts keeps all set user variable statements. When connection
+	// is transferred, set all these variables first.
+	setVarStmts []string
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -138,9 +141,10 @@ func newClientConn(
 	router Router,
 	tun *tunnel,
 ) (ClientConn, error) {
+	var originIP net.IP
 	host, _, err := net.SplitHostPort(conn.RemoteAddress())
-	if err != nil {
-		return nil, err
+	if err == nil {
+		originIP = net.ParseIP(host)
 	}
 	c := &clientConn{
 		ctx:        ctx,
@@ -151,7 +155,7 @@ func newClientConn(
 		moCluster:  mc,
 		router:     router,
 		tun:        tun,
-		originIP:   net.ParseIP(host),
+		originIP:   originIP,
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
@@ -224,10 +228,12 @@ func (c *clientConn) BuildConnWithServer(handshake bool) (ServerConn, error) {
 }
 
 // HandleEvent implements the ClientConn interface.
-func (c *clientConn) HandleEvent(ctx context.Context, e IEventReq, resp chan<- []byte) error {
+func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
 	case *killQueryEvent:
 		return c.handleKillQuery(ev, resp)
+	case *setVarEvent:
+		return c.handleSetVar(ev)
 	default:
 	}
 	return nil
@@ -279,6 +285,12 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	return nil
 }
 
+// handleSetVar handles the set variable event.
+func (c *clientConn) handleSetVar(e *setVarEvent) error {
+	c.setVarStmts = append(c.setVarStmts, e.stmt)
+	return nil
+}
+
 // Close implements the ClientConn interface.
 func (c *clientConn) Close() error {
 	return nil
@@ -317,6 +329,17 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	if !isOKPacket(r) {
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
+	}
+
+	// Set the label session variable.
+	if err := sc.ExecStmt(c.labelInfo.genSetVarStmt(), nil); err != nil {
+		return nil, err
+	}
+	// Set the use defined variables, including session variables and user variables.
+	for _, stmt := range c.setVarStmts {
+		if err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
 	}
 	return sc, nil
 }

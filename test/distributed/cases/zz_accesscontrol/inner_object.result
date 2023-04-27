@@ -44,6 +44,7 @@ partitioned    TINYINT(0)    YES        null
 partition_info    BLOB(0)    YES        null        
 viewdef    BLOB(0)    YES        null        
 constraint    VARCHAR(5000)    YES        null        
+rel_version    INT UNSIGNED(0)    YES        null
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system
