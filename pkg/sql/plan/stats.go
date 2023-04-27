@@ -665,8 +665,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
-		//calc for external scan is heavy. use leafNode to judge if external scan need to recalculate
-		if leafNode {
+		//calc for external scan is heavy, avoid recalc of this
+		if node.Stats.TableCnt == 0 {
 			node.Stats = getExternalStats(node, builder)
 		}
 
