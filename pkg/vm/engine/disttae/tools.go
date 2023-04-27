@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"regexp"
 	"time"
 
@@ -1340,4 +1341,62 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	default:
 		return false, nil
 	}
+}
+
+func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+	var infos [][]*catalog.BlockInfo
+	objMap := make(map[string]int, 0)
+	lenObjs := 0
+	for i := range blocks {
+		block := blocks[i]
+		objName := block.MetaLocation().Name().String()
+		if idx, ok := objMap[objName]; ok {
+			infos[idx] = append(infos[idx], block)
+		} else {
+			objMap[objName] = lenObjs
+			lenObjs++
+			infos = append(infos, []*catalog.BlockInfo{block})
+		}
+	}
+	steps := make([]int, len(infos))
+	currentBlocks := 0
+	for i := range infos {
+		steps[i] = (currentBlocks-PREFETCH_THRESHOLD)/dop - PREFETCH_ROUNDS
+		if steps[i] < 0 {
+			steps[i] = 0
+		}
+		currentBlocks += len(infos[i])
+	}
+	return infos, steps
+}
+
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+	rds := make([]*blockReader, num)
+	for i := 0; i < num; i++ {
+		rds[i] = &blockReader{
+			fs:         fs,
+			tableDef:   tblDef,
+			primaryIdx: primaryIdx,
+			expr:       expr,
+			ts:         ts,
+			ctx:        ctx,
+		}
+	}
+	return rds
+}
+
+func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+	readerIndex := 0
+	for i := range infos {
+		//distribute objects and steps for prefetch
+		rds[readerIndex].steps = append(rds[readerIndex].steps, steps[i])
+		rds[readerIndex].infos = append(rds[readerIndex].infos, infos[i])
+		for j := range infos[i] {
+			//distribute block
+			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
+			readerIndex++
+			readerIndex = readerIndex % num
+		}
+	}
+	return rds
 }

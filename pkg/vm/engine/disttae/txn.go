@@ -44,7 +44,10 @@ func (txn *Transaction) getBlockMetas(
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	name := genMetaTableName(tbl.tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	states := txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	states, err := tbl.getParts(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i := range txn.dnStores {
 		if i >= len(states) {
 			continue
@@ -473,8 +476,8 @@ func blockInfoMarshal(meta BlockMeta) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&meta.Info)), sz)
 }
 
-func BlockInfoUnmarshal(data []byte) catalog.BlockInfo {
-	return *(*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
+func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
+	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn

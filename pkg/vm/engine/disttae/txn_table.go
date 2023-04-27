@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -220,9 +219,7 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 
 func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
-	tbl.setPartsOnce = sync.Once{}
 	tbl._parts = nil
-	tbl._partsErr = nil
 	tbl.blockMetas = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockMetasUpdated = false
@@ -810,14 +807,14 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]catalog.BlockInfo, len(ranges))
+	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
 		blks[i] = BlockInfoUnmarshal(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
 
-	if len(ranges) < num {
+	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:         tbl.db.txn.engine.fs,
@@ -826,7 +823,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []catalog.BlockInfo{blks[i]},
+				blks:       []*catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -834,32 +831,12 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 		}
 		return rds, nil
 	}
-	step := (len(ranges)) / num
-	if step < 1 {
-		step = 1
-	}
+
+	infos, steps := groupBlocksToObjects(blks, num)
+	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primaryIdx, ts, num, expr)
+	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
+		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }
@@ -1118,10 +1095,10 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 }
 
 func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
-	tbl.setPartsOnce.Do(func() {
+	if tbl._parts == nil {
 		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
-	})
-	return tbl._parts, tbl._partsErr
+	}
+	return tbl._parts, nil
 }
 
 func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) error {
