@@ -237,9 +237,7 @@ type txnTable struct {
 	defs              []engine.TableDef
 	tableDef          *plan.TableDef
 	idxs              []uint16
-	setPartsOnce      sync.Once
 	_parts            []*PartitionState
-	_partsErr         error
 	modifiedBlocks    [][]ModifyBlockMeta
 	blockMetas        [][]BlockMeta
 	blockMetasUpdated bool

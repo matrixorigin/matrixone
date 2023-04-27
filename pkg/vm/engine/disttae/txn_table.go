@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -220,9 +219,7 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 
 func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
-	tbl.setPartsOnce = sync.Once{}
 	tbl._parts = nil
-	tbl._partsErr = nil
 	tbl.blockMetas = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockMetasUpdated = false
@@ -1098,10 +1095,10 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 }
 
 func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
-	tbl.setPartsOnce.Do(func() {
+	if tbl._parts == nil {
 		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
-	})
-	return tbl._parts, tbl._partsErr
+	}
+	return tbl._parts, nil
 }
 
 func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) error {
