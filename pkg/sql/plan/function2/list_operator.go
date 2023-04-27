@@ -289,10 +289,11 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 && inputs[0].Oid == types.T_bool && inputs[1].Oid == types.T_bool {
-				return newCheckResultWithSuccess(0)
+			sta, _ := tryToMatch(inputs, []types.T{types.T_bool, types.T_bool})
+			if sta == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
 		},
 
 		Overloads: []overload{
