@@ -50,11 +50,26 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	// }
 
 	tableDef.Name2ColIndex = map[string]int32{}
-	var externalProject []*Expr
+	node1 := &plan.Node{}
+	node1.NodeType = plan.Node_EXTERNAL_SCAN
+	node1.Stats = &plan.Stats{}
+
+	node2 := &plan.Node{}
+	node2.NodeType = plan.Node_PROJECT
+	node2.Stats = &plan.Stats{}
+	node2.NodeId = 1
+	node2.Children = []int32{0}
+
+	node3 := &plan.Node{}
+	node3.NodeType = plan.Node_INSERT
+	node3.Stats = &plan.Stats{}
+	node3.NodeId = 2
+	node3.Children = []int32{1}
+
 	for i := 0; i < len(tableDef.Cols); i++ {
 		idx := int32(i)
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
-		colExpr := &plan.Expr{
+		tmp := &plan.Expr{
 			Typ: tableDef.Cols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -63,75 +78,53 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		}
-		externalProject = append(externalProject, colExpr)
+		node1.ProjectList = append(node1.ProjectList, tmp)
+		// node3.ProjectList = append(node3.ProjectList, tmp)
 	}
-
+	if err := getProjectNode(stmt, ctx, node2, tableDef); err != nil {
+		return nil, err
+	}
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
 	}
 
+	// node3.TableDef = tableDef
+	// node3.ObjRef = objRef
+	node3.InsertCtx = &plan.InsertCtx{
+		Ref:      objRef,
+		TableDef: tableDef,
+		// ParentIdx:    map[string]int32{},
+	}
+
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
+
 	json_byte, err := json.Marshal(stmt.Param)
 	if err != nil {
 		return nil, err
 	}
+
 	tableDef.Createsql = string(json_byte)
+	node1.TableDef = tableDef
+	node1.ObjRef = objRef
+	node3.TableDef = tableDef
+	node3.ObjRef = objRef
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
-	externalScanNode := &plan.Node{
-		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       &plan.Stats{},
-		ProjectList: externalProject,
-		ObjRef:      objRef,
-		TableDef:    tableDef,
+	nodes := make([]*plan.Node, 3)
+	nodes[0] = node1
+	nodes[1] = node2
+	nodes[2] = node3
+	query := &plan.Query{
+		StmtType: plan.Query_INSERT,
+		Steps:    []int32{2},
+		Nodes:    nodes,
 	}
-	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
-
-	projectNode := &plan.Node{
-		Children: []int32{lastNodeId},
-		NodeType: plan.Node_PROJECT,
-		Stats:    &plan.Stats{},
-	}
-	if err := getProjectNode(stmt, ctx, projectNode, tableDef); err != nil {
-		return nil, err
-	}
-	lastNodeId = builder.appendNode(projectNode, bindCtx)
-
-	// append hidden column to tableDef
-	newTableDef := DeepCopyTableDef(tableDef)
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId)
-	if err != nil {
-		return nil, err
-	}
-	query := builder.qry
-	query.StmtType = plan.Query_INSERT
-	query.LoadTag = true
-
-	// lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, newTableDef, lastNodeId, false)
-
-	// insertNode := &plan.Node{
-	// 	Children: []int32{lastNodeId},
-	// 	NodeType: plan.Node_INSERT,
-	// 	Stats:    &plan.Stats{},
-	// 	InsertCtx: &plan.InsertCtx{
-	// 		Ref:             objRef,
-	// 		TableDef:        newTableDef,
-	// 		AddAffectedRows: true,
-	// 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-	// 	},
-	// }
-	// lastNodeId = builder.appendNode(insertNode, bindCtx)
-	// query := builder.qry
-	// query.StmtType = plan.Query_INSERT
-	// query.Steps = []int32{lastNodeId}
-
 	pn := &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
 		},
 	}
+	pn.GetQuery().LoadTag = true
 	return pn, nil
 }
 

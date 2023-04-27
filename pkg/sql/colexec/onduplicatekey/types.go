@@ -28,10 +28,11 @@ type Argument struct {
 	Affected uint64
 	Engine   engine.Engine
 
-	// Source       engine.Relation
-	// UniqueSource []engine.Relation
-	// Ref          *plan.ObjectRef
-	TableDef        *plan.TableDef
+	Source       engine.Relation
+	UniqueSource []engine.Relation
+	Ref          *plan.ObjectRef
+	TableDef     *plan.TableDef
+
 	OnDuplicateIdx  []int32
 	OnDuplicateExpr map[string]*plan.Expr
 

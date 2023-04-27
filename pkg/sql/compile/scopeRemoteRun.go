@@ -21,8 +21,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -591,46 +589,57 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:          t.IsRemote,
-			Ref:               t.InsertCtx.Ref,
-			Attrs:             t.InsertCtx.Attrs,
-			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
-			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
-			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+			IsRemote:     t.IsRemote,
+			Affected:     t.Affected,
+			Ref:          t.InsertCtx.Ref,
+			TableDef:     t.InsertCtx.TableDef,
+			ClusterTable: t.InsertCtx.ClusterTable,
+			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *deletion.Argument:
+		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
+		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
+			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
+		}
+		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
+		}
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+
+		}
 		in.Delete = &pipeline.Deletion{
 			Ts:           t.Ts,
-			AffectedRows: t.AffectedRows(),
+			AffectedRows: t.AffectedRows,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			NBucket:      t.Nbucket,
 			// deleteCtx
-			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
-			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
-			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
-			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
-			Ref:                   t.DeleteCtx.Ref,
-			IsEnd:                 t.DeleteCtx.IsEnd,
+			CanTruncate:    t.DeleteCtx.CanTruncate,
+			DelRef:         t.DeleteCtx.DelRef,
+			IdxIdx:         t.DeleteCtx.IdxIdx,
+			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
+			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
+			OnSetRef:       t.DeleteCtx.OnSetRef,
+			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
+			OnSetUpdateCol: onSetUpdateCols,
+			OnSetIdx:       onSetIdxs,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName: t.SchemaName,
-			TableDef:   t.TableDef,
-			HasAutoCol: t.HasAutoCol,
-			IsUpdate:   t.IsUpdate,
-			Attrs:      t.Attrs,
-		}
-	case *preinsertunique.Argument:
-		in.PreInsertUnique = &pipeline.PreInsertUnique{
-			PreInsertUkCtx: t.PreInsertCtx,
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			ParentIdxPreInsert: t.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -919,32 +928,43 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
+		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
+		for i := 0; i < len(t.OnSetUpdateCol); i++ {
+			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
+		}
+		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
+		for i := 0; i < len(t.OnSetIdx); i++ {
+			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
+		}
 		v.Arg = &deletion.Argument{
 			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			Nbucket:      t.NBucket,
 			DeleteCtx: &deletion.DeleteCtx{
-				CanTruncate:           t.CanTruncate,
-				RowIdIdx:              int(t.RowIdIdx),
-				PartitionTableIDs:     t.PartitionTableIds,
-				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
-				Ref:                   t.Ref,
-				AddAffectedRows:       t.AddAffectedRows,
-				IsEnd:                 t.IsEnd,
+				CanTruncate:    t.CanTruncate,
+				DelRef:         t.DelRef,
+				IdxIdx:         t.IdxIdx,
+				OnRestrictIdx:  t.OnRestrictIdx,
+				OnCascadeIdx:   t.OnCascadeIdx,
+				OnSetRef:       t.OnSetRef,
+				OnSetTableDef:  t.OnSetTableDef,
+				OnSetUpdateCol: onSetUpdateCols,
+				OnSetIdx:       onSetIdxs,
 			},
 		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
+			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Ref:                   t.Ref,
-				AddAffectedRows:       t.AddAffectedRows,
-				Attrs:                 t.Attrs,
-				PartitionTableIDs:     t.PartitionTableIds,
-				PartitionIndexInBatch: int(t.PartitionIdx),
+				Ref:          t.Ref,
+				TableDef:     t.TableDef,
+				ParentIdx:    t.ParentIdx,
+				ClusterTable: t.ClusterTable,
 			},
 		}
 	case vm.PreInsert:
@@ -952,18 +972,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
-			Attrs:      t.GetAttrs(),
-			HasAutoCol: t.GetHasAutoCol(),
-			IsUpdate:   t.GetIsUpdate(),
-		}
-	case vm.PreInsertUnique:
-		t := opr.GetPreInsertUnique()
-		v.Arg = &preinsertunique.Argument{
-			PreInsertCtx: t.GetPreInsertUkCtx(),
+			ParentIdx:  t.GetParentIdxPreInsert(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,

@@ -28,7 +28,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,10 +45,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -142,12 +146,11 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 }
 
 func (c *Compile) setAffectedRows(n uint64) {
-	c.affectRows.Store(n)
+	c.affectRows = n
 }
 
 func (c *Compile) GetAffectedRows() uint64 {
-	affectRows := c.affectRows.Load()
-	return affectRows
+	return c.affectRows
 }
 
 func (c *Compile) run(s *Scope) error {
@@ -159,15 +162,9 @@ func (c *Compile) run(s *Scope) error {
 	case Normal:
 		defer c.fillAnalyzeInfo()
 		return s.Run(c)
-	case Merge, MergeInsert:
+	case Merge:
 		defer c.fillAnalyzeInfo()
-		err := s.MergeRun(c)
-		if err != nil {
-			return err
-		}
-
-		c.setAffectedRows(s.affectedRows())
-		return nil
+		return s.MergeRun(c)
 	case MergeDelete:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
@@ -175,6 +172,14 @@ func (c *Compile) run(s *Scope) error {
 			return err
 		}
 		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		return nil
+	case MergeInsert:
+		defer c.fillAnalyzeInfo()
+		err := s.MergeRun(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergeblock.Argument).AffectedRows)
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -425,32 +430,32 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
-		// insertNode := qry.Nodes[qry.Steps[0]]
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-		// 		c.cnList = engine.Nodes{
-		// 			engine.Node{
-		// 				Addr: c.addr,
-		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
-		// 		}
-		// 	} else {
-		// 		c.cnListStrategy()
-		// 	}
-		// } else {
-		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-		// 		c.cnList = engine.Nodes{
-		// 			engine.Node{
-		// 				Addr: c.addr,
-		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
-		// 		}
-		// 	} else {
-		// 		c.cnList = engine.Nodes{engine.Node{
-		// 			Addr: c.addr,
-		// 			Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
-		// 		}
-		// 	}
-		// }
+		insertNode := qry.Nodes[qry.Steps[0]]
+		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
+			} else {
+				c.cnListStrategy()
+			}
+		} else {
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{
+					engine.Node{
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(1, blkNum)},
+				}
+			} else {
+				c.cnList = engine.Nodes{engine.Node{
+					Addr: c.addr,
+					Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+				}
+			}
+		}
 	default:
 		if blkNum < MinBlockNum {
 			c.cnList = engine.Nodes{engine.Node{
@@ -481,78 +486,143 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 }
 
 // for now, cn-write-s3 delete just support
-// func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
-// 	if len(delCtx.IdxIdx) > 0 || len(delCtx.IdxSource) > 0 {
-// 		return false
-// 	}
+func IsSingleDelete(delCtx *deletion.DeleteCtx) bool {
+	if len(delCtx.IdxIdx) > 0 || len(delCtx.IdxSource) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.OnRestrictIdx) > 0 {
-// 		return false
-// 	}
+	if len(delCtx.OnRestrictIdx) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.OnCascadeIdx) > 0 || len(delCtx.OnCascadeSource) > 0 {
-// 		return false
-// 	}
+	if len(delCtx.OnCascadeIdx) > 0 || len(delCtx.OnCascadeSource) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.OnSetIdx) > 0 || len(delCtx.OnSetSource) > 0 {
-// 		return false
-// 	}
+	if len(delCtx.OnSetIdx) > 0 || len(delCtx.OnSetSource) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
-// 		return false
-// 	}
+	if len(delCtx.OnSetUniqueSource) > 0 && delCtx.OnSetUniqueSource[0] != nil || len(delCtx.OnSetRef) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.OnSetTableDef) > 0 || len(delCtx.OnSetUpdateCol) > 0 {
-// 		return false
-// 	}
+	if len(delCtx.OnSetTableDef) > 0 || len(delCtx.OnSetUpdateCol) > 0 {
+		return false
+	}
 
-// 	if len(delCtx.DelSource) > 1 {
-// 		return false
-// 	}
-// 	return true
-// }
+	if len(delCtx.DelSource) > 1 {
+		return false
+	}
+	return true
+}
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		return ss[0], nil
-		// deleteNode := qry.Nodes[qry.Steps[0]]
-		// deleteNode.NotCacheable = true
-		// nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
-		// // 1.Estiminate the cost of delete rows, if we need to delete too much rows,
-		// // just use distributed deletion (write s3 delete just think about delete
-		// // single table)
-		// arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
-		// 	rs = c.newDeleteMergeScope(arg, ss)
-		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 		Op: vm.MergeDelete,
-		// 		Arg: &mergedelete.Argument{
-		// 			DelSource: arg.DeleteCtx.DelSource[0],
-		// 		},
-		// 	})
-		// 	rs.Magic = MergeDelete
-		// } else {
-		// 	rs = c.newMergeScope(ss)
-		// 	updateScopesLastFlag([]*Scope{rs})
-		// 	rs.Magic = Deletion
-		// 	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		// 	if err != nil {
-		// 		return nil, err
-		// 	}
-		// 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		// 		Op:  vm.Deletion,
-		// 		Arg: arg,
-		// 	})
-		// }
+		deleteNode := qry.Nodes[qry.Steps[0]]
+		deleteNode.NotCacheable = true
+		nodeStats := qry.Nodes[deleteNode.Children[0]].Stats
+		// 1.Estiminate the cost of delete rows, if we need to delete too much rows,
+		// just use distributed deletion (write s3 delete just think about delete
+		// single table)
+		arg, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && IsSingleDelete(arg.DeleteCtx) && !arg.DeleteCtx.CanTruncate {
+			rs = c.newDeleteMergeScope(arg, ss)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeDelete,
+				Arg: &mergedelete.Argument{
+					DelSource: arg.DeleteCtx.DelSource[0],
+				},
+			})
+			rs.Magic = MergeDelete
+		} else {
+			rs = c.newMergeScope(ss)
+			updateScopesLastFlag([]*Scope{rs})
+			rs.Magic = Deletion
+			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if err != nil {
+				return nil, err
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: arg,
+			})
+		}
 	case plan.Query_INSERT:
-		return ss[0], nil
+		insertNode := qry.Nodes[qry.Steps[0]]
+		insertNode.NotCacheable = true
+
+		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
+		arg, err := constructInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
+			// use distributed-insert
+			arg.IsRemote = true
+			for _, scope := range ss {
+				scope.Instructions = append(scope.Instructions, vm.Instruction{
+					Op:  vm.PreInsert,
+					Arg: preArg,
+				})
+			}
+
+			rs = c.newInsertMergeScope(arg, ss)
+			rs.Magic = MergeInsert
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op: vm.MergeBlock,
+				Arg: &mergeblock.Argument{
+					Tbl:         arg.InsertCtx.Rels[0],
+					Unique_tbls: arg.InsertCtx.Rels[1:],
+				},
+			})
+		} else {
+			rs = c.newMergeScope(ss)
+			rs.Magic = Insert
+			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Insert,
+				Arg: arg,
+			})
+		}
 	case plan.Query_UPDATE:
-		return ss[0], nil
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		rs = c.newMergeScope(ss)
+		updateScopesLastFlag([]*Scope{rs})
+		rs.Magic = Update
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Update,
+			Arg: scp,
+		})
 	default:
 		rs = c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})
@@ -622,7 +692,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
+	case plan.Node_FILTER, plan.Node_PROJECT:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -711,112 +781,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
-		curr := c.anal.curr
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
+		if n.DeleteCtx.CanTruncate {
+			return nil, nil
 		}
-		rs := c.newMergeScope(ss)
-		// updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Merge
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		scp, err := constructDeletion(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
-		ss = []*Scope{rs}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_ON_DUPLICATE_KEY:
-		curr := c.anal.curr
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		rs := c.newMergeScope(ss)
-		// updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Merge
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.OnDuplicateKey,
-			Arg: onDuplicateKeyArg,
-		})
-		ss = []*Scope{rs}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_PRE_INSERT_UK:
-		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		preInsertUkArg, err := constructPreInsertUk(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsertUnique,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     preInsertUkArg,
-			})
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_PRE_INSERT:
-		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		preInsertArg, err := constructPreInsert(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsert,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     preInsertArg,
-			})
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_INSERT:
-		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		insertArg, err := constructInsert(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.Insert,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     insertArg,
-			})
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		return c.compilePlanScope(ctx, step, n.Children[0], ns)
+	case plan.Node_INSERT, plan.Node_UPDATE:
+		return c.compilePlanScope(ctx, step, n.Children[0], ns)
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -828,10 +798,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
-			Magic:        Merge,
-			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
-			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+			Magic:    Merge,
+			NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
+			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil
@@ -1602,68 +1571,68 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-// func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-// 	ss2 := make([]*Scope, 0, len(ss))
-// 	for _, s := range ss {
-// 		if s.IsEnd {
-// 			continue
-// 		}
-// 		ss2 = append(ss2, s)
-// 	}
-// 	insert := &vm.Instruction{
-// 		Op:  vm.Insert,
-// 		Arg: arg,
-// 	}
-// 	for i := range ss2 {
-// 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
-// 	}
-// 	return c.newMergeScope(ss2)
-// }
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+	ss2 := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+	insert := &vm.Instruction{
+		Op:  vm.Insert,
+		Arg: arg,
+	}
+	for i := range ss2 {
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
+	}
+	return c.newMergeScope(ss2)
+}
 
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
 // CN, so we need to transfer the rows from the
 // the same block to one and the same CN to perform
 // the deletion operators.
-//func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
-//	//Todo: implemet delete merge
-//	ss2 := make([]*Scope, 0, len(ss))
-//	// ends := make([]*Scope, 0, len(ss))
-//	for _, s := range ss {
-//		if s.IsEnd {
-//			// ends = append(ends, s)
-//			continue
-//		}
-//		ss2 = append(ss2, s)
-//	}
-//
-//	rs := make([]*Scope, 0, len(ss2))
-//	uuids := make([]uuid.UUID, 0, len(ss2))
-//	for i := 0; i < len(ss2); i++ {
-//		rs = append(rs, new(Scope))
-//		uuids = append(uuids, uuid.New())
-//	}
-//
-//	// for every scope, it should dispatch its
-//	// batch to other cn
-//	for i := 0; i < len(ss2); i++ {
-//		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
-//	}
-//	delete := &vm.Instruction{
-//		Op:  vm.Deletion,
-//		Arg: arg,
-//	}
-//	for i := range rs {
-//		// use distributed delete
-//		arg.RemoteDelete = true
-//		// maybe just copy only once?
-//		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
-//		arg.IBucket = uint32(i)
-//		arg.Nbucket = uint32(len(rs))
-//		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil, 0))
-//	}
-//	return c.newMergeScope(rs)
-//}
+func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
+	//Todo: implemet delete merge
+	ss2 := make([]*Scope, 0, len(ss))
+	// ends := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			// ends = append(ends, s)
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+
+	rs := make([]*Scope, 0, len(ss2))
+	uuids := make([]uuid.UUID, 0, len(ss2))
+	for i := 0; i < len(ss2); i++ {
+		rs = append(rs, new(Scope))
+		uuids = append(uuids, uuid.New())
+	}
+
+	// for every scope, it should dispatch its
+	// batch to other cn
+	for i := 0; i < len(ss2); i++ {
+		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
+	}
+	delete := &vm.Instruction{
+		Op:  vm.Deletion,
+		Arg: arg,
+	}
+	for i := range rs {
+		// use distributed delete
+		arg.RemoteDelete = true
+		// maybe just copy only once?
+		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		arg.IBucket = uint32(i)
+		arg.Nbucket = uint32(len(rs))
+		rs[i].Instructions = append(rs[i].Instructions, dupInstruction(delete, nil, 0))
+	}
+	return c.newMergeScope(rs)
+}
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{
@@ -1966,39 +1935,35 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		analInfos: anals,
 		curr:      int(qry.Steps[0]),
 	}
-	for _, node := range c.anal.qry.Nodes {
-		if node.AnalyzeInfo == nil {
-			node.AnalyzeInfo = new(plan.AnalyzeInfo)
-		}
-	}
 	c.proc.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Put.Load())
-	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.List.Load())
-
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Head.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Get.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Delete.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.DeleteMulti.Load())
-
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize, atomic.LoadInt64(&anal.OutputSize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed, atomic.LoadInt64(&anal.TimeConsumed))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize, atomic.LoadInt64(&anal.MemorySize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed, atomic.LoadInt64(&anal.WaitTimeConsumed))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO, atomic.LoadInt64(&anal.DiskIO))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte, atomic.LoadInt64(&anal.S3IOByte))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount, atomic.LoadInt64(&anal.S3IOInputCount))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount, atomic.LoadInt64(&anal.S3IOOutputCount))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
+		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
+			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
+		}
+		c.anal.qry.Nodes[i].AnalyzeInfo.InputRows = atomic.LoadInt64(&anal.InputRows)
+		c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows = atomic.LoadInt64(&anal.OutputRows)
+		c.anal.qry.Nodes[i].AnalyzeInfo.InputSize = atomic.LoadInt64(&anal.InputSize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize = atomic.LoadInt64(&anal.OutputSize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
+		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
+		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
+		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount = atomic.LoadInt64(&anal.S3IOInputCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount = atomic.LoadInt64(&anal.S3IOOutputCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
+		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
 	}
 }
 
@@ -2224,6 +2189,10 @@ func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *p
 	return nodes
 }
 
+func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
+	return anal.analInfos
+}
+
 func validScopeCount(ss []*Scope) int {
 	var cnt int
 
@@ -2370,17 +2339,4 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		tmp.Free(proc.Mp())
 	}
 	return vec, nil
-}
-
-func (s *Scope) affectedRows() uint64 {
-	affectedRows := uint64(0)
-	for _, in := range s.Instructions {
-		if arg, ok := in.Arg.(vm.ModificationArgument); ok {
-			if marg, ok := arg.(*mergeblock.Argument); ok {
-				return marg.AffectedRows()
-			}
-			affectedRows += arg.AffectedRows()
-		}
-	}
-	return affectedRows
 }

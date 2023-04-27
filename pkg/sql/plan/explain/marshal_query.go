@@ -154,14 +154,6 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 		name = "Minus"
 	case plan.Node_MINUS_ALL:
 		name = "Minus All"
-	case plan.Node_ON_DUPLICATE_KEY:
-		name = "On Duplicate Key"
-	case plan.Node_PRE_DELETE:
-		name = "Pre Delete"
-	case plan.Node_PRE_INSERT:
-		name = "Pre Insert"
-	case plan.Node_PRE_INSERT_UK:
-		name = "Pre Insert Unique"
 	default:
 		return name, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -172,7 +164,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	var result string
 	var err error
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
 			result += m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName()
@@ -198,15 +190,16 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		}
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
-			ctx := m.node.DeleteCtx.Ref
-			result += ctx.SchemaName + "." + ctx.ObjName
-		} else {
-			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
-		}
-	case plan.Node_INSERT:
-		if m.node.InsertCtx != nil {
-			ctx := m.node.InsertCtx.Ref
-			result += ctx.SchemaName + "." + ctx.ObjName
+			first := true
+			for _, ctx := range m.node.DeleteCtx.Ref {
+				if !first {
+					result += ", "
+				}
+				result += ctx.SchemaName + "." + ctx.ObjName
+				if first {
+					first = false
+				}
+			}
 		} else {
 			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -246,17 +239,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return result, err
 		}
-	//todo
-	case plan.Node_PRE_INSERT:
-		return "preinsert", nil
-	case plan.Node_PRE_INSERT_UK:
-		return "preinsert_uk", nil
-	case plan.Node_PRE_DELETE:
-		return "predelete", nil
-	case plan.Node_SINK:
-		return "sink", nil
-	case plan.Node_SINK_SCAN:
-		return "sink_scan", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -304,10 +286,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 	case plan.Node_INSERT:
-		objRef := m.node.InsertCtx.Ref
+		tableDef := m.node.TableDef
+		objRef := m.node.ObjRef
 		var fullTableName string
 		if objRef != nil {
 			fullTableName += objRef.GetSchemaName() + "." + objRef.GetObjName()
+		} else if tableDef != nil {
+			fullTableName += tableDef.GetName()
 		} else {
 			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -318,22 +303,22 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 		// "name" : "Columns (2 / 28)",
-		// columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
+		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
-		// labels = append(labels, Label{
-		// 	Name:  "Columns",
-		// 	Value: columns,
-		// })
+		labels = append(labels, Label{
+			Name:  "Columns",
+			Value: columns,
+		})
 
-		// labels = append(labels, Label{
-		// 	Name:  "Total columns",
-		// 	Value: len(tableDef.Cols),
-		// })
+		labels = append(labels, Label{
+			Name:  "Total columns",
+			Value: len(tableDef.Cols),
+		})
 
-		// labels = append(labels, Label{
-		// 	Name:  "Scan columns",
-		// 	Value: len(tableDef.Cols),
-		// })
+		labels = append(labels, Label{
+			Name:  "Scan columns",
+			Value: len(tableDef.Cols),
+		})
 	case plan.Node_UPDATE:
 		if m.node.UpdateCtx != nil {
 			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtx, options)
@@ -497,31 +482,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		labels = append(labels, Label{
 			Name:  "Minus expressions",
 			Value: value,
-		})
-	case plan.Node_PRE_INSERT:
-		labels = append(labels, Label{
-			Name:  "pre insert",
-			Value: []string{},
-		})
-	case plan.Node_PRE_INSERT_UK:
-		labels = append(labels, Label{
-			Name:  "pre insert uk",
-			Value: []string{},
-		})
-	case plan.Node_PRE_DELETE:
-		labels = append(labels, Label{
-			Name:  "pre delete",
-			Value: []string{},
-		})
-	case plan.Node_SINK:
-		labels = append(labels, Label{
-			Name:  "sink",
-			Value: []string{},
-		})
-	case plan.Node_SINK_SCAN:
-		labels = append(labels, Label{
-			Name:  "sink scan",
-			Value: []string{},
 		})
 	default:
 		return nil, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
@@ -735,8 +695,9 @@ func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, op
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	ref := deleteCtx.Ref
-	result = append(result, ref.SchemaName+"."+ref.ObjName)
+	for _, ctx := range deleteCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
+	}
 	return result
 }
 
