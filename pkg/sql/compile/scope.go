@@ -83,10 +83,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
 
 	for _, scope := range s.PreScopes {
+		scope.Proc.ResetContextFromParent(s.Proc.Ctx)
 		switch scope.Magic {
 		case Normal:
 			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
@@ -100,6 +100,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
 		}
 	}
+
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))

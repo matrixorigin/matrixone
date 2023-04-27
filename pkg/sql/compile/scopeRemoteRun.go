@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,26 +118,29 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
-		var ch chan process.WrapCs
-		var ok bool
-		opUuid := receiver.messageUuid
-		for {
-			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
-				runtime.Gosched()
-			} else {
-				break
-			}
+		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil {
+			return err
 		}
 
+		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+		defer putCancel()
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
 			MsgId:  receiver.messageId,
-			Uid:    opUuid,
+			Uid:    receiver.messageUuid,
 			Cs:     receiver.clientSession,
 			DoneCh: doneCh,
 		}
-		ch <- info
-		<-doneCh
+
+		select {
+		case <-putCtx.Done():
+			return moerr.NewInternalErrorNoCtx("pass notify msg to dispatch operator timeout")
+		case <-opProc.Ctx.Done():
+			logutil.Errorf("dispatch operator context done")
+		case opProc.DispatchNotifyCh <- info:
+			<-doneCh
+		}
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -249,7 +251,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(c.proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}

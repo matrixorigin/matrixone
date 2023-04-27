@@ -66,8 +66,14 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 
 // common sender: send to all RemoteReceiver
 func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.prepared {
-		ap.waitRemoteRegsReady(proc)
+	if !ap.ctr.prepared {
+		end, err := ap.waitRemoteRegsReady(proc)
+		if err != nil {
+			return false, err
+		}
+		if end {
+			return true, nil
+		}
 	}
 
 	{ // send to remote regs
@@ -105,7 +111,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 // send it to next one.
 func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	for {
-		sendto := ap.sendCnt % ap.localRegsCnt
+		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-reg.Ctx.Done():
@@ -117,14 +123,14 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				proc.PutBatch(bat)
 			}
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-			ap.localRegsCnt--
-			ap.aliveRegCnt--
-			if ap.localRegsCnt == 0 {
+			ap.ctr.localRegsCnt--
+			ap.ctr.aliveRegCnt--
+			if ap.ctr.localRegsCnt == 0 {
 				return true, nil
 			}
 		case reg.Ch <- bat:
 			proc.SetInputBatch(nil)
-			ap.sendCnt++
+			ap.ctr.sendCnt++
 			return false, nil
 		}
 	}
@@ -134,8 +140,14 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 // if the reg which you want to send to is closed
 // send it to next one.
 func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.prepared {
-		ap.waitRemoteRegsReady(proc)
+	if !ap.ctr.prepared {
+		end, _ := ap.waitRemoteRegsReady(proc)
+		// update the cnt
+		ap.ctr.remoteRegsCnt = len(ap.ctr.remoteReceivers)
+		ap.ctr.aliveRegCnt = ap.ctr.remoteRegsCnt + ap.ctr.localRegsCnt
+		if end || ap.ctr.remoteRegsCnt == 0 {
+			return true, nil
+		}
 	}
 
 	encodeData, errEncode := types.Encode(bat)
@@ -144,31 +156,31 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 
 	for {
-		regIdx := ap.sendCnt % ap.remoteRegsCnt
+		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 
 		if err := sendBatchToClientSession(encodeData, reg); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
 				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
-				ap.remoteRegsCnt--
-				ap.aliveRegCnt--
-				if ap.remoteRegsCnt == 0 {
+				ap.ctr.remoteRegsCnt--
+				ap.ctr.aliveRegCnt--
+				if ap.ctr.remoteRegsCnt == 0 {
 					return true, nil
 				}
-				ap.sendCnt++
+				ap.ctr.sendCnt++
 				continue
 			} else {
 				return false, err
 			}
 		}
-		ap.sendCnt++
+		ap.ctr.sendCnt++
 		return false, nil
 	}
 }
 
 // Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
 func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	toLocal := (ap.sendCnt % ap.aliveRegCnt) < ap.localRegsCnt
+	toLocal := (ap.ctr.sendCnt % ap.ctr.aliveRegCnt) < ap.ctr.localRegsCnt
 	if toLocal {
 		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)
 		if err != nil {

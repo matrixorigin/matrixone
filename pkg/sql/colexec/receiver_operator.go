@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,13 +45,10 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
-		// TODO: return error ?
-		logutil.Errorf("receive reg ctx done")
-		return nil, true, moerr.NewInternalErrorNoCtx("receive reg ctx done in receiver operator")
+		return nil, true, nil
 	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
-			logutil.Errorf("channel closed in receiver operator")
-			return nil, true, moerr.NewInternalErrorNoCtx("channel closed in receiver operator")
+			return nil, true, nil
 		}
 		return bat, false, nil
 	}
@@ -67,14 +63,17 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		start := time.Now()
+		// It is not convenience fo Select to receive proc.Ctx.Done()
+		// so we make sure that the proc.Cancel() will pass to its
+		// children and the children will close the channel
 		chosen, value, ok := reflect.Select(r.receiverListener)
+		analyze.WaitStop(start)
 		if !ok {
+			logutil.Errorf("children pipeline closed unexpectedly")
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--
-			logutil.Errorf("pipeline closed unexpectedly")
-			return nil, true, moerr.NewInternalErrorNoCtx("pipeline closed unexpectedly")
+			return nil, true, nil
 		}
-		analyze.WaitStop(start)
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)

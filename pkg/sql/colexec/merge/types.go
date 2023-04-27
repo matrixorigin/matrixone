@@ -31,6 +31,5 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
 		arg.ctr.FreeOperator(pipelineFailed)
-		arg.ctr = nil
 	}
 }
