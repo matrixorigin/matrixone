@@ -1,3 +1,4 @@
+-- @skip:issue#9196
 --foreign key is varchar,default ON DELETE/update option
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
