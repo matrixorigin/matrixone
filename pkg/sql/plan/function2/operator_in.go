@@ -123,7 +123,7 @@ func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result v
 
 func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
-		op.init(parameters[0])
+		op.init(parameters[1])
 	}
 
 	p := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
