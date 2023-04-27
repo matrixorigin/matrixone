@@ -208,10 +208,10 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 					matchElse = false
 					break
 				}
-				if matchElse {
-					if err := rs.Append(z.GetValue(i)); err != nil {
-						return err
-					}
+			}
+			if matchElse {
+				if err := rs.Append(z.GetValue(i)); err != nil {
+					return err
 				}
 			}
 		}
@@ -228,10 +228,10 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 					matchElse = false
 					break
 				}
-				if matchElse {
-					if err := rs.Append(dv, true); err != nil {
-						return err
-					}
+			}
+			if matchElse {
+				if err := rs.Append(dv, true); err != nil {
+					return err
 				}
 			}
 		}
@@ -249,13 +249,13 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		xs = append(xs, vector.GenerateFunctionFixedTypeParameter[bool](vecs[i]))
 	}
 	for j := 1; j < l; j += 2 {
-		ys = append(ys, vector.GenerateFunctionFixedTypeParameter[types.Varlena](vecs[j]))
+		ys = append(ys, vector.GenerateFunctionStrParameter(vecs[j]))
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	if len(vecs)%2 == 1 {
-		z := vector.GenerateFunctionFixedTypeParameter[types.Varlena](vecs[len(vecs)-1])
+		z := vector.GenerateFunctionStrParameter(vecs[len(vecs)-1])
 		for i := uint64(0); i < uint64(length); i++ {
 			matchElse := true
 			for j := range xs {
@@ -266,10 +266,10 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					matchElse = false
 					break
 				}
-				if matchElse {
-					if err := rs.AppendBytes(z.GetStrValue(i)); err != nil {
-						return err
-					}
+			}
+			if matchElse {
+				if err := rs.AppendBytes(z.GetStrValue(i)); err != nil {
+					return err
 				}
 			}
 		}
@@ -284,10 +284,10 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					matchElse = false
 					break
 				}
-				if matchElse {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
+			}
+			if matchElse {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
 				}
 			}
 		}
