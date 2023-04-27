@@ -473,8 +473,8 @@ func blockInfoMarshal(meta BlockMeta) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&meta.Info)), sz)
 }
 
-func BlockInfoUnmarshal(data []byte) catalog.BlockInfo {
-	return *(*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
+func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
+	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn
