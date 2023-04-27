@@ -35,7 +35,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	args0 := vector.GenerateFunctionStrParameter(ivecs[0])
 	args1 := vector.GenerateFunctionStrParameter(ivecs[1])
-	args2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	args2 := vector.GenerateFunctionStrParameter(ivecs[2])
 
 	if length != 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "mo_ctl can only be called with const args")
@@ -45,7 +45,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	arg1, _ := args1.GetStrValue(0)
 	arg2, _ := args2.GetStrValue(0)
 
-	service := serviceType(function2Util.QuickBytesToStr(arg0))
+	service := serviceType(strings.ToUpper(function2Util.QuickBytesToStr(arg0)))
 	command := strings.ToUpper(function2Util.QuickBytesToStr(arg1))
 	parameter := function2Util.QuickBytesToStr(arg2)
 

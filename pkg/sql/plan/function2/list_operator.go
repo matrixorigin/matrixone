@@ -1064,7 +1064,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedDirectlyTypeMatch,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1172,7 +1172,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_MINUS,
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedDirectlyTypeMatch,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
