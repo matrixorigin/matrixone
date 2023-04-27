@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,20 +60,19 @@ func Prepare(_ *process.Process, arg any) error {
 // the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
-	bat := proc.InputBatch()
+	bat := proc.Reg.InputBatch
 
 	// last batch of block
 	if bat == nil {
 		if p.RemoteDelete {
 			// ToDo: CNBlock Compaction
 			// blkId,delta_metaLoc,type
-			resBat := batch.NewWithSize(4)
-			resBat.Attrs = []string{
+			resBat := batch.New(true, []string{
 				catalog.BlockMeta_Delete_ID,
 				catalog.BlockMeta_DeltaLoc,
 				catalog.BlockMeta_Type,
 				catalog.BlockMeta_Deletes_Length,
-			}
+			})
 			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
@@ -99,13 +99,12 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
 			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
 			proc.SetInputBatch(resBat)
+		} else {
+			// ToDo: need ouyuaning to make sure there are only one table
+			// in a deletion operator
+			// do compaction here
+			p.DeleteCtx.DelSource[0].Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
-		// else {
-		// ToDo: need ouyuaning to make sure there are only one table
-		// in a deletion operator
-		// do compaction here
-		// p.DeleteCtx.DelSource[0].Delete(proc.Ctx, nil, catalog.Row_ID)
-		// }
 		return true, nil
 	}
 
@@ -114,7 +113,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		return false, nil
 	}
 
-	defer proc.PutBatch(bat)
+	defer bat.Clean(proc.Mp())
 	if p.RemoteDelete {
 		// we will cache all rowId in memory,
 		// when the size is too large we will
@@ -122,59 +121,46 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		p.SplitBatch(proc, bat)
 		return false, nil
 	}
-
 	var affectedRows uint64
 	var err error
 	delCtx := p.DeleteCtx
 
-	if len(delCtx.PartitionTableIDs) > 0 {
-		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
-		if err != nil {
-			return false, err
-		}
-
-		for i, delBatch := range delBatches {
-			tempRows := uint64(delBatch.Length())
-			if tempRows > 0 {
-				affectedRows += tempRows
-				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-				if err != nil {
-					delBatch.Clean(proc.Mp())
-					return false, err
-				}
-				delBatch.Clean(proc.Mp())
-			}
-		}
-	} else {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
-		affectedRows = uint64(delBatch.Length())
-		if affectedRows > 0 {
-			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				delBatch.Clean(proc.GetMPool())
-				return false, err
-			}
+	// check OnRestrict, if is not all null, throw error
+	for _, idx := range delCtx.OnRestrictIdx {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Count() {
+			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}
 
-	newBat := batch.NewWithSize(len(bat.Vecs))
-	for j := range bat.Vecs {
-		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-	}
-	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		newBat.Clean(proc.GetMPool())
+	// delete unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.IdxIdx, delCtx.IdxSource)
+	if err != nil {
 		return false, err
 	}
 
-	if delCtx.IsEnd {
-		proc.SetInputBatch(nil)
-		newBat.Clean(proc.GetMPool())
-	} else {
-		proc.SetInputBatch(newBat)
+	// delete child table(which ref on delete cascade)
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.OnCascadeIdx, delCtx.OnCascadeSource)
+	if err != nil {
+		return false, err
 	}
 
-	if delCtx.AddAffectedRows {
-		atomic.AddUint64(&p.affectedRows, affectedRows)
+	// update child table(which ref on delete set null)
+	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource,
+		delCtx.OnSetRef, delCtx.OnSetTableDef, delCtx.OnSetUpdateCol, nil, delCtx.OnSetUniqueSource)
+	if err != nil {
+		return false, err
 	}
+
+	// delete origin table
+	idxList := make([]int32, len(delCtx.DelIdx))
+	for i := 0; i < len(delCtx.DelIdx); i++ {
+		// for now, we have row_id & pk. but only use row_id for delete
+		idxList[i] = delCtx.DelIdx[i][0]
+	}
+	affectedRows, err = colexec.FilterAndDelByRowId(proc, bat, idxList, delCtx.DelSource)
+	if err != nil {
+		return false, err
+	}
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }
