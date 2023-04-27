@@ -331,7 +331,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		vs := make([]byte, 16)
+		var vs string
 		apv := true
 
 		for _, p := range ps {
@@ -343,11 +343,11 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				vs = append(vs, v...)
+				vs += string(v)
 			}
 		}
 		if apv {
-			if err := rs.AppendBytes(vs, false); err != nil {
+			if err := rs.AppendBytes([]byte(vs), false); err != nil {
 				return err
 			}
 		}

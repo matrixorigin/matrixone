@@ -259,7 +259,7 @@ func valueGreatThan1[T constraints.Integer | constraints.Float |
 	for i := uint64(0); i < length; i++ {
 		v1, null1 := col1.GetValue(i)
 		v2, null2 := col2.GetValue(i)
-		if err := result.Append(v1 >= v2, null1 || null2); err != nil {
+		if err := result.Append(v1 > v2, null1 || null2); err != nil {
 			return err
 		}
 	}
