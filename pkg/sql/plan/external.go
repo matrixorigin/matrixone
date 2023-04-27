@@ -174,6 +174,9 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 
 	//read one line
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return DefaultHugeStats()
+	}
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
