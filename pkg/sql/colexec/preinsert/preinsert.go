@@ -16,10 +16,10 @@ package preinsert
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -34,11 +34,7 @@ func Prepare(_ *proc, _ any) error {
 }
 
 func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
-	analy := proc.GetAnalyze(idx)
-	analy.Start()
-	defer analy.Stop()
-
-	var err error
+	defer analyze(idx, proc)()
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
@@ -50,57 +46,39 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
-
 	defer proc.PutBatch(bat)
-	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Attrs = arg.Attrs
-	for idx := range arg.Attrs {
-		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
-	}
-	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		newBat.Clean(proc.GetMPool())
+	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
+
+	//get insert batch
+	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
+	if err != nil {
 		return false, err
 	}
 
-	if !arg.IsUpdate {
-		if arg.HasAutoCol {
-			err := genAutoIncrCol(newBat, proc, arg)
-			if err != nil {
-				newBat.Clean(proc.GetMPool())
-				return false, err
-			}
+	if info.HasAutoCol {
+		err := genAutoIncrCol(insertBatch, proc, arg)
+		if err != nil {
+			return false, err
 		}
 	}
 
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(insertBatch, arg.TableDef, proc.Ctx)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	// calculate the composite primary key column and append the result vector to batch
-	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
+	err = genCompositePrimaryKey(insertBatch, proc, arg.TableDef)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	err = genClusterBy(newBat, proc, arg.TableDef)
+	err = genClusterBy(insertBatch, proc, arg.TableDef)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	//// calculate the partition expression and append the result vector to batch
-	//err = genPartitionExpr(newBat, proc, arg.TableDef)
-	//if err != nil {
-	//	newBat.Clean(proc.GetMPool())
-	//	return false, err
-	//}
-
-	proc.SetInputBatch(newBat)
-
+	proc.SetInputBatch(insertBatch)
 	return false, nil
 }
 
@@ -129,18 +107,12 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
 }
 
-// calculate the partition expression and append the result vector to batch
-//func genPartitionExpr(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
-//	// Check whether it is a partition table
-//	if tableDef.Partition == nil {
-//		return nil
-//	} else {
-//		partitionVec, err := colexec.EvalExpr(bat, proc, tableDef.Partition.PartitionExpression)
-//		if err != nil {
-//			return err
-//		}
-//		bat.Attrs = append(bat.Attrs, "__mo_partition_expr__")
-//		bat.Vecs = append(bat.Vecs, partitionVec)
-//	}
-//	return nil
-//}
+func analyze(idx int, proc *proc) func() {
+	t := time.Now()
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	return func() {
+		anal.Stop()
+		anal.AddInsertTime(t)
+	}
+}
