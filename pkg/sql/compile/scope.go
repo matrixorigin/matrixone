@@ -87,6 +87,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for _, scope := range s.PreScopes {
 		scope.Proc.ResetContextFromParent(s.Proc.Ctx)
+	}
+
+	for _, scope := range s.PreScopes {
 		switch scope.Magic {
 		case Normal:
 			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
