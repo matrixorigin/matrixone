@@ -661,14 +661,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
+	case plan.Node_SINK_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+
 	case plan.Node_EXTERNAL_SCAN:
-		// no good method to estimate external table
-		node.Stats = &plan.Stats{
-			TableCnt:    1000000,
-			BlockNum:    100,
-			Outcnt:      1000000,
-			Cost:        1000000,
-			Selectivity: 1,
+		//calc for external scan is heavy, avoid recalc of this
+		if node.Stats == nil || node.Stats.TableCnt == 0 {
+			node.Stats = getExternalStats(node, builder)
 		}
 
 	case plan.Node_TABLE_SCAN:
@@ -718,6 +717,16 @@ func NeedStats(tableDef *TableDef) bool {
 		return false
 	}
 	return true
+}
+
+func DefaultHugeStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = 10000000
+	stats.Outcnt = 10000000
+	stats.Selectivity = 1
+	stats.BlockNum = 1000
+	return stats
 }
 
 func DefaultStats() *plan.Stats {
