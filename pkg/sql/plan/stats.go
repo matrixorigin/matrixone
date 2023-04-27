@@ -666,7 +666,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
-		if node.Stats.TableCnt == 0 {
+		if node.Stats == nil || node.Stats.TableCnt == 0 {
 			node.Stats = getExternalStats(node, builder)
 		}
 
