@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -232,16 +233,27 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 }
 
 // build equal expression for auto_increment column
+// XXX very bad code. I just copy.
 func getRangeExpr(colName string) *plan.Expr {
+	// XXX too...
+	// I just do a simple modification refer to getAutoIncrTableDef()
+	typ := types.T_varchar.ToType()
+	autoIncrFirstColumnType := &plan.Type{
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
+	}
+
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     10,
-					ObjName: "=",
+					Obj:     EqualFunctionEncodedID,
+					ObjName: EqualFunctionName,
 				},
 				Args: []*plan.Expr{
 					{
+						Typ: autoIncrFirstColumnType,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								Name: catalog.AutoIncrColumnNames[1],

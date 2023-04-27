@@ -431,13 +431,16 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
-		bat := batch.NewWithSize(0)
-		defer bat.Clean(proc.Mp())
-		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-		if err != nil {
-			return true
-		}
-		return ifNeed
+		return true
+
+		// XXX bad code will cause panic if expression is Expr_Col
+		//bat := batch.NewWithSize(0)
+		//defer bat.Clean(proc.Mp())
+		//ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
+		//if err != nil {
+		//	return true
+		//}
+		//return ifNeed
 	}
 
 	// get min max data from Meta

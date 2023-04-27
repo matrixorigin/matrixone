@@ -17,6 +17,7 @@ package function2
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,6 +107,8 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	logutil.Infof("get function by name, %s with args [%v]", name, args)
+
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err

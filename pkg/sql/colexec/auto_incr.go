@@ -402,6 +402,15 @@ func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Bat
 }
 
 func getRangeExpr(colName string) *plan.Expr {
+	// XXX too...
+	// I just do a simple modification refer to getAutoIncrTableDef()
+	typ := types.T_varchar.ToType()
+	autoIncrFirstColumnType := &plan.Type{
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
+	}
+
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -411,6 +420,7 @@ func getRangeExpr(colName string) *plan.Expr {
 				},
 				Args: []*plan.Expr{
 					{
+						Typ: autoIncrFirstColumnType,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								Name: catalog.AutoIncrColumnNames[1],
