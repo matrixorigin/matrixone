@@ -332,3 +332,10 @@ func IsSameObjectLocVsMeta(location Location, meta ObjectMeta) bool {
 	}
 	return location.ShortName().Equal(meta.BlockHeader().ShortName()[:])
 }
+
+func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
+	if len(location) == 0 || short == nil {
+		return false
+	}
+	return location.ShortName().Equal(short[:])
+}

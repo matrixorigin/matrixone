@@ -239,7 +239,7 @@ type txnTable struct {
 	idxs              []uint16
 	_parts            []*PartitionState
 	modifiedBlocks    [][]ModifyBlockMeta
-	blockMetas        [][]BlockMeta
+	blockList         [][]catalog.BlockInfo
 	blockMetasUpdated bool
 	logtailUpdated    bool
 
@@ -389,7 +389,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 }
 
 type ModifyBlockMeta struct {
-	meta    BlockMeta
+	meta    catalog.BlockInfo
 	deletes []int
 }
 

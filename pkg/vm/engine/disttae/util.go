@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +36,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,34 +45,6 @@ const (
 )
 
 // func
-
-func fetchZonemapAndRowsFromBlockInfo(
-	ctx context.Context,
-	idxs []uint16,
-	blockInfo catalog.BlockInfo,
-	fs fileservice.FileService,
-	m *mpool.MPool) ([]Zonemap, uint32, error) {
-	zonemapList := make([]Zonemap, len(idxs))
-
-	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLocation())
-	if err != nil {
-		return nil, 0, err
-	}
-
-	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLocation().ID(), m)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i := range idxs {
-		bytes := obs[i].GetBuf()
-		copy(zonemapList[i][:], bytes[:])
-	}
-
-	return zonemapList, blockInfo.MetaLocation().Rows(), nil
-}
-
 func loadObjectMeta(
 	ctx context.Context,
 	location objectio.Location,
@@ -144,33 +114,6 @@ func buildColumnsZMVectors(
 		vecs[i] = vec
 	}
 	return
-}
-
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	dataLength := len(columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-
-	for i := 0; i < dataLength; i++ {
-		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
-		typ := types.T(dataTypes[i]).ToType()
-
-		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.Zonemap[idx][:])
-		if err != nil {
-			return nil, nil, err
-		}
-
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return nil, nil, nil
-		}
-		datas[i] = [2]any{min, max}
-	}
-
-	return datas, dataTypes, nil
 }
 
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
