@@ -17,8 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -95,7 +96,9 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 				goto handleFailed
 			}
 
-			ast, err = mysql.Parse(ctx, createSql, lowerInt64)
+			p := ses.GetCache().GetParser(dialect.MYSQL, createSql, lowerInt64)
+			defer ses.GetCache().PutParser(p)
+			ast, err = p.Parse(ctx)
 			if err != nil {
 				goto handleFailed
 			}
