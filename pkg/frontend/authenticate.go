@@ -2651,7 +2651,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 					goto handleFailed
 				}
 			} else if aa.StatusOption.Option == tree.AccountStatusOpen {
-				sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxInt64)
+				sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxUint64)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2668,6 +2668,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if alter account suspend, add the account to kill queue
+	if accountExist {
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
+			ses.getRoutineManager().accountRoutine.enKillQueue(int64(targetAccountId), version)
+		}
+	}
+
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -3306,6 +3314,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 
 	var deleteCtx context.Context
 	var accountId int64
+	var version uint64
 	var hasAccount = true
 	clusterTables := make(map[string]int)
 
@@ -3341,6 +3350,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 
 	if execResultArrayHasData(erArray) {
 		accountId, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+		version, err = erArray[0].GetUint64(ctx, 0, 3)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3510,6 +3523,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if drop the account, add the account to kill queue
+	ses.getRoutineManager().accountRoutine.enKillQueue(accountId, version)
+
 	return err
 
 handleFailed:
@@ -5076,33 +5093,53 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	}
 	if p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
-		lastNode := q.Nodes[len(q.Nodes)-1]
+
+		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
 		var clusterTable bool
 		var clusterTableOperation clusterTableOperationType
+
+		switch q.StmtType {
+		case plan.Query_UPDATE:
+			t = PrivilegeTypeUpdate
+			clusterTableOperation = clusterTableModify
+		case plan.Query_DELETE:
+			t = PrivilegeTypeDelete
+			clusterTableOperation = clusterTableModify
+		case plan.Query_INSERT:
+			t = PrivilegeTypeInsert
+			clusterTableOperation = clusterTableModify
+		default:
+			t = PrivilegeTypeSelect
+			clusterTableOperation = clusterTableSelect
+		}
+
 		for _, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
-				switch lastNode.NodeType {
-				case plan.Node_UPDATE:
-					t = PrivilegeTypeUpdate
-					clusterTableOperation = clusterTableModify
-				case plan.Node_DELETE:
-					t = PrivilegeTypeDelete
-					clusterTableOperation = clusterTableModify
-				default:
-					t = PrivilegeTypeSelect
-					clusterTableOperation = clusterTableSelect
-				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
+
+					var scanTyp PrivilegeType
+					switch q.StmtType {
+					case plan.Query_UPDATE:
+						scanTyp = PrivilegeTypeUpdate
+						clusterTableOperation = clusterTableModify
+					case plan.Query_DELETE:
+						scanTyp = PrivilegeTypeDelete
+						clusterTableOperation = clusterTableModify
+					default:
+						scanTyp = PrivilegeTypeSelect
+						clusterTableOperation = clusterTableSelect
+					}
+
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   t,
+							typ:                   scanTyp,
 							databaseName:          node.ObjRef.GetSchemaName(),
 							tableName:             node.ObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
@@ -5110,38 +5147,30 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 						})
 					}
 				}
-			} else if node.NodeType == plan.Node_INSERT { //insert select
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+			} else if node.NodeType == plan.Node_INSERT {
+				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
+					objRef := node.InsertCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeInsert,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							typ:                   t,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.InsertCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+					objRef := node.DeleteCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeDelete,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							typ:                   t,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.DeleteCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}

@@ -29,118 +29,50 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-	bindCtx := NewBindContext(builder, nil)
 
-	rewriteInfo := &dmlSelectInfo{
-		typ:     "delete",
-		rootId:  -1,
-		tblInfo: tblInfo,
+	queryBindCtx := NewBindContext(builder, nil)
+	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
+	if err != nil {
+		return nil, err
 	}
-
-	canTruncate := false
-	if tblInfo.haveConstraint {
-		bindCtx.groupTag = builder.genNewTag()
-		bindCtx.aggregateTag = builder.genNewTag()
-		bindCtx.projectTag = builder.genNewTag()
-
-		// if delete table have constraint
-		err = initDeleteStmt(builder, bindCtx, rewriteInfo, stmt)
-		if err != nil {
-			return nil, err
-		}
-
-		for i, tableDef := range tblInfo.tableDefs {
-			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// append ProjectNode
-		rewriteInfo.rootId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			ProjectList: rewriteInfo.projectList,
-			Children:    []int32{rewriteInfo.rootId},
-			BindingTags: []int32{bindCtx.projectTag},
-		}, bindCtx)
-		bindCtx.results = rewriteInfo.projectList
-	} else {
-		// if delete table have no constraint
-		if stmt.Where == nil && stmt.Limit == nil {
-			canTruncate = true
-		}
-		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, tblInfo)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
+	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
-	// append delete node
-	deleteCtx := &plan.DeleteCtx{
-		CanTruncate: canTruncate,
-		Ref:         rewriteInfo.tblInfo.objRef,
-		Idx:         make([]*plan.IdList, len(rewriteInfo.tblInfo.tableDefs)),
-
-		IdxRef: rewriteInfo.onIdxTbl,
-		IdxIdx: rewriteInfo.onIdx,
-
-		OnRestrictRef: rewriteInfo.onRestrictTbl,
-		OnRestrictIdx: rewriteInfo.onRestrict,
-		OnCascadeRef:  rewriteInfo.onCascadeRef,
-		OnCascadeIdx:  make([]int32, len(rewriteInfo.onCascade)),
-
-		OnSetRef:       rewriteInfo.onSetRef,
-		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
-		OnSetDef:       rewriteInfo.onSetTableDef,
-		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
+	// append sink node
+	sinkNode := &Node{
+		NodeType: plan.Node_SINK,
+		Children: []int32{lastNodeId},
 	}
-	rowIdIdx := int64(0)
-	for i, table_def := range rewriteInfo.tblInfo.tableDefs {
-		if table_def.Pkey == nil {
-			deleteCtx.Idx[i] = &plan.IdList{
-				List: []int64{rowIdIdx},
-			}
-			rowIdIdx = rowIdIdx + 1
-		} else {
-			// have pk
-			deleteCtx.Idx[i] = &plan.IdList{
-				List: []int64{rowIdIdx, rowIdIdx + 1},
-			}
-			rowIdIdx = rowIdIdx + 2
+	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
+	sourceStep = builder.appendStep(lastNodeId)
+
+	// append delete plans
+	beginIdx := 0
+	for i, tableDef := range tblInfo.tableDefs {
+		deleteBindCtx := NewBindContext(builder, nil)
+
+		delPlanCtx := &dmlPlanCtx{
+			objRef:          tblInfo.objRef[i],
+			tableDef:        tableDef,
+			beginIdx:        beginIdx,
+			sourceStep:      sourceStep,
+			isMulti:         tblInfo.isMulti,
+			updateColLength: 0,
+			rowIdPos:        getRowIdPos(tableDef),
 		}
-	}
-	for i, idxList := range rewriteInfo.onCascade {
-		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
-	}
-	for i, setList := range rewriteInfo.onSet {
-		deleteCtx.OnSetIdx[i] = &plan.IdList{
-			List: setList,
+		lastNodeId, err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
+		if err != nil {
+			return nil, err
 		}
-	}
-	for i, idxMap := range rewriteInfo.onSetUpdateCol {
-		deleteCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
-			Map: idxMap,
-		}
+		_ = builder.appendStep(lastNodeId)
+		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 
-	node := &Node{
-		NodeType:  plan.Node_DELETE,
-		ObjRef:    nil,
-		TableDef:  nil,
-		Children:  []int32{query.Steps[len(query.Steps)-1]},
-		NodeId:    int32(len(query.Nodes)),
-		DeleteCtx: deleteCtx,
-	}
-	query.Nodes = append(query.Nodes, node)
-	query.Steps[len(query.Steps)-1] = node.NodeId
 	query.StmtType = plan.Query_DELETE
-
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

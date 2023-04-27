@@ -487,7 +487,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			return err
 		}
 		fileName := location.Name().String()
-		ibat := batch.New(true, bat.Attrs)
+		ibat := batch.NewWithSize(len(bat.Attrs))
+		ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
@@ -636,7 +637,8 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+		new_bat := batch.NewWithSize(1)
+		new_bat.Attrs = []string{catalog.BlockMeta_MetaLoc}
 		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		for _, metaLoc := range metaLocs {
 			vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
@@ -703,7 +705,8 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 }
 
 func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *batch.Batch {
-	ibat := batch.New(true, bat.Attrs)
+	ibat := batch.NewWithSize(len(bat.Attrs))
+	ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
 	for i := 0; i < len(ibat.Attrs); i++ {
 		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
 	}
@@ -809,14 +812,14 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]catalog.BlockInfo, len(ranges))
+	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
 		blks[i] = BlockInfoUnmarshal(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
 
-	if len(ranges) < num {
+	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:         tbl.db.txn.engine.fs,
@@ -825,7 +828,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:       expr,
 				ts:         ts,
 				ctx:        ctx,
-				blks:       []catalog.BlockInfo{blks[i]},
+				blks:       []*catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -833,32 +836,12 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 		}
 		return rds, nil
 	}
-	step := (len(ranges)) / num
-	if step < 1 {
-		step = 1
-	}
+
+	infos, steps := groupBlocksToObjects(blks, num)
+	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primaryIdx, ts, num, expr)
+	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         tbl.db.txn.engine.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
+		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }

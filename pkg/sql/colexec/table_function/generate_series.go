@@ -75,7 +75,8 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	rbat = batch.New(false, arg.Attrs)
+	rbat = batch.NewWithSize(len(arg.Attrs))
+	rbat.Attrs = arg.Attrs
 	rbat.Cnt = 1
 	for i := range arg.Attrs {
 		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
