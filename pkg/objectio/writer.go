@@ -379,6 +379,7 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(uint16(i)).setLocation(ext)
 		blockMeta.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
+		blockMeta.ColumnMeta(uint16(i)).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 	}
 	w.blocks = append(w.blocks, block)
 	w.lastId++

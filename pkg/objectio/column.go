@@ -67,11 +67,11 @@ func (cm ColumnMeta) setIdx(idx uint16) {
 }
 
 func (cm ColumnMeta) Ndv() uint32 {
-	return types.DecodeUint32(cm[:ndvLen])
+	return types.DecodeUint32(cm[ndvOff : ndvOff+ndvLen])
 }
 
 func (cm ColumnMeta) SetNdv(cnt uint32) {
-	copy(cm[:ndvLen], types.EncodeUint32(&cnt))
+	copy(cm[ndvOff:ndvOff+ndvLen], types.EncodeUint32(&cnt))
 }
 
 func (cm ColumnMeta) NullCnt() uint32 {

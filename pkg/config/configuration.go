@@ -153,6 +153,12 @@ var (
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
+
+	// defaultKillRountinesInterval default: 1 minutes
+	defaultKillRountinesInterval = 1
+
+	//defaultCleanKillQueueInterval default: 60 minutes
+	defaultCleanKillQueueInterval = 60
 )
 
 // FrontendParameters of the frontend
@@ -296,6 +302,10 @@ type FrontendParameters struct {
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	KillRountinesInterval int `toml:"killRountinesInterval"`
+
+	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
+
 	// ProxyEnabled indicates that proxy module is enabled and something extra
 	// is needed, such as update the salt.
 	ProxyEnabled bool `toml:"proxy-enabled"`
@@ -424,6 +434,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.PrintDebugInterval == 0 {
 		fp.PrintDebugInterval = defaultPrintDebugInterval
+	}
+
+	if fp.KillRountinesInterval == 0 {
+		fp.KillRountinesInterval = defaultKillRountinesInterval
+	}
+
+	if fp.CleanKillQueueInterval == 0 {
+		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
 }
 
