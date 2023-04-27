@@ -96,7 +96,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 				goto handleFailed
 			}
 
-			p := ses.GetCache().GetParser(dialect.MYSQL, sql, lowerInt64)
+			p := ses.GetCache().GetParser(dialect.MYSQL, createSql, lowerInt64)
 			defer ses.GetCache().PutParser(p)
 			ast, err = p.Parse(ctx)
 			if err != nil {
