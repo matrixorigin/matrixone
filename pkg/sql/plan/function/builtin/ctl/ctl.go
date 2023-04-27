@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
@@ -32,6 +33,10 @@ import (
 // service name: [CN|DN|LOG|HAKEEPER]
 // command: command in supportedCmds
 // command parameter: the parameter of the command
+//
+// TODO(fagongzi): refactor the internal communication implementation to use ctlservice to
+// send and receive ctl requests and responses, using service id as the target. This supports
+// mo_ctl to control any node in the mo cluster
 func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	service := serviceType(strings.ToUpper(vector.MustStrCol(vs[0])[0]))
 	command := strings.ToUpper(vector.MustStrCol(vs[1])[0])
@@ -58,7 +63,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {
-				v, err := proc.TxnClient.New()
+				v, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
 				if err != nil {
 					return nil, err
 				}

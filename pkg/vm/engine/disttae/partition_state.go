@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"net/http"
 	"runtime/trace"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/tidwall/btree"
 )
 
@@ -354,12 +355,12 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 
 			if location := objectio.Location(metaLocationVector[i]); !location.IsEmpty() {
-				entry.MetaLoc = location
+				entry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
 			if location := objectio.Location(deltaLocationVector[i]); !location.IsEmpty() {
-				entry.DeltaLoc = location
+				entry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			if id := segmentIDVector[i]; common.IsEmptySegid(&id) {
+			if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
 				entry.SegmentID = id
 			}
 			entry.Sorted = sortedStateVector[i]

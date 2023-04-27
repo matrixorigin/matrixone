@@ -18,7 +18,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -38,19 +37,19 @@ type node struct {
 func NewNode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
-	mgr base.INodeManager,
+	indexCache model.LRUCache,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *node {
 	impl := new(node)
-	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
-	impl.storage.pnode = newPersistedNode(impl.baseNode)
-	impl.storage.pnode.Ref()
+	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
+	// impl.storage.pnode = newPersistedNode(impl.baseNode)
+	// impl.storage.pnode.Ref()
 	return impl
 }
 
 func (n *node) Close() error {
-	n.storage.pnode.close()
+	// n.storage.pnode.close()
 	return nil
 }
 
@@ -100,7 +99,7 @@ func (n *node) Window(start, end uint32) (*containers.Batch, error) {
 	panic("not implemented yet ")
 }
 
-func (n *node) GetValue(col int, row uint32) (any, error) {
+func (n *node) GetValue(col int, row uint32) (any, bool, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
@@ -152,5 +151,5 @@ func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 
 func (n *node) Prefetch(idxes []uint16) error {
 	key := n.meta.GetMetaLoc()
-	return blockio.Prefetch(idxes, []uint32{key.ID()}, n.fs.Service, key)
+	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.fs.Service, key)
 }

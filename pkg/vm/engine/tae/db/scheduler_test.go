@@ -82,8 +82,6 @@ func TestCheckpoint2(t *testing.T) {
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.IndexCapacity = 1000000
-	opts.CacheCfg.TxnCapacity = 1000000
-	opts.CacheCfg.InsertCapacity = 400
 	// opts.CheckpointCfg = new(options.CheckpointCfg)
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2

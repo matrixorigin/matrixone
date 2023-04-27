@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -45,10 +44,10 @@ type ablock struct {
 func newABlock(
 	meta *catalog.BlockEntry,
 	fs *objectio.ObjectFS,
-	bufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	scheduler tasks.TaskScheduler) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
@@ -292,7 +291,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 
 func (blk *ablock) GetValue(
 	txn txnif.AsyncTxn,
-	row, col int) (v any, err error) {
+	row, col int) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -311,7 +310,7 @@ func (blk *ablock) GetValue(
 func (blk *ablock) getInMemoryValue(
 	mnode *memoryNode,
 	txn txnif.TxnReader,
-	row, col int) (v any, err error) {
+	row, col int) (v any, isNull bool, err error) {
 	blk.RLock()
 	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), txn, blk.RWMutex)
 	blk.RUnlock()
@@ -327,7 +326,7 @@ func (blk *ablock) getInMemoryValue(
 		return
 	}
 	defer view.Close()
-	v = view.GetValue(row)
+	v, isNull = view.GetValue(row)
 	//switch val := v.(type) {
 	//case []byte:
 	//	myVal := make([]byte, len(val))
@@ -378,7 +377,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	defer sortKey.Close()
 	rows := make([]uint32, 0)
-	err = sortKey.ForeachShallow(func(v any, _ bool, offset int) error {
+	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
 		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
 			row := uint32(offset)
 			rows = append(rows, row)
@@ -571,8 +570,8 @@ func (blk *ablock) inMemoryBatchDedup(
 	}
 
 	def := blk.meta.GetSchema().GetSingleSortKey()
-	v := mnode.GetValueByRow(int(dupRow), def.Idx)
-	entry := common.TypeStringValue(keys.GetType(), v)
+	v, isNull := mnode.GetValueByRow(int(dupRow), def.Idx)
+	entry := common.TypeStringValue(*keys.GetType(), v, isNull)
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 
@@ -597,7 +596,7 @@ func (blk *ablock) BatchDedup(
 			precommit,
 			keys,
 			rowmask,
-			dedupABlkClosureFactory(blk.LoadPersistedCommitTS))
+			true)
 	}
 }
 

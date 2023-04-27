@@ -288,7 +288,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
-				data, err := types.Encode(typ) // reuse the type for test
+				data, err := types.Encode(&typ) // reuse the type for test
 				require.NoError(t, err)
 				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {

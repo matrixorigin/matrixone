@@ -30,12 +30,14 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -226,9 +228,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
 		ses.ast = statement
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		statement.Format(fmtCtx)
-		text = SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	} else {
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -264,10 +264,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, sqlTypes []string, err error) context.Context {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt []string, sqlTypes []string, err error) context.Context {
 	retErr := moerr.NewParseError(ctx, err.Error())
 	sqlType := sqlTypes[0]
-	for i, sql := range parsers.SplitSqlBySemicolon(envStmt) {
+	for i, sql := range envStmt {
 		if i < len(sqlTypes) {
 			sqlType = sqlTypes[i]
 		}
@@ -1103,12 +1103,12 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
-// handleAlterDatabaseConfig alter a database's mysql_compatbility_mode
+// handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
-// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+// handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
@@ -1125,6 +1125,10 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 // handleDropUser drops the user for the tenant
 func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUser) error {
 	return doDropUser(ctx, mce.GetSession(), du)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+	return doAlterUser(ctx, mce.GetSession(), au)
 }
 
 // handleCreateRole creates the new role
@@ -1286,6 +1290,79 @@ func (mce *MysqlCmdExecutor) handleShowCreatePublications(ctx context.Context, s
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func doShowBackendServers(ses *Session) error {
+	// Construct the columns.
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetName("UUID")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2.SetName("Address")
+
+	col3 := new(MysqlColumn)
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3.SetName("Labels")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+
+	var filterLabels = func(labels map[string]string) map[string]string {
+		var reservedLabels = map[string]struct{}{
+			"os_user":      {},
+			"os_sudouser":  {},
+			"program_name": {},
+		}
+		for k := range labels {
+			if _, ok := reservedLabels[k]; ok || strings.HasPrefix(k, "_") {
+				delete(labels, k)
+			}
+		}
+		return labels
+	}
+
+	tenant := ses.GetTenantInfo().GetTenant()
+	var se clusterservice.Selector
+	if tenant != sysAccountName {
+		labels := ses.GetMysqlProtocol().GetConnectAttrs()
+		labels["account"] = tenant
+		se = clusterservice.NewSelector().SelectByLabel(
+			filterLabels(labels), clusterservice.EQ)
+	}
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetCNService(se, func(s metadata.CNService) bool {
+		row := make([]interface{}, 3)
+		row[0] = s.ServiceID
+		row[1] = s.SQLAddress
+		var labelStr string
+		for key, value := range s.Labels {
+			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
+		}
+		row[2] = labelStr
+		mrs.AddRow(row)
+		return true
+	})
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	if err := doShowBackendServers(ses); err != nil {
+		return err
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
@@ -2282,9 +2359,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		sql = removePrefixComment(sql)
-		sql = hideAccessKey(sql)
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -2312,6 +2387,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var loadLocalWriter *io.PipeWriter
 
 	singleStatement := len(cws) == 1
+	sqlRecord := parsers.HandleSqlForRecord(sql)
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -2331,7 +2407,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if i < len(ses.sqlSourceType) {
 			sqlType = ses.sqlSourceType[i]
 		}
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, sqlType, singleStatement)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -2589,7 +2665,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.AlterUser: //TODO
+			selfHandle = true
 			ses.InvalidatePrivilegeCache()
+			if err = mce.handleAlterUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.CreateRole:
 			selfHandle = true
 			ses.InvalidatePrivilegeCache()
@@ -2667,6 +2747,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Load:
 			if st.Local {
 				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
+			}
+		case *tree.ShowBackendServers:
+			selfHandle = true
+			if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
+				goto handleFailed
 			}
 		}
 
@@ -3188,15 +3273,16 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
 	}
 
 	singleStatement := len(stmtExecs) == 1
-	for _, exec := range stmtExecs {
-		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, "", singleStatement)
+	sqlRecord := parsers.HandleSqlForRecord(sql)
+	for i, exec := range stmtExecs {
+		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
 			return err
 		}
@@ -3253,7 +3339,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			int(COM_QUIT),
 			nil,
 		)*/
-		return resp, nil
+		return resp, moerr.NewInternalError(requestCtx, "client send quit")
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)

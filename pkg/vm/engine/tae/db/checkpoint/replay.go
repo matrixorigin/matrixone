@@ -66,7 +66,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	if err != nil {
 		return
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, dir.Size, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
 	if err != nil {
 		return
 	}
@@ -83,7 +83,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if bats[0].Vecs[i].Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i])
+			vec = containers.ToDNVector(bats[0].Vecs[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}

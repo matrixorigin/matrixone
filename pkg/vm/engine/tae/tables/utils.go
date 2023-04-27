@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -39,7 +38,6 @@ func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err erro
 }
 
 func LoadPersistedColumnData(
-	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
@@ -56,7 +54,7 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.NewVectorWithSharedMemory(bat.Vecs[0]), nil
+	return containers.ToDNVector(bat.Vecs[0]), nil
 }
 
 func ReadPersistedBlockRow(location objectio.Location) int {
@@ -64,7 +62,6 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
-	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, location)
@@ -78,7 +75,7 @@ func LoadPersistedDeletes(
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	for i := 0; i < 3; i++ {
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat.Vecs[i]))
+		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return
 }

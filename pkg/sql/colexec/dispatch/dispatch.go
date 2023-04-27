@@ -79,7 +79,6 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
-
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}
@@ -101,20 +100,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat.Length() == 0 {
 		return false, nil
 	}
-
-	for i := range bat.Vecs {
-		if bat.Vecs[i].NeedDup() {
-			oldVec := bat.Vecs[i]
-			cloneVec, err := bat.Vecs[i].Dup(proc.Mp())
-			if err != nil {
-				bat.Clean(proc.Mp())
-				return false, err
-			}
-			bat.ReplaceVector(oldVec, cloneVec)
-			oldVec.Free(proc.Mp())
-		}
-	}
-
 	return ap.ctr.sendFunc(bat, ap, proc)
 }
 

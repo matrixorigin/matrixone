@@ -40,7 +40,7 @@ type WriteOptions struct {
 }
 
 type ReadBlockOptions struct {
-	Id    uint32
+	Id    uint16
 	Idxes map[uint16]bool
 }
 
@@ -53,7 +53,7 @@ type Writer interface {
 	Write(batch *batch.Batch) (BlockObject, error)
 
 	// Write metadata for every column of all blocks
-	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ObjectColumnMeta)
+	WriteObjectMeta(ctx context.Context, totalRow uint32, metas []ColumnMeta)
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
@@ -69,28 +69,28 @@ type Reader interface {
 		extent *Extent, idxs []uint16,
 		id uint32,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	ReadAll(
 		ctx context.Context,
 		extent *Extent,
 		idxs []uint16,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc,
+		readFunc CacheConstructorFactory,
 	) (*fileservice.IOVector, error)
 
 	ReadBlocks(ctx context.Context,
 		extent *Extent,
 		ids map[uint32]*ReadBlockOptions,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
 	ReadMeta(ctx context.Context, extent *Extent, m *mpool.MPool) (ObjectMeta, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) (ObjectMeta, error)
+	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectMeta, error)
 
 	GetObject() *Object
 }

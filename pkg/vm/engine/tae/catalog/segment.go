@@ -32,15 +32,6 @@ import (
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
-func compareSegmentFn(a, b *SegmentEntry) int {
-	if a.SortHint < b.SortHint {
-		return -1
-	} else if a.SortHint > b.SortHint {
-		return 1
-	}
-	return 0
-}
-
 type SegmentEntry struct {
 	ID types.Uuid
 	*BaseEntryImpl[*MetadataMVCCNode]
@@ -58,7 +49,7 @@ func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:    state,
@@ -76,7 +67,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
@@ -84,11 +75,11 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: common.NewSegmentid(),
+		ID: objectio.NewSegmentid(),
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:   ES_Appendable,
@@ -104,7 +95,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state: ES_Appendable,
@@ -112,11 +103,12 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	}
 	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid types.Blockid
-	if table.schema.Name == SystemTableSchema.Name {
+	schema := table.GetLastestSchema()
+	if schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
-	} else if table.schema.Name == SystemDBSchema.Name {
+	} else if schema.Name == SystemDBSchema.Name {
 		bid = SystemBlock_DB_ID
-	} else if table.schema.Name == SystemColumnSchema.Name {
+	} else if schema.Name == SystemColumnSchema.Name {
 		bid = SystemBlock_Columns_ID
 	} else {
 		panic("not supported")
@@ -124,6 +116,15 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
+}
+
+func (entry *SegmentEntry) Less(b *SegmentEntry) int {
+	if entry.SortHint < b.SortHint {
+		return -1
+	} else if entry.SortHint > b.SortHint {
+		return 1
+	}
+	return 0
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {
@@ -296,12 +297,12 @@ func (entry *SegmentEntry) CreateBlock(
 	defer entry.Unlock()
 	var id types.Blockid
 	if opts != nil && opts.Id != nil {
-		id = common.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
 			entry.nextObjectIdx = opts.Id.Filen + 1
 		}
 	} else {
-		id = common.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
+		id = objectio.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
 		entry.nextObjectIdx += 1
 	}
 	if entry.nextObjectIdx == math.MaxUint16 {

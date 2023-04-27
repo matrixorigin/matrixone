@@ -16,9 +16,10 @@ package blockio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -74,7 +75,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 			if err != nil {
 				return 0, err
 			}
-			objectSize += col.GetMeta().Location().Length()
+			objectSize += col.Location().Length()
 		}
 	}
 	return objectSize, nil
@@ -87,6 +88,10 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 		panic(fmt.Sprintf("info: %v", info))
 	}
 	num, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	alg, err := strconv.ParseUint(location[2], 10, 32)
 	if err != nil {
 		return nil, err
 	}
@@ -110,13 +115,13 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(uint8(alg), uint32(offset), uint32(size), uint32(osize))
 	uid, err := types.ParseUuid(location[0])
 	if err != nil {
 		return nil, err
 	}
 	name := objectio.BuildObjectName(uid, uint16(num))
-	return objectio.BuildLocation(name, extent, uint32(rows), uint32(id)), nil
+	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }
 
 // EncodeLocation Generate a metaloc
@@ -124,6 +129,6 @@ func EncodeLocation(
 	name objectio.ObjectName,
 	extent objectio.Extent,
 	rows uint32,
-	id uint32) objectio.Location {
+	id uint16) objectio.Location {
 	return objectio.BuildLocation(name, extent, rows, id)
 }

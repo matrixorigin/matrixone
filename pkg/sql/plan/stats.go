@@ -190,7 +190,12 @@ func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
 		return -1
 	}
 
-	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+	ctx := builder.ctxByNode[nodeID]
+	if ctx == nil {
+		return -1
+	}
+
+	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
 		s := sc.GetStatsInfoMap(binding.tableID)
 		return s.NdvMap[binding.cols[col.ColPos]]
 	} else {
@@ -640,14 +645,29 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 
+	case plan.Node_VALUE_SCAN:
+		if node.RowsetData == nil {
+			node.Stats = DefaultStats()
+		} else {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			blockNumber := rowCount/8192 + 1
+			node.Stats = &plan.Stats{
+				TableCnt:    (rowCount),
+				BlockNum:    int32(blockNumber),
+				Outcnt:      rowCount,
+				Cost:        rowCount,
+				Selectivity: 1,
+			}
+		}
+
+	case plan.Node_SINK_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+
 	case plan.Node_EXTERNAL_SCAN:
-		// no good method to estimate external table
-		node.Stats = &plan.Stats{
-			TableCnt:    1000000,
-			BlockNum:    100,
-			Outcnt:      1000000,
-			Cost:        1000000,
-			Selectivity: 1,
+		//calc for external scan is heavy, avoid recalc of this
+		if node.Stats == nil || node.Stats.TableCnt == 0 {
+			node.Stats = getExternalStats(node, builder)
 		}
 
 	case plan.Node_TABLE_SCAN:
@@ -699,6 +719,16 @@ func NeedStats(tableDef *TableDef) bool {
 	return true
 }
 
+func DefaultHugeStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = 10000000
+	stats.Outcnt = 10000000
+	stats.Selectivity = 1
+	stats.BlockNum = 1000
+	return stats
+}
+
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 1000
@@ -709,45 +739,39 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) int32 {
+// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
+const kLeftRightRatio = 1.3
+
+func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
-		for i, child := range node.Children {
-			node.Children[i] = builder.applySwapRuleByStats(child, recursive)
+		for _, child := range node.Children {
+			builder.applySwapRuleByStats(child, recursive)
 		}
 	}
 	if node.NodeType != plan.Node_JOIN {
-		return nodeID
+		return
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	rightChild := builder.qry.Nodes[node.Children[1]]
 	if rightChild.NodeType == plan.Node_FUNCTION_SCAN {
-		return nodeID
+		return
 	}
 
-	if node.JoinType == plan.Node_LEFT {
-		//right join does not support non equal join for now
-		//left join has a better performance than right join, so 1.3 is a threshold
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*1.3 < rightChild.Stats.Outcnt {
-			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_RIGHT
-		}
-		return nodeID
-	}
-	if node.JoinType == plan.Node_RIGHT {
-		//right join does not support non equal join for now
-		//left join has a better performance than right join, so 1.3 is a threshold
-		if !IsEquiJoin(node.OnList) || leftChild.Stats.Outcnt < rightChild.Stats.Outcnt*1.3 {
-			node.Children, node.JoinType = []int32{node.Children[1], node.Children[0]}, plan.Node_LEFT
-		}
-		return nodeID
-	}
-	if node.JoinType == plan.Node_INNER {
+	switch node.JoinType {
+	case plan.Node_INNER, plan.Node_OUTER:
 		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
-			node.Children = []int32{node.Children[1], node.Children[0]}
+			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+
+		}
+
+	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+		//right joins does not support non equal join for now
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+			node.BuildOnLeft = true
 		}
 	}
-	return nodeID
 }
 
 func compareStats(stats1, stats2 *Stats) bool {

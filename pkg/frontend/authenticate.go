@@ -93,6 +93,10 @@ func (ti *TenantInfo) GetUser() string {
 	return ti.User
 }
 
+func (ti *TenantInfo) SetUser(user string) {
+	ti.User = user
+}
+
 func (ti *TenantInfo) GetUserID() uint32 {
 	return ti.UserID
 }
@@ -369,7 +373,7 @@ const (
 
 	moCatalog = "mo_catalog"
 
-	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatbility_mode_temp_db"
+	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatibility_mode_temp_db"
 )
 
 type objectType int
@@ -707,37 +711,37 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                    0,
-		"mo_account":                 0,
-		"mo_role":                    0,
-		"mo_user_grant":              0,
-		"mo_role_grant":              0,
-		"mo_role_privs":              0,
-		"mo_user_defined_function":   0,
-		"mo_mysql_compatbility_mode": 0,
-		catalog.AutoIncrTableName:    0,
+		"mo_user":                     0,
+		"mo_account":                  0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_mysql_compatibility_mode": 0,
+		catalog.AutoIncrTableName:     0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                0,
-		"mo_tables":                  0,
-		"mo_columns":                 0,
-		"mo_account":                 0,
-		"mo_user":                    0,
-		"mo_role":                    0,
-		"mo_user_grant":              0,
-		"mo_role_grant":              0,
-		"mo_role_privs":              0,
-		"mo_user_defined_function":   0,
-		"mo_stored_procedure":        0,
-		"mo_mysql_compatbility_mode": 0,
-		catalog.AutoIncrTableName:    0,
-		"mo_indexes":                 0,
-		"mo_pubs":                    0,
+		"mo_database":                 0,
+		"mo_tables":                   0,
+		"mo_columns":                  0,
+		"mo_account":                  0,
+		"mo_user":                     0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
+		"mo_mysql_compatibility_mode": 0,
+		catalog.AutoIncrTableName:     0,
+		"mo_indexes":                  0,
+		"mo_pubs":                     0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
-	// mo_indexes table does not have primary keys and index constraints, nor does it have self increasing columns,
+	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
@@ -750,14 +754,15 @@ var (
 				column_name    varchar(256) not null,
 				ordinal_position  int unsigned  not null,
 				options     text,
-				index_table_name varchar(5000)
+				index_table_name varchar(5000),
+				primary key(id, column_name)
 			);`
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
 		`create table mo_user(
-				user_id int signed auto_increment,
+				user_id int signed auto_increment primary key,
 				user_host varchar(100),
 				user_name varchar(300),
 				authentication_string varchar(100),
@@ -770,15 +775,16 @@ var (
 				default_role int signed
     		);`,
 		`create table mo_account(
-				account_id int signed auto_increment,
+				account_id int signed auto_increment primary key,
 				account_name varchar(300),
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
+				version bigint unsigned auto_increment,
 				suspended_time timestamp default NULL
 			);`,
 		`create table mo_role(
-				role_id int signed auto_increment,
+				role_id int signed auto_increment primary key,
 				role_name varchar(300),
 				creator int signed,
 				owner int signed,
@@ -789,7 +795,8 @@ var (
 				role_id int signed,
 				user_id int signed,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(role_id, user_id)
 			);`,
 		`create table mo_role_grant(
 				granted_id int signed,
@@ -797,7 +804,8 @@ var (
 				operation_role_id int signed,
 				operation_user_id int signed,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(granted_id, grantee_id)
 			);`,
 		`create table mo_role_privs(
 				role_id int signed,
@@ -809,12 +817,13 @@ var (
 				privilege_level varchar(100),
 				operation_user_id int unsigned,
 				granted_time timestamp,
-				with_grant_option bool
+				with_grant_option bool,
+				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
 			);`,
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
 				name     varchar(100),
-				creator  int unsigned,
+				owner  int unsigned,
 				args     text,
 				retType  varchar(20),
 				body     text,
@@ -831,7 +840,7 @@ var (
 				database_collation varchar(64),
 				primary key(function_id)
 			);`,
-		`create table mo_mysql_compatbility_mode(
+		`create table mo_mysql_compatibility_mode(
 				configuration_id int auto_increment,
 				account_name varchar(300),
 				dat_name     varchar(5000),
@@ -879,7 +888,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
-		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 	}
 	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
@@ -887,14 +896,14 @@ var (
 
 	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
 
-	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_name,
 		dat_name,
 		configuration) values ("%s","%s",%s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
-			creator,
+			owner,
 			args,
 			retType,
 			body,
@@ -998,11 +1007,13 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,suspended_time from mo_catalog.mo_account where account_name = "%s";`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s";`
 
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
 
 	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
+
+	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = "%s" where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
@@ -1244,20 +1255,20 @@ const (
 	// delete stored procedure from mo_user_defined_function
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
-	// delete a tuple from mo_mysql_compatbility_mode when drop a database
-	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+	// delete a tuple from mo_mysql_compatibility_mode when drop a database
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
 
 	getDbName = `select datname from mo_catalog.mo_database where datname = "%s";`
 
-	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
 
-	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatibility_mode where account_name = "%s";`
 
-	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
+	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatibility_mode set configuration = %s where account_name = "%s";`
 
-	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1373,6 +1384,14 @@ func getSqlForUpdateStatusOfAccount(ctx context.Context, status, timestamp, acco
 		return "", err
 	}
 	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account), nil
+}
+
+func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, timestamp, account string, version uint64) (string, error) {
+	err := inputNameIsInvalid(ctx, status, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, timestamp, account), nil
 }
 
 func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (string, error) {
@@ -2310,11 +2329,161 @@ func normalizeNamesOfUsers(ctx context.Context, users []*tree.User) error {
 	return nil
 }
 
+func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
+
+	var err error
+	var sql string
+	var vr *verifiedRole
+	var user *tree.User
+	var userName string
+	var hostName string
+	var password string
+	var erArray []ExecResult
+	var encryption string
+	account := ses.GetTenantInfo()
+	currentUser := account.User
+
+	//1.authenticate the actions
+	if au.Role != nil {
+		return moerr.NewInternalError(ctx, "not support alter role")
+	}
+	if au.MiscOpt != nil {
+		return moerr.NewInternalError(ctx, "not support password or lock operation")
+	}
+	if au.CommentOrAttribute.Exist {
+		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
+	}
+	if len(au.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+
+	err = normalizeNamesOfUsers(ctx, au.Users)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	user = au.Users[0]
+	userName = user.Username
+	hostName = user.Hostname
+	password = user.AuthOption.Str
+	if len(password) == 0 {
+		err = moerr.NewInternalError(ctx, "password is empty string")
+		goto handleFailed
+	}
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if user.AuthOption == nil {
+		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
+		goto handleFailed
+	}
+
+	if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
+		goto handleFailed
+	}
+
+	//check the user exists or not
+	sql, err = getSqlForPasswordOfUser(ctx, userName)
+	if err != nil {
+		goto handleFailed
+	}
+	vr, err = verifyRoleFunc(ctx, bh, sql, userName, roleType)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if vr == nil {
+		//If Exists :
+		// false : return an error
+		// true : return and  do nothing
+		if !au.IfExists {
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
+			goto handleFailed
+		} else {
+			return err
+		}
+	}
+
+	//if the user is admin user with the role moadmin or accountadmin,
+	//the user can be altered
+	//otherwise only general user can alter itself
+	if account.IsSysTenant() {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
+	} else {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
+	}
+	if err != nil {
+		goto handleFailed
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//encryption the password
+	encryption = HashPassWord(password)
+
+	if execResultArrayHasData(erArray) {
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		if currentUser != userName {
+			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			goto handleFailed
+		}
+		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+
+}
 func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) error {
 	var err error
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
+	var version uint64
 	var accountExist bool
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
@@ -2399,6 +2568,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			if err != nil {
 				goto handleFailed
 			}
+			version, err = erArray[0].GetUint64(ctx, i, 3)
+			if err != nil {
+				goto handleFailed
+			}
 		}
 		accountExist = true
 	} else {
@@ -2439,7 +2612,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			}
 
 			//2, update the password
-			sql, err = getSqlForUpdatePasswordOfUser(ctx, aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			//encryption the password
+			encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2465,14 +2640,26 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 		//Option 3: suspend or resume the account
 		if aa.StatusOption.Exist {
-			sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
-			if err != nil {
-				goto handleFailed
-			}
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				goto handleFailed
+			if aa.StatusOption.Option == tree.AccountStatusSuspend {
+				sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+				if err != nil {
+					goto handleFailed
+				}
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+			} else if aa.StatusOption.Option == tree.AccountStatusOpen {
+				sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxUint64)
+				if err != nil {
+					goto handleFailed
+				}
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
 			}
 		}
 	}
@@ -2481,6 +2668,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if alter account suspend, add the account to kill queue
+	if accountExist {
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
+			ses.getRoutineManager().accountRoutine.enKillQueue(int64(targetAccountId), version)
+		}
+	}
+
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -3119,6 +3314,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 
 	var deleteCtx context.Context
 	var accountId int64
+	var version uint64
 	var hasAccount = true
 	clusterTables := make(map[string]int)
 
@@ -3157,6 +3353,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		if err != nil {
 			goto handleFailed
 		}
+		version, err = erArray[0].GetUint64(ctx, 0, 3)
+		if err != nil {
+			goto handleFailed
+		}
 	} else {
 		//no such account
 		if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
@@ -3181,7 +3381,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 5 : drop table mo_role_grant
 	//step 6 : drop table mo_role_privs
 	//step 7 : drop table mo_user_defined_function
-	//step 8 : drop table mo_mysql_compatbility_mode
+	//step 8 : drop table mo_mysql_compatibility_mode
 	//step 9 : drop table %!%mo_increment_columns
 	for _, sql = range getSqlForDropAccount() {
 		err = bh.Exec(deleteCtx, sql)
@@ -3323,6 +3523,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	if err != nil {
 		goto handleFailed
 	}
+
+	//if drop the account, add the account to kill queue
+	ses.getRoutineManager().accountRoutine.enKillQueue(accountId, version)
+
 	return err
 
 handleFailed:
@@ -4784,7 +4988,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions:
+		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowBackendServers:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ShowAccounts:
@@ -6206,7 +6411,8 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	bh := NewBackgroundHandler(ctx, ctx, mp, pu, aicm)
+	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
+	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -6298,8 +6504,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 		defaultPassword = d
 	}
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, defaultPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, defaultPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	//encryption the password
+	encryption := HashPassWord(defaultPassword)
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
@@ -6339,7 +6548,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
-	//step6: add new entries to the mo_compatbility_mode
+	//step6: add new entries to the mo_compatibility_mode
 	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
@@ -6581,7 +6790,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		goto handleFailed
 	}
 
-	//step2.Add new entries to the mo_mysql_compatbility_mode when create a new account
+	//step2.Add new entries to the mo_mysql_compatibility_mode when create a new account
 	// configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	// sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	// err = bh.Exec(ctx, sql)
@@ -6645,6 +6854,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		return err
 	}
+	//encryption the password
+	encryption := HashPassWord(password)
 	status := rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
@@ -6653,7 +6864,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, password, status,
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, encryption, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -6689,7 +6900,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
-	//step6: add new entries to the mo_mysql_compatbility_mode
+	//step6: add new entries to the mo_mysql_compatibility_mode
 	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
 	addSqlIntoSet(initMoMysqlCompatbilityMode)
@@ -6923,12 +7134,15 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			goto handleFailed
 		}
 
+		//encryption the password
+		encryption := HashPassWord(password)
+
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		host = user.Hostname
 		if len(user.Hostname) == 0 || user.Hostname == "%" {
 			host = rootHost
 		}
-		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, password, status,
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
@@ -7309,7 +7523,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		goto handleFailed
 	}
 
-	//step2: update the mo_mysql_compatbility_mode of that database
+	//step2: update the mo_mysql_compatibility_mode of that database
 	sql, err = getSqlForUpdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname)
 	if err != nil {
 		goto handleFailed

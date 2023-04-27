@@ -43,6 +43,20 @@ func init() {
 	}
 }
 
+func TestBatchMarshalAndUnmarshal(t *testing.T) {
+	for _, tc := range tcs {
+		data, err := tc.bat.MarshalBinary()
+		require.NoError(t, err)
+
+		rbat := new(Batch)
+		err = rbat.UnmarshalBinary(data)
+		require.NoError(t, err)
+		for i, vec := range rbat.Vecs {
+			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
+		}
+	}
+}
+
 func TestBatch(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := types.Encode(tc.bat)

@@ -21,7 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
+
+var statsFamilyName = "proxy counter"
 
 type Server struct {
 	runtime runtime.Runtime
@@ -31,6 +35,10 @@ type Server struct {
 
 	// handler handles the client connection.
 	handler *handler
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
+	// for test.
+	testHAKeeperClient logservice.ClusterHAKeeperClient
 }
 
 // NewServer creates the proxy server.
@@ -39,7 +47,8 @@ type Server struct {
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
 	config.FillDefault()
 	s := &Server{
-		config: config,
+		config:     config,
+		counterSet: newCounterSet(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -47,8 +56,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if s.runtime == nil {
 		panic("runtime of proxy is not set")
 	}
+
+	logExporter := newCounterLogExporter(s.counterSet)
+	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
+
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
-	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper)
+	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.testHAKeeperClient)
 	if err != nil {
 		return nil, err
 	}
@@ -76,5 +89,7 @@ func (s *Server) Start() error {
 // Close closes the proxy server.
 func (s *Server) Close() error {
 	_ = s.handler.Close()
+	s.stopper.Stop()
+	stats.Unregister(statsFamilyName)
 	return s.app.Stop()
 }

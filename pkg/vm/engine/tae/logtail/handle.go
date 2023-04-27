@@ -93,7 +93,7 @@ const Size90M = 90 * 1024 * 1024
 
 type CheckpointClient interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
-	FlushTable(dbID, tableID uint64, ts types.TS) error
+	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 }
 
 func DecideTableScope(tableID uint64) Scope {
@@ -173,8 +173,8 @@ func HandleSyncLogTailReq(
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
-			_ = ckpClient.FlushTable(did, tid, end)
+		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
+			_ = ckpClient.FlushTable(context.Background(), did, tid, end)
 			// try again after flushing
 			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
@@ -251,9 +251,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -279,7 +279,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 				dstBatch = b.insBatch
 				// fill unique syscol fields if inserting
 				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
-					txnimpl.FillColumnRow(entry, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
+					txnimpl.FillColumnRow(entry, tblNode, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
 				}
 			} else {
 				dstBatch = b.delBatch
@@ -290,15 +290,15 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
 			tableID := entry.GetID()
 			commitTs := tblNode.GetEnd()
-			for _, usercol := range entry.GetSchema().ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))))
-				commitVec.Append(commitTs)
+			for _, usercol := range node.BaseNode.Schema.ColDefs {
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
+				commitVec.Append(commitTs, false)
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			}
 		}
 	}
@@ -369,16 +369,15 @@ func catalogEntry2Batch[
 	e T,
 	node N,
 	schema *catalog.Schema,
-	fillDataRow func(e T, node N, attr string, col containers.Vector, ts types.TS),
+	fillDataRow func(e T, node N, attr string, col containers.Vector),
 	rowid types.Rowid,
 	commitTs types.TS,
-	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
+		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
+	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid, false)
+	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
 }
 
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
@@ -404,7 +403,8 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 	}
 	b.BlockFn = b.VisitBlk
 
-	schema := tbl.GetSchema()
+	// TODO(aptend): there can be more than one schema.
+	schema := tbl.GetLastestSchema()
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
@@ -490,15 +490,15 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable(), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
@@ -506,8 +506,8 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID))
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
 	}
 
 }
@@ -637,7 +637,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range locations {
-		pref, err := blockio.BuildPrefetch(fs, objectLocations[i])
+		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
 		if err != nil {
 			return nil, err
 		}
@@ -646,7 +646,7 @@ func LoadCheckpointEntries(
 			for col := range item.attrs {
 				idxes[col] = uint16(col)
 			}
-			pref.AddBlock(idxes, []uint32{uint32(idx)})
+			pref.AddBlock(idxes, []uint16{uint16(idx)})
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
@@ -659,7 +659,7 @@ func LoadCheckpointEntries(
 		data := NewCheckpointData()
 		for idx, item := range checkpointDataRefer {
 			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint32(idx), readers[i])
+			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
 			if err != nil {
 				return nil, err
 			}

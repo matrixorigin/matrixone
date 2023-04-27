@@ -51,7 +51,6 @@ func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 }
 
 func (c *CompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
-	//TODO implement me
 	return nil
 }
 
@@ -172,8 +171,9 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	objRef = &plan.ObjectRef{
-		SchemaName: schemaName,
-		ObjName:    tableName,
+		SchemaName:   schemaName,
+		ObjName:      tableName,
+		PubAccountId: -1,
 	}
 
 	tableDef = &plan.TableDef{

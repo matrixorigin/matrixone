@@ -317,6 +317,13 @@ func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
+func (o *testOperator) AddWorkspace(_ client.Workspace) {
+}
+
+func (o *testOperator) GetWorkspace() client.Workspace {
+	return nil
+}
+
 func (o *testOperator) ApplySnapshot(data []byte) error {
 	return nil
 }

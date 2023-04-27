@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"golang.org/x/net/context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -78,10 +79,12 @@ type TxnHandle interface {
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
 	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
+	CreateDatabaseWithCtx(ctx context.Context,
+		name, createSql, datTyp string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
+	GetDatabaseWithCtx(ctx context.Context, name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 }
@@ -241,7 +244,7 @@ type TxnStore interface {
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
-	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
+	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
 	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)

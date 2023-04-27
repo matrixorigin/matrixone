@@ -39,7 +39,7 @@ type BlockWriter struct {
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriter(name, fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterETL, name, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 }
 
 func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriterNew(name, fs)
+	writer, err := objectio.NewObjectWriter(name, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -66,13 +66,6 @@ func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*B
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.isSetPK = true
 	w.pk = idx
-}
-
-func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	block, err = w.WriteBatch(bat)
-	return
 }
 
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
@@ -90,10 +83,12 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
-		columnData := containers.NewVectorWithSharedMemory(vec)
+		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
-		w.objMetaBuilder.InspectVector(i, columnData)
+		ndv := w.objMetaBuilder.InspectVector(i, columnData)
 
+		// set col distinct value
+		block.MustGetColumn(uint16(i)).SetNdv(ndv)
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid)
 		if err = index.BatchUpdateZM(zm, columnData); err != nil {
@@ -123,12 +118,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	return block, nil
 }
 
-func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	return w.writer.Write(bat)
-}
-
 func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
 	return w.writer.Write(batch)
 }
@@ -145,7 +134,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		return blocks, objectio.Extent{}, err
 	}
 	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
-	return blocks, *blocks[0].BlockHeader().MetaLocation(), err
+	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
 
 func (w *BlockWriter) GetName() objectio.ObjectName {

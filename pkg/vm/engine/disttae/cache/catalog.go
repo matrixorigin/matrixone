@@ -403,8 +403,8 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
+	attr.Default = new(plan.Default)
 	if col.hasDef == 1 {
-		attr.Default = new(plan.Default)
 		if err := types.Decode(col.defaultExpr, attr.Default); err != nil {
 			panic(err)
 		}

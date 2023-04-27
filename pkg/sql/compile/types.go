@@ -40,9 +40,11 @@ const (
 	MinBlockNum = 200
 )
 
+type magicType int
+
 // type of scope
 const (
-	Merge = iota
+	Merge magicType = iota
 	Normal
 	Remote
 	Parallel
@@ -61,24 +63,27 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	MergeDelete
 	CreateSequence
 	DropSequence
 	AlterSequence
+	MagicDelete
 )
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
-	PushdownId   uint64
-	PushdownAddr string
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	R            engine.Reader
-	Bat          *batch.Batch
-	Expr         *plan.Expr
-	TableDef     *plan.TableDef
-	Timestamp    timestamp.Timestamp
-	AccountId    int32
+	PushdownId             uint64
+	PushdownAddr           string
+	SchemaName             string
+	RelationName           string
+	PartitionRelationNames []string
+	Attributes             []string
+	R                      engine.Reader
+	Bat                    *batch.Batch
+	Expr                   *plan.Expr
+	TableDef               *plan.TableDef
+	Timestamp              timestamp.Timestamp
+	AccountId              int32
 }
 
 // Col is the information of attribute
@@ -94,7 +99,7 @@ type Scope struct {
 	// 0 -  execution unit for reading data.
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
-	Magic int
+	Magic magicType
 
 	// IsEnd means the pipeline is join
 	IsJoin bool
@@ -104,6 +109,9 @@ type Scope struct {
 
 	// IsRemote means the pipeline is remote
 	IsRemote bool
+
+	// IsRemote means the pipeline is load
+	IsLoad bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.

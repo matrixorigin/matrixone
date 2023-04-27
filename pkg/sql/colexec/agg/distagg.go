@@ -76,7 +76,7 @@ func (a *UnaryDistAgg[T1, T2]) InputTypes() []types.Type {
 }
 
 func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
-	if a.otyp.IsString() {
+	if a.otyp.IsVarlen() {
 		if len(a.vs) == 0 {
 			a.es = make([]bool, 0, size)
 			a.vs = make([]T2, 0, size)
@@ -160,7 +160,7 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 	if hasNull {
 		return nil
 	}
-	if vec.GetType().IsString() {
+	if vec.GetType().IsVarlen() {
 		v = (any)(vec.GetBytesAt(int(sel))).(T1)
 	} else {
 		v = vector.GetFixedAt[T1](vec, int(sel))
@@ -175,7 +175,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 	var err error
 
 	vec := vecs[0]
-	if vec.GetType().IsString() {
+	if vec.GetType().IsVarlen() {
 		for i := range os {
 			if vps[i] == 0 {
 				continue
@@ -224,7 +224,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 	var err error
 
 	vec := vecs[0]
-	if vec.GetType().IsString() {
+	if vec.GetType().IsVarlen() {
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			str := vec.GetBytesAt(j)
@@ -333,7 +333,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 			}
 		}
 	}
-	if a.otyp.IsString() {
+	if a.otyp.IsVarlen() {
 		vec := vector.NewVec(a.otyp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
@@ -386,12 +386,12 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Private:    pData,
 		Es:         a.es,
 		IsCount:    a.isCount,
-		InputType:  a.ityps,
+		InputTypes: a.ityps,
 		OutputType: a.otyp,
 		Srcs:       a.srcs,
 	}
 	switch {
-	case types.IsString(a.otyp.Oid):
+	case a.otyp.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -420,7 +420,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 	// Recover data
 	a.op = decode.Op
-	a.ityps = decode.InputType
+	a.ityps = decode.InputTypes
 	a.otyp = decode.OutputType
 	a.es = decode.Es
 	data = make([]byte, len(decode.Da))
@@ -449,7 +449,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
 	switch {
-	case types.IsString(typ.Oid):
+	case typ.Oid.IsMySQLString():
 		a := agg.(*UnaryDistAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))

@@ -70,8 +70,8 @@ func (node *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
+			node.block.indexCache,
 			node.block.fs,
-			node.block.meta.AsCommonID(),
 			metaloc,
 			schema.ColDefs[i]); err != nil {
 			panic(err)
@@ -155,7 +155,7 @@ func (node *persistedNode) ApplyAppend(
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
-func (node *persistedNode) GetValueByRow(row, col int) (v any) {
+func (node *persistedNode) GetValueByRow(row, col int) (v any, isNull bool) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 

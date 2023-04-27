@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -45,7 +44,7 @@ type txnStore struct {
 	transferTable *model.HashPageTable
 	dbs           map[uint64]*txnDB
 	driver        wal.Driver
-	nodesMgr      base.INodeManager
+	indexCache    model.LRUCache
 	txn           txnif.AsyncTxn
 	catalog       *catalog.Catalog
 	cmdMgr        *commandManager
@@ -61,10 +60,10 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, txnBufMgr, dataFactory)
+		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
 	}
 }
 
@@ -72,7 +71,7 @@ func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
-	txnBufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		transferTable: transferTable,
@@ -82,7 +81,7 @@ func newStore(
 		driver:        driver,
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
-		nodesMgr:      txnBufMgr,
+		indexCache:    indexCache,
 		wg:            sync.WaitGroup{},
 	}
 }
@@ -232,7 +231,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, err error) {
+func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -365,7 +364,7 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
-			tblName := tbl.entry.GetSchema().Name
+			tblName := tbl.GetLocalSchema().Name
 			tid := tbl.entry.ID
 			rotateTable(dbName, tblName, dbid, tid)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {

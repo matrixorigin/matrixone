@@ -172,7 +172,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 	return table.GetByFilter(filter)
 }
 
-func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err error) {
+func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return
@@ -337,7 +337,10 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	if db.store.warChecker == nil {
 		db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
 	}
-	table = newTxnTable(db.store, entry)
+	table, err = newTxnTable(db.store, entry)
+	if err != nil {
+		return
+	}
 	table.idx = len(db.tables)
 	db.tables[id] = table
 	return

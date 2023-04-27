@@ -22,47 +22,57 @@ import (
 )
 
 const (
-	FileNameLen = types.UuidSize + 2
-	ExtentOff   = FileNameLen
-	ExtentLen   = 16
+	ExtentOff   = ObjectNameLen
+	ExtentLen   = ExtentSize
 	RowsOff     = ExtentOff + ExtentLen
 	RowsLen     = 4
 	BlockIDOff  = RowsOff + RowsLen
-	BlockIDLen  = 4
-	LocationLen = FileNameLen + ExtentLen + RowsLen + BlockIDLen
+	BlockIDLen  = 2
+	LocationLen = BlockIDOff + BlockIDLen
 )
 
+const (
+	FileNumOff         = SegmentIdSize
+	FileNumLen         = 2
+	NameStringOff      = FileNumOff + FileNumLen
+	NameStringLen      = 42 //uuid[36]+_[1]+filename[5]
+	ObjectNameLen      = NameStringOff + NameStringLen
+	ObjectNameShortLen = NameStringOff
+)
+
+/*
+Location is a fixed-length unmodifiable byte array.
+Layout:  ObjectName | Extent | Rows(uint32) | ID(uint16)
+*/
 type Location []byte
 
-type ObjectName []byte
-
-func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint32) Location {
+func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint16) Location {
 	var location [LocationLen]byte
-	copy(location[:FileNameLen], name)
-	copy(location[ExtentOff:ExtentOff+ExtentSize], extent.Marshal())
+	copy(location[:ObjectNameLen], name)
+	copy(location[ExtentOff:ExtentOff+ExtentSize], extent)
 	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
-	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint32(&id))
+	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint16(&id))
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
 func (l Location) Name() ObjectName {
-	return ObjectName(l[:FileNameLen])
+	return ObjectName(l[:ObjectNameLen])
 }
 
-func (l Location) Extent() *Extent {
-	return (*Extent)(unsafe.Pointer(&l[ExtentOff]))
+func (l Location) Extent() Extent {
+	return Extent(l[ExtentOff : ExtentOff+ExtentLen])
 }
 
 func (l Location) Rows() uint32 {
 	return types.DecodeUint32(l[RowsOff : RowsOff+RowsLen])
 }
 
-func (l Location) ID() uint32 {
-	return types.DecodeUint32(l[BlockIDOff : BlockIDOff+BlockIDLen])
+func (l Location) ID() uint16 {
+	return types.DecodeUint16(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
 func (l Location) IsEmpty() bool {
-	return len(l) == 0
+	return len(l) < LocationLen || types.DecodeInt64(l[:ObjectNameLen]) == 0
 }
 
 func (l Location) String() string {
@@ -73,23 +83,4 @@ func (l Location) String() string {
 		return string(l)
 	}
 	return fmt.Sprintf("%v_%v_%d_%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
-}
-
-func BuildObjectName(uuid types.Uuid, num uint16) ObjectName {
-	var name [FileNameLen]byte
-	copy(name[:types.UuidSize], types.EncodeUuid(&uuid))
-	copy(name[types.UuidSize:FileNameLen], types.EncodeUint16(&num))
-	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), FileNameLen)
-}
-
-func (o ObjectName) String() string {
-	return fmt.Sprintf("%v_%d", types.DecodeUuid(o[:16]).ToString(), types.DecodeUint16(o[16:18]))
-}
-
-func (o ObjectName) Sid() types.Uuid {
-	return types.DecodeUuid(o[:types.UuidSize])
-}
-
-func (o ObjectName) Num() uint16 {
-	return types.DecodeUint16(o[types.UuidSize:FileNameLen])
 }

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -106,6 +107,65 @@ type Type struct {
 	Scale int32
 }
 
+// ProtoSize is used by gogoproto.
+func (t *Type) ProtoSize() int {
+	return 2*4 + 4*3
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
+	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	binary.BigEndian.PutUint16(data[4:], uint16(t.dummy1))
+	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
+	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
+	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
+	return 20, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (t *Type) MarshalTo(data []byte) (int, error) {
+	size := t.ProtoSize()
+	return t.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (t *Type) Marshal() ([]byte, error) {
+	data := make([]byte, t.ProtoSize())
+	n, err := t.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
+func (t *Type) Unmarshal(data []byte) error {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
+	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
+	t.dummy1 = uint8(binary.BigEndian.Uint16(data[4:]))
+	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
+	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
+	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
+	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+	return nil
+}
+
+func (t *Type) MarshalBinary() ([]byte, error) {
+	return t.Marshal()
+}
+
+func (t *Type) UnmarshalBinary(data []byte) error {
+	return t.Unmarshal(data)
+}
+
 type Date int32
 
 type Datetime int64
@@ -113,10 +173,12 @@ type Timestamp int64
 type Time int64
 
 type Decimal64 uint64
+
 type Decimal128 struct {
 	B0_63   uint64
 	B64_127 uint64
 }
+
 type Decimal256 struct {
 	B0_63    uint64
 	B64_127  uint64
@@ -133,11 +195,89 @@ type Uuid [16]byte
 // See txts.go for impl.
 type TS [TxnTsSize]byte
 
+// ProtoSize is used by gogoproto.
+func (ts *TS) ProtoSize() int {
+	return TxnTsSize
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (ts *TS) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < ts.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, ts[:])
+	return n, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (ts *TS) MarshalTo(data []byte) (int, error) {
+	size := ts.ProtoSize()
+	return ts.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (ts *TS) Marshal() ([]byte, error) {
+	data := make([]byte, ts.ProtoSize())
+	n, err := ts.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
+func (ts *TS) Unmarshal(data []byte) error {
+	if len(data) < ts.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(ts[:], data)
+	return nil
+}
+
 // Rowid
 type Rowid [RowidSize]byte
 
 // Blockid
 type Blockid [BlockidSize]byte
+
+// ProtoSize is used by gogoproto.
+func (b *Blockid) ProtoSize() int {
+	return BlockidSize
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (b *Blockid) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < b.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, b[:])
+	return n, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (b *Blockid) MarshalTo(data []byte) (int, error) {
+	size := b.ProtoSize()
+	return b.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (b *Blockid) Marshal() ([]byte, error) {
+	data := make([]byte, b.ProtoSize())
+	n, err := b.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+// Unmarshal is used by gogoproto.
+func (b *Blockid) Unmarshal(data []byte) error {
+	if len(data) < b.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(b[:], data)
+	return nil
+}
 
 // Fixed bytes.   Deciaml64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
@@ -270,11 +410,6 @@ func (t Type) IsVarlen() bool {
 // Special
 func (t Type) IsTuple() bool {
 	return t.Oid == T_tuple
-}
-
-// Bad function, but keep for now so that old code works.
-func (t Type) IsString() bool {
-	return t.IsVarlen()
 }
 
 func (t Type) IsInt() bool {
@@ -624,55 +759,58 @@ func (t T) FixedLength() int {
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
 
-// isUnsignedInt: return true if the types.T is UnSigned integer type
-func IsUnsignedInt(t T) bool {
+// IsUnsignedInt return true if the types.T is UnSigned integer type
+func (t T) IsUnsignedInt() bool {
 	if t == T_uint8 || t == T_uint16 || t == T_uint32 || t == T_uint64 {
 		return true
 	}
 	return false
 }
 
-// isSignedInt: return true if the types.T is Signed integer type
-func IsSignedInt(t T) bool {
+// IsSignedInt return true if the types.T is Signed integer type
+func (t T) IsSignedInt() bool {
 	if t == T_int8 || t == T_int16 || t == T_int32 || t == T_int64 {
 		return true
 	}
 	return false
 }
 
-// if expr type is integer return true,else return false
-func IsInteger(t T) bool {
-	if IsUnsignedInt(t) || IsSignedInt(t) {
+// IsInteger if expr type is integer return true,else return false
+func (t T) IsInteger() bool {
+	if t.IsUnsignedInt() || t.IsSignedInt() {
 		return true
 	}
 	return false
 }
 
-// IsFloat: return true if the types.T is floating Point Types
-func IsFloat(t T) bool {
+// IsFloat return true if the types.T is floating Point Types
+func (t T) IsFloat() bool {
 	if t == T_float32 || t == T_float64 {
 		return true
 	}
 	return false
 }
 
-// isString: return true if the types.T is string type
-func IsString(t T) bool {
+// IsMySQLString return true if the types.T is a MySQL string type (https://dev.mysql.com/doc/refman/8.0/en/string-types.html)
+// NOTE: types.IsVarlen() and t.IsMySQLString() are different. t.IsMySQLString() doesn't have T_Json type.
+func (t T) IsMySQLString() bool {
+	// NOTE: Don't replace this with t.FixedLength()<0
+	// The t.FixedLength()<0 logic includes T_Json, which is not a MySQL string type.
 	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
 		return true
 	}
 	return false
 }
 
-func IsDateRelate(t T) bool {
+func (t T) IsDateRelate() bool {
 	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
 		return true
 	}
 	return false
 }
 
-// IsDecimal: return true if the types.T is decimal64 or decimal128
-func IsDecimal(t T) bool {
+// IsDecimal return true if the types.T is decimal64 or decimal128
+func (t T) IsDecimal() bool {
 	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {
 		return true
 	}

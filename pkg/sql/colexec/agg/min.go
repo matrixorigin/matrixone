@@ -208,7 +208,9 @@ func (m *StrMin) Eval(vs [][]byte) [][]byte {
 func (m *StrMin) Fill(_ int64, value []byte, ov []byte, _ int64, isEmpty bool, isNull bool) ([]byte, bool) {
 	if !isNull {
 		if bytes.Compare(value, ov) < 0 || isEmpty {
-			return value, false
+			v := make([]byte, 0, len(value))
+			v = append(v, value...)
+			return v, false
 		}
 	}
 	return ov, isEmpty

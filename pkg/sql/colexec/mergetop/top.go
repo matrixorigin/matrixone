@@ -102,6 +102,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			logutil.Errorf("pipeline closed unexpectedly")
 			return true, nil
 		}
@@ -174,7 +175,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			bat.Clean(proc.Mp())
 			return false, err
 		}
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 	}
 }
 
@@ -241,7 +242,6 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	ctr.bat.ExpandNulls()
 	anal.Output(ctr.bat, isLast)
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil

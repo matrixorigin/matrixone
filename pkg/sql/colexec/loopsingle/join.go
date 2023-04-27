@@ -64,6 +64,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat.Length() == 0 {
@@ -184,7 +185,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

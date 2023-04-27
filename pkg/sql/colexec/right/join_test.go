@@ -103,6 +103,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}
@@ -123,8 +124,9 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		nb1 := tc.proc.Mp().CurrNB()
+		tc.proc.FreeVectors()
 		tc.arg.Free(tc.proc, false)
+		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}
 }
@@ -241,13 +243,13 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Left_typs:   ts,
-			Right_typs:  ts,
-			Result:      rp,
-			Conditions:  cs,
-			NumCPU:      1,
-			Is_receiver: true,
-			Cond:        cond,
+			LeftTypes:  ts,
+			RightTypes: ts,
+			Result:     rp,
+			Conditions: cs,
+			NumCPU:     1,
+			IsMerger:   true,
+			Cond:       cond,
 		},
 		barg: &hashbuild.Argument{
 			Typs:        ts,

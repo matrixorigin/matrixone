@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -470,7 +471,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(param.ctx, catalog.AutoIncrColumnNames, expr, param.proc.Mp())
+		bat, err := rds[0].Read(param.ctx, catalog.AutoIncrColumnNames, expr, param.proc.Mp(), nil)
 		if err != nil {
 			return 0, 0, nil, moerr.NewInvalidInput(param.ctx, "can not find the auto col")
 		}
@@ -567,7 +568,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 
 	retbat := batch.NewWithSize(1)
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(ctx, catalog.AutoIncrColumnNames, nil, mp)
+		bat, err := rds[0].Read(ctx, catalog.AutoIncrColumnNames, nil, mp, nil)
 		if err != nil {
 			bat.Clean(mp)
 			return nil, 0
@@ -765,12 +766,10 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			}
 
 			// Rename the old cache.
-			renameAutoIncrCache(delName, newName+d.Attr.Name, proc)
+			renameAutoIncrCache(newName+d.Attr.Name, delName, proc)
 
 			// In cache implementation no update needed.
-			currentNum = currentNum - 1
-
-			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum-1, 1, proc.Mp())
+			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
@@ -865,7 +864,11 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if proc.TxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "must set txn client")
 	}
-	txn, err = proc.TxnClient.New()
+	var minSnapshotTS timestamp.Timestamp
+	if proc.TxnOperator != nil {
+		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
+	}
+	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
 	if err != nil {
 		return nil, err
 	}

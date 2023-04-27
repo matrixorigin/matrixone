@@ -78,7 +78,7 @@ func Test_verifyLightPrivilege(t *testing.T) {
 	defer ctrl.Finish()
 
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	sys := &TenantInfo{
 		Tenant: sysAccountName,

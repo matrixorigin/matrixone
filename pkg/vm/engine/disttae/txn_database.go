@@ -122,16 +122,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		partition:    item.Partition,
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
-		parts:        db.txn.engine.getPartitions(db.databaseId, item.Id).Snapshot(),
 	}
-	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, item.Id,
-		true, columnLength, true)
-	if err != nil {
-		return nil, err
-	}
-	tbl.meta = meta
-	tbl.updated = false
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
@@ -175,17 +166,23 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 
 func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
-
+	var v any
+	var ok bool
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return 0, err
 	}
 	k := genTableKey(ctx, name, db.databaseId)
-	if v, ok := db.txn.createMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
-		v.(*txnTable).tableId = newId
-	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
+	v, ok = db.txn.createMap.Load(k)
+	if !ok {
+		v, ok = db.txn.tableMap.Load(k)
+	}
+
+	if ok {
+		txnTable := v.(*txnTable)
+		oldId = txnTable.tableId
+		txnTable.reset(newId)
+
 	} else {
 		item := &cache.TableItem{
 			Name:       name,
@@ -302,7 +299,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
-	tbl.parts = db.txn.engine.getPartitions(db.databaseId, tableId).Snapshot()
 	tbl.getTableDef()
 	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
@@ -310,13 +306,11 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 
 func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
-	parts := db.txn.engine.getPartitions(db.databaseId, id).Snapshot()
 	tbl := &txnTable{
 		db:           db,
 		tableId:      id,
 		tableName:    name,
 		defs:         defs,
-		parts:        parts,
 		primaryIdx:   -1,
 		clusterByIdx: -1,
 	}

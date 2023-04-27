@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
@@ -104,7 +105,7 @@ func (t *Table) NewReader(
 		true,
 		theseShards(shards),
 		OpNewTableIter,
-		NewTableIterReq{
+		&NewTableIterReq{
 			TableID: t.id,
 			Expr:    expr,
 		},
@@ -144,7 +145,7 @@ func (t *Table) NewReader(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
 	}
@@ -161,7 +162,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 			true,
 			thisShard(t.iterInfos[0].Shard),
 			OpRead,
-			ReadReq{
+			&ReadReq{
 				IterID:   t.iterInfos[0].IterID,
 				ColNames: colNames,
 			},
@@ -195,13 +196,17 @@ func (t *TableReader) Close() error {
 			true,
 			thisShard(info.Shard),
 			OpCloseTableIter,
-			CloseTableIterReq{
+			&CloseTableIterReq{
 				IterID: info.IterID,
 			},
 		)
 		_ = err // ignore error
 	}
 	return nil
+}
+
+func (t *Table) GetEngineType() engine.EngineType {
+	return engine.Memory
 }
 
 func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {

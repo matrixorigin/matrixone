@@ -21,41 +21,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BfReader struct {
-	bfKey  objectio.Location
-	idx    uint16
-	reader *blockio.BlockReader
-	typ    types.T
+	bfKey      objectio.Location
+	reader     *blockio.BlockReader
+	typ        types.T
+	indexCache model.LRUCache
 }
 
 func NewBfReader(
-	id *common.ID,
 	typ types.T,
 	metaLoc objectio.Location,
+	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
 ) *BfReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
-		idx:    id.Idx,
-		bfKey:  metaLoc,
-		reader: reader,
-		typ:    typ,
+		indexCache: indexCache,
+		bfKey:      metaLoc,
+		reader:     reader,
+		typ:        typ,
 	}
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, r.bfKey.ID(), nil)
+	// return r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
+	v, ok := r.indexCache.Get(r.reader.GetName())
+	if ok {
+		return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
+	}
+	v, size, err := r.reader.LoadAllBF(context.Background())
 	if err != nil {
-		// TODOa: Error Handling?
 		return nil, err
 	}
-	return bf, err
+	r.indexCache.Set(r.reader.GetName(), v, int64(size))
+	return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {

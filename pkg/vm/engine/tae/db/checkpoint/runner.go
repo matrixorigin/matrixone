@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -396,7 +396,7 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
 }
-func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
@@ -404,7 +404,7 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		if tableTree == nil {
 			return nil
 		}
-		nTree := common.NewTree()
+		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
 		dirtyCtx := new(DirtyCtx)
@@ -438,18 +438,16 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := blockio.NewBlockWriter(r.fs.Service, name)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.fs.Service)
 	if err != nil {
 		return err
 	}
-	mobat := batch.New(true, bat.Attrs)
-	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
 		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, _, err = writer.Sync(context.Background())
+	_, err = writer.WriteEnd(context.Background())
 	return
 }
 
@@ -646,7 +644,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid, force bool) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -655,11 +653,12 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id 
 	if err != nil {
 		panic(err)
 	}
-	segment, err := table.GetSegmentByID(segmentID)
+	sid := objectio.ToSegmentId(id)
+	segment, err := table.GetSegmentByID(*sid)
 	if err != nil {
 		panic(err)
 	}
-	blk, err := segment.GetBlockEntryByID(id)
+	blk, err := segment.GetBlockEntryByID(*id)
 	if err != nil {
 		panic(err)
 	}
@@ -703,10 +702,11 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	visitor := new(common.BaseTreeVisitor)
-	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
-		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
-			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
+	visitor := new(model.BaseTreeVisitor)
+	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
+		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
+			id := objectio.NewBlockid(segmentID, num, seq)
+			return r.tryCompactBlock(dbID, tableID, &id, force)
 		}
 	}(force)
 

@@ -82,6 +82,16 @@ func Prepare(proc *process.Process, arg any) error {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
+	if param.Extern == nil {
+		param.Extern = &tree.ExternParam{}
+		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
+			return err
+		}
+		if err := plan2.InitS3Param(param.Extern); err != nil {
+			return err
+		}
+		param.Extern.FileService = proc.FileService
+	}
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -297,9 +307,13 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 			},
 		},
 	}
+	if 2*param.Idx >= len(param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset) {
+		return nil, nil
+	}
+	param.FileOffset = param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset[2*param.Idx : 2*param.Idx+2]
 	if param.Extern.Parallel {
-		vec.Entries[0].Offset = int64(param.FileOffset[param.Fileparam.FileIndex-1][0])
-		vec.Entries[0].Size = int64(param.FileOffset[param.Fileparam.FileIndex-1][1] - param.FileOffset[param.Fileparam.FileIndex-1][0])
+		vec.Entries[0].Offset = int64(param.FileOffset[0])
+		vec.Entries[0].Size = int64(param.FileOffset[1] - param.FileOffset[0])
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
@@ -311,8 +325,8 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
-	arr := make([][2]int, 0)
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([]int64, error) {
+	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
@@ -342,13 +356,15 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 		offset = append(offset, vec.Entries[0].Offset)
 	}
 
-	start := 0
+	start := int64(0)
 	for i := 0; i < mcpu; i++ {
 		if i+1 < mcpu {
-			arr = append(arr, [2]int{start, int(offset[i+1] + tailSize[i+1])})
-			start = int(offset[i+1] + tailSize[i+1])
+			arr = append(arr, start)
+			arr = append(arr, offset[i+1]+tailSize[i+1])
+			start = offset[i+1] + tailSize[i+1]
 		} else {
-			arr = append(arr, [2]int{start, -1})
+			arr = append(arr, start)
+			arr = append(arr, -1)
 		}
 	}
 	return arr, nil
@@ -413,14 +429,15 @@ func makeType(Cols []*plan.ColDef, index int, flag bool) types.Type {
 }
 
 func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batch.Batch {
-	batchData := batch.New(true, param.Attrs)
+	bat := batch.NewWithSize(len(param.Attrs))
+	bat.SetAttributes(param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i, param.ParallelLoad)
 		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
-		batchData.Vecs[i] = vec
+		bat.Vecs[i] = vec
 	}
-	return batchData
+	return bat
 }
 
 func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
@@ -493,23 +510,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	n := bat.Vecs[0].Length()
 	if unexpectEOF && n > 0 {
 		n--
-		for i := 0; i < len(bat.Vecs); i++ {
-			newVec, err := proc.AllocVectorOfRows(*bat.Vecs[i].GetType(), n, nil)
-			if err != nil {
-				return nil, err
-			}
-			nulls.Set(newVec.GetNulls(), bat.Vecs[i].GetNulls())
-			for j := int64(0); j < int64(n); j++ {
-				if newVec.GetNulls().Contains(uint64(j)) {
-					continue
-				}
-				err := newVec.Copy(bat.Vecs[i], j, j, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-			}
-			bat.Vecs[i].Free(proc.Mp())
-			bat.Vecs[i] = newVec
+		for i := 0; i < bat.VectorCount(); i++ {
+			vec := bat.GetVector(int32(i))
+			vec.SetLength(n)
 		}
 	}
 	sels := proc.Mp().GetSels()
@@ -588,7 +591,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	if param.IgnoreLine != 0 {
-		if !param.Extern.Parallel || param.FileOffset[param.Fileparam.FileIndex-1][0] == 0 {
+		if !param.Extern.Parallel || param.FileOffset[0] == 0 {
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
@@ -627,7 +630,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID(), proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -755,14 +758,14 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
 	var err error
 	if param.Extern.QueryResult {
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
 	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}

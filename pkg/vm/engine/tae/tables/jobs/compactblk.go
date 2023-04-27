@@ -247,7 +247,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		// 	return err
 		// }
 	}
-	if !table.GetSchema().HasSortKey() && task.created != nil {
+	if !table.GetLastestSchema().HasSortKey() && task.created != nil {
 		n := task.created.Rows()
 		task.mapping = make([]uint32, n)
 		for i := 0; i < n; i++ {

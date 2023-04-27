@@ -14,9 +14,24 @@ set @uuid_create_table = last_uuid();
 insert into query_tae_table values (1);
 set @uuid_insert_table = last_uuid();
 
+-- hide secret keys
+create user u identified by '123456';
+set @uuid_hide_1 = last_uuid();
+create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111', abc3 identified by '222';
+set @uuid_hide_2 = last_uuid();
+create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};
+set @uuid_hide_3 = last_uuid();
+
+-- hide /* cloud_user */
+/* cloud_user */select 1;
+set @uuid_hide_4 = last_uuid();
+
 select sleep(16);
 
 select account from system.statement_info where statement_id = @uuid_create_table;
+
+-- hide result
+select statement from system.statement_info where statement_id in (@uuid_hide_1, @uuid_hide_2, @uuid_hide_3, @uuid_hide_4);
 
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
 -- @session
@@ -25,7 +40,7 @@ select account, statement from system.statement_info where statement = 'insert i
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
 
 -- case: fix issue 8168, with syntax error
-select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt');
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table');
 
 -- clean
 drop account `query_tae_table`;
