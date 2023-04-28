@@ -494,6 +494,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 
+	// str := DebugShowScopes(steps)
+	// fmt.Print(str)
+
 	return steps, err
 }
 
@@ -829,10 +832,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
 		// todo:  make write s3 to support partition table
-		if len(insertArg.InsertCtx.PartitionTableIDs) > 0 {
+		// todo:  when have unique key. do not write s3
+		if len(insertArg.InsertCtx.PartitionTableIDs) > 0 || !insertArg.InsertCtx.IsEnd {
 			toWriteS3 = false
 		}
+		if insertArg.InsertCtx.TableDef.Name == "t1" {
+			toWriteS3 = true
+		}
 		insertArg.ToWriteS3 = toWriteS3
+		mergeBlockIsEnd := insertArg.InsertCtx.IsEnd
 		if toWriteS3 {
 			insertArg.InsertCtx.IsEnd = false
 		}
@@ -851,7 +859,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
-					Tbl: insertArg.InsertCtx.Rel,
+					Tbl:   insertArg.InsertCtx.Rel,
+					IsEnd: mergeBlockIsEnd,
 				},
 			})
 			ss = []*Scope{rs}
