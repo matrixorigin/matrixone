@@ -65,6 +65,8 @@ type container struct {
 	mapAggType map[int32]int
 
 	bat *batch.Batch
+
+	again bool
 }
 
 type Argument struct {

@@ -149,7 +149,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	bat := proc.InputBatch()
 	if bat == nil {
 		// if the result vectors are empty, process again. because the result of Agg can't be empty but 0 or NULL.
-		if len(ctr.aggVecs) == 0 && len(ctr.multiVecs) == 0 {
+		if !ctr.again {
 			b := batch.NewWithSize(len(ap.Types))
 			for i := range b.Vecs {
 				b.Vecs[i] = vector.NewVec(ap.Types[i])
@@ -499,6 +499,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
+	ctr.again = true
 	for i := range ctr.aggVecs {
 		vec, err := ctr.aggVecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
@@ -511,6 +512,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 }
 
 func (ctr *container) evalMultiAggs(bat *batch.Batch, proc *process.Process) error {
+	ctr.again = true
 	for i := range ctr.multiVecs {
 		for j := range ctr.multiVecs[i] {
 			vec, err := ctr.multiVecs[i][j].executor.Eval(proc, []*batch.Batch{bat})
