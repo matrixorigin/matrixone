@@ -832,12 +832,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
 		// todo:  make write s3 to support partition table
-		// todo:  when have unique key. do not write s3
-		if len(insertArg.InsertCtx.PartitionTableIDs) > 0 || !insertArg.InsertCtx.IsEnd {
+		if len(insertArg.InsertCtx.PartitionTableIDs) > 0 {
 			toWriteS3 = false
-		}
-		if insertArg.InsertCtx.TableDef.Name == "t1" {
-			toWriteS3 = true
 		}
 		insertArg.ToWriteS3 = toWriteS3
 		mergeBlockIsEnd := insertArg.InsertCtx.IsEnd
