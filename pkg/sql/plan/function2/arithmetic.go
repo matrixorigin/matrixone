@@ -614,6 +614,10 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *
 		return floatMod[float32](parameters, result, uint64(length))
 	case types.T_float64:
 		return floatMod[float64](parameters, result, uint64(length))
+	case types.T_decimal64:
+		return decimal64Mod(parameters, result, uint64(length))
+	case types.T_decimal128:
+		return decimal128Mod(parameters, result, uint64(length))
 	}
 	panic("unreached code")
 }
@@ -664,6 +668,54 @@ func floatMod[T constraints.Float](parameters []*vector.Vector, result vector.Fu
 				if err := rs.Append(T(math.Mod(float64(v1), float64(v2))), false); err != nil {
 					return err
 				}
+			}
+		}
+	}
+	return nil
+}
+
+func decimal64Mod(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
+	rs := vector.MustFunctionResult[types.Decimal64](result)
+	for i := uint64(0); i < length; i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(v1, true); err != nil {
+				return err
+			}
+		} else {
+			r, _, err := v1.Mod(v2, p1.GetType().Scale, p2.GetType().Scale)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(r, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128Mod(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	for i := uint64(0); i < length; i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(v1, true); err != nil {
+				return err
+			}
+		} else {
+			r, _, err := v1.Mod(v2, p1.GetType().Scale, p2.GetType().Scale)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(r, false); err != nil {
+				return err
 			}
 		}
 	}

@@ -584,6 +584,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 
 func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[T](result)
+	rs.TempSetType(*ivecs[0].GetType())
 	vecs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])

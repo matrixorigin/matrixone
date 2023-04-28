@@ -283,6 +283,10 @@ func (fr *FunctionResult[T]) GetType() types.Type {
 	return *fr.vec.GetType()
 }
 
+func (fr *FunctionResult[T]) TempSetType(t types.Type) {
+	fr.vec.SetType(t)
+}
+
 func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T]) (err error) {
 	// clean the old memory
 	if fr.vec != fp.GetSourceVector() {
