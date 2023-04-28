@@ -29,6 +29,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/cache"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -38,7 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -76,6 +77,8 @@ type Session struct {
 
 	// mpool
 	mp *mpool.MPool
+	// session cache
+	sc *cache.Cache
 
 	pu *config.ParameterUnit
 
@@ -310,6 +313,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		protocol: proto,
 		mp:       mp,
 		pu:       pu,
+		sc:       cache.New(),
 		ep: &ExportParam{
 			ExportParam: &tree.ExportParam{
 				Outfile: false,
@@ -380,6 +384,10 @@ func (ses *Session) Close() {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
+	}
+	if ses.sc != nil {
+		ses.sc.Free()
+		ses.sc = nil
 	}
 	ses.mrs = nil
 	ses.data = nil
@@ -456,6 +464,10 @@ func (bgs *BackgroundSession) Close() {
 		bgs.Session.Close()
 	}
 	bgs = nil
+}
+
+func (ses *Session) GetCache() *cache.Cache {
+	return ses.sc
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -1536,7 +1548,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	p := bh.ses.GetCache().GetParser(dialect.MYSQL, sql, v.(int64))
+	defer bh.ses.GetCache().PutParser(p)
+	statements, err := p.Parse(ctx)
 	if err != nil {
 		return err
 	}

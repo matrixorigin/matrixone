@@ -1,3 +1,4 @@
+-- @skip:issue#9196
 create table f1(b int, a int primary key);
 create table f2(b int, aa varchar primary key);
 create table c1 (a int, b int, foreign key f_a(a) references f1(c));
