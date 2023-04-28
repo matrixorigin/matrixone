@@ -2113,6 +2113,9 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2148,6 +2151,9 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2166,6 +2172,9 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
@@ -3603,9 +3612,9 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		}
 		// data transform Global to json
 		if len(marshalPlan.Steps) > 0 {
-			//if len(marshalPlan.Steps) > 1 {
-			//	logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
-			//}
+			if len(marshalPlan.Steps) > 1 {
+				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
+			}
 			buffer := &bytes.Buffer{}
 			encoder := json.NewEncoder(buffer)
 			encoder.SetEscapeHTML(false)

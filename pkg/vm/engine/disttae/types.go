@@ -38,6 +38,11 @@ import (
 )
 
 const (
+	PREFETCH_THRESHOLD = 512
+	PREFETCH_ROUNDS    = 32
+)
+
+const (
 	INSERT = iota
 	DELETE
 	COMPACTION_CN
@@ -232,12 +237,11 @@ type txnTable struct {
 	defs              []engine.TableDef
 	tableDef          *plan.TableDef
 	idxs              []uint16
-	setPartsOnce      sync.Once
 	_parts            []*PartitionState
-	_partsErr         error
 	modifiedBlocks    [][]ModifyBlockMeta
-	blockMetas        [][]BlockMeta
-	blockMetasUpdated bool
+	blockInfos        [][]catalog.BlockInfo
+	blockInfosUpdated bool
+	logtailUpdated    bool
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
@@ -287,13 +291,19 @@ type column struct {
 }
 
 type blockReader struct {
-	blks       []catalog.BlockInfo
+	blks       []*catalog.BlockInfo
 	ctx        context.Context
 	fs         fileservice.FileService
 	ts         timestamp.Timestamp
 	tableDef   *plan.TableDef
 	primaryIdx int
 	expr       *plan.Expr
+
+	//used for prefetch
+	infos           [][]*catalog.BlockInfo
+	steps           []int
+	currentStep     int
+	prefetchColIdxs []uint16 //need to remove rowid
 
 	// cached meta data.
 	colIdxs        []uint16
@@ -379,7 +389,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 }
 
 type ModifyBlockMeta struct {
-	meta    BlockMeta
+	meta    catalog.BlockInfo
 	deletes []int
 }
 

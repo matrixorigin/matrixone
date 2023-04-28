@@ -109,12 +109,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = ndesc.Node.TableDef.TblFunc.Name
-	case plan.Node_PRE_INSERT:
-		pname = "PreInsert"
-	case plan.Node_PRE_INSERT_UK:
-		pname = "PreInsert UniqueKey"
-	case plan.Node_PRE_DELETE:
-		pname = "PreDelete"
 	default:
 		panic("error node type")
 	}
@@ -149,24 +143,16 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_DELETE:
 			result += " on "
 			if ndesc.Node.DeleteCtx != nil {
-				ctx := ndesc.Node.DeleteCtx.Ref
-				result += ctx.SchemaName + "." + ctx.ObjName
-			}
-		case plan.Node_PRE_INSERT:
-			result += " on "
-			if ndesc.Node.PreInsertCtx != nil {
-				if ndesc.Node.PreInsertCtx.Ref != nil {
-					result += ndesc.Node.PreInsertCtx.Ref.GetSchemaName() + "." + ndesc.Node.PreInsertCtx.Ref.GetObjName()
-				} else if ndesc.Node.PreInsertCtx.TableDef != nil {
-					result += ndesc.Node.TableDef.GetName()
+				first := true
+				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
+					if !first {
+						result += ", "
+					}
+					result += ctx.SchemaName + "." + ctx.ObjName
+					if first {
+						first = false
+					}
 				}
-			}
-		case plan.Node_PRE_DELETE:
-			result += " on "
-			if ndesc.Node.ObjRef != nil {
-				result += ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName()
-			} else if ndesc.Node.TableDef != nil {
-				result += ndesc.Node.TableDef.GetName()
 			}
 		}
 	}

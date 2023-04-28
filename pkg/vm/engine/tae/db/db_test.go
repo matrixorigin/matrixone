@@ -4046,7 +4046,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
 	infos = append(infos, []*pkgcatalog.BlockInfo{info})
-	err = blockio.PrefetchInner(colIdxs, fs, infos)
+	err = blockio.BlockPrefetch(colIdxs, fs, infos)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
