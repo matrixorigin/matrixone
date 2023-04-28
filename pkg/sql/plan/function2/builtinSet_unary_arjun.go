@@ -346,10 +346,13 @@ func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		} else {
 			d, e := types.ParseDateCast(function2Util.QuickBytesToStr(v))
 			if e != nil {
-				return e
-			}
-			if err := rs.Append(d.Month(), false); err != nil {
-				return err
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(d.Month(), false); err != nil {
+					return err
+				}
 			}
 		}
 	}

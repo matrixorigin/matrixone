@@ -162,7 +162,7 @@ func extractFromDate(unit string, d types.Date) (uint32, error) {
 
 func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	if !ivecs[0].IsConst() {
-		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+		return moerr.NewInternalError(proc.Ctx, "invalid input")
 	}
 
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
