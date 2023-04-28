@@ -171,7 +171,7 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if bulkErr != nil {
-		logutil.Error("sqlWriter db insert bulk insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
+		// logutil.Error("sqlWriter insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
 		return 0, err
 	}
 	return bulkCnt, bulkErr
