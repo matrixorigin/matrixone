@@ -46,6 +46,11 @@ var (
 	scaleVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
+const (
+	// ZeroDatetime is the zero value for date Time '0000-01-01 00:00:00'.
+	ZeroDatetime = Datetime(0)
+)
+
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 func (dt Datetime) String() string {
