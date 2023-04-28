@@ -828,7 +828,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
+		// todo:  make write s3 to support partition table
+		if len(insertArg.InsertCtx.PartitionTableIDs) > 0 {
+			toWriteS3 = false
+		}
 		insertArg.ToWriteS3 = toWriteS3
+		if toWriteS3 {
+			insertArg.InsertCtx.IsEnd = false
+		}
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Insert,
