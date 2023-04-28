@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -82,8 +83,7 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 
 type InfoFromZoneMap struct {
 	ValMap         []map[any]int // all distinct value in blocks zonemap
-	MinVal         []any         //minvalue of all blocks for column
-	MaxVal         []any         //maxvalue of all blocks for column
+	ColumnZMs      []objectio.ZoneMap
 	DataTypes      []types.Type
 	MaybeUniqueMap []bool
 }
@@ -91,8 +91,7 @@ type InfoFromZoneMap struct {
 func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
 		ValMap:         make([]map[any]int, lenCols),
-		MinVal:         make([]any, lenCols),
-		MaxVal:         make([]any, lenCols),
+		ColumnZMs:      make([]objectio.ZoneMap, lenCols),
 		DataTypes:      make([]types.Type, lenCols),
 		MaybeUniqueMap: make([]bool, lenCols),
 	}
@@ -123,36 +122,36 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 	//set info in statsInfoMap
 	for i := range columns {
 		colName := tableDef.Cols[columns[i]].Name
-		s.NdvMap[colName] = calcNdv(info.MinVal[i], info.MaxVal[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, info.DataTypes[i], info.MaybeUniqueMap[i])
+		s.NdvMap[colName] = calcNdv(info.ColumnZMs[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, &info.DataTypes[i], info.MaybeUniqueMap[i])
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int8))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int8))
+			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int16:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int16))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int16))
+			s.MinValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int32:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int32))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int32))
+			s.MinValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int64:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int64))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int64))
+			s.MinValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint8:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint8))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint8))
+			s.MinValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint16:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint16))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint16))
+			s.MinValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint32:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint32))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint32))
+			s.MinValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint64:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint64))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint64))
+			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_date:
-			s.MinValMap[colName] = float64(info.MinVal[i].(types.Date))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(types.Date))
+			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
 }
@@ -340,8 +339,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 	return outcnt
 }
 
-func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type, maybeUnique bool) float64 {
-	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
+func calcNdv(zm objectio.ZoneMap, distinctValNum, blockNumTotal, tableCnt float64, t *types.Type, maybeUnique bool) float64 {
+	ndv1 := calNdvUsingZonemap(zm, t)
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
 	if ndv1 <= 0 {
 		return ndv2
@@ -375,42 +374,44 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	return ndv
 }
 
-func calcNdvUsingMinMax(minVal, maxVal any, t types.Type) float64 {
+func calNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	switch t.Oid {
 	case types.T_bool:
 		return 2
 	case types.T_int8:
-		return float64(maxVal.(int8)-minVal.(int8)) + 1
+		return float64(types.DecodeFixed[int8](zm.GetMaxBuf())) - float64(types.DecodeFixed[int8](zm.GetMinBuf())) + 1
 	case types.T_int16:
-		return float64(maxVal.(int16)-minVal.(int16)) + 1
+		return float64(types.DecodeFixed[int16](zm.GetMaxBuf())) - float64(types.DecodeFixed[int16](zm.GetMinBuf())) + 1
 	case types.T_int32:
-		return float64(maxVal.(int32)-minVal.(int32)) + 1
+		return float64(types.DecodeFixed[int32](zm.GetMaxBuf())) - float64(types.DecodeFixed[int32](zm.GetMinBuf())) + 1
 	case types.T_int64:
-		return float64(maxVal.(int64)-minVal.(int64)) + 1
+		return float64(types.DecodeFixed[int64](zm.GetMaxBuf())) - float64(types.DecodeFixed[int64](zm.GetMinBuf())) + 1
 	case types.T_uint8:
-		return float64(maxVal.(uint8)-minVal.(uint8)) + 1
+		return float64(types.DecodeFixed[uint8](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint8](zm.GetMinBuf())) + 1
 	case types.T_uint16:
-		return float64(maxVal.(uint16)-minVal.(uint16)) + 1
+		return float64(types.DecodeFixed[uint16](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint16](zm.GetMinBuf())) + 1
 	case types.T_uint32:
-		return float64(maxVal.(uint32)-minVal.(uint32)) + 1
+		return float64(types.DecodeFixed[uint32](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint32](zm.GetMinBuf())) + 1
 	case types.T_uint64:
-		return float64(maxVal.(uint64)-minVal.(uint64)) + 1
+		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
 	case types.T_decimal64:
-		return types.Decimal64ToFloat64(maxVal.(types.Decimal64), t.Scale) - types.Decimal64ToFloat64(minVal.(types.Decimal64), t.Scale) + 1
+		return types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMaxBuf()), t.Scale) -
+			types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMinBuf()), t.Scale) + 1
 	case types.T_decimal128:
-		return types.Decimal128ToFloat64(maxVal.(types.Decimal128), t.Scale) - types.Decimal128ToFloat64(minVal.(types.Decimal128), t.Scale) + 1
+		return types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMaxBuf()), t.Scale) -
+			types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMinBuf()), t.Scale) + 1
 	case types.T_float32:
-		return float64(maxVal.(float32)-minVal.(float32)) + 1
+		return float64(types.DecodeFixed[float32](zm.GetMaxBuf())) - float64(types.DecodeFixed[float32](zm.GetMinBuf())) + 1
 	case types.T_float64:
-		return maxVal.(float64) - minVal.(float64) + 1
+		return types.DecodeFixed[float64](zm.GetMaxBuf()) - types.DecodeFixed[float64](zm.GetMinBuf()) + 1
 	case types.T_timestamp:
-		return float64(maxVal.(types.Timestamp)-minVal.(types.Timestamp)) + 1
+		return float64(types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Timestamp](zm.GetMinBuf())) + 1
 	case types.T_date:
-		return float64(maxVal.(types.Date)-minVal.(types.Date)) + 1
+		return float64(types.DecodeFixed[types.Date](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Date](zm.GetMinBuf())) + 1
 	case types.T_time:
-		return float64(maxVal.(types.Time)-minVal.(types.Time)) + 1
+		return float64(types.DecodeFixed[types.Time](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Time](zm.GetMinBuf())) + 1
 	case types.T_datetime:
-		return float64(maxVal.(types.Datetime)-minVal.(types.Datetime)) + 1
+		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
 	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return -1
 	default:

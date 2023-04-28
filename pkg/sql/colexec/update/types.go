@@ -23,7 +23,6 @@ import (
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
-	Engine       engine.Engine
 	UpdateCtx    *UpdateCtx
 }
 

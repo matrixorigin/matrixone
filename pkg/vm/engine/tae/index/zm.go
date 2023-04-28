@@ -95,6 +95,12 @@ func (zm ZM) IsString() bool {
 func (zm ZM) SetType(t types.T) {
 	zm[63] &= 0x00
 	zm[63] |= byte(t)
+	sz := t.FixedLength()
+	if sz <= 0 {
+		return
+	}
+	zm[61] = byte(sz)
+	zm[30] = byte(sz)
 }
 
 func (zm ZM) GetMin() any {
