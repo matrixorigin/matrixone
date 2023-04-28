@@ -668,11 +668,11 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			var res string
 			switch v1Str {
 			case "both":
-				res = trimBoth(string(src), string(cut))
+				res = trimBoth(string(cut), string(src))
 			case "leading":
-				res = trimLeading(string(src), string(cut))
+				res = trimLeading(string(cut), string(src))
 			case "trailing":
-				res = trimTrailing(string(src), string(cut))
+				res = trimTrailing(string(cut), string(src))
 			default:
 				return moerr.NewNotSupported(proc.Ctx, "trim type %s", v1Str)
 			}

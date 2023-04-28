@@ -188,7 +188,15 @@ func moTableColMaxMinImpl(fn string, ivecs []*vector.Vector, result vector.Funct
 
 	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+	if err != nil {
+		return err
+	}
+	defer txn.Rollback(proc.Ctx)
+	if err = e.New(proc.Ctx, txn); err != nil {
+		return err
+	}
+	defer e.Rollback(proc.Ctx, txn)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		db, dbnull := dbs.GetStrValue(i)
