@@ -70,7 +70,6 @@ func TestPreInsertNormal(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	argument1 := Argument{
-		Eg:         eng,
 		SchemaName: "testDb",
 
 		TableDef: &plan.TableDef{
@@ -128,7 +127,6 @@ func TestPreInsertNullCheck(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	argument2 := Argument{
-		Eg:         eng,
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
