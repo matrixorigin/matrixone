@@ -6,7 +6,6 @@ OBJS=mo.o arith.o compare.o logic.o
 all: libmo.a
 
 libmo.a: $(OBJS)
-	$(MAKE) ${DEBUG_OPT} -C external/decNumber
 	ar -rcs libmo.a *.o
 
 .PHONY: debug
