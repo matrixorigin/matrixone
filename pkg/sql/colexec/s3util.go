@@ -191,8 +191,21 @@ func (w *S3Writer) ResetMetaLocBat() {
 //	}
 //}
 
-func (w *S3Writer) Output(proc *process.Process) {
-	proc.SetInputBatch(w.metaLocBat)
+func (w *S3Writer) Output(proc *process.Process) error {
+	bat := batch.NewWithSize(len(w.metaLocBat.Attrs))
+	bat.SetAttributes(w.metaLocBat.Attrs)
+
+	for i := range w.metaLocBat.Attrs {
+		vec := vector.NewVec(*w.metaLocBat.Vecs[i].GetType())
+		if err := vec.UnionBatch(w.metaLocBat.Vecs[i], 0, w.metaLocBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+			return err
+		}
+		bat.SetVector(int32(i), vec)
+	}
+	bat.Zs = append(bat.Zs, w.metaLocBat.Zs...)
+
+	proc.SetInputBatch(bat)
+	return nil
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {

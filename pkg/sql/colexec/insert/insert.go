@@ -63,7 +63,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				ap.ctr.state = End
 				return false, err
 			}
-			s3Writer.Output(proc)
+			err := s3Writer.Output(proc)
+			if err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	}
@@ -80,7 +83,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			ap.ctr.state = End
 			return false, err
 		}
-		s3Writer.Output(proc)
+		err := s3Writer.Output(proc)
+		if err != nil {
+			return false, err
+		}
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
