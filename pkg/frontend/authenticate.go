@@ -2890,7 +2890,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	if err != nil {
 		goto handleFailed
 	}
-	if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+	if tenantInfo != nil && !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
 		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 		goto handleFailed
 	}
@@ -6709,6 +6709,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	if err != nil {
 		goto handleFailed
 	}
+
+	createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -6961,6 +6963,47 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+// create subscription database
+func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
+	ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
+	defer span.End()
+
+	var err error
+	subscriptions := make([]string, 0)
+	//process the syspublications
+	//syspublications_value := ses.GetSysVar("syspublications")
+	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
+	if syspublications, ok := syspublications_value.(string); ok {
+		if len(syspublications) == 0 {
+			return err
+		}
+		subscriptions = strings.Split(syspublications, ",")
+	}
+	// if no subscriptions, return
+	if len(subscriptions) == 0 {
+		return err
+	}
+
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	createSubscriptionFormat := `create database %s from sys publication %s;`
+	sqls := make([]string, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
+	}
 	for _, sql := range sqls {
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
