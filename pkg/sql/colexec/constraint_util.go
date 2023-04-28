@@ -59,7 +59,6 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 }
 
 func FilterAndUpdateByRowId(
-	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
 	idxList [][]int32,
