@@ -144,22 +144,22 @@ loop:
 	return d, m, s, nil
 }
 
-func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
+func UpdateInsertBatch(proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
-		eg:      e,
-		ctx:     ctx,
+		eg:      proc.Ctx.Value(defines.EngineKey{}).(engine.Engine),
+		ctx:     proc.Ctx,
 		proc:    proc,
 		colDefs: ColDefs,
 		dbName:  dbName,
 		tblName: tblName,
 	}
 
-	offset, step, err := getNextAutoIncrNum(proc, ColDefs, ctx, incrParam, bat, tableID)
+	offset, step, err := getNextAutoIncrNum(proc, ColDefs, proc.Ctx, incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
 
-	if err = updateBatchImpl(ctx, ColDefs, bat, offset, step); err != nil {
+	if err = updateBatchImpl(proc.Ctx, ColDefs, bat, offset, step); err != nil {
 		return err
 	}
 	return nil
