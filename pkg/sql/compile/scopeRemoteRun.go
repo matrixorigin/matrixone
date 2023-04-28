@@ -150,7 +150,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		s = refactorScope(c, c.ctx, s)
+		s = refactorScope(c, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
@@ -337,7 +337,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+func refactorScope(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,

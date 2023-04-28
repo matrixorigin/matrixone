@@ -46,15 +46,6 @@ func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	}
 }
 
-func (s *Scanner) Reset(sql string) {
-	s.buf = sql
-	s.Pos = 0
-	s.Line = 0
-	s.Col = 0
-	s.PrePos = 0
-	s.posVarIndex = 0
-}
-
 func (s *Scanner) Scan() (int, string) {
 	if s.MysqlSpecialComment != nil {
 		msc := s.MysqlSpecialComment
