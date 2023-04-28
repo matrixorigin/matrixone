@@ -398,7 +398,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
 			Engine:    t.Engine,
-			IsRemote:  t.IsRemote,
+			ToWriteS3: t.ToWriteS3,
 			InsertCtx: t.InsertCtx,
 		}
 	case vm.PreInsert:
@@ -541,6 +541,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		IsEnd:                 oldCtx.IsEnd,
+		TableDef:              oldCtx.TableDef,
 	}
 	if len(oldCtx.PartitionTableIds) > 0 {
 		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))

@@ -827,8 +827,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		currentFirstFlag := c.anal.isFirst
-		isRemote := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
-		insertArg.IsRemote = isRemote
+		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || c.anal.qry.LoadTag
+		insertArg.ToWriteS3 = toWriteS3
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Insert,
@@ -838,7 +838,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			})
 		}
 
-		if isRemote {
+		if toWriteS3 {
 			rs := c.newMergeScope(ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{

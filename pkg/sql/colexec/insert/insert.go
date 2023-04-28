@@ -34,13 +34,13 @@ func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.state = Process
-	// if ap.IsRemote {
-	// 	s3Writers, err := colexec.AllocS3Writers(ap.InsertCtx.TableDef)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	ap.ctr.s3Writers = s3Writers
-	// }
+	if ap.ToWriteS3 {
+		s3Writer, err := colexec.AllocS3Writer(ap.InsertCtx.TableDef)
+		if err != nil {
+			return err
+		}
+		ap.ctr.s3Writer = s3Writer
+	}
 	return nil
 }
 
@@ -53,23 +53,18 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	// s3Writers := ap.ctr.s3Writers
+	s3Writer := ap.ctr.s3Writer
 	bat := proc.InputBatch()
 	if bat == nil {
-		// if ap.IsRemote {
-		// 	// handle the last Batch that batchSize less than DefaultBlockMaxRows
-		// 	// for more info, refer to the comments about reSizeBatch
-		// 	for _, s3Writer := range s3Writers {
-		// 		if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
-		// 			ap.ctr.state = End
-		// 			return false, err
-		// 		}
-		// 	}
-		// 	if err := collectAndOutput(proc, s3Writers); err != nil {
-		// 		ap.ctr.state = End
-		// 		return false, err
-		// 	}
-		// }
+		if ap.ToWriteS3 {
+			// handle the last Batch that batchSize less than DefaultBlockMaxRows
+			// for more info, refer to the comments about reSizeBatch
+			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
+				ap.ctr.state = End
+				return false, err
+			}
+			s3Writer.Output(proc)
+		}
 		return true, nil
 	}
 	if bat.Length() == 0 {
@@ -78,13 +73,14 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
-	//write origin table
-	if ap.IsRemote {
+
+	if ap.ToWriteS3 {
 		// write to s3.
-		// if err := s3Writers[0].WriteS3Batch(bat, proc); err != nil {
-		// 	ap.ctr.state = End
-		// 	return false, err
-		// }
+		if err := s3Writer.WriteS3Batch(bat, proc); err != nil {
+			ap.ctr.state = End
+			return false, err
+		}
+		s3Writer.Output(proc)
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
@@ -111,7 +107,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				partitionBat.Clean(proc.Mp())
 			}
 		} else {
-			// write origin table, bat will be deeply copied into txn's workspace.
+			// insert into table, insertBat will be deeply copied into txn's workspace.
 			err := insertCtx.Rel.Write(proc.Ctx, insertBat)
 			if err != nil {
 				return false, err
@@ -132,23 +128,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	return false, nil
 }
 
-// func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-// 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-// 	res := batch.NewWithSize(len(attrs))
-// 	res.SetAttributes(attrs)
-// 	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-// 	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
-// 	for _, w := range s3Writers {
-// 		//deep copy.
-// 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
-// 		if err != nil {
-// 			return
-// 		}
-// 	}
-// 	proc.SetInputBatch(res)
-// 	return
-// }
-
 func analyze(proc *process.Process, idx int) func() {
 	t := time.Now()
 	anal := proc.GetAnalyze(idx)
@@ -158,28 +137,3 @@ func analyze(proc *process.Process, idx int) func() {
 		anal.AddInsertTime(t)
 	}
 }
-
-// func getUniqueKeyInfo(tableDef *pb.TableDef) (map[string]int, int) {
-// 	nameToPos := make(map[string]int)
-// 	pkPos := -1
-// 	pos := 0
-// 	hasCompositePKey := false
-// 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-// 		hasCompositePKey = true
-// 	}
-// 	for j, col := range tableDef.Cols {
-// 		// Check whether the composite primary key column is included
-// 		if !hasCompositePKey && col.Name != catalog.Row_ID && col.Primary {
-// 			pkPos = j
-// 		}
-// 		if col.Name != catalog.Row_ID {
-// 			nameToPos[col.Name] = pos
-// 			pos++
-// 		}
-// 	}
-// 	// Check whether the composite primary key column is included
-// 	if hasCompositePKey {
-// 		pkPos = pos
-// 	}
-// 	return nameToPos, pkPos
-// }

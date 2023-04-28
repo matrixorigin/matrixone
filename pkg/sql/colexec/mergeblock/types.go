@@ -34,7 +34,7 @@ type Argument struct {
 	// 1. main table
 	Tbl engine.Relation
 	// 2. unique index tables
-	Unique_tbls  []engine.Relation
+	//Unique_tbls  []engine.Relation
 	affectedRows uint64
 	// 3. used for ut_test, otherwise the batch will free,
 	// and we can't get the result to check
@@ -56,14 +56,14 @@ func (arg *Argument) GetMetaLocBat(name string) {
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
 		0, 0))
 	arg.container.mp[0] = bat
-	for i := range arg.Unique_tbls {
-		bat := batch.NewWithSize(1)
-		bat.Attrs = []string{name}
-		bat.Cnt = 1
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
-			0, 0))
-		arg.container.mp[i+1] = bat
-	}
+	//for i := range arg.Unique_tbls {
+	//	bat := batch.NewWithSize(1)
+	//	bat.Attrs = []string{name}
+	//	bat.Cnt = 1
+	//	bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
+	//		0, 0))
+	//	arg.container.mp[i+1] = bat
+	//}
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {

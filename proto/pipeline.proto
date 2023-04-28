@@ -76,7 +76,7 @@ message Group {
 
 message Insert{
   uint64 affected              = 1;
-  bool IsRemote                = 2;
+  bool ToWriteS3 = 2;
   bool add_affected_rows       = 3;
   plan.ObjectRef ref           = 4;
   repeated string attrs        = 5;

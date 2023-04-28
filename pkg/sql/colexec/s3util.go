@@ -121,71 +121,54 @@ func (w *S3Writer) SetSortIdx(sortIdx int) {
 	w.sortIndex = sortIdx
 }
 
-// AllocS3Writers Alloc S3 writers for origin table.
-func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
-	uniqueNums := 0
-	for _, idx := range tableDef.Indexes {
-		if idx.Unique {
-			uniqueNums++
-		}
+func AllocS3Writer(tableDef *plan.TableDef) (*S3Writer, error) {
+	writer := &S3Writer{
+		sortIndex: -1,
+		pk:        make(map[string]struct{}),
+		idx:       0,
+		sels:      make([]int64, options.DefaultBlockMaxRows),
 	}
+	for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
+		writer.sels[j] = int64(j)
+	}
+	writer.ResetMetaLocBat()
 
-	writers := make([]*S3Writer, 1+uniqueNums)
-	for i := range writers {
-		writers[i] = &S3Writer{
-			sortIndex: -1,
-			pk:        make(map[string]struct{}),
-			idx:       int16(i),
-			sels:      make([]int64, options.DefaultBlockMaxRows),
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		// the serialized cpk col is located in the last of the bat.vecs
+		writer.sortIndex = len(tableDef.Cols)
+	} else {
+		// Get Single Col pk index
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Primary {
+				writer.sortIndex = idx
+				break
+			}
 		}
-		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
-			writers[i].sels[j] = int64(j)
-		}
-		writers[i].ResetMetaLocBat()
-		//handle origin/main table's sort index.
-		if i == 0 {
-			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-				// the serialized cpk col is located in the last of the bat.vecs
-				writers[i].sortIndex = len(tableDef.Cols)
+		if tableDef.ClusterBy != nil {
+			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				writer.sortIndex = len(tableDef.Cols)
 			} else {
-				// Get Single Col pk index
 				for idx, colDef := range tableDef.Cols {
-					if colDef.Primary {
-						writers[i].sortIndex = idx
-						break
-					}
-				}
-				if tableDef.ClusterBy != nil {
-					if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-						// the serialized clusterby col is located in the last of the bat.vecs
-						writers[i].sortIndex = len(tableDef.Cols)
-					} else {
-						for idx, colDef := range tableDef.Cols {
-							if colDef.Name == tableDef.ClusterBy.Name {
-								writers[i].sortIndex = idx
-							}
-						}
+					if colDef.Name == tableDef.ClusterBy.Name {
+						writer.sortIndex = idx
 					}
 				}
 			}
-			// get Primary
-			for _, def := range tableDef.Cols {
-				if def.Primary {
-					writers[i].pk[def.Name] = struct{}{}
-				}
-			}
-
-			// Check whether the composite primary key column is included
-			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-				writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
-			}
-			continue
 		}
-		//handle for unique index table.
-		writers[i].sortIndex = 0
-		writers[i].pk[catalog.IndexTableIndexColName] = struct{}{}
 	}
-	return writers, nil
+	// get Primary
+	for _, def := range tableDef.Cols {
+		if def.Primary {
+			writer.pk[def.Name] = struct{}{}
+		}
+	}
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		writer.pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
+	}
+	return writer, nil
 }
 
 func (w *S3Writer) ResetMetaLocBat() {
@@ -201,11 +184,15 @@ func (w *S3Writer) ResetMetaLocBat() {
 	w.metaLocBat = metaLocBat
 }
 
-func (w *S3Writer) WriteEnd(proc *process.Process) {
-	if w.metaLocBat.Vecs[0].Length() > 0 {
-		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-		proc.SetInputBatch(w.metaLocBat)
-	}
+//func (w *S3Writer) WriteEnd(proc *process.Process) {
+//	if w.metaLocBat.Vecs[0].Length() > 0 {
+//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+//		proc.SetInputBatch(w.metaLocBat)
+//	}
+//}
+
+func (w *S3Writer) Output(proc *process.Process) {
+	proc.SetInputBatch(w.metaLocBat)
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
@@ -244,7 +231,7 @@ func (w *S3Writer) InitBuffers(bat *batch.Batch) {
 
 // the return value can be -1, int(>0)
 // >0: the tableBatches[idx] is over threshold
-// -1: the tableBatches[idx] is less than threshold
+// -1: the tableBatches[idx] is less than or equal to threshold
 func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 	var rbat *batch.Batch
 

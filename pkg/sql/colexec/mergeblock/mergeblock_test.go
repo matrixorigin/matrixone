@@ -58,8 +58,8 @@ func TestMergeBlock(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	argument1 := Argument{
-		Tbl:          &mockRelation{},
-		Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
+		Tbl: &mockRelation{},
+		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
 		notFreeBatch: true,
 	}
@@ -83,20 +83,20 @@ func TestMergeBlock(t *testing.T) {
 		}
 	}
 	// Check UniqueTables
-	for j := range argument1.Unique_tbls {
-		tbl := argument1.Unique_tbls[j]
-		result := tbl.(*mockRelation).result
-		// check attr names
-		require.True(t, reflect.DeepEqual(
-			[]string{catalog.BlockMeta_MetaLoc},
-			result.Attrs,
-		))
-		// check vector
-		require.Equal(t, 1, len(result.Vecs))
-		for i, vec := range result.Vecs {
-			require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
-		}
-	}
+	//for j := range argument1.Unique_tbls {
+	//	tbl := argument1.Unique_tbls[j]
+	//	result := tbl.(*mockRelation).result
+	//	// check attr names
+	//	require.True(t, reflect.DeepEqual(
+	//		[]string{catalog.BlockMeta_MetaLoc},
+	//		result.Attrs,
+	//	))
+	//	// check vector
+	//	require.Equal(t, 1, len(result.Vecs))
+	//	for i, vec := range result.Vecs {
+	//		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
+	//	}
+	//}
 	argument1.Free(proc, false)
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
