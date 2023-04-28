@@ -108,16 +108,6 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	buf.End++
 }
 
-func (buf *ExplainDataBuffer) PushPlanTitle(title string) {
-	if buf.Start == -1 {
-		buf.Start++
-	}
-	buf.CurrentLine++
-	buf.Lines = append(buf.Lines, title)
-	logutil.Infof(buf.Lines[buf.CurrentLine])
-	buf.End++
-}
-
 type ExplainFormat int32
 
 const (

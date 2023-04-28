@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -418,6 +417,34 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_uint16,
 				Fn:        unary.DayOfYear,
+			},
+		},
+	},
+	TO_DAYS: {
+		Id:     TO_DAYS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_datetime},
+				ReturnTyp:       types.T_int64,
+				UseNewFramework: true,
+				NewFn:           unary.ToDays,
+			},
+		},
+	},
+	TO_SECONDS: {
+		Id:     TO_SECONDS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_datetime},
+				ReturnTyp:       types.T_int64,
+				UseNewFramework: true,
+				NewFn:           unary.ToSeconds,
 			},
 		},
 	},
@@ -3225,49 +3252,6 @@ var builtins = map[int]Functions{
 				RealTimeRelated: true,
 				ReturnTyp:       types.T_varchar,
 				Fn:              seq.Currval,
-			},
-		},
-	},
-	ASSERT: {
-		Id:     ASSERT,
-		Flag:   plan.Function_STRICT,
-		Layout: STANDARD_FUNCTION,
-		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
-			if len(inputs) != 2 {
-				return wrongFunctionParameters, nil
-			}
-			if inputs[0] != types.T_bool {
-				return wrongFunctionParameters, nil
-			}
-			if inputs[1] != types.T_varchar {
-				return wrongFunctionParameters, nil
-			}
-			return 0, inputs
-		},
-		Overloads: []Function{
-			{
-				Index:               0,
-				UseNewFramework:     true,
-				Volatile:            false,
-				Args:                []types.T{types.T_bool, types.T_varchar},
-				ParameterMustScalar: []bool{false, true},
-				ReturnTyp:           types.T_bool,
-				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-					checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-					errMsg := parameters[1].GetStringAt(0)
-					res := vector.MustFunctionResult[bool](result)
-					for i := uint64(0); i < uint64(length); i++ {
-						flag, isNull := checkFlags.GetValue(i)
-						if isNull || !flag {
-							return moerr.NewInternalError(proc.Ctx, errMsg)
-						}
-						err := res.Append(true, false)
-						if err != nil {
-							return err
-						}
-					}
-					return nil
-				},
 			},
 		},
 	},

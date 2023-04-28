@@ -123,12 +123,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
 	}
-	metas, err := db.txn.getBlockMetas(ctx, tbl, true)
-	if err != nil {
-		return nil, err
-	}
-	tbl.blockMetas = metas
-	tbl.blockMetasUpdated = false
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }

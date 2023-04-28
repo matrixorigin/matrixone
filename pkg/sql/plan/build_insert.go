@@ -34,8 +34,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		rootId:  -1,
 		tblInfo: tblInfo,
 	}
-	tableDef := tblInfo.tableDefs[0]
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
+	tblDef := tblInfo.tableDefs[0]
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, tblInfo.isClusterTable[0])
 	if err != nil {
 		return nil, err
 	}
@@ -45,31 +45,67 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewTag()
+	bindCtx.aggregateTag = builder.genNewTag()
+	bindCtx.projectTag = builder.genNewTag()
+
 	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
-	lastNodeId := rewriteInfo.rootId
-	sourceStep := builder.appendStep(lastNodeId)
+
+	if tblInfo.haveConstraint {
+		for i, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// append ProjectNode
+	rewriteInfo.rootId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: rewriteInfo.projectList,
+		Children:    []int32{rewriteInfo.rootId},
+		BindingTags: []int32{bindCtx.projectTag},
+	}, bindCtx)
+
+	bindCtx.results = rewriteInfo.projectList
+	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
-	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
-	// new logic
-	objRef := tblInfo.objRef[0]
-	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
-	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
+	// append insert node
+	insertCtx := &plan.InsertCtx{
+		Ref:      rewriteInfo.tblInfo.objRef[0],
+		TableDef: rewriteInfo.tblInfo.tableDefs[0],
+
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+
+		OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
+		OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
 	}
-	if err != nil {
-		return nil, err
+	if len(rewriteInfo.parentIdx) == 1 {
+		insertCtx.ParentIdx = rewriteInfo.parentIdx[0]
 	}
+
+	node := &Node{
+		NodeType:  plan.Node_INSERT,
+		ObjRef:    insertCtx.Ref,
+		TableDef:  insertCtx.TableDef,
+		Children:  []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:    int32(len(query.Nodes)),
+		InsertCtx: insertCtx,
+	}
+	query.Nodes = append(query.Nodes, node)
+	query.Steps[len(query.Steps)-1] = node.NodeId
 	query.StmtType = plan.Query_INSERT
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
