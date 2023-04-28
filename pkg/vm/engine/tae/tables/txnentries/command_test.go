@@ -15,7 +15,6 @@
 package txnentries
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -34,14 +33,10 @@ func TestCompactBlockCmd(t *testing.T) {
 	to := &common.ID{TableID: 1, SegmentID: sid2, BlockID: objectio.NewBlockid(&sid2, 3, 0)}
 	cmd := newCompactBlockCmd(from, to, nil, 0)
 
-	var w bytes.Buffer
-	_, err := cmd.WriteTo(&w)
+	buf, err := cmd.MarshalBinary()
 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	_, _, err = txnbase.BuildCommandFrom(r)
+	_, err = txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
 }
 
@@ -71,13 +66,9 @@ func TestMergeBlocksCmd(t *testing.T) {
 		nil,
 		0)
 
-	var w bytes.Buffer
-	_, err := cmd.WriteTo(&w)
+	buf, err := cmd.MarshalBinary()
 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	_, _, err = txnbase.BuildCommandFrom(r)
+	_, err = txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
 }
