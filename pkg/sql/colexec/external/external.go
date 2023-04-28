@@ -592,6 +592,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]string, param.IgnoreLine))
 			} else {
 				plh.moCsvLineArray = nil
 				cnt = 0

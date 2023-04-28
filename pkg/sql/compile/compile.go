@@ -871,6 +871,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
+		if param.Parallel {
+			return nil, moerr.NewInvalidInput(ctx, "load local do not support parallel mode")
+		}
 		mcpu = 1
 	}
 	if err != nil {
