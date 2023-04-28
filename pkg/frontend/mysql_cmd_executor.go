@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -1025,9 +1026,7 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-	p := ses.GetCache().GetParser(dialect.MYSQL, st.Sql, v.(int64))
-	defer ses.GetCache().PutParser(p)
-	stmts, err := p.Parse(ctx)
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -1535,9 +1534,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		if err != nil {
 			v = int64(1)
 		}
-		p := ses.GetCache().GetParser(dialect.MYSQL, sql, v.(int64))
-		defer ses.GetCache().PutParser(p)
-		stmts, err = p.Parse(proc.Ctx)
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2066,9 +2063,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		if err != nil {
 			return nil, err
 		}
-		p := ses.GetCache().GetParser(dialect.MYSQL, sql, v.(int64))
-		defer ses.GetCache().PutParser(p)
-		stmts, err = p.Parse(proc.Ctx)
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
