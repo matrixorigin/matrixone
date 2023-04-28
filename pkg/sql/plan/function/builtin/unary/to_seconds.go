@@ -25,37 +25,23 @@ import (
 // Seconds in 0000 AD
 const ADZeroSeconds = 31622400
 
-// ToSeconds: InMySQL: Given a date date, returns a day number (the number of days since year 0). Returns NULL if date is NULL.
+// ToSeconds: InMySQL: Given a date date, returns a day number (the number of days since year 0000). Returns NULL if date is NULL.
 // note:  but Matrxone think the date of the first year of the year is 0001-01-01, this function selects compatibility with MySQL
-// reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_to-days
-func ToSeconds(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	dateVector := vectors[0]
-	rtyp := types.T_int64.ToType()
-
-	if dateVector.IsConstNull() {
-		rvec := vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp())
-		return rvec, nil
-	}
-
-	if dateVector.IsConst() {
-		// XXX Null handling maybe broken.
-		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
-		resCol, err := CalcToSeconds(proc.Ctx, datetimes, dateVector.GetNulls())
-		if err != nil {
-			return nil, err
+// reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_to-seconds
+func ToSeconds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	dateParams := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		datetimeValue, isNull := dateParams.GetValue(i)
+		if isNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return vector.NewConstFixed(rtyp, resCol[0], dateVector.Length(), proc.Mp()), nil
-	} else {
-		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
-		resCol, err := CalcToSeconds(proc.Ctx, datetimes, dateVector.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		rvec := vector.NewVec(rtyp)
-		nulls.Set(rvec.GetNulls(), dateVector.GetNulls())
-		vector.AppendFixedList(rvec, resCol, nil, proc.Mp())
-		return rvec, nil
+		rs.Append(DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetimeValue)+ADZeroSeconds, false)
 	}
+	return nil
 }
 
 // CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)

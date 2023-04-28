@@ -15,8 +15,6 @@
 package unary
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,46 +41,20 @@ const (
 // ToDays: InMySQL: Given a date date, returns a day number (the number of days since year 0). Returns NULL if date is NULL.
 // note:  but Matrxone think the date of the first year of the year is 0001-01-01, this function selects compatibility with MySQL
 // reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_to-days
-func ToDays(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	dateVector := vectors[0]
-	rtyp := types.T_int64.ToType()
-
-	if dateVector.IsConstNull() {
-		rvec := vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp())
-		return rvec, nil
-	}
-
-	if dateVector.IsConst() {
-		// XXX Null handling maybe broken.
-		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
-		resCol, err := CalcToDays(proc.Ctx, datetimes, dateVector.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		return vector.NewConstFixed(rtyp, resCol[0], dateVector.Length(), proc.Mp()), nil
-	} else {
-		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
-		resCol, err := CalcToDays(proc.Ctx, datetimes, dateVector.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		rvec := vector.NewVec(rtyp)
-		nulls.Set(rvec.GetNulls(), dateVector.GetNulls())
-		vector.AppendFixedList(rvec, resCol, nil, proc.Mp())
-		return rvec, nil
-	}
-}
-
-// CalcToDays: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToDays(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
+func ToDays(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	dateParams := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		datetimeValue, isNull := dateParams.GetValue(i)
+		if isNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetime) + ADZeroDays
+		rs.Append(DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetimeValue)+ADZeroDays, false)
 	}
-	return res, nil
+	return nil
 }
 
 // DateTimeDiff returns t2 - t1 where t1 and t2 are datetime expressions.

@@ -15,7 +15,7 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -91,17 +91,19 @@ func TestToDays(t *testing.T) {
 			expects = append(expects, c.expect)
 		}
 
-		dateVector := testutil.MakeDateTimeVector(datestrs, nil)
-		expectVector := testutil.MakeInt64Vector(expects, nil)
-
 		proc := testutil.NewProc()
-		result, err := ToDays([]*vector.Vector{dateVector}, proc)
-		if err != nil {
-			t.Fatal(err)
+		dateVector := testutil.MakeDateTimeVector(datestrs, nil)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
+
+		inputs := []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_datetime.ToType(), datetimes, nil),
 		}
-		convey.So(err, convey.ShouldBeNil)
-		compare := testutil.CompareVectors(expectVector, result)
-		convey.So(compare, convey.ShouldBeTrue)
+		expect := testutil.NewFunctionTestResult(types.T_int64.ToType(), false, expects, nil)
+		caseNow := testutil.NewFunctionTestCase(proc, inputs, expect, ToDays)
+		succeed, info := caseNow.Run()
+		convey.So(succeed, convey.ShouldBeTrue)
+		require.True(t, succeed, fmt.Sprintf("err info is '%s'", info))
+
 	})
 
 	convey.Convey("Test02 Date_Format() with multi line", t, func() {
@@ -153,35 +155,23 @@ func TestToDays(t *testing.T) {
 			expects = append(expects, c.expect)
 		}
 
-		dateVector := testutil.MakeDateTimeVector(datestrs, nil)
-		expectVector := testutil.MakeInt64Vector(expects, nil)
-
 		proc := testutil.NewProc()
-		result, err := ToDays([]*vector.Vector{dateVector}, proc)
-		if err != nil {
-			t.Fatal(err)
+		dateVector := testutil.MakeDateTimeVector(datestrs, nil)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
+
+		inputs := []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_datetime.ToType(), datetimes, nil),
 		}
-		convey.So(err, convey.ShouldBeNil)
-		compare := testutil.CompareVectors(expectVector, result)
-		convey.So(compare, convey.ShouldBeTrue)
+		expect := testutil.NewFunctionTestResult(types.T_int64.ToType(), false, expects, nil)
+		caseNow := testutil.NewFunctionTestCase(proc, inputs, expect, ToDays)
+		succeed, info := caseNow.Run()
+		convey.So(succeed, convey.ShouldBeTrue)
+		require.True(t, succeed, fmt.Sprintf("err info is '%s'", info))
 	})
 }
 
 // Single row constant input parameter test to_days function
 func TestToDaysWithScalar(t *testing.T) {
-	mp := mpool.MustNewZero()
-	makeDateFormatVectors := func(date string) []*vector.Vector {
-		vec := make([]*vector.Vector, 2)
-
-		datetime, err := types.ParseDatetime(date, 6)
-		if err != nil {
-			panic(err)
-		}
-
-		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), datetime, 1, mp)
-		return vec
-	}
-
 	cases := []struct {
 		name    string
 		datestr string
@@ -260,15 +250,19 @@ func TestToDaysWithScalar(t *testing.T) {
 	}
 
 	proc := testutil.NewProc()
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			inputVecs := makeDateFormatVectors(c.datestr)
-			resVec, err := ToDays(inputVecs, proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.expect, vector.GetFixedAt[int64](resVec, 0))
-		})
+	for idx, kase := range cases {
+		d, err := types.ParseDatetime(kase.datestr, 6)
+		if err != nil {
+			panic(err)
+		}
+
+		inputs := []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{d}, nil),
+		}
+		expect := testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{kase.expect}, nil)
+		caseNow := testutil.NewFunctionTestCase(proc, inputs, expect, ToDays)
+		successd, info := caseNow.Run()
+		require.True(t, successd, fmt.Sprintf("case %d, err info is '%s'", idx, info))
 	}
 }
 

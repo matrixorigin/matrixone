@@ -426,10 +426,11 @@ var builtins = map[int]Functions{
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
-				Index:     0,
-				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_int64,
-				Fn:        unary.ToDays,
+				Index:           0,
+				Args:            []types.T{types.T_datetime},
+				ReturnTyp:       types.T_int64,
+				UseNewFramework: true,
+				NewFn:           unary.ToDays,
 			},
 		},
 	},
@@ -439,10 +440,11 @@ var builtins = map[int]Functions{
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
-				Index:     0,
-				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_int64,
-				Fn:        unary.ToSeconds,
+				Index:           0,
+				Args:            []types.T{types.T_datetime},
+				ReturnTyp:       types.T_int64,
+				UseNewFramework: true,
+				NewFn:           unary.ToSeconds,
 			},
 		},
 	},
