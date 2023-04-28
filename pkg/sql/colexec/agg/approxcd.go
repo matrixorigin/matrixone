@@ -15,6 +15,8 @@
 package agg
 
 import (
+	"bytes"
+
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -110,12 +112,51 @@ func getTheBytes(value any) []byte {
 }
 
 func (a *ApproxCountDistic[T]) MarshalBinary() ([]byte, error) {
-	return types.Encode(&a.Sk)
+	// Sk []*hll.Sketch
+	if len(a.Sk) == 0 {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+
+	l := int32(len(a.Sk))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		data, err := a.Sk[i].MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		size := int32(len(data))
+		buf.Write(types.EncodeInt32(&size))
+		buf.Write(data)
+	}
+
+	return buf.Bytes(), nil
 }
 
 func (a *ApproxCountDistic[T]) UnmarshalBinary(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
 	// avoid resulting errors caused by morpc overusing memory
 	copyData := make([]byte, len(data))
 	copy(copyData, data)
-	return types.Decode(copyData, &a.Sk)
+
+	l := types.DecodeInt32(data[:4])
+	data = data[4:]
+	sks := make([]*hll.Sketch, l)
+	for i := 0; i < int(l); i++ {
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
+
+		sk := new(hll.Sketch)
+		if err := sk.UnmarshalBinary(data[:size]); err != nil {
+			return err
+		}
+		data = data[size:]
+		sks[i] = sk
+	}
+	a.Sk = sks
+	return nil
 }

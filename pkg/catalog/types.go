@@ -131,6 +131,7 @@ const (
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
 	BlockMeta_ID              = "block_id"
+	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
@@ -138,7 +139,11 @@ const (
 	BlockMeta_CommitTs        = "committs"
 	BlockMeta_SegmentID       = "segment_id"
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
-
+	BlockMeta_Type            = "%!%mo__meta_type"
+	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
+	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
+	BlockMetaOffset    = "%!%mo__meta_offset"
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"
@@ -239,12 +244,53 @@ const (
 	BLOCKMETA_SEGID_IDX      = 6
 )
 
+type ObjectLocation [objectio.LocationLen]byte
+
+// ProtoSize is used by gogoproto.
+func (m *ObjectLocation) ProtoSize() int {
+	return objectio.LocationLen
+}
+
+// MarshalTo is used by gogoproto.
+func (m *ObjectLocation) MarshalTo(data []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(data[:size])
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (m *ObjectLocation) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, m[:])
+	return n, nil
+}
+
+// Marshal is used by gogoproto.
+func (m *ObjectLocation) Marshal() ([]byte, error) {
+	data := make([]byte, m.ProtoSize())
+	n, err := m.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (m *ObjectLocation) Unmarshal(data []byte) error {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(m[:], data)
+	return nil
+}
+
 type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
-	MetaLoc    [objectio.LocationLen]byte
-	DeltaLoc   [objectio.LocationLen]byte
+	MetaLoc    ObjectLocation
+	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 }

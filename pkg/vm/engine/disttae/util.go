@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -50,8 +51,8 @@ func fetchZonemapAndRowsFromBlockInfo(
 	idxs []uint16,
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
-	m *mpool.MPool) ([][64]byte, uint32, error) {
-	zonemapList := make([][64]byte, len(idxs))
+	m *mpool.MPool) ([]Zonemap, uint32, error) {
+	zonemapList := make([]Zonemap, len(idxs))
 
 	// raed s3
 	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLocation())
@@ -771,4 +772,16 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
+}
+
+/*
+	RowId:
+
+| segmentId | blockId | offsetId |
+
+	18 bytes   2 bytes   4 bytes
+*/
+// SegmentId = Uuid + fileId
+func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
+	return objectio.NewRowid(blkid, offset)
 }

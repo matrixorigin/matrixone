@@ -84,3 +84,42 @@ func (d Uuid) Gt(other Uuid) bool {
 func (d Uuid) Ne(other Uuid) bool {
 	return d.Compare(other) != 0
 }
+
+// ProtoSize is used by gogoproto.
+func (d *Uuid) ProtoSize() int {
+	return 16
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (d *Uuid) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < d.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, d[:])
+	return n, nil
+}
+
+// MarshalTo is used by gogoproto.
+func (d *Uuid) MarshalTo(data []byte) (int, error) {
+	size := d.ProtoSize()
+	return d.MarshalToSizedBuffer(data[:size])
+}
+
+// Marshal is used by gogoproto.
+func (d *Uuid) Marshal() ([]byte, error) {
+	data := make([]byte, d.ProtoSize())
+	n, err := d.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (d *Uuid) Unmarshal(data []byte) error {
+	if len(data) < d.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(d[:], data)
+	return nil
+}
