@@ -446,7 +446,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	if err := applyIndexFunc(maybeAddPrimaryKey(createTable)); err != nil {
+	if err := applyIndexFunc(maybeAddPrimaryKey(stmt, createTable)); err != nil {
 		return nil, err
 	}
 
@@ -2044,7 +2044,9 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 // auto-increment column primary key. In pessimistic transactionm mode, locks arithmetic requires
 // a primary key. To avoid conflicts with Cluster-By, this primary key needs to be disabled from
 // sorting inside TAE.
-func maybeAddPrimaryKey(def *plan.CreateTable) *ColDef {
+func maybeAddPrimaryKey(
+	stmt *tree.CreateTable,
+	def *plan.CreateTable) *ColDef {
 	if def.TableDef.Pkey == nil &&
 		!def.IsSystemExternalRel() {
 		def.TableDef.Cols = append(def.TableDef.Cols,
@@ -2068,7 +2070,17 @@ func maybeAddPrimaryKey(def *plan.CreateTable) *ColDef {
 			Names:       []string{catalog.FakePrimaryKeyColName},
 			PkeyColName: catalog.FakePrimaryKeyColName,
 		}
-		return def.TableDef.Cols[len(def.TableDef.Cols)-1]
+		idx := len(def.TableDef.Cols) - 1
+		// FIXME: due to the special treatment of insert and update for composite primary key, cluster-by, the
+		// hidden primary key cannot be placed in the last column, otherwise it will cause the columns sent to
+		// tae will not match the definition of schema, resulting in panic.
+		if def.TableDef.ClusterBy != nil &&
+			len(stmt.ClusterByOption.ColumnList) > 1 {
+			// we must swap hide pk and cluster_by
+			def.TableDef.Cols[idx-1], def.TableDef.Cols[idx] = def.TableDef.Cols[idx], def.TableDef.Cols[idx-1]
+			idx = idx - 1
+		}
+		return def.TableDef.Cols[idx]
 	}
 	return nil
 }
