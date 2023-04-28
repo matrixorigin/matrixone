@@ -398,15 +398,12 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
 			Affected:  t.Affected,
-			Engine:    t.Engine,
 			IsRemote:  t.IsRemote,
 			InsertCtx: t.InsertCtx,
 		}
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
 		res.Arg = &preinsert.Argument{
-			Ctx:        t.Ctx,
-			Eg:         t.Eg,
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
 			ParentIdx:  t.ParentIdx,
@@ -562,8 +559,6 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	}
 
 	return &preinsert.Argument{
-		Ctx:        proc.Ctx,
-		Eg:         eg,
 		SchemaName: schemaName,
 		TableDef:   insertCtx.TableDef,
 		ParentIdx:  insertCtx.ParentIdx,
@@ -592,7 +587,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
-		Engine:    eg,
 	}, nil
 }
 
