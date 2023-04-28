@@ -59,6 +59,10 @@ func (l Location) Name() ObjectName {
 	return ObjectName(l[:ObjectNameLen])
 }
 
+func (l Location) ShortName() *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&l[0]))
+}
+
 func (l Location) Extent() Extent {
 	return Extent(l[ExtentOff : ExtentOff+ExtentLen])
 }
