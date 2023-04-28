@@ -37,12 +37,14 @@ import (
 
 func (txn *Transaction) getBlockInfos(
 	ctx context.Context,
-	databaseId uint64,
-	tableId uint64,
+	tbl *txnTable,
 ) (blocks [][]catalog.BlockInfo, err error) {
 	blocks = make([][]catalog.BlockInfo, len(txn.dnStores))
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	states := txn.engine.getPartitions(databaseId, tableId).Snapshot()
+	states, err := tbl.getParts(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i := range txn.dnStores {
 		if i >= len(states) {
 			continue
