@@ -1127,7 +1127,7 @@ func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) erro
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return err
 		}
-		blocks, err := tbl.db.txn.getBlockInfos(ctx, tbl.db.databaseId, tbl.tableId)
+		blocks, err := tbl.db.txn.getBlockInfos(ctx, tbl)
 		if err != nil {
 			return err
 		}
