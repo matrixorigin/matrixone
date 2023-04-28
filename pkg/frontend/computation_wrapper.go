@@ -271,7 +271,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	var txnCtx context.Context
+	txnCtx := requestCtx 
 	if cacheHit && cwft.plan.NeedImplicitTxn() {
 		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
