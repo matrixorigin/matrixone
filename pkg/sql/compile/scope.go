@@ -90,7 +90,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		switch scope.Magic {
 		case Normal:
 			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
-		case Merge:
+		case Merge, MergeInsert:
 			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
 		case Remote:
 			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
