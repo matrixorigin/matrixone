@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 2",
-		output: "select 2",
+		input:  "select 1",
+		output: "select 1",
 	}
 )
 
