@@ -84,6 +84,9 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 				// 	info.MaybeUniqueMap[idx] = false
 				// }
 				zm := colMeta.ZoneMap()
+				if !zm.IsInited() {
+					continue
+				}
 
 				if !maybeUnique(zm, rows) {
 					info.MaybeUniqueMap[idx] = false
