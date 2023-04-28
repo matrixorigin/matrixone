@@ -1,10 +1,10 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package preinsertunique
+package cache
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
-type Argument struct {
-	Ctx          context.Context
-	PreInsertCtx *plan.PreInsertUkCtx
+type parserCache struct {
+	parsers []*mysql.Lexer
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+type Cache struct {
+	pc *parserCache
+}

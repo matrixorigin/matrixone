@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -220,9 +219,7 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 
 func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
-	tbl.setPartsOnce = sync.Once{}
 	tbl._parts = nil
-	tbl._partsErr = nil
 	tbl.blockMetas = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockMetasUpdated = false
@@ -421,11 +418,28 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	if err != nil {
 		return err
 	}
-	bat, err := genAlterTableTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, c.AlterBody, tbl.db.txn.proc.Mp())
+	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, ct, tbl.db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		return err
+	}
+	tbl.constraint = ct
+	return nil
+}
+
+func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	ct, err := c.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	bat, err := genTableAlterTuple(constraint, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = tbl.db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
 		return err
 	}
@@ -487,8 +501,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			return err
 		}
 		fileName := location.Name().String()
-		ibat := batch.NewWithSize(len(bat.Attrs))
-		ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
+		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
 			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
@@ -635,8 +648,7 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		new_bat := batch.NewWithSize(1)
-		new_bat.Attrs = []string{catalog.BlockMeta_MetaLoc}
+		new_bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
 		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		for _, metaLoc := range metaLocs {
 			vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
@@ -703,8 +715,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 }
 
 func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *batch.Batch {
-	ibat := batch.NewWithSize(len(bat.Attrs))
-	ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
+	ibat := batch.New(true, bat.Attrs)
 	for i := 0; i < len(ibat.Attrs); i++ {
 		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
 	}
@@ -1102,29 +1113,21 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 }
 
 func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
-	tbl.setPartsOnce.Do(func() {
+	if tbl._parts == nil {
+		if err := tbl.updateLogtail(ctx); err != nil {
+			return nil, err
+		}
 		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
-	})
-	return tbl._parts, tbl._partsErr
+	}
+	return tbl._parts, nil
 }
 
 func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) error {
 	tbl.dnList = []int{0}
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.blockMetasUpdated {
-		if tbl.db.txn.engine.UsePushModelOrNot() {
-			if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-				return err
-			}
-			err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
-			if err != nil {
-				return err
-			}
-		} else {
-			if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-				tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-				return err
-			}
+		if err := tbl.updateLogtail(ctx); err != nil {
+			return err
 		}
 		metas, err := tbl.db.txn.getBlockMetas(ctx, tbl, false)
 		if err != nil {
@@ -1133,5 +1136,34 @@ func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) erro
 		tbl.blockMetas = metas
 		tbl.blockMetasUpdated = true
 	}
+	return nil
+}
+
+func (tbl *txnTable) updateLogtail(ctx context.Context) error {
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	if created {
+		return nil
+	}
+
+	if tbl.logtailUpdated {
+		return nil
+	}
+
+	if tbl.db.txn.engine.UsePushModelOrNot() {
+		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
+		if err != nil {
+			return err
+		}
+	} else {
+		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
+			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+	}
+
+	tbl.logtailUpdated = true
 	return nil
 }

@@ -273,6 +273,11 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 	return nil
 }
 
+func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 	data.InitZsOne(data.Length())
 	shards, err := t.engine.shardPolicy.Batch(

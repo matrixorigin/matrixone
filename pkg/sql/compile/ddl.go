@@ -82,13 +82,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -193,22 +194,23 @@ func (s *Scope) AlterTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
-			// case Update:
-			// 	go func(cs *Scope) {
-			// 		var err error
-			// 		defer func() {
-			// 			errChan <- err
-			// 		}()
-			// 		_, err = cs.Update(c)
-			// 	}(s.PreScopes[i])
+		case Update:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Update(c)
+			}(s.PreScopes[i])
 		}
 	}
 
@@ -252,6 +254,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 				for i, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
@@ -294,6 +297,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
@@ -387,6 +391,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterIndex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterIndex
 			constraintName := tableAlterIndex.IndexName
 			for i, indexdef := range tableDef.Indexes {
@@ -424,8 +429,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 	// reset origin table's constraint
 	var oldCt *engine.ConstraintDef
 	newCt := &engine.ConstraintDef{
-		Cts:       []engine.Constraint{},
-		AlterBody: &api.AlterTableBody{},
+		Cts: []engine.Constraint{},
 	}
 	for _, def := range oldDefs {
 		if ct, ok := def.(*engine.ConstraintDef); ok {
@@ -456,7 +460,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			for in := range dropIndex { //if dropIndex != nil {
+			for in := range dropIndex {
 				for i, idx := range t.Indexes {
 					if dropIndex[in].IndexName == idx.IndexName {
 						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
@@ -493,6 +497,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
+	var constraint [][]byte
 	for _, kind := range alterKind {
 		var req *api.AlterTableReq
 		switch kind {
@@ -517,10 +522,14 @@ func (s *Scope) AlterTable(c *Compile) error {
 			dropColIdx++
 		default:
 		}
-		newCt.AlterBody.Req = append(newCt.AlterBody.Req, req)
+		tmp, err := req.Marshal()
+		if err != nil {
+			return err
+		}
+		constraint = append(constraint, tmp)
 	}
 
-	err = rel.UpdateConstraint(c.ctx, newCt)
+	err = rel.AlterTable(c.ctx, newCt, constraint)
 	if err != nil {
 		return err
 	}
@@ -891,13 +900,14 @@ func (s *Scope) DropIndex(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -1147,19 +1157,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	//Truncate Partition subtable if needed
-	for _, name := range tqry.PartitionTableNames {
-		var err error
-		if isTemp {
-			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
-		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
-		}
-		if err != nil {
-			return err
-		}
-	}
-
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
@@ -1245,13 +1242,14 @@ func (s *Scope) DropTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}

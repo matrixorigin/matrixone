@@ -520,6 +520,16 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
+		case []catalog.UpdateConstraint:
+			for _, cmd := range cmds {
+				req := api.NewUpdateConstraintReq(
+					cmd.DatabaseId,
+					cmd.TableId,
+					string(cmd.Constraint))
+				if err = h.CacheTxnRequest(ctx, meta, req, nil); err != nil {
+					return err
+				}
+			}
 		case []*api.AlterTableReq:
 			for _, cmd := range cmds {
 				if err = h.CacheTxnRequest(ctx, meta, cmd, nil); err != nil {

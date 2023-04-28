@@ -177,9 +177,10 @@ const (
 	MO_COLUMNS_ID  = 3
 )
 
-// index use to update altertable
+// index use to update constraint
 const (
-	MO_TABLES_UPDATE_ALTERTABLE = 0
+	MO_TABLES_ALTER_TABLE       = 0
+	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 
 // column's index in catalog table

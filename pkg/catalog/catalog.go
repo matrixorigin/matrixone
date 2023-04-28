@@ -86,6 +86,8 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.EntryType == api.Entry_Delete {
 			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		} else if e.EntryType == api.Entry_Update {
+			return genUpdateConstraint(GenRows(bat)), es[1:], nil
+		} else if e.EntryType == api.Entry_Alter {
 			e, err := genUpdateAltertable(GenRows(bat))
 			if err != nil {
 				return nil, nil, err
@@ -198,11 +200,23 @@ func genCreateTables(rows [][]any) []CreateTable {
 	return cmds
 }
 
+func genUpdateConstraint(rows [][]any) []UpdateConstraint {
+	cmds := make([]UpdateConstraint, len(rows))
+	for i, row := range rows {
+		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
+		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		cmds[i].TableName = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
+	}
+	return cmds
+}
+
 func genUpdateAltertable(rows [][]any) ([]*api.AlterTableReq, error) {
 	cmds := make([]*api.AlterTableReq, len(rows))
 	for i, row := range rows {
 		req := &api.AlterTableReq{}
-		err := req.Unmarshal(row[MO_TABLES_UPDATE_ALTERTABLE].([]byte))
+		err := req.Unmarshal(row[MO_TABLES_ALTER_TABLE].([]byte))
 		if err != nil {
 			return nil, err
 		}

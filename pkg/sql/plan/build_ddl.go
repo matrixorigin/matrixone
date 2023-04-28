@@ -1151,11 +1151,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				}
 			}
 		}
-
-		if tableDef.Partition != nil {
-			truncateTable.PartitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
-			copy(truncateTable.PartitionTableNames, tableDef.Partition.PartitionTableNames)
-		}
 	}
 
 	return &Plan{

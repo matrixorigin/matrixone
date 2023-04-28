@@ -67,7 +67,7 @@ type container struct {
 type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
-	affectedRows uint64
+	AffectedRows uint64
 	Engine       engine.Engine
 
 	// for delete filter below
@@ -80,15 +80,26 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	CanTruncate           bool
-	RowIdIdx              int               // The array index position of the rowid column
-	PartitionTableIDs     []uint64          // Align array index with the partition number
-	PartitionIndexInBatch int               // The array index position of the partition expression column
-	PartitionSources      []engine.Relation // Align array index with the partition number
-	Source                engine.Relation
-	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool
-	IsEnd                 bool
+	CanTruncate bool
+
+	DelSource []engine.Relation
+	DelRef    []*plan.ObjectRef
+	DelIdx    [][]int32
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+
+	OnRestrictIdx []int32
+
+	OnCascadeSource []engine.Relation
+	OnCascadeIdx    []int32
+
+	OnSetSource       []engine.Relation
+	OnSetUniqueSource [][]engine.Relation
+	OnSetIdx          [][]int32
+	OnSetRef          []*plan.ObjectRef
+	OnSetTableDef     []*plan.TableDef
+	OnSetUpdateCol    []map[string]int32
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
@@ -220,8 +231,4 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		vector.AppendBytes(bat.GetVector(0), []byte(metaLoc), false, proc.GetMPool())
 	}
 	return resSize, nil
-}
-
-func (arg *Argument) AffectedRows() uint64 {
-	return arg.affectedRows
 }

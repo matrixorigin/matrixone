@@ -17,9 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"regexp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -112,24 +113,54 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genAlterTableTuple(tblId, dbId uint64, tblName, dbName string, alterBody *api.AlterTableBody,
+func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constraint []byte,
 	m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(1)
+	bat := batch.NewWithSize(5)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
 	bat.SetZs(1, m)
-	idx := catalog.MO_TABLES_UPDATE_ALTERTABLE
-	bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
 
-	for i := 0; i < len(alterBody.Req); i++ {
-		bytes, err := alterBody.Req[i].Marshal()
-		if err != nil {
+	{
+		idx := catalog.MO_TABLES_REL_ID_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
+		if err := vector.AppendFixed(bat.Vecs[idx], tblId, false, m); err != nil {
 			return nil, err
 		}
-		if err := vector.AppendBytes(bat.Vecs[idx], bytes, false, m); err != nil {
+		idx = catalog.MO_TABLES_REL_NAME_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // relname
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tblName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // reldatabase
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(dbName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := vector.AppendFixed(bat.Vecs[idx], dbId, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_UPDATE_CONSTRAINT
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
+		if err := vector.AppendBytes(bat.Vecs[idx], constraint, false, m); err != nil {
 			return nil, err
 		}
 	}
+	return bat, nil
+}
 
+func genTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
+	bat.SetZs(1, m)
+	for i := 0; i < len(constraint); i++ {
+		idx := catalog.MO_TABLES_ALTER_TABLE
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
+		if err := vector.AppendBytes(bat.Vecs[idx], constraint[i], false, m); err != nil {
+			return nil, err
+		}
+	}
 	return bat, nil
 }
 
@@ -711,6 +742,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		typ = api.Entry_Delete
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
+	} else if e.typ == ALTER {
+		typ = api.Entry_Alter
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {

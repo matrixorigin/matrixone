@@ -171,8 +171,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		ures []bytejson.UnnestResult
 	)
 
-	rbat = batch.NewWithSize(len(arg.Attrs))
-	rbat.Attrs = arg.Attrs
+	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.retSchema {
 		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])

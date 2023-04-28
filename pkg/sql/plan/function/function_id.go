@@ -76,7 +76,6 @@ const (
 	ARRAY_SIZE     // ARRAY_SIZE
 	ASCII          // ASCII
 	ASIN           // ASIN
-	ASSERT         // ASSERT
 	ATAN           // ATAN
 	ATAN2          // ATAN2
 	AVG            // AVG
@@ -227,6 +226,8 @@ const (
 	HOUR   // HOUR
 	MINUTE // MINUTE
 	SECOND // SECOND
+	TO_DAYS
+	TO_SECONDS
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -428,6 +429,8 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"to_days":                        TO_DAYS,
+	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
@@ -541,7 +544,6 @@ var functionIdRegister = map[string]int32{
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
-	"assert":                         ASSERT,
 	"lastval":                        LASTVAL,
 }
 

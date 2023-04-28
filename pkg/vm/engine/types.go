@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -262,8 +261,7 @@ func (def *TableDefPB) FromPBVersion() TableDef {
 }
 
 type ConstraintDef struct {
-	Cts       []Constraint
-	AlterBody *api.AlterTableBody
+	Cts []Constraint
 }
 
 type ConstraintType int8
@@ -522,6 +520,8 @@ type Relation interface {
 
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
+
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
 
 	GetTableID(context.Context) uint64
 
