@@ -9,4 +9,5 @@ create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 show subscriptions;
 -- @session
 drop account acc_idx;
+drop publication sys_pub_1;
 drop database sys_db_1;
