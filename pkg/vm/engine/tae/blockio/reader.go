@@ -26,6 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+const (
+	AsyncIo = 1
+	SyncIo  = 2
+)
+
+var IoModel = SyncIo
+
 type BlockReader struct {
 	reader *objectio.ObjectReader
 	aio    *IoPipeline
@@ -86,17 +93,25 @@ func (r *BlockReader) LoadColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	proc := fetchParams{
-		idxes:  cols,
-		blk:    blk,
-		pool:   m,
-		reader: r.reader,
+	var ioVectors *fileservice.IOVector
+	if IoModel == AsyncIo {
+		proc := fetchParams{
+			idxes:  cols,
+			blk:    blk,
+			pool:   m,
+			reader: r.reader,
+		}
+		var v any
+		if v, err = r.aio.Fetch(ctx, proc); err != nil {
+			return
+		}
+		ioVectors = v.(*fileservice.IOVector)
+	} else {
+		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, blk, m)
+		if err != nil {
+			return
+		}
 	}
-	var v any
-	if v, err = r.aio.Fetch(ctx, proc); err != nil {
-		return
-	}
-	ioVectors := v.(*fileservice.IOVector)
 	bat = batch.NewWithSize(len(cols))
 	for i := range cols {
 		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
