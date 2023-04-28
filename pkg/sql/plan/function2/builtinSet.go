@@ -537,8 +537,8 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if err := rs.AppendBytes([]byte(rval), false); err != nil {
 					return err
 				}
+				continue
 			}
-			continue
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {
 			return err
@@ -591,7 +591,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
 		val := types.CurrentTimestamp().Unix()
-		for i := uint64(0); i < uint64(0); i++ {
+		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
 				return nil
 			}

@@ -819,7 +819,6 @@ func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, err
 // SPLIT PART
 
 func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[2])
@@ -840,15 +839,15 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return
 			}
 
-			// TODO: Please validate if this is correct based on the old code: https://github.com/m-schen/matrixone/blob/3b58fe39a4c233739a8d3b9cd4fcd562fa2a1568/pkg/sql/plan/function/builtin/multi/split_part.go#L70
 			res, isNull := SplitSingle(string(v1), string(v2), v3)
 			if isNull {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-			}
-			if err = rs.AppendBytes([]byte(res), false); err != nil {
-				return err
+			} else {
+				if err = rs.AppendBytes([]byte(res), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
