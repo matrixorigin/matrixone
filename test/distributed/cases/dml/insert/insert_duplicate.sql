@@ -1,4 +1,4 @@
--- @skip:issue#8498
+-- @skip:issue#9194
 CREATE TABLE IF NOT EXISTS indup_00(
     `id` INT UNSIGNED,
     `act_name` VARCHAR(20) NOT NULL,

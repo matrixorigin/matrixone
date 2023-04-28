@@ -80,13 +80,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -158,22 +159,23 @@ func (s *Scope) AlterTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
-			// case Update:
-			// 	go func(cs *Scope) {
-			// 		var err error
-			// 		defer func() {
-			// 			errChan <- err
-			// 		}()
-			// 		_, err = cs.Update(c)
-			// 	}(s.PreScopes[i])
+		case Update:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				_, err = cs.Update(c)
+			}(s.PreScopes[i])
 		}
 	}
 
@@ -772,13 +774,14 @@ func (s *Scope) DropIndex(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}
@@ -1028,19 +1031,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	//Truncate Partition subtable if needed
-	for _, name := range tqry.PartitionTableNames {
-		var err error
-		if isTemp {
-			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
-		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
-		}
-		if err != nil {
-			return err
-		}
-	}
-
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
@@ -1126,13 +1116,14 @@ func (s *Scope) DropTable(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
-		case Merge:
+		case Deletion:
+			// execute additional sql pipeline, currently, only delete operations are performed
 			go func(cs *Scope) {
 				var err error
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.MergeRun(c)
+				_, err = cs.Delete(c)
 			}(s.PreScopes[i])
 		}
 	}
