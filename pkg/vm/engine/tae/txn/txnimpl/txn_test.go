@@ -351,7 +351,7 @@ func TestNodeCommand(t *testing.T) {
 	for i, inode := range tbl.localSegment.nodes {
 		cmd, err := inode.MakeCommand(uint32(i))
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
+		assert.NotNil(t, cmd.(*AppendCmd).Data)
 		//if entry != nil {
 		//	_ = entry.WaitDone()
 		//	entry.Free()

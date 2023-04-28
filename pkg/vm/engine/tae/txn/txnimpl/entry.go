@@ -15,11 +15,26 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 const (
-	ETInsertNode = entry.ETCustomizedStart + 1 + iota
-	ETTxnRecord
-	ETTxnState
+	IOET_WALEntry_TxnRecord = entry.IOET_WALEntry_CustomizedStart + iota
+	IOET_WALEntry_TxnState
 )
+
+func init() {
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_TxnRecord,
+			Version: entry.IOET_WALEntry_V1,
+		}, nil, entry.UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_TxnState,
+			Version: entry.IOET_WALEntry_V1,
+		}, nil, entry.UnmarshalEntry,
+	)
+}
