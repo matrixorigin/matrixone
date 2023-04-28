@@ -286,7 +286,7 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 func (w *StoreInfo) makeInternalCheckpointEntry() (e entry.Entry) {
 	e = entry.GetBase()
 	lsn := w.GetSynced(GroupCKP)
-	e.SetType(entry.ETPostCommit)
+	e.SetType(entry.IOET_WALEntry_PostCommit)
 	buf, err := w.marshalPostCommitEntry()
 	if err != nil {
 		panic(err)

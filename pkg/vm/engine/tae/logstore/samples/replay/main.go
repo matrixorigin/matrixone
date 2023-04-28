@@ -47,7 +47,7 @@ func main() {
 			Group:     10,
 			Uncommits: tid,
 		}
-		e1.SetType(entry.ETUncommitted)
+		e1.SetType(entry.IOET_WALEntry_Uncommitted)
 		e1.SetInfo(uncommitInfo)
 		n, err := common.LogAllocator.Alloc(common.K * 100)
 		if err != nil {
@@ -68,7 +68,7 @@ func main() {
 			TxnId: tid,
 		}
 		e2 := entry.GetBase()
-		e2.SetType(entry.ETTxn)
+		e2.SetType(entry.IOET_WALEntry_Txn)
 		e2.SetInfo(txnInfo)
 		n, err = common.LogAllocator.Alloc(common.K * 100)
 		if err != nil {
@@ -98,7 +98,7 @@ func main() {
 			}},
 		}
 		e3 := entry.GetBase()
-		e3.SetType(entry.ETCheckpoint)
+		e3.SetType(entry.IOET_WALEntry_Checkpoint)
 		e3.SetInfo(info)
 		_, err = s.Append(entry.GTCKp, e3)
 		if err != nil {
