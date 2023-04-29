@@ -76,6 +76,8 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 
 	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
+	} else if th.ses.IfInitedTempEngine() {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, th.ses.GetTempTableStorage())
 	}
 	return retTxnCtx
 }
@@ -195,7 +197,7 @@ func (th *TxnHandler) SetTxnOperatorInvalid() {
 func (th *TxnHandler) GetTxnOperator() (context.Context, TxnOperator) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	return th.txnCtx, th.txnOperator
+	return th.createTxnCtx(), th.txnOperator
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
