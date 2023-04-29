@@ -220,6 +220,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 	return 0
 }
 
+func (proc *Process) SetCacheForAutoCol(name string) {
+	aicm := proc.Aicm
+	aicm.Mu.Lock()
+	defer aicm.Mu.Unlock()
+	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
+}
+
 type analyze struct {
 	start    time.Time
 	wait     time.Duration

@@ -1033,6 +1033,14 @@ func (tbl *txnTable) updateLocalState(
 		return nil
 	}
 
+	// hide primary key, auto_incr, nevery dedup.
+	if tbl.tableDef != nil {
+		pk := tbl.tableDef.Cols[tbl.primaryIdx]
+		if pk.Hidden && pk.Typ.AutoIncr {
+			return nil
+		}
+	}
+
 	if tbl.localState == nil {
 		tbl.localState = NewPartitionState(true)
 	}

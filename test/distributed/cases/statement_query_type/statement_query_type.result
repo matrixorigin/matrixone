@@ -111,8 +111,8 @@ truncate table test_01;
 drop table test_01;
 drop database test_db;
 use statement_query_type;
-begin;
 create database test_db;
+begin;
 use test_db;
 create table test_table(
 col1 int,
@@ -163,6 +163,7 @@ internal error: administrative command is unsupported in transactions
 create user user_name identified by 'password';
 internal error: administrative command is unsupported in transactions
 create database if not exists db1;
+internal error: CREATE/DROP of database is not supported in transactions
 grant create table,drop table on database *.* to test_role;
 internal error: administrative command is unsupported in transactions
 revoke test_role from user_name;
@@ -174,8 +175,9 @@ internal error: administrative command is unsupported in transactions
 drop account test_account;
 internal error: administrative command is unsupported in transactions
 drop database db1;
-internal error: Only CREATE of DDL is supported in transactions
+internal error: CREATE/DROP of database is not supported in transactions
 create database db2;
+internal error: CREATE/DROP of database is not supported in transactions
 create table table_2(
 col1 int,
 col2 varchar
@@ -189,7 +191,7 @@ internal error: Only CREATE of DDL is supported in transactions
 drop table table_2;
 internal error: Only CREATE of DDL is supported in transactions
 drop database db2;
-internal error: Only CREATE of DDL is supported in transactions
+internal error: CREATE/DROP of database is not supported in transactions
 select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
