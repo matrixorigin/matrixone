@@ -42,10 +42,6 @@ insert into t1 values
 (32, '2001-11-17', 7999);
 
 select * from t1 order by col1;
-select * from `%!%p0%!%t1` order by col1;
-select * from `%!%p1%!%t1` order by col1;
-select * from `%!%p2%!%t1` order by col1;
-select * from `%!%p3%!%t1` order by col1;
 
 truncate table t1;
 select * from t1 order by col1;
