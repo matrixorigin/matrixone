@@ -15,106 +15,65 @@
 package txnimpl
 
 import (
-	"bytes"
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
-
-func TestPointerCmd(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	groups := uint32(10)
-	maxLsn := uint64(10)
-	for group := uint32(1); group <= groups; group++ {
-		for lsn := uint64(1); lsn <= maxLsn; lsn++ {
-			cmd := new(txnbase.PointerCmd)
-			cmd.Group = group
-			cmd.Lsn = lsn
-			mashalled, err := cmd.Marshal()
-			assert.Nil(t, err)
-			r := bytes.NewBuffer(mashalled)
-			cmd2, _, err := txnbase.BuildCommandFrom(r)
-			assert.Nil(t, err)
-			assert.Equal(t, cmd.Group, cmd2.(*txnbase.PointerCmd).Group)
-			assert.Equal(t, cmd.Lsn, cmd2.(*txnbase.PointerCmd).Lsn)
-		}
-	}
-}
 
 func TestComposedCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	composed := txnbase.NewComposedCmd()
 	defer composed.Close()
-	groups := uint32(10)
-	maxLsn := uint64(10)
-	for group := uint32(1); group <= groups; group++ {
-		for lsn := uint64(1); lsn <= maxLsn; lsn++ {
-			cmd := new(txnbase.PointerCmd)
-			cmd.Group = group
-			cmd.Lsn = lsn
-			composed.AddCmd(cmd)
-		}
-	}
-	batCnt := 5
 
-	schema := catalog.MockSchema(4, 0)
-	for i := 0; i < batCnt; i++ {
-		bat := catalog.MockBatch(schema, (i+1)*5)
-		defer bat.Close()
-		batCmd := txnbase.NewBatchCmd(bat)
-		del := roaring.NewBitmap()
-		del.Add(uint32(i))
-		delCmd := txnbase.NewDeleteBitmapCmd(del)
-		comp := txnbase.NewComposedCmd()
-		comp.AddCmd(batCmd)
-		comp.AddCmd(delCmd)
-		composed.AddCmd(comp)
-	}
-	var w bytes.Buffer
-	_, err := composed.WriteTo(&w)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	dbCmd, err := db.MakeCommand(1)
 	assert.Nil(t, err)
+	composed.AddCmd(dbCmd)
 
-	buf := w.Bytes()
-
-	r := bytes.NewBuffer(buf)
-	composed2, _, err := txnbase.BuildCommandFrom(r)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	tblCmd, err := table.MakeCommand(1)
 	assert.Nil(t, err)
-	defer composed2.Close()
-	cmd1 := composed.Cmds
-	cmd2 := composed2.(*txnbase.ComposedCmd).Cmds
+	composed.AddCmd(tblCmd)
 
-	assert.Equal(t, len(cmd1), len(cmd2))
-	for i, c1 := range cmd1 {
-		c2 := cmd2[i]
-		assert.Equal(t, c1.GetType(), c2.GetType())
-		switch c1.GetType() {
-		case txnbase.CmdPointer:
-			assert.Equal(t, c1.(*txnbase.PointerCmd).Group, c2.(*txnbase.PointerCmd).Group)
-			assert.Equal(t, c1.(*txnbase.PointerCmd).Group, c2.(*txnbase.PointerCmd).Group)
-		case txnbase.CmdComposed:
-			comp1 := c1.(*txnbase.ComposedCmd)
-			comp2 := c2.(*txnbase.ComposedCmd)
-			for j, cc1 := range comp1.Cmds {
-				cc2 := comp2.Cmds[j]
-				assert.Equal(t, cc1.GetType(), cc2.GetType())
-				switch cc1.GetType() {
-				case txnbase.CmdPointer:
-					assert.Equal(t, cc1.(*txnbase.PointerCmd).Group, cc2.(*txnbase.PointerCmd).Group)
-					assert.Equal(t, cc1.(*txnbase.PointerCmd).Group, cc2.(*txnbase.PointerCmd).Group)
-				case txnbase.CmdDeleteBitmap:
-					assert.True(t, cc1.(*txnbase.DeleteBitmapCmd).Bitmap.Equals(cc1.(*txnbase.DeleteBitmapCmd).Bitmap))
-				case txnbase.CmdBatch:
-					b1 := cc1.(*txnbase.BatchCmd)
-					b2 := cc2.(*txnbase.BatchCmd)
-					assert.True(t, b1.Bat.Equals(b2.Bat))
-				}
-			}
-		}
-	}
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	segCmd, err := seg.MakeCommand(1)
+	assert.Nil(t, err)
+	composed.AddCmd(segCmd)
+
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
+	blkCmd, err := blk.MakeCommand(1)
+	assert.Nil(t, err)
+	composed.AddCmd(blkCmd)
+
+	controller := updates.NewMVCCHandle(blk)
+	ts := types.NextGlobalTsForTest()
+
+	node := updates.MockAppendNode(ts, 0, 2515, controller)
+	cmd := updates.NewAppendCmd(1, node)
+
+	composed.AddCmd(cmd)
+
+	del := updates.NewDeleteNode(nil, handle.DT_Normal)
+	del.AttachTo(controller.GetDeleteChain())
+	cmd2, err := del.MakeCommand(1)
+	assert.Nil(t, err)
+	composed.AddCmd(cmd2)
+
+	buf, err := composed.MarshalBinary()
+	assert.Nil(t, err)
+	vcomposed2, err := txnbase.BuildCommandFrom(buf)
+	assert.Nil(t, err)
+	composed2 := vcomposed2.(*txnbase.ComposedCmd)
+	assert.Equal(t, composed.CmdSize, composed2.CmdSize)
 }

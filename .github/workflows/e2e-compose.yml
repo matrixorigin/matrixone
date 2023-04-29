@@ -66,6 +66,8 @@ jobs:
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/docker-compose-log/logservice.log
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
+          curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -147,6 +149,9 @@ jobs:
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/multi-cn-docker-compose-log/dn.log
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/multi-cn-docker-compose-log/logservice.log
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/multi-cn-docker-compose-log
+          curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/multi-cn-docker-compose-log/cn-0-dump-stacks.log
+          curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/multi-cn-ocker-compose-log/cn-1-dump-stacks.log
+
 
       - name: shutdown containers
         if: ${{ always() }}

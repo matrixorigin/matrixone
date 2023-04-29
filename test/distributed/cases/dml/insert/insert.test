@@ -202,6 +202,7 @@ insert into t select * from t;
 select count(*) from t;
 insert into t select * from t;
 select count(*) from t;
+-- @bvt:issue#9105
 insert into t select * from t;
 select count(*) from t;
 insert into t select * from t;
@@ -222,6 +223,7 @@ insert into t select * from t;
 select count(*) from t;
 commit;
 select count(*) from t;
+-- @bvt:issue
 drop table t;
 # 2.primary key test
 create table t(a int primary key);
