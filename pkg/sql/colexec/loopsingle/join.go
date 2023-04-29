@@ -16,7 +16,6 @@ package loopsingle
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +31,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
@@ -56,9 +56,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		case Probe:
 			var err error
-			start := time.Now()
-			bat := <-proc.Reg.MergeReceivers[0].Ch
-			anal.WaitStop(start)
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return false, err
+			}
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -84,9 +86,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	start := time.Now()
-	bat := <-proc.Reg.MergeReceivers[1].Ch
-	anal.WaitStop(start)
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 
 	if bat != nil {
 		ctr.bat = bat
