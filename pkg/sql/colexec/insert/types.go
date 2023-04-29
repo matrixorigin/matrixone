@@ -34,7 +34,6 @@ type container struct {
 type Argument struct {
 	ctr       *container
 	Affected  uint64
-	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
 	InsertCtx *InsertCtx
 }

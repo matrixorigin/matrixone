@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"hash/crc32"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +42,8 @@ import (
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
+
+	HandleNotifyTimeout = 300 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
@@ -415,4 +419,26 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	return result, nil
+}
+
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
+	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+	defer getCancel()
+	var opProc *process.Process
+	var ok bool
+	opUuid := receiver.messageUuid
+outter:
+	for {
+		select {
+		case <-getCtx.Done():
+			return nil, moerr.NewInternalErrorNoCtx("get dispatch process by uuid failed")
+		default:
+			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
+				runtime.Gosched()
+			} else {
+				break outter
+			}
+		}
+	}
+	return opProc, nil
 }
