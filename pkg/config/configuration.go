@@ -428,7 +428,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 
 	if fp.AutoIncrCacheSize == 0 {
-		fp.AutoIncrCacheSize = 3000
+		fp.AutoIncrCacheSize = 3000000
 	}
 
 	if fp.LowerCaseTableNames == "" {

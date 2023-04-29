@@ -18,11 +18,11 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -33,6 +33,10 @@ const (
 	PrefixIndexTableName = "__mo_index_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
@@ -153,7 +157,7 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
-	SystemExternalRel     = "e"
+	SystemExternalRel     = plan.SystemExternalRel
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"

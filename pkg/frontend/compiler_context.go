@@ -420,6 +420,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				OnUpdate:  attr.Attr.OnUpdate,
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
+				Hidden:    attr.Attr.IsHidden,
 			}
 			// Is it a composite primary key
 			if attr.Attr.Name == catalog.CPrimaryKeyColName {

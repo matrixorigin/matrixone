@@ -170,9 +170,7 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
 	return offsets
 }
 
-func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
-	b.Lock()
-	defer b.Unlock()
+func (b *deletedBlocks) removeBlockDeletedInfoLocked(blockID string) {
 	delete(b.offsets, blockID)
 }
 

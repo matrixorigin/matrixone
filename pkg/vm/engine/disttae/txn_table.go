@@ -600,7 +600,7 @@ func (tbl *txnTable) compaction() error {
 			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		tbl.db.txn.deletedBlocks.removeBlockDeletedInfo(id)
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfoLocked(id)
 		if len(deleteOffsets) == 0 {
 			return true
 		}
@@ -1029,6 +1029,14 @@ func (tbl *txnTable) updateLocalState(
 	if tbl.primaryIdx < 0 {
 		// no primary key, skip
 		return nil
+	}
+
+	// hide primary key, auto_incr, nevery dedup.
+	if tbl.tableDef != nil {
+		pk := tbl.tableDef.Cols[tbl.primaryIdx]
+		if pk.Hidden && pk.Typ.AutoIncr {
+			return nil
+		}
 	}
 
 	if tbl.localState == nil {

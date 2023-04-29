@@ -54,6 +54,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func createDropDatabaseErrorInfo() string {
+	return "CREATE/DROP of database is not supported in transactions"
+}
+
 func onlyCreateStatementErrorInfo() string {
 	return "Only CREATE of DDL is supported in transactions"
 }
@@ -2186,7 +2190,9 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 	}
 	if !can {
 		//is ddl statement
-		if IsDDL(stmt) {
+		if IsCreateDropDatabase(stmt) {
+			return moerr.NewInternalError(requestCtx, createDropDatabaseErrorInfo())
+		} else if IsDDL(stmt) {
 			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
 			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())

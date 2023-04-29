@@ -279,6 +279,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
+	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i] = &process.AnalyzeInfo{
