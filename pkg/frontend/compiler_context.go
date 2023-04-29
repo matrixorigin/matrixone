@@ -122,14 +122,15 @@ func (tcc *TxnCompilerContext) GetContext() context.Context {
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
+	var txnCtx context.Context
 	var txn TxnOperator
-	txn, err = tcc.GetTxnHandler().GetTxn()
+	txnCtx, txn, err = tcc.GetTxnHandler().GetTxn()
 	if err != nil {
 		return false
 	}
 	//open database
 	ses := tcc.GetSession()
-	_, err = tcc.GetTxnHandler().GetStorage().Database(tcc.GetTxnHandler().GetTxnCtx(), name, txn)
+	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
 	if err != nil {
 		logErrorf(ses.GetDebugString(), "get database %v failed. error %v", name, err)
 		return false
@@ -143,19 +144,17 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	txn, err := tcc.GetTxnHandler().GetTxn()
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
 		return 0, err
 	}
-	ses := tcc.GetSession()
-	ctx := ses.GetRequestContext()
-	database, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	database, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
 		return 0, err
 	}
-	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(txnCtx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(ses.GetRequestContext(), "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalError(txnCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -168,7 +167,10 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	}
 
 	ses := tcc.GetSession()
-	txnCtx := tcc.GetTxnHandler().GetTxnCtx()
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, nil, err
+	}
 	account := ses.GetTenantInfo()
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
@@ -179,11 +181,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if sub != nil {
 		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
 		dbName = sub.DbName
-	}
-
-	txn, err := tcc.GetTxnHandler().GetTxn()
-	if err != nil {
-		return nil, nil, err
 	}
 
 	//open database
@@ -213,18 +210,18 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	return txnCtx, table, nil
 }
 
-func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName string) (engine.Relation, error) {
 	e := tcc.ses.storage
-	txn, err := tcc.txnHandler.GetTxn()
+	txnCtx, txn, err := tcc.txnHandler.GetTxn()
 	if err != nil {
 		return nil, err
 	}
-	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
+	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
 		logutil.Errorf("get temp database error %v", err)
 		return nil, err
 	}
-	table, err := db.Relation(ctx, tableName)
+	table, err := db.Relation(txnCtx, tableName)
 	return table, err
 }
 
@@ -247,8 +244,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub 
 }
 
 func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *plan2.TableDef) {
-	txnCtx := tcc.GetTxnHandler().GetTxnCtx()
-	txn, err := tcc.GetTxnHandler().GetTxn()
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
 		return nil, nil
 	}
@@ -715,11 +711,11 @@ func (tcc *TxnCompilerContext) SetProcess(proc *process.Process) {
 }
 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
-	txn, err := tcc.GetTxnHandler().GetTxn()
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
 	if err != nil {
 		return nil, err
 	}
-	sub, err := getSubscriptionMeta(tcc.GetContext(), dbName, tcc.GetSession(), txn)
+	sub, err := getSubscriptionMeta(txnCtx, dbName, tcc.GetSession(), txn)
 	if err != nil {
 		return nil, err
 	}
