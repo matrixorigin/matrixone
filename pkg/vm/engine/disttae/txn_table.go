@@ -591,6 +591,8 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
+	var deletedIDs []string
+	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
 	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
 		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
 		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
@@ -600,7 +602,7 @@ func (tbl *txnTable) compaction() error {
 			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		tbl.db.txn.deletedBlocks.removeBlockDeletedInfoLocked(id)
+		deletedIDs = append(deletedIDs, id)
 		if len(deleteOffsets) == 0 {
 			return true
 		}
@@ -948,7 +950,7 @@ func (tbl *txnTable) newReader(
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
-		deleteBlocks:    txn.deletedBlocks,
+		deletedBlocks:   txn.deletedBlocks,
 	}
 	readers[0] = partReader
 
