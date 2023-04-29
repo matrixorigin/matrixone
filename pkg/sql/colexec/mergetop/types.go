@@ -15,27 +15,23 @@
 package mergetop
 
 import (
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	n     int // result vector number
 	sels  []int64
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
 
 	bat *batch.Batch // bat stores the final result of merge-top
-
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
 }
 
 type Argument struct {
@@ -49,7 +45,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanReceiver(mp)
+		ctr.FreeOperator(pipelineFailed)
 	}
 }
 
@@ -57,27 +53,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
-	}
-}
-
-func (ctr *container) cleanReceiver(mp *mpool.MPool) {
-	listeners := ctr.receiverListener
-	alive := len(listeners)
-	for alive != 0 {
-		chosen, value, ok := reflect.Select(listeners)
-		if !ok {
-			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
-			alive--
-			continue
-		}
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			alive--
-			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
-			continue
-		}
-		bat.Clean(mp)
 	}
 }
 

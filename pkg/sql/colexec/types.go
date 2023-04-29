@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"reflect"
 	"sync"
 
 	"github.com/google/uuid"
@@ -51,13 +52,13 @@ type Server struct {
 	CNSegmentId   types.Uuid
 	InitSegmentId bool
 	// currentFileOffset uint16
-	uuidCsChanMap UuidCsChanMap
+	uuidCsChanMap UuidProcMap
 	cnSegmentMap  CnSegmentMap
 }
 
-type UuidCsChanMap struct {
+type UuidProcMap struct {
 	sync.Mutex
-	mp map[uuid.UUID]chan process.WrapCs
+	mp map[uuid.UUID]*process.Process
 }
 
 type CnSegmentMap struct {
@@ -67,4 +68,18 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[string]int32
+}
+
+// ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
+type ReceiverOperator struct {
+	proc *process.Process
+
+	// parameter for Merge-Type receiver.
+	// Merge-Type specifys the operator receive batch from all
+	// regs or single reg.
+	//
+	// Merge/MergeGroup/MergeLimit ... are Merge-Type
+	// while Join/Intersect/Minus ... are not
+	aliveMergeReceiver int
+	receiverListener   []reflect.SelectCase
 }

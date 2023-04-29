@@ -237,8 +237,8 @@ type txnTable struct {
 	idxs              []uint16
 	_parts            []*PartitionState
 	modifiedBlocks    [][]ModifyBlockMeta
-	blockMetas        [][]BlockMeta
-	blockMetasUpdated bool
+	blockInfos        [][]catalog.BlockInfo
+	blockInfosUpdated bool
 	logtailUpdated    bool
 
 	primaryIdx   int // -1 means no primary key
@@ -387,7 +387,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 }
 
 type ModifyBlockMeta struct {
-	meta    BlockMeta
+	meta    catalog.BlockInfo
 	deletes []int
 }
 

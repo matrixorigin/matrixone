@@ -147,7 +147,7 @@ func (entry *BlockEntry) GetSegment() *SegmentEntry {
 }
 
 func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateBlock
+	cmdType := IOET_WALTxnCommand_Block
 	entry.RLock()
 	defer entry.RUnlock()
 	return newBlockCmd(id, cmdType, entry), nil

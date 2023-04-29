@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -36,6 +37,32 @@ const (
 	TNormal
 	TReplay
 )
+
+const (
+	IOET_WALRecord_V1 uint16 = 1
+	IOET_WALRecord    uint16 = 1000
+
+	IOET_WALRecord_CurrVer = IOET_WALRecord_V1
+)
+
+func init() {
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALRecord,
+			Version: IOET_WALRecord_V1,
+		},
+		func(a any) ([]byte, error) {
+			return a.(*baseEntry).Marshal()
+		},
+		func(b []byte) (any, error) {
+			record := &baseEntry{
+				meta: &meta{},
+			}
+			err := record.Unmarshal(b)
+			return record, err
+		},
+	)
+}
 
 type meta struct {
 	metaType    MetaType
@@ -159,51 +186,37 @@ func (m *meta) Marshal() (buf []byte, err error) {
 	return
 }
 
-// read: logrecord -> meta+payload -> entry
-// write: entries+meta -> payload -> record
-type recordEntry struct {
+type baseEntry struct {
+	EntryType, Version uint16
 	*meta
 	entries []*entry.Entry
 	cmd     *ReplayCmd
-
-	payload     []byte
-	unmarshaled atomic.Uint32
-	mashalMu    sync.RWMutex
+	payload []byte
 }
 
-func newRecordEntry() *recordEntry {
-	return &recordEntry{entries: make([]*entry.Entry, 0), meta: newMeta()}
-}
-
-func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
-	payload := make([]byte, len(r.Payload()))
-	copy(payload, r.Payload())
-	return &recordEntry{payload: payload, meta: newMeta(), mashalMu: sync.RWMutex{}}
-}
-
-func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
-	bbuf := bytes.NewBuffer(r.payload)
-	lsns := make([]uint64, 0)
-	for lsn := range r.meta.addr {
-		lsns = append(lsns, lsn)
-		e := entry.NewEmptyEntry()
-		e.ReadFrom(bbuf)
-		h(e)
-		e.Entry.Free()
+func (r *baseEntry) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = r.WriteTo(&bbuf); err != nil {
+		return
 	}
-	intervals := common.NewClosedIntervalsBySlice(lsns)
-	return intervals
-}
-func (r *recordEntry) append(e *entry.Entry) {
-	r.entries = append(r.entries, e)
-	r.meta.addr[e.Lsn] = uint64(r.payloadSize)
-	r.payloadSize += uint64(e.GetSize())
+	buf = bbuf.Bytes()
+	return
 }
 
-func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
+func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
+	r.EntryType = IOET_WALRecord
+	r.Version = IOET_WALRecord_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&r.EntryType)); err != nil {
+		return 0, err
+	}
+	n += 2
+	if _, err = w.Write(types.EncodeUint16(&r.Version)); err != nil {
+		return 0, err
+	}
+	n += 2
 	n1, err := r.meta.WriteTo(w)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
 	n += n1
 	switch r.meta.metaType {
@@ -227,7 +240,7 @@ func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
+func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 	n1, err := r.meta.ReadFrom(reader)
 	if err != nil {
 		return 0, err
@@ -245,20 +258,59 @@ func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 	return
 }
 
-func (r *recordEntry) Unmarshal(buf []byte) error {
+func (r *baseEntry) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := r.ReadFrom(bbuf)
 	return err
 }
 
-func (r *recordEntry) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = r.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
+// read: logrecord -> meta+payload -> entry
+// write: entries+meta -> payload -> record
+type recordEntry struct {
+	*baseEntry
+	payload     []byte
+	unmarshaled atomic.Uint32
+	mashalMu    sync.RWMutex
 }
+
+func newRecordEntry() *recordEntry {
+	return &recordEntry{
+		baseEntry: &baseEntry{
+			entries: make([]*entry.Entry, 0), meta: newMeta(),
+		},
+	}
+}
+
+func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
+	payload := make([]byte, len(r.Payload()))
+	copy(payload, r.Payload())
+	return &recordEntry{
+		payload: payload,
+		baseEntry: &baseEntry{
+			meta: newMeta(),
+		},
+		mashalMu: sync.RWMutex{}}
+}
+
+func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
+	bbuf := bytes.NewBuffer(r.baseEntry.payload)
+	lsns := make([]uint64, 0)
+	for lsn := range r.meta.addr {
+		lsns = append(lsns, lsn)
+		e := entry.NewEmptyEntry()
+		e.ReadFrom(bbuf)
+		h(e)
+		e.Entry.Free()
+	}
+	intervals := common.NewClosedIntervalsBySlice(lsns)
+	return intervals
+}
+func (r *recordEntry) append(e *entry.Entry) {
+	r.entries = append(r.entries, e)
+	r.meta.addr[e.Lsn] = uint64(r.payloadSize)
+	r.payloadSize += uint64(e.GetSize())
+}
+
 func (r *recordEntry) prepareRecord() (size int) {
 	var err error
 	r.payload, err = r.Marshal()
@@ -277,19 +329,21 @@ func (r *recordEntry) unmarshal() {
 	if r.unmarshaled.Load() == 1 {
 		return
 	}
-	buf := r.payload
-	r.payload = nil
-	err := r.Unmarshal(buf)
+	head := objectio.DecodeIOEntryHeader(r.payload[:4])
+	codec := objectio.GetIOEntryCodec(*head)
+	entry, err := codec.Decode(r.payload[4:])
 	if err != nil {
 		panic(err)
 	}
+	r.baseEntry = entry.(*baseEntry)
+	r.payload = nil
 	r.unmarshaled.Store(1)
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	r.unmarshal()
 	offset := r.meta.addr[lsn]
-	bbuf := bytes.NewBuffer(r.payload[offset:])
+	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
 	e.ReadFrom(bbuf)
 	e.Lsn = lsn

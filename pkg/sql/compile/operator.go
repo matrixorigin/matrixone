@@ -398,7 +398,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
 			Affected:  t.Affected,
-			Engine:    t.Engine,
 			IsRemote:  t.IsRemote,
 			InsertCtx: t.InsertCtx,
 		}
@@ -417,7 +416,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:      t.Nbucket,
 			DeleteCtx:    t.DeleteCtx,
 			AffectedRows: t.AffectedRows,
-			Engine:       t.Engine,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 		}
@@ -515,7 +513,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
-		Engine:    eg,
 	}, nil
 }
 
@@ -588,7 +585,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
-		Engine:    eg,
 	}, nil
 }
 
@@ -688,7 +684,6 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 
 	return &update.Argument{
 		UpdateCtx: updateCtx,
-		Engine:    eg,
 	}, nil
 }
 

@@ -27,4 +27,4 @@ type Argument struct {
 	ParentIdx  map[string]int32
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(*proc, bool) {}
