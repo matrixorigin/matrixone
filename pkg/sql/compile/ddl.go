@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 var (
@@ -737,7 +738,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp())
+		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
 		if err != nil {
 			return err
 		}
@@ -1073,7 +1074,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
 	} else {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, newId, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
 	}
 	if err != nil {
 		return err
@@ -1326,6 +1327,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				Comment:       col.GetComment(),
 				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
+				IsHidden:      col.Hidden,
 			},
 		}
 	}
@@ -1452,7 +1454,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	// Make sequence vecs.
 	switch typ.Oid {
 	case types.T_int16:
-		incr, minV, maxV, startN, err := makeSequenceParam[int16](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[int16](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1482,7 +1484,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			return nil, err
 		}
 	case types.T_int32:
-		incr, minV, maxV, startN, err := makeSequenceParam[int32](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[int32](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1512,7 +1514,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			return nil, err
 		}
 	case types.T_int64:
-		incr, minV, maxV, startN, err := makeSequenceParam[int64](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[int64](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1542,7 +1544,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			return nil, err
 		}
 	case types.T_uint16:
-		incr, minV, maxV, startN, err := makeSequenceParam[uint16](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[uint16](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1568,7 +1570,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			return nil, err
 		}
 	case types.T_uint32:
-		incr, minV, maxV, startN, err := makeSequenceParam[uint32](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[uint32](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1594,7 +1596,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			return nil, err
 		}
 	case types.T_uint64:
-		incr, minV, maxV, startN, err := makeSequenceParam[uint64](typ, ctx, stmt)
+		incr, minV, maxV, startN, err := makeSequenceParam[uint64](ctx, stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1642,7 +1644,7 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	return nil
 }
 
-func makeSequenceParam[T constraints.Integer](typ types.Type, ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
+func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
 	var minValue, maxValue, startNum T
 	incrNum := int64(1)
 	if stmt.IncrementBy != nil {

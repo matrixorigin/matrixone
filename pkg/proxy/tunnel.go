@@ -45,6 +45,15 @@ type tunnel struct {
 	errC chan error
 	// cc is the client connection which this tunnel holds.
 	cc ClientConn
+	// reqC is the event request channel. Events may be happened in tunnel data flow,
+	// and need to be handled in client connection.
+	reqC chan IEvent
+	// respC is the event response channel.
+	respC chan []byte
+	// closeOnce controls the close function to close tunnel only once.
+	closeOnce sync.Once
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
 
 	mu struct {
 		sync.Mutex
@@ -66,13 +75,20 @@ type tunnel struct {
 }
 
 // newTunnel creates a tunnel.
-func newTunnel(ctx context.Context, logger *log.MOLogger) *tunnel {
+func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet) *tunnel {
 	ctx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
 		ctx:       ctx,
 		ctxCancel: cancel,
 		logger:    logger,
 		errC:      make(chan error, 1),
+		// We need to handle events synchronously, so this channel has no buffer.
+		reqC: make(chan IEvent),
+		// response channel should have buffer, because it is handled in the same
+		// for-select with reqC.
+		respC: make(chan []byte, 10),
+		// set the counter set.
+		counterSet: cs,
 	}
 	return t
 }
@@ -87,8 +103,8 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
-		t.mu.clientConn = newMySQLConn("client", cc.RawConn(), 0)
-		t.mu.serverConn = newMySQLConn("server", sc.RawConn(), 0)
+		t.mu.clientConn = newMySQLConn("client", cc.RawConn(), 0, t.reqC, t.respC)
+		t.mu.serverConn = newMySQLConn("server", sc.RawConn(), 0, t.reqC, t.respC)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = newPipe("client->server", t.mu.clientConn, t.mu.serverConn)
@@ -141,12 +157,12 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx); err != nil {
-			t.setError(err)
+			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx); err != nil {
-			t.setError(err)
+			t.setError(withCode(err, codeServerDisconnect))
 		}
 	}()
 	if err := csp.waitReady(t.ctx); err != nil {
@@ -208,8 +224,10 @@ func (t *tunnel) canStartTransfer() bool {
 
 // transfer transfers the serverConn of tunnel to a new one.
 func (t *tunnel) transfer(ctx context.Context) error {
+	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(); !ok {
+		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.NewInternalError(ctx, "not safe to start transfer")
 	}
 	defer func() {
@@ -235,6 +253,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		return err
 	}
 	t.replaceServerConn(newConn)
+	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
 
@@ -256,26 +275,31 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLConn("server", newConn.RawConn(), 0), nil
+	return newMySQLConn("server", newConn.RawConn(), 0, t.reqC, t.respC), nil
 }
 
 // Close closes the tunnel.
 func (t *tunnel) Close() error {
-	if t.ctxCancel != nil {
-		t.ctxCancel()
-	}
+	t.closeOnce.Do(func() {
+		if t.ctxCancel != nil {
+			t.ctxCancel()
+		}
+		select {
+		case t.errC <- moerr.NewInternalErrorNoCtx("tunnel closed"):
+		default:
+		}
+		// Close the event channels.
+		close(t.reqC)
+		close(t.respC)
 
-	select {
-	case t.errC <- moerr.NewInternalErrorNoCtx("tunnel closed"):
-	default:
-	}
-	cc, sc := t.getConns()
-	if cc != nil {
-		_ = cc.Close()
-	}
-	if sc != nil {
-		_ = sc.Close()
-	}
+		cc, sc := t.getConns()
+		if cc != nil {
+			_ = cc.Close()
+		}
+		if sc != nil {
+			_ = sc.Close()
+		}
+	})
 	return nil
 }
 
@@ -372,7 +396,7 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			// The preRecv is cut off by set the connection deadline to a pastime.
 			return true, nil
 		} else if re != nil {
-			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s", re.Error())
+			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		p.mu.lastCmdTime = time.Now()
 		if txn == txnBegin {

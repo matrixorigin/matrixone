@@ -15,6 +15,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"reflect"
@@ -23,12 +24,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -54,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAppend(t *testing.T) {
@@ -248,6 +253,8 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	assert.NoError(t, err)
 
 	oldv := bats[0].Vecs[updateColIdx].Get(5)
+	oldvIsNull := bats[0].Vecs[updateColIdx].IsNull(5)
+
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(5)
 	ufilter := handle.NewEQFilter(v)
 	{
@@ -257,7 +264,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
 		}
 	}
-	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv)
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv, oldvIsNull)
 	assert.NoError(t, err)
 
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
@@ -388,20 +395,21 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		name := blockio.EncodeObjectName()
-		writer, err := blockio.NewBlockWriter(dataBlk.GetFs().Service, name)
+		uuid, _ := types.BuildUuid()
+		name := objectio.BuildObjectName(uuid, 0)
+		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name)
 		assert.Nil(t, err)
-		_, err = writer.WriteBlock(bat)
+		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc := blockio.EncodeLocation(
+			writer.GetName(),
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
-			blocks)
-		assert.Nil(t, err)
+			blocks[0].GetID())
 		blk.UpdateMetaLoc(metaLoc)
-		v, err := dataBlk.GetValue(txn, 4, 2)
+		v, _, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)
 		expectVal := bat.Vecs[2].Get(4)
 		assert.Equal(t, expectVal, v)
@@ -541,7 +549,7 @@ func TestCompactBlock1(t *testing.T) {
 			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			assert.Nil(t, err)
 			f2 := handle.NewEQFilter(v.(int32) + 1)
-			err = rel.UpdateByFilter(f2, 3, int64(99))
+			err = rel.UpdateByFilter(f2, 3, int64(99), false)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
@@ -612,9 +620,9 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	}
 	//compact blocks
 	var newBlockFp1 *common.ID
-	var metaLoc1 string
+	var metaLoc1 objectio.Location
 	var newBlockFp2 *common.ID
-	var metaLoc2 string
+	var metaLoc2 objectio.Location
 	{
 		txn, rel := getRelation(t, 0, db, "db", schema.Name)
 		it := rel.MakeBlockIt()
@@ -666,12 +674,12 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-		err := rel.AddBlksWithMetaLoc(nil, []string{metaLoc1})
+		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
 		assert.Nil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc2})
+		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc2})
 		assert.Nil(t, err)
 		err = rel.Append(bats[1])
 		assert.Nil(t, err)
@@ -692,7 +700,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc1, metaLoc2})
+		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1, metaLoc2})
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -707,8 +715,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 				return nil
 			}
 			metaLoc := blk.GetMetaLoc()
-			assert.True(t, metaLoc != "")
-			if metaLoc == metaLoc1 {
+			assert.True(t, !metaLoc.IsEmpty())
+			if bytes.Equal(metaLoc, metaLoc1) {
 				view, err := blk.GetColumnDataById(2)
 				assert.NoError(t, err)
 				defer view.Close()
@@ -919,8 +927,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.M * 5
-	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	db := initDB(t, opts)
 	defer db.Close()
@@ -983,7 +989,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
-	t.Log(db.MTBufMgr.String())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	t.Logf("GetPenddingLSNCnt: %d", db.Scheduler.GetPenddingLSNCnt())
 	t.Logf("GetCheckpointed: %d", db.Scheduler.GetCheckpointedLSN())
@@ -1113,13 +1118,13 @@ func TestMVCC1(t *testing.T) {
 	row := 5
 	expectVal := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(row)
 	filter := handle.NewEQFilter(expectVal)
-	actualVal, err := rel.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
+	actualVal, _, err := rel.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
 	assert.Equal(t, expectVal, actualVal)
 	assert.NoError(t, txn.Commit())
 
 	_, rel = getDefaultRelation(t, db, schema.Name)
-	actualVal, err = rel.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
+	actualVal, _, err = rel.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
 	assert.Equal(t, expectVal, actualVal)
 
@@ -1129,7 +1134,7 @@ func TestMVCC1(t *testing.T) {
 
 	val2 := bats[1].Vecs[schema.GetSingleSortKeyIdx()].Get(row)
 	filter.Val = val2
-	actualVal, err = rel2.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
+	actualVal, _, err = rel2.GetValueByFilter(filter, schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
 	assert.Equal(t, val2, actualVal)
 
@@ -1224,8 +1229,6 @@ func TestUnload1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.K
-	opts.CacheCfg.TxnCapacity = common.M
 	db := initDB(t, opts)
 	defer db.Close()
 
@@ -1269,8 +1272,6 @@ func TestUnload2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.K*4 - common.K/2
-	opts.CacheCfg.TxnCapacity = common.M
 	db := initDB(t, opts)
 	defer db.Close()
 
@@ -1332,9 +1333,6 @@ func TestUnload2(t *testing.T) {
 		}
 		_ = txn.Commit()
 	}
-
-	t.Log(db.MTBufMgr.String())
-	// t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDelete1(t *testing.T) {
@@ -1839,10 +1837,10 @@ func TestScan2(t *testing.T) {
 	pkv = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(8)
 	filter = handle.NewEQFilter(pkv)
 	updateV := int64(999)
-	err = rel.UpdateByFilter(filter, 3, updateV)
+	err = rel.UpdateByFilter(filter, 3, updateV, false)
 	assert.NoError(t, err)
 
-	v, err := rel.GetValueByFilter(filter, 3)
+	v, _, err := rel.GetValueByFilter(filter, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, updateV, v.(int64))
 	checkAllColRowsByScan(t, rel, int(rows)-1, true)
@@ -1966,19 +1964,19 @@ func TestUpdateByFilter(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
-	err := rel.UpdateByFilter(filter, 2, int32(2222))
+	err := rel.UpdateByFilter(filter, 2, int32(2222), false)
 	assert.NoError(t, err)
 
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	cv, err := rel.GetValue(id, row, 2)
+	cv, _, err := rel.GetValue(id, row, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(2222), cv.(int32))
 
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
 
-	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333))
+	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333), false)
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
@@ -2141,12 +2139,12 @@ func TestSnapshotIsolation1(t *testing.T) {
 
 	// Step 3
 	txn2, rel2 := getDefaultRelation(t, tae, schema.Name)
-	err := rel2.UpdateByFilter(filter, 3, int64(2222))
+	err := rel2.UpdateByFilter(filter, 3, int64(2222), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn2.Commit())
 
 	// Step 4
-	err = rel1.UpdateByFilter(filter, 3, int64(1111))
+	err = rel1.UpdateByFilter(filter, 3, int64(1111), false)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
@@ -2160,12 +2158,12 @@ func TestSnapshotIsolation1(t *testing.T) {
 
 	// Step 6
 	txn3, rel3 := getDefaultRelation(t, tae, schema.Name)
-	err = rel3.UpdateByFilter(filter, 3, int64(3333))
+	err = rel3.UpdateByFilter(filter, 3, int64(3333), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn3.Commit())
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	v, err = rel.GetValueByFilter(filter, 3)
+	v, _, err = rel.GetValueByFilter(filter, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3333), v.(int64))
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
@@ -2470,7 +2468,7 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bats[0].Vecs[3].Update(2, types.Null{})
+	bats[0].Vecs[3].Update(2, nil, true)
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()
@@ -2478,8 +2476,8 @@ func TestNull1(t *testing.T) {
 	view, err := blk.GetColumnDataById(3)
 	assert.NoError(t, err)
 	defer view.Close()
-	v := view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	//v := view.GetData().Get(2)
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
@@ -2489,30 +2487,30 @@ func TestNull1(t *testing.T) {
 	view, err = blk.GetColumnDataById(3)
 	assert.NoError(t, err)
 	defer view.Close()
-	v = view.GetData().Get(2)
-	assert.True(t, types.IsNull(v))
+	//v = view.GetData().Get(2)
+	assert.True(t, view.GetData().IsNull(2))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 
-	v = getSingleSortKeyValue(bats[0], schema, 2)
+	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter_2 := handle.NewEQFilter(v)
-	uv0_2, err := rel.GetValueByFilter(filter_2, 3)
+	_, uv0_2_isNull, err := rel.GetValueByFilter(filter_2, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_2))
+	assert.True(t, uv0_2_isNull)
 
 	v0_4 := getSingleSortKeyValue(bats[0], schema, 4)
 	filter_4 := handle.NewEQFilter(v0_4)
-	err = rel.UpdateByFilter(filter_4, 3, types.Null{})
+	err = rel.UpdateByFilter(filter_4, 3, nil, true)
 	assert.NoError(t, err)
-	uv, err := rel.GetValueByFilter(filter_4, 3)
+	_, uv_isNull, err := rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv))
+	assert.True(t, uv_isNull)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
-	uv, err = rel.GetValueByFilter(filter_4, 3)
+	_, uv_isNull, err = rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv))
+	assert.True(t, uv_isNull)
 
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
@@ -2521,31 +2519,31 @@ func TestNull1(t *testing.T) {
 	tae.compactBlocks(false)
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
-	uv, err = rel.GetValueByFilter(filter_4, 3)
+	_, uv_isNull, err = rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv))
+	assert.True(t, uv_isNull)
 	assert.NoError(t, txn.Commit())
 
 	tae.restart()
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
-	uv, err = rel.GetValueByFilter(filter_4, 3)
+	_, uv_isNull, err = rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv))
+	assert.True(t, uv_isNull)
 
 	v0_1 := getSingleSortKeyValue(bats[0], schema, 1)
 	filter0_1 := handle.NewEQFilter(v0_1)
-	err = rel.UpdateByFilter(filter0_1, 12, types.Null{})
+	err = rel.UpdateByFilter(filter0_1, 12, nil, true)
 	assert.NoError(t, err)
-	uv0_1, err := rel.GetValueByFilter(filter0_1, 12)
+	_, uv0_1_isNull, err := rel.GetValueByFilter(filter0_1, 12)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_1))
+	assert.True(t, uv0_1_isNull)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	_, uv0_1_isNull, err = rel.GetValueByFilter(filter0_1, 12)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_1))
+	assert.True(t, uv0_1_isNull)
 	err = rel.Append(bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
@@ -2554,23 +2552,23 @@ func TestNull1(t *testing.T) {
 	tae.mergeBlocks(false)
 
 	txn, rel = tae.getRelation()
-	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	_, uv0_1_isNull, err = rel.GetValueByFilter(filter0_1, 12)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_1))
-	uv0_2, err = rel.GetValueByFilter(filter_2, 3)
+	assert.True(t, uv0_1_isNull)
+	_, uv0_2_isNull, err = rel.GetValueByFilter(filter_2, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_2))
+	assert.True(t, uv0_2_isNull)
 	assert.NoError(t, txn.Commit())
 
 	tae.restart()
 
 	txn, rel = tae.getRelation()
-	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	_, uv0_1_isNull, err = rel.GetValueByFilter(filter0_1, 12)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_1))
-	uv0_2, err = rel.GetValueByFilter(filter_2, 3)
+	assert.True(t, uv0_1_isNull)
+	_, uv0_2_isNull, err = rel.GetValueByFilter(filter_2, 3)
 	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv0_2))
+	assert.True(t, uv0_2_isNull)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -3105,9 +3103,9 @@ func TestTruncateZonemap(t *testing.T) {
 	trickyMinv := mockBytes(0, 33)                                        // smaller than minv, not in mut index but in immut index
 	maxv := mockBytes(0xff, 35, Mod{0, 0x61}, Mod{1, 0x62}, Mod{2, 0x63}) // abc0xff0xff...
 	trickyMaxv := []byte("abd")                                           // bigger than maxv, not in mut index but in immut index
-	bat.Vecs[12].Update(8, maxv)
-	bat.Vecs[12].Update(11, minv)
-	bat.Vecs[12].Update(22, []byte("abcc"))
+	bat.Vecs[12].Update(8, maxv, false)
+	bat.Vecs[12].Update(11, minv, false)
+	bat.Vecs[12].Update(22, []byte("abcc"), false)
 	defer bat.Close()
 
 	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
@@ -3146,7 +3144,7 @@ func TestTruncateZonemap(t *testing.T) {
 
 	// 3 NonAppendable Blocks
 	txn, rel = tae.getRelation()
-	rel.UpdateByFilter(handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35))
+	rel.UpdateByFilter(handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35), false)
 	assert.NoError(t, txn.Commit())
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
@@ -3362,7 +3360,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(false)
 	assert.NoError(t, err)
-	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, "test_1")
+	blk.GetMeta().(*catalog.BlockEntry).UpdateMetaLoc(txn, objectio.Location("test_1"))
 	assert.NoError(t, txn.Commit())
 
 	txn, err = tae.StartTxn(nil)
@@ -3375,7 +3373,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	blk, err = seg.CreateBlock(false)
 	assert.NoError(t, err)
-	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, "test_2")
+	blk.GetMeta().(*catalog.BlockEntry).UpdateDeltaLoc(txn, objectio.Location("test_2"))
 	rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, txn.Commit())
 
@@ -3392,7 +3390,9 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, e
 	return "", types.TS{}, nil
 }
 
-func (c *dummyCpkGetter) FlushTable(dbID, tableID uint64, ts types.TS) error { return nil }
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+	return nil
+}
 
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -4026,9 +4026,9 @@ func TestBlockRead(t *testing.T) {
 		BlockID:    bid,
 		SegmentID:  sid,
 		EntryState: true,
-		MetaLoc:    metaloc,
-		DeltaLoc:   deltaloc,
 	}
+	info.SetMetaLocation(metaloc)
+	info.SetDeltaLocation(deltaloc)
 
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
@@ -4044,9 +4044,13 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
+	infos := make([][]*pkgcatalog.BlockInfo, 0)
+	infos = append(infos, []*pkgcatalog.BlockInfo{info})
+	err = blockio.BlockPrefetch(colIdxs, fs, infos)
+	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
-		beforeDel, fs, pool,
+		beforeDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4054,13 +4058,13 @@ func TestBlockRead(t *testing.T) {
 
 	b2, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
-		afterFirstDel, fs, pool,
+		afterFirstDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
 		context.Background(), info, colIdxs, colTyps,
-		afterSecondDel, fs, pool,
+		afterSecondDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4071,7 +4075,7 @@ func TestBlockRead(t *testing.T) {
 		context.Background(), info,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool,
+		afterSecondDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b4.Vecs))
@@ -4083,7 +4087,7 @@ func TestBlockRead(t *testing.T) {
 		context.Background(), info,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool,
+		afterSecondDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b5.Vecs))
@@ -4128,10 +4132,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		err = task.OnExec()
 		assert.NoError(t, err)
-		assert.True(t, meta.GetMetaLoc() != "")
-		assert.True(t, meta.GetDeltaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		assert.True(t, !meta.GetMetaLoc().IsEmpty())
+		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
 		err = txn.Commit()
 		assert.Nil(t, err)
 		err = meta.GetSegment().RemoveEntry(meta)
@@ -4158,10 +4162,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		err = task.OnExec()
 		assert.NoError(t, err)
-		assert.True(t, meta.GetMetaLoc() != "")
-		assert.True(t, meta.GetDeltaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		assert.True(t, !meta.GetMetaLoc().IsEmpty())
+		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
 		err = txn.Commit()
 		assert.Nil(t, err)
 	}
@@ -4200,6 +4204,7 @@ func TestFlushTable(t *testing.T) {
 	table, err := db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	err = tae.FlushTable(
+		context.Background(),
 		0,
 		db.GetID(),
 		table.ID(),
@@ -4311,7 +4316,7 @@ func TestDelete4(t *testing.T) {
 	schema.SegmentMaxBlocks = 5
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
-	bat.Vecs[1].Update(0, uint32(0))
+	bat.Vecs[1].Update(0, uint32(0), false)
 	defer bat.Close()
 	tae.createRelAndAppend(bat, true)
 
@@ -4330,7 +4335,7 @@ func TestDelete4(t *testing.T) {
 			txn.Rollback()
 			return
 		}
-		v, err := rel.GetValue(id, offset, 1)
+		v, _, err := rel.GetValue(id, offset, 1)
 		if err != nil {
 			txn.Rollback()
 			return
@@ -4341,7 +4346,7 @@ func TestDelete4(t *testing.T) {
 			txn.Rollback()
 			return
 		}
-		cloneBat.Vecs[1].Update(0, newV)
+		cloneBat.Vecs[1].Update(0, newV, false)
 		if err := rel.Append(cloneBat); err != nil {
 			txn.Rollback()
 			return
@@ -4367,7 +4372,7 @@ func TestDelete4(t *testing.T) {
 
 	getValueFn := func() {
 		txn, rel := tae.getRelation()
-		v, err := rel.GetValueByFilter(filter, 1)
+		v, _, err := rel.GetValueByFilter(filter, 1)
 		assert.NoError(t, err)
 		assert.Equal(t, int(count.Load()), int(v.(uint32)))
 		assert.NoError(t, txn.Commit())
@@ -4471,7 +4476,7 @@ func TestTransfer(t *testing.T) {
 	assert.NoError(t, err)
 
 	meta := rel1.GetMeta().(*catalog.TableEntry)
-	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+	err = tae.FlushTable(context.Background(), 0, meta.GetDB().ID, meta.ID,
 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
 	assert.NoError(t, err)
 
@@ -4480,10 +4485,10 @@ func TestTransfer(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn2, rel2 := tae.getRelation()
-	_, err = rel2.GetValueByFilter(filter, 3)
+	_, _, err = rel2.GetValueByFilter(filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
-	v, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
+	v, _, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
 	expectV := bat.Vecs[2].Get(4)
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
@@ -4517,10 +4522,10 @@ func TestTransfer2(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn2, rel2 := tae.getRelation()
-	_, err = rel2.GetValueByFilter(filter, 3)
+	_, _, err = rel2.GetValueByFilter(filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
-	v, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
+	v, _, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
 	expectV := bat.Vecs[2].Get(4)
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
@@ -4595,7 +4600,7 @@ func TestTransfer3(t *testing.T) {
 	assert.NoError(t, err)
 
 	meta := rel1.GetMeta().(*catalog.TableEntry)
-	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+	err = tae.FlushTable(context.Background(), 0, meta.GetDB().ID, meta.ID,
 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
 	assert.NoError(t, err)
 
@@ -4620,7 +4625,7 @@ func TestUpdate(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	bat.Vecs[2].Update(0, int32(0))
+	bat.Vecs[2].Update(0, int32(0), false)
 
 	tae.createRelAndAppend(bat, true)
 
@@ -4634,7 +4639,7 @@ func TestUpdate(t *testing.T) {
 		txn, rel := tae.getRelation()
 		id, offset, err := rel.GetByFilter(filter)
 		assert.NoError(t, err)
-		v, err := rel.GetValue(id, offset, 2)
+		v, _, err := rel.GetValue(id, offset, 2)
 		assert.NoError(t, err)
 		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 		if err != nil {
@@ -4645,7 +4650,7 @@ func TestUpdate(t *testing.T) {
 		tuples := bat.CloneWindow(0, 1)
 		defer tuples.Close()
 		updatedV := v.(int32) + 1
-		tuples.Vecs[2].Update(0, updatedV)
+		tuples.Vecs[2].Update(0, updatedV, false)
 		err = rel.Append(tuples)
 		assert.NoError(t, err)
 
@@ -4669,7 +4674,7 @@ func TestUpdate(t *testing.T) {
 	t.Logf("Final: %v", expectV.Load())
 	{
 		txn, rel := tae.getRelation()
-		v, err := rel.GetValueByFilter(filter, 2)
+		v, _, err := rel.GetValueByFilter(filter, 2)
 		assert.NoError(t, err)
 		assert.Equal(t, v.(int32), expectV.Load())
 		checkAllColRowsByScan(t, rel, 1, true)
@@ -4695,22 +4700,22 @@ func TestAlwaysUpdate(t *testing.T) {
 	tae.bindSchema(schema)
 
 	bats := catalog.MockBatch(schema, 400*100).Split(100)
-	metalocs := make([]string, 0, 100)
+	metalocs := make([]objectio.Location, 0, 100)
 	// write only one segment
 	for i := 0; i < 1; i++ {
-		objName1 := common.NewSegmentid().ToString() + "-0"
+		objName1 := objectio.NewSegmentid().ToString() + "-0"
 		writer, err := blockio.NewBlockWriter(tae.Fs.Service, objName1)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
-			_, err := writer.WriteBlock(bat)
+			_, err := writer.WriteBatch(containers.ToCNBatch(bat))
 			assert.Nil(t, err)
 		}
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
 		for _, blk := range blocks {
-			loc, err := blockio.EncodeLocation(blk.GetExtent(), 8192, blocks)
+			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), 8192, blocks[0].GetID())
 			assert.Nil(t, err)
 			metalocs = append(metalocs, loc)
 		}
@@ -4737,7 +4742,7 @@ func TestAlwaysUpdate(t *testing.T) {
 			filter := handle.NewEQFilter(int64(x))
 			id, offset, err := rel.GetByFilter(filter)
 			assert.NoError(t, err)
-			_, err = rel.GetValue(id, offset, 2)
+			_, _, err = rel.GetValue(id, offset, 2)
 			assert.NoError(t, err)
 			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			if err != nil {
@@ -4745,7 +4750,7 @@ func TestAlwaysUpdate(t *testing.T) {
 				_ = txn.Rollback()
 				return
 			}
-			tuples.Vecs[3].Update(0, int64(x))
+			tuples.Vecs[3].Update(0, int64(x), false)
 			err = rel.Append(tuples)
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit())
@@ -5028,7 +5033,7 @@ func TestGCDropTable(t *testing.T) {
 	tae.restart()
 }
 
-func TestUpdateCstr(t *testing.T) {
+func TestAlterTableBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -5039,6 +5044,7 @@ func TestUpdateCstr(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	schema.Constraint = []byte("start version")
+	schema.Comment = "comment version"
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
@@ -5048,16 +5054,18 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ := db.GetRelationByName("test")
-	err := tbl.UpdateConstraint([]byte("version 1"))
-	assert.NoError(t, err)
+	err := tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 1"))
+	require.NoError(t, err)
+	err = tbl.AlterTable(context.Background(), api.NewUpdateCommentReq(0, 0, "comment version 1"))
+	require.NoError(t, err)
 	err = txn.Commit()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ = db.GetRelationByName("test")
-	err = tbl.UpdateConstraint([]byte("version 2"))
-	assert.NoError(t, err)
+	err = tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 2"))
+	require.NoError(t, err)
 	txn.Commit()
 
 	tots := func(ts types.TS) *timestamp.Timestamp {
@@ -5073,10 +5081,16 @@ func TestUpdateCstr(t *testing.T) {
 
 	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	assert.Equal(t, 3, cstrCol.Length())
-	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
 	tae.restart()
 
@@ -5088,15 +5102,23 @@ func TestUpdateCstr(t *testing.T) {
 
 	bat, _ = batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	assert.Equal(t, 3, cstrCol.Length())
-	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
+	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
+	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	commetCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	require.Equal(t, 3, cstrCol.Length())
+	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL2))
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	_, err = db.DropRelationByName("test")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	txn.Commit()
 
 	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -5105,9 +5127,9 @@ func TestUpdateCstr(t *testing.T) {
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
 	}, true)
 
-	assert.Equal(t, 2, len(resp.Commands)) // create and drop
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.Equal(t, 2, len(resp.Commands)) // create and drop
+	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
@@ -5144,8 +5166,6 @@ func TestAppendAndGC(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.M * 5
-	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
 	tae := newTestEngine(t, opts)
@@ -5923,13 +5943,13 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.createRelAndAppend(bats[0], true)
 
 	_, rel := tae.getRelation()
-	partioned := rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned := rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
 	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -5942,6 +5962,116 @@ func TestMarshalPartioned(t *testing.T) {
 	tae.restart()
 
 	_, rel = tae.getRelation()
-	partioned = rel.GetMeta().(*catalog.TableEntry).GetSchema().Partitioned
+	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
+}
+
+func TestDedup2(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(14, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	count := 50
+	data := catalog.MockBatch(schema, count)
+	datas := data.Split(count)
+
+	tae.createRelAndAppend(datas[0], true)
+
+	for i := 1; i < count; i++ {
+		tae.DoAppend(datas[i])
+		txn, rel := tae.getRelation()
+		for j := 0; j <= i; j++ {
+			err := rel.Append(datas[j])
+			assert.Error(t, err)
+		}
+		assert.NoError(t, txn.Commit())
+	}
+}
+
+func TestCompactLargeTable(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(600, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 10)
+
+	tae.createRelAndAppend(data, true)
+
+	tae.restart()
+
+	tae.checkRowsByScan(10, true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	tae.restart()
+
+	tae.checkRowsByScan(10, true)
+}
+
+func TestCommitS3Blocks(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(60, 3)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 200)
+	datas := data.Split(10)
+	tae.createRelAndAppend(datas[0], true)
+	datas = datas[1:]
+
+	blkMetas := make([]objectio.Location, 0)
+	for _, bat := range datas {
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name)
+		assert.Nil(t, err)
+		writer.SetPrimaryKey(3)
+		for i := 0; i < 50; i++ {
+			_, err := writer.WriteBatch(containers.ToCNBatch(bat))
+			assert.Nil(t, err)
+			//offset++
+		}
+		blocks, _, err := writer.Sync(context.Background())
+		assert.Nil(t, err)
+		assert.Equal(t, 50, len(blocks))
+		for _, blk := range blocks {
+			metaLoc := blockio.EncodeLocation(
+				writer.GetName(),
+				blk.GetExtent(),
+				uint32(bat.Vecs[0].Length()),
+				blk.GetID())
+			assert.Nil(t, err)
+			blkMetas = append(blkMetas, metaLoc)
+		}
+	}
+
+	for _, meta := range blkMetas {
+		txn, rel := tae.getRelation()
+		rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		assert.NoError(t, txn.Commit())
+	}
+	for _, meta := range blkMetas {
+		txn, rel := tae.getRelation()
+		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		assert.Error(t, err)
+		assert.NoError(t, txn.Commit())
+	}
 }

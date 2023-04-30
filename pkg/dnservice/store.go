@@ -16,7 +16,6 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
@@ -89,6 +90,7 @@ type store struct {
 	metadataFileService fileservice.ReplaceableFileService
 	lockTableAllocator  lockservice.LockTableAllocator
 	moCluster           clusterservice.MOCluster
+	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 
@@ -169,6 +171,9 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
+	if err := s.initCtlService(); err != nil {
+		return nil, err
+	}
 	s.initTaskHolder()
 	return s, nil
 }
@@ -180,6 +185,9 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
+	if err := s.ctlservice.Start(); err != nil {
+		return err
+	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
@@ -188,6 +196,9 @@ func (s *store) Close() error {
 	s.stopper.Stop()
 	var err error
 	s.moCluster.Close()
+	if e := s.ctlservice.Close(); e != nil {
+		err = multierr.Append(e, err)
+	}
 	if e := s.hakeeperClient.Close(); e != nil {
 		err = multierr.Append(e, err)
 	}

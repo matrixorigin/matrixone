@@ -335,5 +335,29 @@ drop table t1;
 create table t1(a datetime);
 insert into t1 values("9999-12-31 23:59:59.999999");
 invalid input: invalid datatime value 9999-12-31 23:59:59.999999
+set time_zone = '+8:00';
+drop table if exists t1;
+create table t1(t datetime(6));
+insert into t1 values('2020-01-01 23:59:59.999999'),('2021-02-03 04:05:06.070809');
+select t + 1 from t1;
+t + 1
+1577923200.999999
+1612325107.070809
+select t - 1 from t1;
+t - 1
+1577923198.999999
+1612325105.070809
+select t * 10 from t1;
+t * 10
+15779231999.999990
+16123251060.708090
+select t / 10 from t1;
+t / 10
+157792319.999999900000
+161232510.607080900000
+select t % 5 from t1;
+t % 5
+4.999999
+1.070809
 set @@time_zone='+5:99';
 wrong date/time format specifier: +5:99

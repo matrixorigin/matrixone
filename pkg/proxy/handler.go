@@ -39,19 +39,31 @@ type handler struct {
 	moCluster clusterservice.MOCluster
 	// router select the best CN server and connects to it.
 	router Router
+	// counterSet counts the events in proxy.
+	counterSet *counterSet
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
 
 // newProxyHandler creates a new proxy handler.
 func newProxyHandler(
-	ctx context.Context, runtime runtime.Runtime, cfg Config, stopper *stopper.Stopper,
+	ctx context.Context,
+	runtime runtime.Runtime,
+	cfg Config,
+	st *stopper.Stopper,
+	cs *counterSet,
+	testHAKeeperClient logservice.ClusterHAKeeperClient,
 ) (*handler, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	c, err := logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
-	if err != nil {
-		return nil, err
+
+	var err error
+	c := testHAKeeperClient
+	if c == nil {
+		c, err = logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Create the MO cluster.
@@ -67,41 +79,45 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(stopper, runtime.Logger(), mc, opts...)
+	re, err := newRebalancer(st, runtime.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &handler{
-		ctx:       context.Background(),
-		logger:    runtime.Logger(),
-		config:    cfg,
-		stopper:   stopper,
-		moCluster: mc,
-		router:    newRouter(mc, re, false),
+		ctx:        context.Background(),
+		logger:     runtime.Logger(),
+		config:     cfg,
+		stopper:    st,
+		moCluster:  mc,
+		counterSet: cs,
+		router:     newRouter(mc, re, false),
 	}, nil
 }
 
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
+	h.counterSet.connAccepted.Add(1)
+	h.counterSet.connTotal.Add(1)
+	defer h.counterSet.connTotal.Add(-1)
+
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger)
+	t := newTunnel(h.ctx, h.logger, h.counterSet)
 	defer func() {
 		_ = t.Close()
 	}()
 
-	cc, err := newClientConn(h.ctx, h.logger, c, h.moCluster, h.router, t)
+	cc, err := newClientConn(h.ctx, h.logger, h.counterSet, c, h.moCluster, h.router, t)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cc.Close() }()
 
-	// TODO(volgariver6): white list handling.
-
 	// client builds connections with a best CN server and returns
 	// the server connection.
 	sc, err := cc.BuildConnWithServer(true)
 	if err != nil {
+		h.counterSet.updateWithErr(err)
 		cc.SendErrToClient(err.Error())
 		return err
 	}
@@ -112,8 +128,38 @@ func (h *handler) handle(c goetty.IOSession) error {
 		zap.String("server", sc.RawConn().RemoteAddr().String()),
 	)
 
-	// TODO(volgariver6): Is the handshake packet available for long time?
 	if err := t.run(cc, sc); err != nil {
+		return err
+	}
+
+	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
+	defer st.Stop()
+	// Starts the event handler go-routine to handle the events comes from tunnel data flow,
+	// such as, kill connection event.
+	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
+		for {
+			select {
+			case e := <-t.reqC:
+				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
+					h.logger.Error("failed to handle event",
+						zap.Any("event", e), zap.Error(err))
+				}
+			case r := <-t.respC:
+				if len(r) > 0 {
+					t.mu.Lock()
+					// We must call this method because it locks writeMu.
+					if err := t.mu.serverConn.writeDataDirectly(cc.RawConn(), r); err != nil {
+						h.logger.Error("failed to write event response",
+							zap.Any("response", r), zap.Error(err))
+					}
+					t.mu.Unlock()
+				}
+			case <-ctx.Done():
+				h.logger.Info("event handler stopped.")
+				return
+			}
+		}
+	}); err != nil {
 		return err
 	}
 
@@ -121,6 +167,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
+		h.counterSet.updateWithErr(err)
 		h.logger.Error("proxy handle error", zap.Error(err))
 		return err
 	}

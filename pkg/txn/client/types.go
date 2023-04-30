@@ -33,14 +33,36 @@ type TxnClientCreateOption func(*txnClient)
 // TxnClient transaction client, the operational entry point for transactions.
 // Each CN node holds one instance of TxnClient.
 type TxnClient interface {
+	// Minimum Active Transaction Timestamp
+	MinTimestamp() timestamp.Timestamp
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(options ...TxnOption) (TxnOperator, error)
+	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
+}
+
+// TxnClientWithCtl TxnClient to support ctl command.
+type TxnClientWithCtl interface {
+	TxnClient
+
+	// GetLatestCommitTS get latest commit timestamp
+	GetLatestCommitTS() timestamp.Timestamp
+	// SetLatestCommitTS set latest commit timestamp
+	SetLatestCommitTS(timestamp.Timestamp)
+}
+
+// TxnClientWithFeature is similar to TxnClient, except that some methods have been added to determine
+// whether certain features are supported.
+type TxnClientWithFeature interface {
+	TxnClient
+	// RefreshExpressionEnabled return true if refresh expression feature enabled
+	RefreshExpressionEnabled() bool
+	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
+	CNBasedConsistencyEnabled() bool
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -91,6 +113,11 @@ type TxnOperator interface {
 	// will be committed to dn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+
+	// AddWorkspace for the transaction
+	AddWorkspace(workspace Workspace)
+	// GetWorkspace from the transaction
+	GetWorkspace() Workspace
 }
 
 // DebugableTxnOperator debugable txn operator
@@ -115,4 +142,23 @@ func SetupRuntimeTxnOptions(
 	iso txn.TxnIsolation) {
 	rt.SetGlobalVariables(runtime.TxnIsolation, iso)
 	rt.SetGlobalVariables(runtime.TxnMode, m)
+}
+
+// TimestampWaiter is used to wait for the timestamp to reach a specified timestamp.
+// In the Push mode of LogTail's Event, the DN pushes the logtail to the subscribed
+// CN once a transaction has been Committed. So there is a actual wait (last push commit
+// ts >= start ts). This is unfriendly to TP, so we can lose some freshness and use the
+// latest commit ts received from the current DN pushg as the start ts of the transaction,
+// which eliminates this physical wait.
+type TimestampWaiter interface {
+	// GetTimestamp get the latest commit ts as snapshot ts of the new txn. It will keep
+	// blocking if latest commit timestamp received from DN is less than the given value.
+	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+	// NotifyLatestCommitTS notify the latest timestamp that received from DN
+	NotifyLatestCommitTS(timestamp.Timestamp)
+	// Close close the timestamp waiter
+	Close()
+}
+
+type Workspace interface {
 }

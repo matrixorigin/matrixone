@@ -17,6 +17,8 @@ package txnimpl
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -165,20 +167,20 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
 }
 
-func (blk *txnBlock) GetMetaLoc() (metaloc string) {
+func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
 	return blk.entry.GetVisibleMetaLoc(blk.Txn)
 }
-func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
+func (blk *txnBlock) GetDeltaLoc() (deltaloc objectio.Location) {
 	return blk.entry.GetVisibleDeltaLoc(blk.Txn)
 }
-func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
+func (blk *txnBlock) UpdateMetaLoc(metaLoc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaLoc)
 	return
 }
 
-func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
+func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
 	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
@@ -204,7 +206,7 @@ func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, err
 	if blk.isUncommitted {
 		attrIds := make([]int, len(attrs))
 		for i, attr := range attrs {
-			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
+			attrIds[i] = blk.table.GetLocalSchema().GetColIdx(attr)
 		}
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
@@ -227,7 +229,7 @@ func (blk *txnBlock) Prefetch(idxes []uint16) error {
 
 func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
+		attrId := blk.table.GetLocalSchema().GetColIdx(attr)
 		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr)

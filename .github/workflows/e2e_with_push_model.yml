@@ -35,6 +35,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head
           sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
 
@@ -65,6 +66,11 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
 
+      - name: Dump mo-service goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
@@ -79,6 +85,7 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
@@ -116,6 +123,8 @@ jobs:
           cd $GITHUB_WORKSPACE/head
           sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml
@@ -147,6 +156,11 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
 
+      - name: Dump mo-service goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
@@ -161,6 +175,7 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}

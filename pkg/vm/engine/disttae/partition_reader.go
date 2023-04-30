@@ -16,14 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type PartitionReader struct {
@@ -45,15 +43,19 @@ type PartitionReader struct {
 	// the following attributes are used to support cn2s3
 	procMPool       *mpool.MPool
 	s3FileService   fileservice.FileService
-	s3BlockReader   dataio.Reader
+	s3BlockReader   *blockio.BlockReader
 	extendId2s3File map[string]int
 
 	// used to get idx of sepcified col
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
+	deletedBlocks   *deletedBlocks
 }
 
+// BlockBatch is used to record the metaLoc info
+// for the s3 block written by current txn, it's
+// stored in the txn writes
 type BlockBatch struct {
 	metas  []string
 	idx    int
@@ -88,6 +90,9 @@ func (p *PartitionReader) Close() error {
 
 func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 	for _, str := range colNames {
+		if str == catalog.Row_ID {
+			continue
+		}
 		v, ok := p.colIdxMp[str]
 		if !ok {
 			panic("not existed col in partitionReader")
@@ -97,48 +102,50 @@ func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 	return
 }
 
-func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
 	if p.blockBatch == nil {
 		p.blockBatch = &BlockBatch{}
 	}
-	//p.inserts new insert
-	//p.blockBatch s3 insert
+	// dumpBatch or compaction will set some batches as nil
+	if len(p.inserts) > 0 && (p.inserts[0] == nil || p.inserts[0].Length() == 0) {
+		p.inserts = p.inserts[1:]
+		return &batch.Batch{}, nil
+	}
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
 			var err error
+			var location objectio.Location
 			//var ivec *fileservice.IOVector
-			var bats []*batch.Batch
 			// read block
-			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
+			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge,
+			//  but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
 				p.blockBatch.setBat(p.inserts[0])
 				p.inserts = p.inserts[1:]
 			}
 			metaLoc := p.blockBatch.read()
-			name := strings.Split(metaLoc, ":")[0]
+			location, err = blockio.EncodeLocationFromString(metaLoc)
+			if err != nil {
+				return nil, err
+			}
+			name := location.Name().String()
 			if name != p.currentFileName {
-				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, metaLoc)
+				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, location)
 				p.extendId2s3File[name] = 0
 				p.currentFileName = name
 				if err != nil {
 					return nil, err
 				}
 			}
-			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
-			for _, name := range colNames {
-				if name == catalog.Row_ID {
-					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
-				}
-			}
-			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{extent.Id()}, p.procMPool)
+			bat, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), location.ID(), p.procMPool)
 			if err != nil {
 				return nil, err
 			}
-			rbat := bats[0]
+			rbat := bat
 			for i, vec := range rbat.Vecs {
 				rbat.Vecs[i], err = vec.Dup(p.procMPool)
 				if err != nil {
@@ -148,6 +155,31 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
+
+			var hasRowId bool
+			// note: if there is rowId colName, it must be the last one
+			if colNames[len(colNames)-1] == catalog.Row_ID {
+				hasRowId = true
+			}
+			sid := location.Name().SegmentId()
+			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+			if hasRowId {
+				// add rowId col for rbat
+				lens := rbat.Length()
+				vec := vector.NewVec(types.T_Rowid.ToType())
+				for i := 0; i < lens; i++ {
+					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(&blkid, uint32(i)), false,
+						p.procMPool); err != nil {
+						return rbat, err
+					}
+				}
+				rbat.Vecs = append(rbat.Vecs, vec)
+			}
+
+			deletes := p.deletedBlocks.getDeletedOffsetsByBlock(string(blkid[:]))
+			if len(deletes) != 0 {
+				rbat.AntiShrink(deletes)
+			}
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
 			return rbat, nil
 		} else {
@@ -157,7 +189,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
-				b.Vecs[i] = vector.NewVec(p.typsMap[name])
+				if vp == nil {
+					b.Vecs[i] = vector.NewVec(p.typsMap[name])
+				} else {
+					b.Vecs[i] = vp.GetVector(p.typsMap[name])
+				}
 			}
 			for i, vec := range b.Vecs {
 				srcVec := bat.Vecs[i]
@@ -172,13 +208,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					}
 				}
 			}
-			for j := 0; j < bat.Length(); j++ {
-				if _, ok := p.deletes[rowIds[j]]; ok {
-					continue
-				}
-				//mo_tables, mo_columns 要删除行
-				b.Zs = append(b.Zs, int64(bat.Zs[j]))
-			}
+			b.SetZs(bat.Length(), p.procMPool)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}
@@ -187,7 +217,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.NewVec(p.typsMap[name])
+		if vp == nil {
+			b.Vecs[i] = vector.NewVec(p.typsMap[name])
+		} else {
+			b.Vecs[i] = vp.GetVector(p.typsMap[name])
+		}
 	}
 	rows := 0
 	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
@@ -198,6 +232,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 		}
 	}
+
 	for p.iter.Next() {
 		entry := p.iter.Entry()
 		if _, ok := p.deletes[entry.RowID]; ok {

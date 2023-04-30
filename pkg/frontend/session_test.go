@@ -48,8 +48,8 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		cnt := 0
-		txnClient.EXPECT().New().DoAndReturn(
-			func(ootions ...client.TxnOption) (client.TxnOperator, error) {
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ timestamp.Timestamp, ootions ...client.TxnOption) (client.TxnOperator, error) {
 				cnt++
 				if cnt%2 != 0 {
 					return txnOperator, nil
@@ -87,11 +87,11 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 			connectCtx: ctx,
 			gSysVars:   &gSys,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldNotBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -127,7 +127,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
 
-		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -152,13 +152,13 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			connectCtx: ctx,
 			gSysVars:   &gSys,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
 		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
 
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 
 		idx++
@@ -196,7 +196,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
 
-		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
@@ -207,11 +207,11 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			pu:         pu,
 			connectCtx: ctx,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.RollbackTxn()
 		convey.So(err, convey.ShouldBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.RollbackTxn()
 		convey.So(err, convey.ShouldNotBeNil)
@@ -234,7 +234,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
@@ -263,7 +263,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
-		_, _ = ses.GetTxnHandler().GetTxn()
+		_, _, err = ses.GetTxnHandler().GetTxn()
 		convey.So(err, convey.ShouldBeNil)
 
 		err = ses.TxnCommit()
@@ -290,7 +290,7 @@ func TestVariables(t *testing.T) {
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New().AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).AnyTimes()
 		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil), gSysVars, true, nil)
 		session.SetRequestContext(context.Background())
 		return session
@@ -581,7 +581,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -626,9 +626,6 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 
 		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
-
-		hkd := tcc.GetHideKeyDef("abc", "t1")
-		convey.So(hkd, convey.ShouldBeNil)
 
 		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
 		convey.So(stats, convey.ShouldBeNil)

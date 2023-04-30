@@ -257,6 +257,12 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 				if tblInfo.typ != "insert" {
 					newCols = append(newCols, col)
 				}
+			} else if col.Name == catalog.FakePrimaryKeyColName {
+				// fake pk is auto increment, need to fill.
+				// TODO(fagongzi): we need to use a separate tag to mark the columns
+				// for these behaviors, instead of using column names, which needs to
+				// be changed after 0.8
+				newCols = append(newCols, col)
 			}
 		} else {
 			newCols = append(newCols, col)
@@ -436,7 +442,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	if stmt.Columns == nil {
 		for _, col := range tableDef.Cols {
-			insertColumns = append(insertColumns, col.Name)
+			// Hide pk can not added, because this column is auto increment
+			// column. This must be fill by auto increment
+			if col.Name != catalog.FakePrimaryKeyColName {
+				insertColumns = append(insertColumns, col.Name)
+			}
 		}
 	} else {
 		syntaxHasColumnNames = true
@@ -595,8 +605,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
-		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+		rowIdCol := MakeRowIdColDef()
+		rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 		rightTableDef.Name2ColIndex = map[string]int32{}
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)
@@ -1071,8 +1081,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					rightTableDef := builder.qry.Nodes[rightId].TableDef
 
 					if info.typ == "insert" {
-						hiddenCol := builder.compCtx.GetHideKeyDef(idxRef.SchemaName, idxRef.ObjName)
-						rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+						rowIdCol := MakeRowIdColDef()
+						rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
 						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
 					}
 

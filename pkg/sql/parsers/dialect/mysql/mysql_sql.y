@@ -319,7 +319,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -412,6 +412,8 @@ import (
 // sp_begin_sym
 %token <str> SPBEGIN
 
+%token <str> BACKEND SERVERS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
@@ -425,6 +427,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
+%type <statement> show_servers_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
@@ -496,7 +499,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem
+%type <tableDef> table_elem constaint_def constraint_elem index_def
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -2583,7 +2586,7 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
@@ -2591,7 +2594,7 @@ alter_database_config_stmt:
             IsAccountLevel: false,
         }
      }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
@@ -2772,6 +2775,7 @@ show_stmt:
 |   show_accounts_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_servers_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3146,6 +3150,12 @@ show_create_stmt:
 |   SHOW CREATE PUBLICATION db_name
     {
 	$$ = &tree.ShowCreatePublications{Name: $4}
+    }
+
+show_servers_stmt:
+    SHOW BACKEND SERVERS
+    {
+        $$ = &tree.ShowBackendServers{}
     }
 
 table_name_unresolved:
@@ -6255,36 +6265,13 @@ table_elem:
     {
         $$ = $1
     }
-
-constaint_def:
-    constraint_keyword constraint_elem
-    {
-        if $1 != "" {
-            switch v := $2.(type) {
-            case *tree.PrimaryKeyIndex:
-                v.Name = $1
-            case *tree.ForeignKey:
-                v.Name = $1
-            }
-        }
-        $$ = $2
-    }
-|    constraint_elem
+|   index_def
     {
         $$ = $1
     }
 
-constraint_elem:
-    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
-    {
-         $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
-    }
-|    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+index_def:
+    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
     {
         $$ = &tree.FullTextIndex{
             KeyParts: $5,
@@ -6313,6 +6300,37 @@ constraint_elem:
             KeyParts: $5,
             Name: $3[0],
             KeyType: keyTyp,
+            IndexOption: $7,
+        }
+    }
+
+constaint_def:
+    constraint_keyword constraint_elem
+    {
+        if $1 != "" {
+            switch v := $2.(type) {
+            case *tree.PrimaryKeyIndex:
+                v.ConstraintSymbol = $1
+            case *tree.ForeignKey:
+                v.ConstraintSymbol = $1
+            case *tree.UniqueIndex:
+                v.ConstraintSymbol = $1
+            }
+        }
+        $$ = $2
+    }
+|    constraint_elem
+    {
+        $$ = $1
+    }
+
+constraint_elem:
+    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+         $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
             IndexOption: $7,
         }
     }
@@ -9098,7 +9116,7 @@ equal_opt:
 //|   COLUMN_NUMBER
 //|   TABLE_VALUES
 //|   RETURNS
-//|   MYSQL_COMPATBILITY_MODE
+//|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT

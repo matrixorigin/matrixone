@@ -289,6 +289,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ExtraOptions:    node.ExtraOptions,
 		Children:        make([]int32, len(node.Children)),
 		JoinType:        node.JoinType,
+		BuildOnLeft:     node.BuildOnLeft,
 		BindingTags:     make([]int32, len(node.BindingTags)),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),
@@ -403,7 +404,7 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 	}
 }
 
-func DeepCopyTyp(typ *plan.Type) *plan.Type {
+func DeepCopyType(typ *plan.Type) *plan.Type {
 	if typ == nil {
 		return nil
 	}
@@ -424,13 +425,14 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Typ:       DeepCopyTyp(col.Typ),
+		Typ:       DeepCopyType(col.Typ),
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
 		Pkidx:     col.Pkidx,
 		Comment:   col.Comment,
 		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
 		ClusterBy: col.ClusterBy,
+		Hidden:    col.Hidden,
 	}
 }
 
@@ -860,7 +862,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: DeepCopyTyp(expr.Typ),
+		Typ: DeepCopyType(expr.Typ),
 	}
 
 	switch item := expr.Expr.(type) {
@@ -973,7 +975,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
 			T: &plan.TargetType{
-				Typ: DeepCopyTyp(item.T.Typ),
+				Typ: DeepCopyType(item.T.Typ),
 			},
 		}
 

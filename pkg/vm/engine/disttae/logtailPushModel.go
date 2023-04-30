@@ -16,18 +16,19 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
@@ -41,6 +42,9 @@ const (
 	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
 	// we assume that client has lost connect to server and will start a reconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
+
+	// once we reconnect dn failed. we will retry after time retryReconnect.
+	retryReconnect = 20 * time.Millisecond
 
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
@@ -88,10 +92,16 @@ type pushClient struct {
 
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
+
+	// timestampWaiter is used to notify the latest commit timestamp
+	timestampWaiter client.TimestampWaiter
 }
 
-func (client *pushClient) init(serviceAddr string) error {
-	client.receivedLogTailTime.initLogTailTimestamp()
+func (client *pushClient) init(
+	serviceAddr string,
+	timestampWaiter client.TimestampWaiter) error {
+	client.timestampWaiter = timestampWaiter
+	client.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
 	client.subscribed.initTableSubscribeRecord()
 
 	if client.subscriber == nil {
@@ -304,19 +314,23 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				r.close()
 			}
 			logutil.Infof("start to reconnect to dn log tail service")
-			dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-			if err := client.init(dnLogTailServerBackend); err != nil {
-				logutil.Error("rebuild the cn log tail client failed.")
-				reconnectErr <- err
+			for {
+				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
+					logutil.Error("rebuild the cn log tail client failed.")
+					time.Sleep(retryReconnect)
+					continue
+				}
+
+				// once we reconnect succeed, should clean partition here.
+				e.cleanMemoryTable()
+
+				go func() {
+					err := client.firstTimeConnectToLogTailServer(context.TODO())
+					reconnectErr <- err
+				}()
+				break
 			}
-
-			// once we reconnect succeed, should clean partition here.
-			e.cleanMemoryTable()
-
-			go func() {
-				err := client.firstTimeConnectToLogTailServer(context.TODO())
-				reconnectErr <- err
-			}()
 		}
 	}()
 }
@@ -329,29 +343,28 @@ func (client *pushClient) unusedTableGCTicker() {
 			<-ticker.C
 
 			t := time.Now()
-			if t.After(time.Time{}.Add(unsubscribeTimer)) {
-				client.subscribed.mutex.Lock()
+			client.subscribed.mutex.Lock()
 
-				shouldClean := t.Add(-unsubscribeTimer)
-				for k, v := range client.subscribed.m {
-					if ifShouldNotDistribute(k.db, k.tbl) {
-						// never unsubscribe the mo_databases, mo_tables, mo_columns.
-						continue
-					}
-					if !v.isDeleting && !v.latestTime.After(shouldClean) {
-						if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
-							logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
-							client.subscribed.m[k] = tableSubscribeStatus{
-								isDeleting: true,
-								latestTime: v.latestTime,
-							}
-							continue
+			shouldClean := t.Add(-unsubscribeTimer)
+			for k, v := range client.subscribed.m {
+				if ifShouldNotDistribute(k.db, k.tbl) {
+					// never unsubscribe the mo_databases, mo_tables, mo_columns.
+					continue
+				}
+				if !v.isDeleting && !v.latestTime.After(shouldClean) {
+					if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
+						logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
+						client.subscribed.m[k] = tableSubscribeStatus{
+							isDeleting: true,
+							latestTime: v.latestTime,
 						}
-						logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed", k.db, k.tbl)
+						continue
+					} else {
+						logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed, err : %s", k.db, k.tbl, err.Error())
 					}
 				}
-				client.subscribed.mutex.Unlock()
 			}
+			client.subscribed.mutex.Unlock()
 		}
 	}()
 }
@@ -418,19 +431,33 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
-	ready atomic.Bool
-	tList []struct {
+	timestampWaiter client.TimestampWaiter
+	ready           atomic.Bool
+	tList           []struct {
 		time timestamp.Timestamp
 		sync.RWMutex
 	}
 }
 
-func (r *syncLogTailTimestamp) initLogTailTimestamp() {
+func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
+	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
-	r.tList = make([]struct {
-		time timestamp.Timestamp
-		sync.RWMutex
-	}, parallelNums+1)
+	if len(r.tList) == 0 {
+		r.tList = make([]struct {
+			time timestamp.Timestamp
+			sync.RWMutex
+		}, parallelNums+1)
+	} else {
+		for i := range r.tList {
+			r.tList[i].Lock()
+		}
+		for i := range r.tList {
+			r.tList[i].time = timestamp.Timestamp{}
+		}
+		for i := range r.tList {
+			r.tList[i].Unlock()
+		}
+	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
@@ -452,6 +479,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp
 	r.tList[index].Lock()
 	r.tList[index].time = newTimestamp
 	r.tList[index].Unlock()
+	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
@@ -472,6 +500,10 @@ type logTailSubscriber struct {
 	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
 }
 
+func clientIsPreparing(context.Context, api.TableID) error {
+	return moerr.NewInternalErrorNoCtx("log tail client is not ready")
+}
+
 type logTailSubscriberResponse struct {
 	response *service.LogtailResponse
 	err      error
@@ -480,6 +512,7 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
+	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &service.LogtailResponseSegment{}
 	})
@@ -487,12 +520,13 @@ func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 		),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+		morpc.WithBackendLogger(logger),
 	)
 
 	c, err1 := morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(10000),
 		morpc.WithClientTag("cn-log-tail-client"),
+		morpc.WithClientLogger(logger),
 	)
 	if err1 != nil {
 		return nil, err1
@@ -506,9 +540,10 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
-	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
-	if err != nil {
-		return err
+	// close the old stream
+	oldClient := s.logTailClient
+	if oldClient != nil {
+		_ = oldClient.Close()
 	}
 
 	// if channel is not nil here, it's most likely called by reconnect process.
@@ -519,25 +554,32 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	} else {
 		<-s.lockSubscriber
 	}
+	s.lockSubscriber <- clientIsPreparing
+
 	if s.lockUnSubscriber == nil {
 		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
 	} else {
 		<-s.lockUnSubscriber
 	}
+	s.lockUnSubscriber <- clientIsPreparing
+
+	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
+	if err != nil {
+		return err
+	}
 
 	// new the log tail client.
-	oldClient := s.logTailClient
 	s.logTailClient, err = service.NewLogtailClient(stream,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	if err != nil {
-		s.lockSubscriber, s.lockUnSubscriber = nil, nil
+		return err
 	}
+	<-s.lockSubscriber
+	<-s.lockUnSubscriber
+
 	s.lockSubscriber <- s.subscribeTable
 	s.lockUnSubscriber <- s.unSubscribeTable
-	if oldClient != nil {
-		_ = oldClient.Close()
-	}
-	return err
+	return nil
 }
 
 // can't call this method directly.
@@ -581,12 +623,15 @@ func (e *Engine) UsePushModelOrNot() bool {
 }
 
 func (e *Engine) InitLogTailPushModel(
-	ctx context.Context) error {
+	ctx context.Context,
+	timestampWaiter client.TimestampWaiter) error {
 	e.SetPushModelFlag(true)
 
 	// get log tail service address.
 	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-	if err := e.pClient.init(dnLogTailServerBackend); err != nil {
+	if err := e.pClient.init(
+		dnLogTailServerBackend,
+		timestampWaiter); err != nil {
 		return err
 	}
 	e.pClient.receiveTableLogTailContinuously(e)

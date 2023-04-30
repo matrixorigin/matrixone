@@ -35,11 +35,11 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 // type ItBytesOp func(v []byte, isNull bool, row int) error
 
 type Vector interface {
-	GetType() types.Type
+	GetType() *types.Type
 
 	// Deep copy ops
 	Get(i int) any
-	Append(v any)
+	Append(v any, isNull bool)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
 
 	WriteTo(w io.Writer) (int64, error)
@@ -52,7 +52,7 @@ type Vector interface {
 	GetDownstreamVector() *cnVector.Vector
 	setDownstreamVector(vec *cnVector.Vector)
 
-	Update(i int, v any)
+	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
 
 	Extend(o Vector)
@@ -60,8 +60,6 @@ type Vector interface {
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
-	ForeachShallow(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	Length() int
 	Allocated() int
@@ -79,7 +77,7 @@ type Vector interface {
 	Equals(o Vector) bool
 	String() string
 	PPString(num int) string
-	AppendMany(vs ...any)
+	AppendMany(vs []any, isNulls []bool)
 	Delete(i int)
 }
 

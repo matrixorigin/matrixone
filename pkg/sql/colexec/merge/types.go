@@ -15,15 +15,13 @@
 package merge
 
 import (
-	"reflect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
+	colexec.ReceiverOperator
 }
 
 type Argument struct {
@@ -32,6 +30,6 @@ type Argument struct {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
-		arg.ctr.receiverListener = nil
+		arg.ctr.FreeOperator(pipelineFailed)
 	}
 }

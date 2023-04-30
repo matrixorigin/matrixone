@@ -536,7 +536,7 @@ func init() {
 		"returns":                  RETURNS,
 		"extension":                EXTENSION,
 		"query_result":             QUERY_RESULT,
-		"mysql_compatbility_mode":  MYSQL_COMPATBILITY_MODE,
+		"mysql_compatibility_mode": MYSQL_COMPATIBILITY_MODE,
 		"sequences":                SEQUENCES,
 		"sequence":                 SEQUENCE,
 		"increment":                INCREMENT,
@@ -551,5 +551,7 @@ func init() {
 		"subscriptions":            SUBSCRIPTIONS,
 		"publications":             PUBLICATIONS,
 		"roles":                    ROLES,
+		"backend":                  BACKEND,
+		"servers":                  SERVERS,
 	}
 }

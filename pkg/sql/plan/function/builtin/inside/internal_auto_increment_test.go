@@ -56,13 +56,13 @@ func TestInternalAutoIncrement(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c, d interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(4)
 		bat.Zs = []int64{1}
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -165,7 +165,7 @@ func Test_newTxn(t *testing.T) {
 	require.NotNil(t, err)
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	proc.TxnClient = txnClient
 	_, err = newTxn(eng, proc, proc.Ctx)
 	require.Nil(t, err)

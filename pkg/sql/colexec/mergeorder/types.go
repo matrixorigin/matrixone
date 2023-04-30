@@ -15,26 +15,22 @@
 package mergeorder
 
 import (
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	n     int               // result vector number
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
 
 	bat *batch.Batch // bat store the result of merge-order
-
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
 
 	// some reused memory
 	unionFlag                    []uint8
@@ -52,6 +48,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.FreeOperator(pipelineFailed)
 	}
 }
 

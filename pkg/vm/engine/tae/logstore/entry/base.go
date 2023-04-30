@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -78,11 +79,11 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	if sn, err = common.WriteString(info.TxnId, w); err != nil {
+	if sn, err = objectio.WriteString(info.TxnId, w); err != nil {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(info.Uncommits, w); err != nil {
+	if sn, err = objectio.WriteString(info.Uncommits, w); err != nil {
 		return
 	}
 	n += sn
@@ -153,11 +154,11 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	if info.TxnId, sn, err = common.ReadString(r); err != nil {
+	if info.TxnId, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
-	if info.Uncommits, sn, err = common.ReadString(r); err != nil {
+	if info.Uncommits, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -396,10 +397,6 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		}
 		b.payload = b.node[:b.GetPayloadSize()]
 	}
-	if b.GetType() == ETCheckpoint && b.GetPayloadSize() != 0 {
-		logutil.Infof("payload %d", b.GetPayloadSize())
-		panic("wrong payload size")
-	}
 	n1 := 0
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
@@ -408,8 +405,10 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return int64(n1), err
 		}
-		info := NewEmptyInfo()
-		err = info.Unmarshal(infoBuf)
+		head := objectio.DecodeIOEntryHeader(b.descBuf)
+		codec := objectio.GetIOEntryCodec(*head)
+		vinfo, err := codec.Decode(infoBuf)
+		info := vinfo.(*Info)
 		if err != nil {
 			return int64(n1), err
 		}
@@ -442,11 +441,13 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	if err != nil {
 		return n + n1, err
 	}
-
 	offset += n1
 	b.SetInfoBuf(infoBuf)
-	info := NewEmptyInfo()
-	err = info.Unmarshal(infoBuf)
+
+	head := objectio.DecodeIOEntryHeader(b.descBuf)
+	codec := objectio.GetIOEntryCodec(*head)
+	vinfo, err := codec.Decode(infoBuf)
+	info := vinfo.(*Info)
 	if err != nil {
 		return n + n1, err
 	}
@@ -470,6 +471,7 @@ func (b *Base) PrepareWrite() {
 }
 
 func (b *Base) WriteTo(w io.Writer) (int64, error) {
+	b.descriptor.SetVersion(IOET_WALEntry_CurrVer)
 	n1, err := b.descriptor.WriteTo(w)
 	if err != nil {
 		return n1, err

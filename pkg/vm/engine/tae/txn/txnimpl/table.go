@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-
 	"github.com/RoaringBitmap/roaring"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -105,16 +106,20 @@ type txnTable struct {
 	idx int
 }
 
-func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
+func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
+	schema := entry.GetVisibleSchema(store.txn)
+	if schema == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No visible schema for ts %s", store.txn.GetStartTS().ToString())
+	}
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
-		schema:      entry.GetSchema(),
+		schema:      schema,
 		deleteNodes: make(map[common.ID]*deleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  newTxnEntries(),
 	}
-	return tbl
+	return tbl, nil
 }
 
 func (tbl *txnTable) PrePreareTransfer() (err error) {
@@ -366,7 +371,7 @@ func (tbl *txnTable) SoftDeleteSegment(id types.Uuid) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, &id)
 	return
 }
 
@@ -374,11 +379,11 @@ func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *common.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
@@ -389,7 +394,7 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *c
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID)
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
 	if is1PC {
 		meta.Set1PC()
 	}
@@ -407,7 +412,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if meta != nil {
 		tbl.txnEntries.Append(meta)
 	}
@@ -419,7 +424,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 	tbl.txnEntries.Append(entry)
 	for _, id := range readed {
 		// warChecker skip non-block read
-		if common.IsEmptyBlkid(&id.BlockID) {
+		if objectio.IsEmptyBlkid(&id.BlockID) {
 			continue
 		}
 
@@ -446,7 +451,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
@@ -458,7 +463,7 @@ func (tbl *txnTable) createBlock(
 	sid types.Uuid,
 	state catalog.EntryState,
 	is1PC bool,
-	opts *common.CreateBlockOpt) (blk handle.Block, err error) {
+	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -480,7 +485,7 @@ func (tbl *txnTable) createBlock(
 	}
 	tbl.store.IncreateWriteCnt()
 	id := meta.AsCommonID()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	tbl.txnEntries.Append(meta)
 	return buildBlock(tbl, meta), err
 }
@@ -510,7 +515,9 @@ func (tbl *txnTable) IsDeleted() bool {
 	return tbl.dropEntry != nil
 }
 
-func (tbl *txnTable) GetSchema() *catalog.Schema {
+// GetLocalSchema returns the schema remains in the txn table, rather than the
+// latest schema in TableEntry
+func (tbl *txnTable) GetLocalSchema() *catalog.Schema {
 	return tbl.schema
 }
 
@@ -543,7 +550,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 		return ErrDuplicateNode
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	tbl.deleteNodes[nid] = newDeleteNode(node, tbl.txnEntries.Len())
 	tbl.txnEntries.Append(node)
 	return nil
@@ -577,8 +584,8 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 }
 
 func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []dataio.Index,
-	metaLocs []string) (err error) {
+	zm []objectio.ZoneMap,
+	metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -594,20 +601,16 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				if err != nil {
 					return err
 				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					return err
-				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.ToDNVector(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -745,14 +748,14 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	return
 }
 
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment != nil && tbl.localSegment.entry.ID == id.SegmentID {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -768,7 +771,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	return block.GetValue(tbl.store.txn, int(row), int(col))
 }
 
-func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
+func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -777,7 +780,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	if err != nil {
 		panic(err)
 	}
-	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaloc)
+	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaLoc)
 	if err != nil {
 		return
 	}
@@ -787,7 +790,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	return
 }
 
-func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
+func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
@@ -806,14 +809,22 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) 
 	return
 }
 
-func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
+func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
+	switch req.Kind {
+	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment:
+	default:
+		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
-	isNewNode, err := tbl.entry.UpdateConstraint(tbl.store.txn, cstr)
+	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
-	return
+	//TODO(aptend):
+	// 1.update local schema
+	// 2.handle written data in localseg, keep the batch aligned with the new schema
+	return err
 }
 
 func (tbl *txnTable) UncommittedRows() uint32 {
@@ -887,7 +898,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 // DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
@@ -914,20 +925,16 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []string) (err error) {
 				if err != nil {
 					return err
 				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					return err
-				}
-				bats, err := reader.LoadColumns(
+				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
+					loc.ID(),
 					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0])
+				vec := containers.ToDNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {

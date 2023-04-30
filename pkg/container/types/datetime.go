@@ -46,6 +46,11 @@ var (
 	scaleVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
+const (
+	// ZeroDatetime is the zero value for date Time '0000-01-01 00:00:00'.
+	ZeroDatetime = Datetime(0)
+)
+
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 func (dt Datetime) String() string {
@@ -524,4 +529,12 @@ func ValidDatetime(year int32, month, day uint8) bool {
 
 func (dt Datetime) SecsSinceUnixEpoch() int64 {
 	return (int64(dt) - unixEpochMicroSecs) / microSecsPerSec
+}
+
+func (dt Datetime) ToDecimal64() Decimal64 {
+	return Decimal64(int64(dt) - unixEpochMicroSecs)
+}
+
+func (dt Datetime) ToDecimal128() Decimal128 {
+	return Decimal128{uint64(int64(dt) - unixEpochMicroSecs), 0}
 }

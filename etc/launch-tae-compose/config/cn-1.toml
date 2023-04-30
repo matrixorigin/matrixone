@@ -54,8 +54,16 @@ service-address = "cn-1:6002"
 sql-address = "cn-1:6001"
 turn-on-push-model = false
 
+[cn.ctl.address]
+listen-address = "0.0.0.0:19958"
+service-address = "cn-1:19958"
+
 [cn.Engine]
 type = "distributed-tae"
 
 [cn.frontend]
 port = 6001
+
+[cn.txn]
+enable-sacrificing-freshness = false
+enable-cn-based-consistency = true

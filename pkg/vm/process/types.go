@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -149,6 +151,7 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
+	vp *vectorPool
 	mp *mpool.MPool
 
 	// unix timestamp
@@ -178,6 +181,11 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+}
+
+type vectorPool struct {
+	sync.Mutex
+	vecs map[uint8][]*vector.Vector
 }
 
 type sqlHelper interface {
@@ -210,6 +218,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 		return *proc.LastInsertID
 	}
 	return 0
+}
+
+func (proc *Process) SetCacheForAutoCol(name string) {
+	aicm := proc.Aicm
+	aicm.Mu.Lock()
+	defer aicm.Mu.Unlock()
+	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
 type analyze struct {

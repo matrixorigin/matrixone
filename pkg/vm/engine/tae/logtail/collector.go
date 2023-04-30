@@ -23,9 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/tidwall/btree"
 )
 
@@ -45,16 +46,16 @@ type DirtyEntryInterceptor = catalog.Processor
 type DirtyTreeEntry struct {
 	sync.RWMutex
 	start, end types.TS
-	tree       *common.Tree
+	tree       *model.Tree
 }
 
 func NewEmptyDirtyTreeEntry() *DirtyTreeEntry {
 	return &DirtyTreeEntry{
-		tree: common.NewTree(),
+		tree: model.NewTree(),
 	}
 }
 
-func NewDirtyTreeEntry(start, end types.TS, tree *common.Tree) *DirtyTreeEntry {
+func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 	entry := NewEmptyDirtyTreeEntry()
 	entry.start = start
 	entry.end = end
@@ -80,7 +81,7 @@ func (entry *DirtyTreeEntry) GetTimeRange() (from, to types.TS) {
 	return entry.start, entry.end
 }
 
-func (entry *DirtyTreeEntry) GetTree() (tree *common.Tree) {
+func (entry *DirtyTreeEntry) GetTree() (tree *model.Tree) {
 	return entry.tree
 }
 
@@ -334,7 +335,7 @@ func (d *dirtyCollector) cleanupStorage() {
 // iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
 func (d *dirtyCollector) tryCompactTree(
 	interceptor DirtyEntryInterceptor,
-	tree *common.Tree) (err error) {
+	tree *model.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
@@ -371,7 +372,7 @@ func (d *dirtyCollector) tryCompactTree(
 				dirtyTable.Shrink(id)
 				continue
 			}
-			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
+			if seg, err = tbl.GetSegmentByID(*dirtySeg.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
 					err = nil
@@ -380,9 +381,10 @@ func (d *dirtyCollector) tryCompactTree(
 				return
 			}
 			for id := range dirtySeg.Blks {
-				if blk, err = seg.GetBlockEntryByID(id); err != nil {
+				bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
+				if blk, err = seg.GetBlockEntryByID(bid); err != nil {
 					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtySeg.Shrink(id)
+						dirtySeg.Shrink(&bid)
 						err = nil
 						continue
 					}
@@ -394,7 +396,7 @@ func (d *dirtyCollector) tryCompactTree(
 					if blk.HasPersistedData() {
 						blk.GetBlockData().TryUpgrade()
 					}
-					dirtySeg.Shrink(id)
+					dirtySeg.Shrink(&bid)
 					continue
 				}
 				if err = interceptor.OnBlock(blk); err != nil {

@@ -23,6 +23,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestZMNull(t *testing.T) {
+	zm := NewZM(types.T_int64)
+	x := zm.GetMin()
+	require.Nil(t, x)
+	y := zm.GetMax()
+	require.Nil(t, y)
+
+	require.Equal(t, 8, len(zm.GetMinBuf()))
+	require.Equal(t, 8, len(zm.GetMaxBuf()))
+
+	require.False(t, zm.Contains(int64(-1)))
+	require.False(t, zm.Contains(int64(0)))
+	require.False(t, zm.Contains(int64(1)))
+}
+
 func TestZM(t *testing.T) {
 	int64v := int64(100)
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))

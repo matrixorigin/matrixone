@@ -274,6 +274,7 @@ func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error 
 			return err
 		}
 		if !can {
+			//is ddl statement
 			if IsAdministrativeStatement(stmt) {
 				return moerr.NewInternalError(ctx, administrativeCommandIsUnsupportedInTxnErrorInfo())
 			} else if IsParameterModificationStatement(stmt) {

@@ -53,7 +53,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
@@ -82,6 +82,16 @@ func Prepare(proc *process.Process, arg any) error {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
+	if param.Extern == nil {
+		param.Extern = &tree.ExternParam{}
+		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
+			return err
+		}
+		if err := plan2.InitS3Param(param.Extern); err != nil {
+			return err
+		}
+		param.Extern.FileService = proc.FileService
+	}
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -297,9 +307,13 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 			},
 		},
 	}
+	if 2*param.Idx >= len(param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset) {
+		return nil, nil
+	}
+	param.FileOffset = param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset[2*param.Idx : 2*param.Idx+2]
 	if param.Extern.Parallel {
-		vec.Entries[0].Offset = int64(param.FileOffset[param.Fileparam.FileIndex-1][0])
-		vec.Entries[0].Size = int64(param.FileOffset[param.Fileparam.FileIndex-1][1] - param.FileOffset[param.Fileparam.FileIndex-1][0])
+		vec.Entries[0].Offset = int64(param.FileOffset[0])
+		vec.Entries[0].Size = int64(param.FileOffset[1] - param.FileOffset[0])
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
@@ -311,8 +325,8 @@ func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
-	arr := make([][2]int, 0)
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([]int64, error) {
+	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
@@ -342,13 +356,15 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 		offset = append(offset, vec.Entries[0].Offset)
 	}
 
-	start := 0
+	start := int64(0)
 	for i := 0; i < mcpu; i++ {
 		if i+1 < mcpu {
-			arr = append(arr, [2]int{start, int(offset[i+1] + tailSize[i+1])})
-			start = int(offset[i+1] + tailSize[i+1])
+			arr = append(arr, start)
+			arr = append(arr, offset[i+1]+tailSize[i+1])
+			start = offset[i+1] + tailSize[i+1]
 		} else {
-			arr = append(arr, [2]int{start, -1})
+			arr = append(arr, start)
+			arr = append(arr, -1)
 		}
 	}
 	return arr, nil
@@ -410,15 +426,16 @@ func makeType(Cols []*plan.ColDef, index int) types.Type {
 }
 
 func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batch.Batch {
-	batchData := batch.New(true, param.Attrs)
+	bat := batch.NewWithSize(len(param.Attrs))
+	bat.SetAttributes(param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i)
-		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
-		//vec.SetOriginal(false)
-		batchData.Vecs[i] = vec
+		bat.Vecs[i] = proc.GetVector(typ)
+		bat.Vecs[i].PreExtend(batchSize, proc.Mp())
+		bat.Vecs[i].SetLength(batchSize)
 	}
-	return batchData
+	return bat
 }
 
 func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
@@ -440,10 +457,10 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 	}
 }
 
-func getRealAttrCnt(attrs []string) int {
+func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 	cnt := 0
 	for i := 0; i < len(attrs); i++ {
-		if catalog.ContainExternalHidenCol(attrs[i]) {
+		if catalog.ContainExternalHidenCol(attrs[i]) || cols[i].Hidden {
 			cnt++
 		}
 	}
@@ -474,11 +491,11 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 			//the column account_id of the cluster table do need to be filled here
-			if len(Line)+1 < getRealAttrCnt(param.Attrs) {
+			if len(Line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
 			}
 		} else {
-			if !param.Extern.SysTable && len(Line) < getRealAttrCnt(param.Attrs) {
+			if !param.Extern.SysTable && len(Line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
 			}
 		}
@@ -491,23 +508,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	n := bat.Vecs[0].Length()
 	if unexpectEOF && n > 0 {
 		n--
-		for i := 0; i < len(bat.Vecs); i++ {
-			newVec, err := proc.AllocVectorOfRows(*bat.Vecs[i].GetType(), n, nil)
-			if err != nil {
-				return nil, err
-			}
-			nulls.Set(newVec.GetNulls(), bat.Vecs[i].GetNulls())
-			for j := int64(0); j < int64(n); j++ {
-				if newVec.GetNulls().Contains(uint64(j)) {
-					continue
-				}
-				err := newVec.Copy(bat.Vecs[i], j, j, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-			}
-			bat.Vecs[i].Free(proc.Mp())
-			bat.Vecs[i] = newVec
+		for i := 0; i < bat.VectorCount(); i++ {
+			vec := bat.GetVector(int32(i))
+			vec.SetLength(n)
 		}
 	}
 	sels := proc.Mp().GetSels()
@@ -585,10 +588,11 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	if param.IgnoreLine != 0 {
-		if !param.Extern.Parallel || param.FileOffset[param.Fileparam.FileIndex-1][0] == 0 {
+		if !param.Extern.Parallel || param.FileOffset[0] == 0 {
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]string, param.IgnoreLine))
 			} else {
 				plh.moCsvLineArray = nil
 				cnt = 0
@@ -617,8 +621,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
-	header := meta.GetHeader()
-	colCnt := header.GetColumnCount()
+	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if param.Extern.SysTable && idxs[i] >= colCnt {
@@ -626,7 +629,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +645,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = bats[0].Vecs[i]
+				vecTmp = tmpBat.Vecs[i]
 				if err != nil {
 					return nil, err
 				}
@@ -659,7 +662,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = bats[0].Vecs[i]
+			vecTmp = tmpBat.Vecs[i]
 			if err != nil {
 				return nil, err
 			}
@@ -754,14 +757,14 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
 	var err error
 	if param.Extern.QueryResult {
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
 	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
@@ -899,10 +902,13 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonMap) < len(attrs) {
+	if len(jsonMap) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
 	for idx, attr := range attrs {
+		if cols[idx].Hidden {
+			continue
+		}
 		if val, ok := jsonMap[attr]; ok {
 			if val == nil {
 				res = append(res, NULL_FLAG)
@@ -947,7 +953,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonArray) < len(attrs) {
+	if len(jsonArray) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo())
 	}
 	for idx, val := range jsonArray {
@@ -1025,13 +1031,17 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		if param.ClusterTable.GetIsClusterTable() && int(param.ClusterTable.GetColumnIndexOfAccountId()) == colIdx {
 			continue
 		}
+		vec := bat.Vecs[colIdx]
+		if param.Cols[colIdx].Hidden {
+			nulls.Add(vec.GetNulls(), uint64(rowIdx))
+			continue
+		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
 			field = strings.TrimSpace(field)
 		}
-		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
 		if id != types.T_char && id != types.T_varchar &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {

@@ -790,10 +790,6 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
-	return m.tables[tableName].Cols[len(m.tables[tableName].Cols)-1]
-}
-
 func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
 	return m.stats[obj.ObjName]
 }

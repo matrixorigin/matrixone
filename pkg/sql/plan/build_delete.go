@@ -67,9 +67,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	} else {
 		// if delete table have no constraint
 		if stmt.Where == nil && stmt.Limit == nil {
-			// we need to fix #7779 first, don't use truncate
-			// I will improve this after cn-write-s3 delete
-			canTruncate = false
+			canTruncate = true
 		}
 		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, tblInfo)
 		if err != nil {
@@ -149,65 +147,3 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		},
 	}, err
 }
-
-// // build rowid column abstract syntax tree expression of the table to be deleted
-// func buildRowIdAstExpr(ctx CompilerContext, tbinfo *tableInfo, schemaName string, tableName string) (tree.SelectExpr, error) {
-// 	hideKey := ctx.GetHideKeyDef(schemaName, tableName)
-// 	if hideKey == nil {
-// 		return tree.SelectExpr{}, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
-// 	}
-// 	tblAliasName := tableName
-// 	if tbinfo != nil {
-// 		tblAliasName = tbinfo.baseName2AliasMap[tableName]
-// 	}
-// 	expr := tree.SetUnresolvedName(tblAliasName, hideKey.Name)
-// 	return tree.SelectExpr{Expr: expr}, nil
-// }
-
-// // build Index table ast expr
-// func buildIndexTableExpr(indexTableName string) tree.TableExpr {
-// 	prefix := tree.ObjectNamePrefix{
-// 		CatalogName:     "",
-// 		SchemaName:      "",
-// 		ExplicitCatalog: false,
-// 		ExplicitSchema:  false,
-// 	}
-
-// 	tableExpr := tree.NewTableName(tree.Identifier(indexTableName), prefix)
-
-// 	aliasClause := tree.AliasClause{
-// 		Alias: "",
-// 	}
-// 	return tree.NewAliasedTableExpr(tableExpr, aliasClause)
-// }
-
-// // construct equivalent connection conditions between original table and index table
-// func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
-// 	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
-// 	// If it is a single column index
-// 	if len(indexField.Parts) == 1 {
-// 		uniqueColName := indexField.Parts[0]
-// 		leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
-// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
-
-// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
-// 		return tree.NewOnJoinCond(onCondExpr)
-// 	} else { // If it is a composite index
-// 		funcName := tree.SetUnresolvedName(strings.ToLower("serial"))
-// 		// build function parameters
-// 		exprs := make(tree.Exprs, len(indexField.Parts))
-// 		for i, part := range indexField.Parts {
-// 			exprs[i] = tree.SetUnresolvedName(originTableAlias, part)
-// 		}
-
-// 		// build composite index serialize function expression
-// 		leftExpr := &tree.FuncExpr{
-// 			Func:  tree.FuncName2ResolvableFunctionReference(funcName),
-// 			Exprs: exprs,
-// 		}
-
-// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
-// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
-// 		return tree.NewOnJoinCond(onCondExpr)
-// 	}
-// }

@@ -23,7 +23,7 @@ import (
 
 func Test_sliceLikePure(t *testing.T) {
 	type args struct {
-		s    []string
+		s    [][]byte
 		expr []byte
 	}
 	tests := []struct {
@@ -36,7 +36,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "%",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("%"),
 			},
 			want:    []int64{0, 1},
@@ -46,7 +46,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "_",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("_"),
 			},
 			want:    []int64{0},
@@ -56,7 +56,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "nil",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte(""),
 			},
 			want:    []int64{},
@@ -66,7 +66,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "bc",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("bc"),
 			},
 			want:    []int64{1},
@@ -76,7 +76,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "_XXX",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("_c"),
 			},
 			want:    []int64{1},
@@ -86,7 +86,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "%XXX",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("%c"),
 			},
 			want:    []int64{1},
@@ -96,7 +96,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "_XXX%",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("_c%"),
 			},
 			want:    []int64{1, 2},
@@ -106,7 +106,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "%XXX_",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("%c_"),
 			},
 			want:    []int64{2},
@@ -116,7 +116,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "_XXX_",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("_c_"),
 			},
 			want:    []int64{2},
@@ -126,7 +126,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "%XXX%",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("%c%"),
 			},
 			want:    []int64{1, 2},
@@ -136,7 +136,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "XXX%YYY",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a%c"),
 			},
 			want:    []int64{0, 1},
@@ -146,7 +146,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "XXX_YYY",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a_c"),
 			},
 			want:    []int64{0},
@@ -156,7 +156,7 @@ func Test_sliceLikePure(t *testing.T) {
 		{
 			name: "*",
 			args: args{
-				s:    []string{"abc", "*", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("*"), []byte("aca")},
 				expr: []byte("*"),
 			},
 			want:    []int64{1},
@@ -355,7 +355,7 @@ func Test_pureLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ok, err := BtConstAndConst(string(tt.args.p), tt.args.expr)
+			ok, err := BtConstAndConst(tt.args.p, tt.args.expr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("scalarLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -370,7 +370,7 @@ func Test_pureLikePure(t *testing.T) {
 
 func Test_sliceNullLikePure(t *testing.T) {
 	type args struct {
-		s    []string
+		s    [][]byte
 		expr []byte
 		ns   *nulls.Nulls
 	}
@@ -384,7 +384,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "%",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("%"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -395,7 +395,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "_",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("_"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -406,7 +406,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "nil",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte(""),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -417,7 +417,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "bc",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("bc"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -428,7 +428,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "_XXX",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("_c"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -439,7 +439,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "%XXX",
 			args: args{
-				s:    []string{"a", "bc"},
+				s:    [][]byte{[]byte("a"), []byte("bc")},
 				expr: []byte("%c"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -450,7 +450,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "_XXX%",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("_c%"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -461,7 +461,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "%XXX_",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("%c_"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -472,7 +472,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "_XXX_",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("_c_"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -483,7 +483,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "%XXX%",
 			args: args{
-				s:    []string{"a", "bc", "aca"},
+				s:    [][]byte{[]byte("a"), []byte("bc"), []byte("aca")},
 				expr: []byte("%c%"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -494,7 +494,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "XXX%YYY",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a%c"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -505,7 +505,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "XXX_YYY",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a_c"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -516,7 +516,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "XXX_",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a_"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -527,7 +527,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "XXX%",
 			args: args{
-				s:    []string{"abc", "ac", "aca"},
+				s:    [][]byte{[]byte("abc"), []byte("ac"), []byte("aca")},
 				expr: []byte("a%"),
 				ns:   nulls.NewWithSize(0),
 			},
@@ -538,7 +538,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 		{
 			name: "*",
 			args: args{
-				s:    []string{"abc", "*", "*a"},
+				s:    [][]byte{[]byte("abc"), []byte("*"), []byte("*a")},
 				expr: []byte("*"),
 				ns:   nulls.NewWithSize(0),
 			},

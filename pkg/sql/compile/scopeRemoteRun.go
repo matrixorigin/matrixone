@@ -18,14 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"runtime"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -41,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -65,13 +61,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -106,48 +107,40 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
+	err := cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}
 	return receiver.sendEndMessage()
 }
 
-func fillEngineForInsert(s *Scope, e engine.Engine) {
-	for i := range s.Instructions {
-		if s.Instructions[i].Op == vm.Insert {
-			s.Instructions[i].Arg.(*insert.Argument).Engine = e
-		}
-	}
-	for i := range s.PreScopes {
-		fillEngineForInsert(s.PreScopes[i], e)
-	}
-}
-
 // cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver messageReceiverOnServer) error {
+func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
-		var ch chan process.WrapCs
-		var ok bool
-		opUuid := receiver.messageUuid
-		for {
-			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
-				runtime.Gosched()
-			} else {
-				break
-			}
+		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil {
+			return err
 		}
 
+		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+		defer putCancel()
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
 			MsgId:  receiver.messageId,
-			Uid:    opUuid,
+			Uid:    receiver.messageUuid,
 			Cs:     receiver.clientSession,
 			DoneCh: doneCh,
 		}
-		ch <- info
-		<-doneCh
+
+		select {
+		case <-putCtx.Done():
+			return moerr.NewInternalErrorNoCtx("pass notify msg to dispatch operator timeout")
+		case <-opProc.Ctx.Done():
+			logutil.Errorf("dispatch operator context done")
+		case opProc.DispatchNotifyCh <- info:
+			<-doneCh
+		}
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -159,8 +152,7 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		fillEngineForInsert(s, c.e)
-		s = refactorScope(c, c.ctx, s)
+		s = refactorScope(c, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
@@ -259,7 +251,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(c.proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
@@ -347,7 +339,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+func refactorScope(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
@@ -386,6 +378,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
+	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
@@ -472,15 +465,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 
 func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
-	for i, u := range p.UuidsToRegIdx {
-		uid, err := uuid.FromBytes(u.GetUuid())
+	for i := range p.UuidsToRegIdx {
+		op := p.UuidsToRegIdx[i]
+		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
-			Idx:      int(u.GetIdx()),
+			Idx:      int(op.GetIdx()),
 			Uuid:     uid,
-			FromAddr: u.FromAddr,
+			FromAddr: op.FromAddr,
 		}
 	}
 	return nil
@@ -488,13 +482,16 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 
 func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
-	for i, u := range s.RemoteReceivRegInfos {
+	for i := range s.RemoteReceivRegInfos {
+		op := &s.RemoteReceivRegInfos[i]
+		uid, _ := op.Uuid.MarshalBinary()
 		ret[i] = &pipeline.UuidToRegIdx{
-			Idx:      int32(u.Idx),
-			Uuid:     u.Uuid[:],
-			FromAddr: u.FromAddr,
+			Idx:      int32(op.Idx),
+			Uuid:     uid,
+			FromAddr: op.FromAddr,
 		}
 	}
+
 	return ret
 }
 
@@ -507,9 +504,10 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s := &Scope{
-		Magic:    int(p.GetPipelineType()),
+		Magic:    magicType(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
+		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
 	}
@@ -600,6 +598,36 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
 			IdxIdx:       t.InsertCtx.IdxIdx,
+		}
+	case *deletion.Argument:
+		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
+		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
+			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
+		}
+		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
+		}
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+
+		}
+		in.Delete = &pipeline.Deletion{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
+			// deleteCtx
+			CanTruncate:    t.DeleteCtx.CanTruncate,
+			DelRef:         t.DeleteCtx.DelRef,
+			IdxIdx:         t.DeleteCtx.IdxIdx,
+			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
+			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
+			OnSetRef:       t.DeleteCtx.OnSetRef,
+			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
+			OnSetUpdateCol: onSetUpdateCols,
+			OnSetIdx:       onSetIdxs,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -694,8 +722,28 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:    rels,
 			ColList:    poses,
 			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.Left_typs),
-			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightsemi.Argument:
+		in.RightSemiJoin = &pipeline.RightSemiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
+	case *rightanti.Argument:
+		in.RightAntiJoin = &pipeline.RightAntiJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Expr:       t.Cond,
+			RightTypes: convertToPlanTypes(t.RightTypes),
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
 		}
@@ -861,11 +909,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			i++
 		}
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:         t.Es.Attrs,
-			Cols:          t.Es.Cols,
-			Name2ColIndex: name2ColIndexSlice,
-			CreateSql:     t.Es.CreateSql,
-			FileList:      t.Es.FileList,
+			Attrs:           t.Es.Attrs,
+			Cols:            t.Es.Cols,
+			FileSize:        t.Es.FileSize,
+			FileOffsetTotal: t.Es.FileOffsetTotal,
+			Name2ColIndex:   name2ColIndexSlice,
+			CreateSql:       t.Es.CreateSql,
+			FileList:        t.Es.FileList,
+			Filter:          t.Es.Filter.FilterExpr,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -875,8 +926,37 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
-	switch opr.Op {
+	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	switch v.Op {
+	case vm.Deletion:
+		t := opr.GetDelete()
+		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
+		for i := 0; i < len(t.OnSetUpdateCol); i++ {
+			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
+		}
+		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
+		for i := 0; i < len(t.OnSetIdx); i++ {
+			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
+		}
+		v.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			Nbucket:      t.NBucket,
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:    t.CanTruncate,
+				DelRef:         t.DelRef,
+				IdxIdx:         t.IdxIdx,
+				OnRestrictIdx:  t.OnRestrictIdx,
+				OnCascadeIdx:   t.OnCascadeIdx,
+				OnSetRef:       t.OnSetRef,
+				OnSetTableDef:  t.OnSetTableDef,
+				OnSetUpdateCol: onSetUpdateCols,
+				OnSetIdx:       onSetIdxs,
+			},
+		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
@@ -979,8 +1059,28 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Ibucket:    t.Ibucket,
 			Nbucket:    t.Nbucket,
 			Result:     convertToResultPos(t.RelList, t.ColList),
-			Left_typs:  convertToTypes(t.LeftTypes),
-			Right_typs: convertToTypes(t.RightTypes),
+			LeftTypes:  convertToTypes(t.LeftTypes),
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightSemi:
+		t := opr.GetRightSemiJoin()
+		v.Arg = &rightsemi.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
+	case vm.RightAnti:
+		t := opr.GetRightAntiJoin()
+		v.Arg = &rightanti.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			RightTypes: convertToTypes(t.RightTypes),
 			Cond:       t.Expr,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
@@ -1152,14 +1252,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &external.Argument{
 			Es: &external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:         t.Attrs,
-					Cols:          t.Cols,
-					CreateSql:     t.CreateSql,
-					Name2ColIndex: name2ColIndex,
-					FileList:      t.FileList,
+					Attrs:           t.Attrs,
+					FileSize:        t.FileSize,
+					FileOffsetTotal: t.FileOffsetTotal,
+					Cols:            t.Cols,
+					CreateSql:       t.CreateSql,
+					Name2ColIndex:   name2ColIndex,
+					FileList:        t.FileList,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
+					Filter: &external.FilterParam{
+						FilterExpr: t.Filter,
+					},
 				},
 			},
 		}
@@ -1434,14 +1539,14 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeI
 	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
 	p := &pipeline.Pipeline{}
 	p.PipelineId = ctxId
-	p.PipelineType = Pushdown
+	p.PipelineType = pipeline.Pipeline_PipelineType(Pushdown)
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
 		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
-		Op: vm.Connector,
+		Op: int32(vm.Connector),
 		Connect: &pipeline.Connector{
 			ConnectorIndex: idx,
 			PipelineId:     ctx.id,

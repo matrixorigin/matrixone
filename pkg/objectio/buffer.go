@@ -41,7 +41,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	return buffer
 }
 
-func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error) {
+func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int) {
 	offset := int64(0)
 	le := len(b.vector.Entries)
 	if len(b.vector.Entries) > 0 {
@@ -54,7 +54,7 @@ func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int, error
 		Data:   buf,
 	}
 	b.vector.Entries = append(b.vector.Entries, entry)
-	return int(offset), len(buf), nil
+	return int(offset), len(buf)
 }
 
 func (b *ObjectBuffer) Length() int {

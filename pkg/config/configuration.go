@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -145,13 +146,19 @@ var (
 	defaultOBShowStatsInterval = time.Minute
 
 	// defaultOBMaxBufferCnt
-	defaultOBBufferCnt int32 = 10
+	defaultOBBufferCnt int32 = -1
 
 	//defaultOBBufferSize, 10 << 20 = 10485760
 	defaultOBBufferSize int64 = 10485760
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
+
+	// defaultKillRountinesInterval default: 1 minutes
+	defaultKillRountinesInterval = 1
+
+	//defaultCleanKillQueueInterval default: 60 minutes
+	defaultCleanKillQueueInterval = 60
 )
 
 // FrontendParameters of the frontend
@@ -295,9 +302,16 @@ type FrontendParameters struct {
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	KillRountinesInterval int `toml:"killRountinesInterval"`
+
+	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
+
 	// ProxyEnabled indicates that proxy module is enabled and something extra
 	// is needed, such as update the salt.
 	ProxyEnabled bool `toml:"proxy-enabled"`
+
+	// SkipCheckPrivilege denotes the privilege check should be passed.
+	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -414,7 +428,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 
 	if fp.AutoIncrCacheSize == 0 {
-		fp.AutoIncrCacheSize = 3000
+		fp.AutoIncrCacheSize = 3000000
 	}
 
 	if fp.LowerCaseTableNames == "" {
@@ -423,6 +437,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.PrintDebugInterval == 0 {
 		fp.PrintDebugInterval = defaultPrintDebugInterval
+	}
+
+	if fp.KillRountinesInterval == 0 {
+		fp.KillRountinesInterval = defaultKillRountinesInterval
+	}
+
+	if fp.CleanKillQueueInterval == 0 {
+		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
 }
 
@@ -645,13 +667,18 @@ type ParameterUnit struct {
 
 	// LockService instance
 	LockService lockservice.LockService
+
+	// HAKeeper client, which is used to get connection ID
+	// from HAKeeper currently.
+	HAKeeperClient logservice.CNHAKeeperClient
 }
 
 func NewParameterUnit(
 	sv *FrontendParameters,
 	storageEngine engine.Engine,
 	txnClient client.TxnClient,
-	clusterNodes engine.Nodes) *ParameterUnit {
+	clusterNodes engine.Nodes,
+) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		StorageEngine: storageEngine,

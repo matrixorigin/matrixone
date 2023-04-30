@@ -73,17 +73,9 @@ func IsDropStatement(stmt tree.Statement) bool {
 	return false
 }
 
-func isCreateDropDatabase(stmt tree.Statement) bool {
+func IsCreateDropDatabase(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateDatabase, *tree.DropDatabase:
-		return true
-	}
-	return false
-}
-
-func isDropDatabase(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.DropDatabase:
 		return true
 	}
 	return false
@@ -101,11 +93,11 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return isCreateDropDatabase(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropDatabase(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
 }
 
 /*
-statementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
+StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
 
 Cases    | set Autocommit = 1/0 | BEGIN statement |
 ---------------------------------------------------
@@ -120,6 +112,7 @@ If it is Case1,Case3, Then
 	Create/Drop database reports error
 
 If it is Case2, Then
+
 	Create/Drop database as other statement.
 
 If it is Case4, Then
@@ -166,7 +159,8 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowAccounts,
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
-		*tree.ShowCreatePublications:
+		*tree.ShowCreatePublications,
+		*tree.ShowBackendServers:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
@@ -199,8 +193,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.DropSequence, *tree.TruncateTable:
-		return true, nil
+	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.DropSequence:
+		//background transaction can execute the DROPxxx in one transaction
+		return ses.IsBackgroundSession(), nil
 	case *tree.DropDatabase: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil

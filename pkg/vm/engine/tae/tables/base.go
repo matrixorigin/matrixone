@@ -25,11 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -49,13 +48,13 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	bufMgr    base.INodeManager
-	fs        *objectio.ObjectFS
-	scheduler tasks.TaskScheduler
-	meta      *catalog.BlockEntry
-	mvcc      *updates.MVCCHandle
-	ttl       time.Time
-	impl      data.Block
+	indexCache model.LRUCache
+	fs         *objectio.ObjectFS
+	scheduler  tasks.TaskScheduler
+	meta       *catalog.BlockEntry
+	mvcc       *updates.MVCCHandle
+	ttl        time.Time
+	impl       data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -63,16 +62,16 @@ type baseBlock struct {
 func newBaseBlock(
 	impl data.Block,
 	meta *catalog.BlockEntry,
-	bufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
 	scheduler tasks.TaskScheduler) *baseBlock {
 	blk := &baseBlock{
-		impl:      impl,
-		bufMgr:    bufMgr,
-		fs:        fs,
-		scheduler: scheduler,
-		meta:      meta,
-		ttl:       time.Now(),
+		impl:       impl,
+		indexCache: indexCache,
+		fs:         fs,
+		scheduler:  scheduler,
+		meta:       meta,
+		ttl:        time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -137,10 +136,9 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 	return
 }
 
-func (blk *baseBlock) GetMeta() any                 { return blk.meta }
-func (blk *baseBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
-func (blk *baseBlock) GetFs() *objectio.ObjectFS    { return blk.fs }
-func (blk *baseBlock) GetID() *common.ID            { return blk.meta.AsCommonID() }
+func (blk *baseBlock) GetMeta() any              { return blk.meta }
+func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.fs }
+func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
@@ -167,27 +165,23 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		return
 	}
 	location := blk.meta.GetMetaLoc()
-	if location == "" {
+	if location.IsEmpty() {
 		return
 	}
 	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
 	if err != nil {
 		return
 	}
-	_, id, _, _, err := blockio.DecodeLocation(location)
-	if err != nil {
-		return
-	}
 	bat, err := reader.LoadColumns(
 		context.Background(),
 		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
-		[]uint32{id},
+		location.ID(),
 		nil,
 	)
 	if err != nil {
 		return
 	}
-	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0])
+	vec = containers.ToDNVector(bat.Vecs[0])
 	return
 }
 
@@ -215,7 +209,6 @@ func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
-		blk.bufMgr,
 		blk.fs,
 		blk.meta.AsCommonID(),
 		def,
@@ -224,11 +217,10 @@ func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
 
 func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
-	if location == "" {
+	if location.IsEmpty() {
 		return
 	}
 	return LoadPersistedDeletes(
-		blk.bufMgr,
 		blk.fs,
 		location)
 }
@@ -266,11 +258,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		_, _, meta, _, err := blockio.DecodeLocation(key)
-		if err != nil {
-			return err
-		}
-		return blockio.Prefetch(idxes, []uint32{meta.Id()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.fs.Service, key)
 	}
 }
 
@@ -357,12 +345,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	dedupClosure func(
-		containers.Vector,
-		txnif.TxnReader,
-		*roaring.Bitmap,
-		*catalog.ColDef,
-	) func(any, bool, int) error) (err error) {
+	isAblk bool) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
@@ -387,8 +370,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 		}
 	}
 	defer view.Close()
-	dedupFn := dedupClosure(view.GetData(), txn, view.DeleteMask, def)
-	err = keys.ForeachShallow(dedupFn, sels)
+	var dedupFn any
+	if isAblk {
+		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn)
+	} else {
+		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def)
+	}
+	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 
@@ -396,7 +384,7 @@ func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	row, col int,
-	skipMemory bool) (v any, err error) {
+	skipMemory bool) (v any, isNull bool, err error) {
 	view := model.NewColumnView(col)
 	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
 		return
@@ -418,7 +406,7 @@ func (blk *baseBlock) getPersistedValue(
 		return
 	}
 	defer view2.Close()
-	v = view2.GetValue(row)
+	v, isNull = view2.GetValue(row)
 	return
 }
 
@@ -563,14 +551,10 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 func (blk *baseBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
 	metaLoc := blk.meta.GetMetaLoc()
-	if metaLoc == "" {
+	if metaLoc.IsEmpty() {
 		return rows
 	}
-	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
-	if err != nil {
-		panic(err)
-	}
-	fileRows := uint64(meta.GetRows())
+	fileRows := uint64(metaLoc.Rows())
 	if rows > fileRows {
 		return rows
 	}

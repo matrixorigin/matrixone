@@ -16,6 +16,8 @@ package colexec
 
 import (
 	"context"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -28,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestInsertIndexMetadata(t *testing.T) {
@@ -54,7 +55,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
 		//bat.Zs = []int64{1}
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -149,7 +150,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())

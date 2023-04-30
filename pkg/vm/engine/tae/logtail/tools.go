@@ -42,7 +42,8 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 			_ = w.WriteByte(',')
 		}
 		v := vec.Get(i)
-		_, _ = w.WriteString(common.TypeStringValue(typ, v, opts...))
+		vIsNull := vec.IsNull(i)
+		_, _ = w.WriteString(common.TypeStringValue(*typ, v, vIsNull, opts...))
 		first = false
 	}
 
@@ -126,6 +127,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 
 // consume containers.Batch to construct api batch
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.CopyToMoBatch(bat)
+	mobat := containers.CopyToCNBatch(bat)
 	return batch.BatchToProtoBatch(mobat)
 }

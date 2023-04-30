@@ -159,8 +159,8 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
 		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
-		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
-		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+		infos[i].SetMetaLocation(row[BLOCKMETA_METALOC_IDX].([]byte))
+		infos[i].SetDeltaLocation(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
 		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
 	}

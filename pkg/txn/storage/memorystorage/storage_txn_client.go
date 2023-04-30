@@ -46,7 +46,10 @@ func NewStorageTxnClient(
 
 var _ client.TxnClient = new(StorageTxnClient)
 
-func (s *StorageTxnClient) New(options ...client.TxnOption) (client.TxnOperator, error) {
+func (s *StorageTxnClient) New(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	options ...client.TxnOption) (client.TxnOperator, error) {
 	now, _ := s.clock.Now()
 	meta := txn.TxnMeta{
 		ID:         []byte(uuid.NewString()),
@@ -66,12 +69,24 @@ func (*StorageTxnClient) Close() error {
 	return nil
 }
 
+func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)
+
+func (s *StorageTxnOperator) AddWorkspace(_ client.Workspace) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) GetWorkspace() client.Workspace {
+	panic("unimplemented")
+}
 
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 	panic("unimplemented")

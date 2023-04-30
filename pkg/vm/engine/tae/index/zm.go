@@ -78,6 +78,12 @@ func (zm ZM) String() string {
 	return b.String()
 }
 
+func (zm ZM) Clone() ZM {
+	cloned := make([]byte, ZMSize)
+	copy(cloned[:], zm[:])
+	return cloned
+}
+
 func (zm ZM) GetType() types.T {
 	return types.T(zm[63])
 }
@@ -89,14 +95,26 @@ func (zm ZM) IsString() bool {
 func (zm ZM) SetType(t types.T) {
 	zm[63] &= 0x00
 	zm[63] |= byte(t)
+	sz := t.FixedLength()
+	if sz <= 0 {
+		return
+	}
+	zm[61] = byte(sz)
+	zm[30] = byte(sz)
 }
 
 func (zm ZM) GetMin() any {
+	if !zm.IsInited() {
+		return nil
+	}
 	buf := zm.GetMinBuf()
 	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMax() any {
+	if !zm.IsInited() {
+		return nil
+	}
 	buf := zm.GetMaxBuf()
 	return zm.getValue(buf)
 }

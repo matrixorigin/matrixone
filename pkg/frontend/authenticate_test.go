@@ -587,6 +587,7 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.PrepareStmt{}},
 		{stmt: &tree.PrepareString{}},
 		{stmt: &tree.Deallocate{}},
+		{stmt: &tree.ShowBackendServers{}},
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -5832,6 +5833,165 @@ func Test_doDropUser(t *testing.T) {
 	})
 }
 
+func Test_doAlterUser(t *testing.T) {
+	convey.Convey("alter user success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterUser{
+			Users: []*tree.User{
+				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		for i, user := range stmt.Users {
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
+			mrs := newMrsForPasswordOfUser([][]interface{}{
+				{i, "111", 0},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "root", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+		}
+
+		for _, user := range stmt.Users {
+			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
+			bh.sql2result[sql] = nil
+		}
+
+		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("alter user fail for alter multi user", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterUser{
+			Users: []*tree.User{
+				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+				{Username: "u2", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+				{Username: "u3", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		for i, user := range stmt.Users {
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
+			mrs := newMrsForPasswordOfUser([][]interface{}{
+				{i, "111", "public"},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
+		}
+
+		for _, user := range stmt.Users {
+			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
+			bh.sql2result[sql] = nil
+		}
+
+		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+
+	convey.Convey("alter user fail for privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterUser{
+			Users: []*tree.User{
+				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		for i, user := range stmt.Users {
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
+			mrs := newMrsForPasswordOfUser([][]interface{}{
+				{i, "111", "public"},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
+		}
+
+		for _, user := range stmt.Users {
+			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
+			bh.sql2result[sql] = nil
+		}
+
+		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+}
+
 func Test_doAlterAccount(t *testing.T) {
 	convey.Convey("alter account (auth_option) succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -5857,6 +6017,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -5864,7 +6031,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -5904,6 +6071,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -5911,7 +6085,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -5950,6 +6124,13 @@ func Test_doAlterAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5993,6 +6174,13 @@ func Test_doAlterAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6038,6 +6226,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -6045,7 +6240,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, "0", "open", 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6053,7 +6248,9 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
 		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
-		bh.sql2result[sql] = nil
+		bh.sql2result[sql] = newMrsForCheckTenant([][]interface{}{
+			{0, 0, 0, 0},
+		})
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -6075,6 +6272,13 @@ func Test_doAlterAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6123,6 +6327,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -6160,6 +6371,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -6167,7 +6385,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6201,6 +6419,13 @@ func Test_doAlterAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -6208,7 +6433,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, 0, 0, 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6241,6 +6466,13 @@ func Test_doAlterAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6293,6 +6525,13 @@ func Test_doDropAccount(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -6300,7 +6539,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
-			{0},
+			{0, "0", "open", 0},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -6335,6 +6574,13 @@ func Test_doDropAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6372,6 +6618,13 @@ func Test_doDropAccount(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6908,8 +7161,19 @@ func newMrsForCheckTenant(rows [][]interface{}) *MysqlResultSet {
 	col2 := &MysqlColumn{}
 	col2.SetName("account_name")
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("status")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("version")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONG)
+
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -7258,7 +7522,7 @@ func TestDoCreatePublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7316,7 +7580,7 @@ func TestDoDropPublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7358,7 +7622,7 @@ func TestDoAlterPublication(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -7491,7 +7755,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
-	defer ses.Dispose()
+	defer ses.Close()
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,

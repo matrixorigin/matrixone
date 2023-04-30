@@ -15,7 +15,6 @@
 package mergesort
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -47,9 +46,9 @@ func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []uint32) (ret
 	for i, v := range dataWithIdx.AsSlice() {
 		idx[i] = v.idx
 		if v.isNull {
-			col.Update(i, types.Null{})
+			col.Update(i, nil, true)
 		} else {
-			col.Update(i, v.data)
+			col.Update(i, v.data, false)
 		}
 	}
 
@@ -73,7 +72,7 @@ func Merge[T any](
 	}
 
 	for i := range toLayout {
-		ret[i] = containers.MakeVector(col[0].GetType())
+		ret[i] = containers.MakeVector(*col[0].GetType())
 	}
 
 	nBlk := len(col)
@@ -94,9 +93,9 @@ func Merge[T any](
 			top := heapPop(&heap)
 			(*src)[k] = top.src
 			if top.isNull {
-				ret[i].Append(types.Null{})
+				ret[i].Append(nil, true)
 			} else {
-				ret[i].Append(top.data)
+				ret[i].Append(top.data, false)
 			}
 			mapping[offset[top.src]+top.next-1] = uint32(k)
 			k++
@@ -113,9 +112,9 @@ func Merge[T any](
 }
 
 func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
-	ret := containers.MakeVector(col.GetType())
+	ret := containers.MakeVector(*col.GetType())
 	for _, j := range idx {
-		ret.Append(col.Get(int(j)))
+		ret.Append(col.Get(int(j)), col.IsNull(int(j)))
 	}
 	col.Close()
 	return ret
@@ -127,10 +126,10 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(col[0].GetType())
+		ret[i] = containers.MakeVector(*col[0].GetType())
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			ret[i].Append(col[s].Get(cursors[s]))
+			ret[i].Append(col[s].Get(cursors[s]), col[s].IsNull(cursors[s]))
 			cursors[s]++
 			k++
 		}
@@ -152,7 +151,7 @@ func Reshape(column []containers.Vector, fromLayout, toLayout []uint32) (ret []c
 	fromIdx := 0
 	fromOffset := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(column[0].GetType())
+		ret[i] = containers.MakeVector(*column[0].GetType())
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
 			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)

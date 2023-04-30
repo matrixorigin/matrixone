@@ -59,7 +59,6 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 }
 
 func FilterAndUpdateByRowId(
-	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
 	idxList [][]int32,
@@ -111,7 +110,7 @@ func FilterAndUpdateByRowId(
 
 			// fill auto incr column
 			if info.HasAutoCol {
-				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
+				if err = UpdateInsertBatch(proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
 					return 0, err
 				}
 			}
@@ -155,7 +154,7 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *batch.Batch,
+func WriteUniqueTable(s3Writers []*S3Writer, proc *process.Process, updateBatch *batch.Batch,
 	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	if tableDef.Indexes == nil {
 		return nil
@@ -209,7 +208,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 			ukBatch.SetVector(1, vec)
 		}
 
-		if s3Writer == nil {
+		if s3Writers == nil {
 			rel := rels[uIdx]
 			err := rel.Write(proc.Ctx, ukBatch)
 			if err != nil {
@@ -218,7 +217,7 @@ func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *ba
 			uIdx++
 		} else {
 			uIdx++
-			err := s3Writer.WriteS3Batch(ukBatch, proc, uIdx)
+			err := s3Writers[uIdx].WriteS3Batch(ukBatch, proc)
 			if err != nil {
 				return err
 			}
@@ -304,6 +303,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 
 func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, batLen int, attrs []string, rowSkip []bool, parentIdx map[string]int32) (*batch.Batch, error) {
 	updateBatch := batch.New(true, attrs)
+	updateBatch.AddCnt(1)
 	var toVec *vector.Vector
 	var err error
 
@@ -350,7 +350,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 		}
 
 		if fromVec.IsConst() {
-			toVec = vector.NewVec(*bat.Vecs[idx].GetType())
+			toVec = proc.GetVector(*bat.Vecs[idx].GetType())
 			if fromVec.IsConstNull() {
 				for j := 0; j < batLen; j++ {
 					err := vector.AppendFixed(toVec, 0, true, proc.Mp())
@@ -367,14 +367,13 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 				}
 			}
 		} else {
+			toVec = proc.GetVector(*fromVec.GetType())
 			if rowSkip == nil {
 				// XXX should we free the fromVec here ?
-				toVec, err = fromVec.Dup(proc.Mp())
-				if err != nil {
+				if err = vector.GetUnionFunction(*fromVec.GetType(), proc.Mp())(toVec, fromVec); err != nil {
 					return nil, err
 				}
 			} else {
-				toVec = vector.NewVec(*fromVec.GetType())
 				for j := 0; j < fromVec.Length(); j++ {
 					if !rowSkip[j] {
 						err = toVec.UnionOne(fromVec, int64(j), proc.Mp())
