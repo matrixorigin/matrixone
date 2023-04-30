@@ -271,15 +271,16 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
+	txnCtx := requestCtx
 	if cacheHit && cwft.plan.NeedImplicitTxn() {
-		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
 			return nil, err
 		}
 	} else if cwft.plan.GetQuery().GetLoadTag() {
-		cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
+		txnCtx, cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
 	} else if cwft.plan.NeedImplicitTxn() {
-		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
 		if err != nil {
 			return nil, err
 		}
@@ -288,13 +289,14 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
 	}
+	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnHandler.GetTxnCtx(), cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
 	}
-	err = cwft.compile.Compile(txnHandler.GetTxnCtx(), cwft.plan, cwft.ses, fill)
+	err = cwft.compile.Compile(txnCtx, cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
 	}

@@ -212,7 +212,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var txn TxnOperator
 	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		txn, err = handler.GetTxn()
+		_, txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
 		} else {
@@ -293,7 +293,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			txn, err = handler.GetTxn()
+			_, txn, err = handler.GetTxn()
 			if err != nil {
 				logErrorf(ses.GetDebugString(), "RecordStatementTxnID. error:%v", err)
 			} else {
@@ -427,15 +427,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func doUse(ctx context.Context, ses *Session, db string) error {
 	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
+	var txnCtx context.Context
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
-	txn, err = txnHandler.GetTxn()
+	txnCtx, txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -2326,7 +2327,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		requestCtx,
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
@@ -3249,7 +3250,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		requestCtx,
 		ses.GetMemPool(),
 		pu.TxnClient,
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())

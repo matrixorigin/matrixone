@@ -170,8 +170,12 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
 	return offsets
 }
 
-func (b *deletedBlocks) removeBlockDeletedInfoLocked(blockID string) {
-	delete(b.offsets, blockID)
+func (b *deletedBlocks) removeBlockDeletedInfos(ids []string) {
+	b.Lock()
+	defer b.Unlock()
+	for _, id := range ids {
+		delete(b.offsets, id)
+	}
 }
 
 func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
