@@ -327,6 +327,8 @@ insert into t5 values(10),(20),(30);
 drop table t5;
 
 start transaction;
+create table t5(a int);
+insert into t5 values(10),(20),(30);
 insert into t5 values(100),(2000),(3000);
 -- execute error
 set @autocommit=0;
