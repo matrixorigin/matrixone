@@ -250,7 +250,6 @@ create database db;
 show databases like 'db';
 use db;
 
-begin;
 create table table3(a int, b int);
 insert into table3 values (2000, 3000);
 create view view_table3 as select * from table3;
