@@ -146,7 +146,7 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *B
 }
 
 func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateSegment
+	cmdType := IOET_WALTxnCommand_Segment
 	entry.RLock()
 	defer entry.RUnlock()
 	return newSegmentCmd(id, cmdType, entry), nil

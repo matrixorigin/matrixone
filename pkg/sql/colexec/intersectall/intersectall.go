@@ -38,6 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 	var err error
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.IBucket, ap.NBucket, proc.Mp()); err != nil {
 		return err
 	}

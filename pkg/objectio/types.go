@@ -34,6 +34,9 @@ const ZoneMapSize = index.ZMSize
 type ZoneMap = index.ZM
 type StaticFilter = index.StaticFilter
 
+var NewZM = index.NewZM
+var BuildZM = index.BuildZM
+
 type WriteOptions struct {
 	Type WriteType
 	Val  any

@@ -468,7 +468,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
-	cmdType := CmdUpdateDatabase
+	cmdType := IOET_WALTxnCommand_Database
 	e.RLock()
 	defer e.RUnlock()
 	return newDBCmd(id, cmdType, e), nil

@@ -1,0 +1,66 @@
+select TO_SECONDS(null);
+to_seconds(null)
+null
+SELECT TO_SECONDS('19950501');
+to_seconds(19950501)
+62966505600
+SELECT TO_SECONDS('2007-10-07');
+to_seconds(2007-10-07)
+63358934400
+SELECT TO_SECONDS('2008-10-07');
+to_seconds(2008-10-07)
+63390556800
+SELECT TO_SECONDS('0001-01-01');
+to_seconds(0001-01-01)
+31622400
+drop table if exists t_dates;
+create table t_dates(
+a_date date,
+b_datetime datetime,
+c_timestamp timestamp
+);
+insert into t_dates values('1999-04-05', '1999-04-05 11:01:02', '1999-04-05 11:01:02');
+insert into t_dates values('2004-04-03', '2004-04-03 13:11:10', '2004-04-03 13:11:10');
+insert into t_dates values('2012-04-05', '2012-04-05 11:01:02', '2012-04-05 11:01:02.123456');
+insert into t_dates values('1997-04-03', '1997-04-03 13:11:10', '1997-04-03 13:11:10.123456');
+insert into t_dates values('2022-04-05', '2022-04-05 11:01:02.123456', '2022-04-05 11:01:02.123456');
+insert into t_dates values('1999-09-05', '2004-09-03 13:11:10.123456', '2004-09-03 13:11:10.123456');
+insert into t_dates values(null, null, null);
+insert into t_dates values('', '', '');
+select a_date, TO_SECONDS(a_date) from t_dates order by a_date;
+a_date    to_seconds(a_date)
+null    null
+null    null
+1997-04-03    63027244800
+1999-04-05    63090489600
+1999-09-05    63103708800
+2004-04-03    63248169600
+2012-04-05    63500803200
+2022-04-05    63816336000
+select * from t_dates where TO_SECONDS(a_date) > 730214;
+a_date    b_datetime    c_timestamp
+1999-04-05    1999-04-05 11:01:02    1999-04-05 11:01:02
+2004-04-03    2004-04-03 13:11:10    2004-04-03 13:11:10
+2012-04-05    2012-04-05 11:01:02    2012-04-05 11:01:02
+1997-04-03    1997-04-03 13:11:10    1997-04-03 13:11:10
+2022-04-05    2022-04-05 11:01:02    2022-04-05 11:01:02
+1999-09-05    2004-09-03 13:11:10    2004-09-03 13:11:10
+select b_datetime, TO_SECONDS(b_datetime) from t_dates order by b_datetime;
+b_datetime    to_seconds(b_datetime)
+null    null
+null    null
+1997-04-03 13:11:10    63027292270
+1999-04-05 11:01:02    63090529262
+2004-04-03 13:11:10    63248217070
+2004-09-03 13:11:10    63261436270
+2012-04-05 11:01:02    63500842862
+2022-04-05 11:01:02    63816375662
+select * from t_dates where TO_SECONDS(b_datetime) > 730214;
+a_date    b_datetime    c_timestamp
+1999-04-05    1999-04-05 11:01:02    1999-04-05 11:01:02
+2004-04-03    2004-04-03 13:11:10    2004-04-03 13:11:10
+2012-04-05    2012-04-05 11:01:02    2012-04-05 11:01:02
+1997-04-03    1997-04-03 13:11:10    1997-04-03 13:11:10
+2022-04-05    2022-04-05 11:01:02    2022-04-05 11:01:02
+1999-09-05    2004-09-03 13:11:10    2004-09-03 13:11:10
+drop table t_dates;

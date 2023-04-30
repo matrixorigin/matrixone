@@ -199,7 +199,7 @@ func (entry *TableEntry) CreateSegment(
 }
 
 func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateTable
+	cmdType := IOET_WALTxnCommand_Table
 	entry.RLock()
 	defer entry.RUnlock()
 	return newTableCmd(id, cmdType, entry), nil
