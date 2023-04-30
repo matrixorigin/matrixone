@@ -15,7 +15,7 @@
 package operator
 
 import (
-	"strings"
+	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -33,7 +33,7 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	lvs, rvs := vector.MustStrCol(lv), vector.MustBytesCol(rv)
+	lvs, rvs := vector.MustBytesCol(lv), vector.MustBytesCol(rv)
 
 	switch {
 	case !lv.IsConst() && rv.IsConst():
@@ -103,12 +103,12 @@ func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	lvs, rvs := vector.MustStrCol(lv), vector.MustBytesCol(rv)
+	lvs, rvs := vector.MustBytesCol(lv), vector.MustBytesCol(rv)
 	for i := range lvs {
-		lvs[i] = strings.ToLower(lvs[i])
+		lvs[i] = bytes.ToLower(lvs[i])
 	}
 	for i := range rvs {
-		rvs[i] = []byte(strings.ToLower(string(rvs[i])))
+		rvs[i] = bytes.ToLower(rvs[i])
 	}
 
 	switch {

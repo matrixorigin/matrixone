@@ -155,7 +155,7 @@ func TestCwFn1(t *testing.T) {
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarInt64(1, 4),
+			expect: testutil.MakeInt64Vector([]int64{1, 1, 1, 1}, nil),
 		},
 
 		{
@@ -195,7 +195,7 @@ func TestCwFn1(t *testing.T) {
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(types.T_any, 5),
+			expect: testutil.MakeInt64Vector([]int64{0, 0, 0, 0, 0}, []uint64{0, 1, 2, 3, 4}),
 		},
 	}
 

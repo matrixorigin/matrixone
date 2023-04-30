@@ -132,7 +132,7 @@ func genSyncLogTailReq(have, want timestamp.Timestamp, databaseId,
 }
 
 func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error) {
-	payload, err := types.Encode(req)
+	payload, err := types.Encode(&req)
 	if err != nil {
 		return nil, err
 	}

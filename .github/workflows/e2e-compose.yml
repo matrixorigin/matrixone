@@ -141,12 +141,12 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
-          mkdir  -p ${{ github.workspace }}/docker-compose-log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/docker-compose-log/logservice.log
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir -p ${{ github.workspace }}/multi-cn-docker-compose-log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-0.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-1.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/multi-cn-docker-compose-log/dn.log
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/multi-cn-docker-compose-log/logservice.log
+          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/multi-cn-docker-compose-log
 
       - name: shutdown containers
         if: ${{ always() }}

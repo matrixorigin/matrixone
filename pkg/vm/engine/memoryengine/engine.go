@@ -83,7 +83,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		false,
 		e.allShards,
 		OpCreateDatabase,
-		CreateDatabaseReq{
+		&CreateDatabaseReq{
 			ID:         id,
 			AccessInfo: getAccessInfo(ctx),
 			Name:       dbName,
@@ -104,7 +104,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		true,
 		e.anyShard,
 		OpOpenDatabase,
-		OpenDatabaseReq{
+		&OpenDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),
 			Name:       dbName,
 		},
@@ -135,7 +135,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 		true,
 		e.anyShard,
 		OpGetDatabases,
-		GetDatabasesReq{
+		&GetDatabasesReq{
 			AccessInfo: getAccessInfo(ctx),
 		},
 	)
@@ -154,7 +154,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 		false,
 		e.allShards,
 		OpDeleteDatabase,
-		DeleteDatabaseReq{
+		&DeleteDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),
 			Name:       dbName,
 		},

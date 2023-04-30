@@ -18,8 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -310,27 +308,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(
-	columns []string,
-	tableDef *plan.TableDef,
-	service fileservice.FileService,
-	infos [][]*pkgcatalog.BlockInfo) error {
-	idxes := make([]uint16, len(columns))
-
-	// Generate index for columns
-	for i, column := range columns {
-		if column != pkgcatalog.Row_ID {
-			if colIdx, ok := tableDef.Name2ColIndex[column]; ok {
-				idxes[i] = uint16(colIdx)
-			} else {
-				idxes[i] = uint16(len(tableDef.Name2ColIndex))
-			}
-		}
-	}
-	return PrefetchInner(idxes, service, infos)
-}
-
-func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
