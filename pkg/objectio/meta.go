@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -338,4 +339,29 @@ func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
 		return false
 	}
 	return location.ShortName().Equal(short[:])
+}
+
+func BuildMetaData(blkCount, colCount uint16) objectMetaV1 {
+	var meta bytes.Buffer
+	length := uint32(0)
+	objectMeta := BuildObjectMeta(colCount)
+	objectMeta.BlockHeader().SetColumnCount(colCount)
+	objectMeta.BlockHeader().SetSequence(blkCount)
+	length += objectMeta.Length()
+	blockIndex := BuildBlockIndex(uint32(blkCount))
+	blockIndex.SetBlockCount(uint32(blkCount))
+	length += blockIndex.Length()
+	var blkMetaBuf bytes.Buffer
+	for i := uint16(0); i < blkCount; i++ {
+		blkMeta := NewBlock(colCount)
+		blkMeta.BlockHeader().SetSequence(i)
+		n := uint32(len(blkMeta))
+		blockIndex.SetBlockMetaPos(uint32(i), length, n)
+		length += n
+		blkMetaBuf.Write(blkMeta)
+	}
+	meta.Write(objectMeta)
+	meta.Write(blockIndex)
+	meta.Write(blkMetaBuf.Bytes())
+	return meta.Bytes()
 }
