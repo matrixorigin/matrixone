@@ -43,7 +43,6 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_SegID           = "segment_id"
 	SnapshotAttr_TID             = "table_id"
 	SnapshotAttr_DBID            = "db_id"
 	SegmentAttr_ID               = "id"
@@ -691,27 +690,28 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		sid := insTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(types.Uuid)
 		appendable := ins.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
 		state := ES_NotAppendable
 		if appendable {
 			state = ES_Appendable
 		}
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
+		sid := blkID.Segment()
 		metaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
 		deltaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateBlock(dbid, tid, &sid, &blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
+		catalog.onReplayCreateBlock(dbid, tid, sid, &blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(types.Segmentid)
 		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
+		blkID := rid.GetBlockid()
+		sid := blkID.Segment()
 		un := txnbase.ReadTuple(delTxn, i)
 		metaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
 		deltaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
-		catalog.onReplayDeleteBlock(dbid, tid, &sid, rid.GetBlockid(), metaLoc, deltaLoc, un)
+		catalog.onReplayDeleteBlock(dbid, tid, sid, blkID, metaLoc, deltaLoc, un)
 	}
 }
 func (catalog *Catalog) onReplayCreateBlock(

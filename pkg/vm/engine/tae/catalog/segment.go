@@ -113,6 +113,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	} else {
 		panic("not supported")
 	}
+	e.ID = *bid.Segment()
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
