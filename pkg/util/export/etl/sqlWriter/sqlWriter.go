@@ -168,14 +168,15 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
 		return 0, dbErr
 	}
-
-	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
-	if bulkErr != nil {
-		// logutil.Error("sqlWriter insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
-		return 0, err
+	if tbl.Table != "rawlog" {
+		bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+		if bulkErr != nil {
+			// logutil.Error("sqlWriter insert failed", zap.String("address", sw.address), zap.String("records lens", strconv.Itoa(len(records))), zap.Error(bulkErr))
+			return 0, err
+		}
+		return bulkCnt, bulkErr
 	}
-	return bulkCnt, bulkErr
-
+	return 0, nil
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
