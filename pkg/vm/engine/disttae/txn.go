@@ -92,7 +92,7 @@ func (txn *Transaction) WriteBatch(
 ) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT {
+	if typ == INSERT && !batchHasRowId {
 		txn.genBlock()
 		len := bat.Length()
 		vec := vector.NewVec(types.T_Rowid.ToType())
