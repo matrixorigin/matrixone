@@ -156,6 +156,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		partition:    item.Partition,
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
+		rowid:        item.Rowid,
+		rowids:       item.Rowids,
 	}
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
